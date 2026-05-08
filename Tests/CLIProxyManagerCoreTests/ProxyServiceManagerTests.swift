@@ -6,6 +6,7 @@ final class ProxyServiceManagerTests: XCTestCase {
     func testStartWritesCompatibleConfigAndLaunchesBinaryWithConfigPath() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
         let launcher = FakeProcessLauncher()
         let manager = ProxyServiceManager(paths: paths, launcher: launcher)
 
@@ -34,6 +35,7 @@ final class ProxyServiceManagerTests: XCTestCase {
     func testStartDoesNotUseRealHomeWhenPathsUseTemporaryRoot() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
         let launcher = FakeProcessLauncher()
         let manager = ProxyServiceManager(paths: paths, launcher: launcher)
 
@@ -62,11 +64,28 @@ final class ProxyServiceManagerTests: XCTestCase {
         XCTAssertEqual(launcher.invocations, [])
     }
 
+    func testStartReportsMissingBinaryBeforeWritingConfigOrLaunching() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let launcher = FakeProcessLauncher()
+        let manager = ProxyServiceManager(paths: paths, launcher: launcher)
+
+        do {
+            try await manager.start(port: 8317)
+            XCTFail("Expected missing binary error")
+        } catch let error as ProxyServiceError {
+            XCTAssertEqual(error, .missingBinary(paths.clipProxyBinary.path))
+        }
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.clipProxyConfigFile.path))
+        XCTAssertEqual(launcher.invocations, [])
+    }
+
     func testStartReportsWriteFailure() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
-        try FileManager.default.createDirectory(at: paths.rootDirectory, withIntermediateDirectories: true)
-        try Data().write(to: paths.clipProxyDirectory)
+        try createBinary(at: paths.clipProxyBinary)
+        try FileManager.default.createDirectory(at: paths.clipProxyConfigFile, withIntermediateDirectories: true)
         let launcher = FakeProcessLauncher()
         let manager = ProxyServiceManager(paths: paths, launcher: launcher)
 
@@ -86,6 +105,7 @@ final class ProxyServiceManagerTests: XCTestCase {
     func testStartReportsLaunchFailure() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
         let launcher = FakeProcessLauncher(error: NSError(domain: "test", code: 1))
         let manager = ProxyServiceManager(paths: paths, launcher: launcher)
 
@@ -109,6 +129,11 @@ final class ProxyServiceManagerTests: XCTestCase {
         try FileManager.default.createDirectory(at: sandbox, withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: sandbox) }
         return sandbox
+    }
+
+    private func createBinary(at url: URL) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("#!/bin/sh\n".utf8).write(to: url)
     }
 }
 

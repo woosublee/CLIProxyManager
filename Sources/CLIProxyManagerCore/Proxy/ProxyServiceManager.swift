@@ -19,6 +19,7 @@ public struct ProcessLauncher: ProcessLaunching {
 
 public enum ProxyServiceError: Error, Equatable {
     case invalidPort(Int)
+    case missingBinary(String)
     case writeFailed(String)
     case launchFailed(String)
 }
@@ -41,6 +42,10 @@ public struct ProxyServiceManager: @unchecked Sendable {
     public func start(port: Int) async throws {
         guard isValidPort(port) else {
             throw ProxyServiceError.invalidPort(port)
+        }
+
+        guard fileManager.fileExists(atPath: paths.clipProxyBinary.path) else {
+            throw ProxyServiceError.missingBinary(paths.clipProxyBinary.path)
         }
 
         do {
