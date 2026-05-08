@@ -88,13 +88,14 @@ final class ProxyServiceManagerTests: XCTestCase {
         XCTAssertEqual(launcher.invocations, [])
     }
 
-    func testSecondStartReplacesAndStopsPreviousManagedProcess() async throws {
+    func testSecondStartStopsPreviousManagedProcessBeforeLaunchingReplacement() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         try createBinary(at: paths.clipProxyBinary)
-        let firstProcess = ManagedProxyProcessDouble()
-        let secondProcess = ManagedProxyProcessDouble()
-        let launcher = FakeProcessLauncher(processes: [firstProcess, secondProcess])
+        let events = ProxyLifecycleEventLog()
+        let firstProcess = ManagedProxyProcessDouble(name: "first", events: events)
+        let secondProcess = ManagedProxyProcessDouble(name: "second", events: events)
+        let launcher = FakeProcessLauncher(processes: [firstProcess, secondProcess], events: events)
         let manager = ProxyServiceManager(paths: paths, launcher: launcher)
 
         try await manager.start(port: 8317)
@@ -103,6 +104,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         XCTAssertEqual(firstProcess.terminateCallCount, 1)
         XCTAssertEqual(firstProcess.waitUntilExitCallCount, 1)
         XCTAssertEqual(secondProcess.terminateCallCount, 0)
+        XCTAssertEqual(events.values, ["launch", "first terminate", "first wait", "launch"])
     }
 
     func testRestartStopsExistingProcessBeforeStartingAgain() async throws {
@@ -234,6 +236,7 @@ private final class FakeProcessLauncher: ProcessLaunching, @unchecked Sendable {
     }
 
     private let error: Error?
+    private let events: ProxyLifecycleEventLog?
     private let lock = NSLock()
     private var processes: [any ManagedProxyProcess]
     private var _invocations: [Invocation] = []
@@ -242,18 +245,25 @@ private final class FakeProcessLauncher: ProcessLaunching, @unchecked Sendable {
         lock.withLock { _invocations }
     }
 
-    init(error: Error? = nil, process: any ManagedProxyProcess = ManagedProxyProcessDouble()) {
+    init(
+        error: Error? = nil,
+        process: any ManagedProxyProcess = ManagedProxyProcessDouble(),
+        events: ProxyLifecycleEventLog? = nil
+    ) {
         self.error = error
+        self.events = events
         self.processes = [process]
     }
 
-    init(error: Error? = nil, processes: [any ManagedProxyProcess]) {
+    init(error: Error? = nil, processes: [any ManagedProxyProcess], events: ProxyLifecycleEventLog? = nil) {
         self.error = error
+        self.events = events
         self.processes = processes
     }
 
     func launch(_ executable: String, _ arguments: [String]) throws -> any ManagedProxyProcess {
         lock.withLock { _invocations.append(Invocation(executable: executable, arguments: arguments)) }
+        events?.append("launch")
         if let error {
             throw error
         }
@@ -262,6 +272,8 @@ private final class FakeProcessLauncher: ProcessLaunching, @unchecked Sendable {
 }
 
 private final class ManagedProxyProcessDouble: ManagedProxyProcess, @unchecked Sendable {
+    private let name: String?
+    private let events: ProxyLifecycleEventLog?
     private let lock = NSLock()
     private var _terminateCallCount = 0
     private var _waitUntilExitCallCount = 0
@@ -274,11 +286,35 @@ private final class ManagedProxyProcessDouble: ManagedProxyProcess, @unchecked S
         lock.withLock { _waitUntilExitCallCount }
     }
 
+    init(name: String? = nil, events: ProxyLifecycleEventLog? = nil) {
+        self.name = name
+        self.events = events
+    }
+
     func terminate() {
         lock.withLock { _terminateCallCount += 1 }
+        if let name {
+            events?.append("\(name) terminate")
+        }
     }
 
     func waitUntilExit() {
         lock.withLock { _waitUntilExitCallCount += 1 }
+        if let name {
+            events?.append("\(name) wait")
+        }
+    }
+}
+
+private final class ProxyLifecycleEventLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _values: [String] = []
+
+    var values: [String] {
+        lock.withLock { _values }
+    }
+
+    func append(_ value: String) {
+        lock.withLock { _values.append(value) }
     }
 }
