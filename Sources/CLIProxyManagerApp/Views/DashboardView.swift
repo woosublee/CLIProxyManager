@@ -21,6 +21,8 @@ struct DashboardView: View {
             switch selection {
             case .dashboard:
                 dashboardDetail
+            case .licenses:
+                LicensesView()
             case .accounts, .models, .logs, .settings:
                 PlaceholderDetail(section: selection)
             }
@@ -56,6 +58,7 @@ private enum DashboardSection: String, CaseIterable, Identifiable {
     case accounts
     case models
     case logs
+    case licenses
     case settings
 
     var id: String { rawValue }
@@ -70,6 +73,8 @@ private enum DashboardSection: String, CaseIterable, Identifiable {
             "Models"
         case .logs:
             "Logs"
+        case .licenses:
+            "Licenses"
         case .settings:
             "Settings"
         }
@@ -85,6 +90,8 @@ private enum DashboardSection: String, CaseIterable, Identifiable {
             "cpu"
         case .logs:
             "list.bullet.rectangle"
+        case .licenses:
+            "doc.text.magnifyingglass"
         case .settings:
             "gearshape"
         }
