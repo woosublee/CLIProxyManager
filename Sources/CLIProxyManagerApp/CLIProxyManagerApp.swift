@@ -2,10 +2,21 @@ import SwiftUI
 
 @main
 struct CLIProxyManagerApp: App {
+    @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
+
     var body: some Scene {
         WindowGroup {
-            Text("CLIProxy Manager")
-                .frame(width: 720, height: 480)
+            if hasCompletedOnboarding {
+                DashboardView()
+            } else {
+                OnboardingView()
+                    .toolbar {
+                        Button("대시보드로 이동") {
+                            hasCompletedOnboarding = true
+                        }
+                    }
+            }
         }
+        .windowStyle(.titleBar)
     }
 }
