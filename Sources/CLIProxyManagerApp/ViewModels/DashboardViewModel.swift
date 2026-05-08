@@ -1,26 +1,29 @@
 import Combine
 import CLIProxyManagerCore
 
-protocol ProxyServiceStarting: Sendable {
+protocol ProxyServiceControlling: Sendable {
     func start(port: Int) async throws
+    func stop() async throws
+    func restart(port: Int) async throws
 }
 
-extension ProxyServiceManager: ProxyServiceStarting {}
+extension ProxyServiceManager: ProxyServiceControlling {}
 
 @MainActor
 final class DashboardViewModel: ObservableObject {
     @Published var cards: [ProfileCard]
     @Published var serverStatus: DiagnosticStatus
+    @Published var isServerActionInProgress = false
 
     private let config: AppConfig
     private let proxyHealthClient: ProxyHealthClient
-    private let proxyService: any ProxyServiceStarting
+    private let proxyService: any ProxyServiceControlling
     private let claudeConnector: ClaudeConnector
 
     init(
         config: AppConfig = .default,
         proxyHealthClient: ProxyHealthClient = ProxyHealthClient(),
-        proxyService: any ProxyServiceStarting = BundledProxyBinary.serviceManager(),
+        proxyService: any ProxyServiceControlling = BundledProxyBinary.serviceManager(),
         claudeConnector: ClaudeConnector = ClaudeConnector()
     ) {
         self.config = config
@@ -42,14 +45,35 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func startServer() async {
-        do {
+        await performServerAction(title: "CLIProxyAPI 시작 실패") {
             try await proxyService.start(port: config.port)
+        }
+    }
+
+    func stopServer() async {
+        await performServerAction(title: "CLIProxyAPI 중지 실패") {
+            try await proxyService.stop()
+        }
+    }
+
+    func restartServer() async {
+        await performServerAction(title: "CLIProxyAPI 재시작 실패") {
+            try await proxyService.restart(port: config.port)
+        }
+    }
+
+    private func performServerAction(title: String, action: () async throws -> Void) async {
+        isServerActionInProgress = true
+        defer { isServerActionInProgress = false }
+
+        do {
+            try await action()
             await refresh()
         } catch {
             updateStatuses(
                 serverStatus: DiagnosticStatus(
                     severity: .error,
-                    title: "CLIProxyAPI 시작 실패",
+                    title: title,
                     message: error.localizedDescription
                 ),
                 claudeStatus: nil

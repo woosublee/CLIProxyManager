@@ -79,6 +79,48 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.cards.first { $0.command == config.commands.ccodex }?.status.severity, .ready)
     }
 
+    func testStopServerUsesInjectedProxyServiceAndRefreshesStatus() async {
+        let config = AppConfig.default
+        let proxyService = StubProxyServiceStarter()
+        let viewModel = DashboardViewModel(
+            config: config,
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
+            proxyService: proxyService,
+            claudeConnector: ClaudeConnector(runner: StubProcessRunner(results: [
+                ProcessResult(exitCode: 0, stdout: "/usr/local/bin/claude\n", stderr: ""),
+                ProcessResult(exitCode: 0, stdout: "로그인되어 있습니다.\n", stderr: ""),
+                ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: "")
+            ]))
+        )
+
+        await viewModel.stopServer()
+
+        XCTAssertEqual(proxyService.stopCount, 1)
+        XCTAssertEqual(viewModel.serverStatus.severity, .ready)
+        XCTAssertEqual(viewModel.cards.first { $0.command == config.commands.ccodex }?.status.severity, .ready)
+    }
+
+    func testRestartServerUsesInjectedProxyServiceAndRefreshesStatus() async {
+        let config = AppConfig.default
+        let proxyService = StubProxyServiceStarter()
+        let viewModel = DashboardViewModel(
+            config: config,
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
+            proxyService: proxyService,
+            claudeConnector: ClaudeConnector(runner: StubProcessRunner(results: [
+                ProcessResult(exitCode: 0, stdout: "/usr/local/bin/claude\n", stderr: ""),
+                ProcessResult(exitCode: 0, stdout: "로그인되어 있습니다.\n", stderr: ""),
+                ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: "")
+            ]))
+        )
+
+        await viewModel.restartServer()
+
+        XCTAssertEqual(proxyService.restartPorts, [config.port])
+        XCTAssertEqual(viewModel.serverStatus.severity, .ready)
+        XCTAssertEqual(viewModel.cards.first { $0.command == config.commands.ccodex }?.status.severity, .ready)
+    }
+
     func testStartServerFailureUpdatesServerAndCodexCardStatus() async {
         let config = AppConfig.default
         let proxyService = StubProxyServiceStarter(error: ProxyServiceError.missingBinary("test"))
@@ -118,13 +160,23 @@ private final class StubProcessRunner: ProcessRunning, @unchecked Sendable {
     }
 }
 
-private final class StubProxyServiceStarter: ProxyServiceStarting, @unchecked Sendable {
+private final class StubProxyServiceStarter: ProxyServiceControlling, @unchecked Sendable {
     private let error: Error?
     private let lock = NSLock()
     private var _ports: [Int] = []
+    private var _restartPorts: [Int] = []
+    private var _stopCount = 0
 
     var ports: [Int] {
         lock.withLock { _ports }
+    }
+
+    var restartPorts: [Int] {
+        lock.withLock { _restartPorts }
+    }
+
+    var stopCount: Int {
+        lock.withLock { _stopCount }
     }
 
     init(error: Error? = nil) {
@@ -133,6 +185,20 @@ private final class StubProxyServiceStarter: ProxyServiceStarting, @unchecked Se
 
     func start(port: Int) async throws {
         lock.withLock { _ports.append(port) }
+        if let error {
+            throw error
+        }
+    }
+
+    func stop() async throws {
+        lock.withLock { _stopCount += 1 }
+        if let error {
+            throw error
+        }
+    }
+
+    func restart(port: Int) async throws {
+        lock.withLock { _restartPorts.append(port) }
         if let error {
             throw error
         }
