@@ -1,0 +1,8 @@
+.DS_Store
+.build/
+.swiftpm/
+*.xcodeproj
+*.xcworkspace
+derived-data/
+Resources/cliproxyapi/cliproxyapi
+.superpowers/brainstorm/
