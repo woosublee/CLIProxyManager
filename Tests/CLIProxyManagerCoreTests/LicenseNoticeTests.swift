@@ -10,5 +10,8 @@ final class LicenseNoticeTests: XCTestCase {
         XCTAssertTrue(notice.requiredNotice.contains("MIT License"))
         XCTAssertTrue(notice.providerTermsNotice.contains("각 provider 약관"))
         XCTAssertTrue(notice.providerTermsNotice.contains("공식 보증 제품이 아닙니다"))
+        XCTAssertTrue(notice.fullLicenseText.contains("Copyright"))
+        XCTAssertTrue(notice.fullLicenseText.contains("Permission is hereby granted"))
+        XCTAssertTrue(notice.fullLicenseText.contains("THE SOFTWARE IS PROVIDED \"AS IS\""))
     }
 }

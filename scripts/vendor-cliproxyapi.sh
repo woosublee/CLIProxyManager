@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-DEST="$REPO_ROOT/Resources/cliproxyapi/cliproxyapi"
+DEST="$REPO_ROOT/Sources/CLIProxyManagerApp/Resources/cliproxyapi/cliproxyapi"
 
 if [[ $# -gt 0 ]]; then
   SOURCE="$1"

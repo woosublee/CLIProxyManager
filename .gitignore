@@ -4,5 +4,5 @@
 *.xcodeproj
 *.xcworkspace
 derived-data/
-Resources/cliproxyapi/cliproxyapi
+Sources/CLIProxyManagerApp/Resources/cliproxyapi/cliproxyapi
 .superpowers/brainstorm/

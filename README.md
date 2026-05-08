@@ -14,7 +14,7 @@ The app is intended to make installation, diagnostics, shell function setup, and
 
 ## CLIProxyAPI license notice
 
-This app bundles or manages CLIProxyAPI, which is distributed under the MIT License. The CLIProxyAPI license text is included at `Resources/Licenses/CLIProxyAPI-LICENSE.txt`.
+This app bundles or manages CLIProxyAPI, which is distributed under the MIT License. The CLIProxyAPI license text is included at `Sources/CLIProxyManagerApp/Resources/Licenses/CLIProxyAPI-LICENSE.txt`.
 
 When distributing this app with CLIProxyAPI, keep the upstream CLIProxyAPI copyright notice and MIT permission notice in the app bundle and public release materials.
 
