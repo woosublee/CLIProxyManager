@@ -5,16 +5,32 @@ public struct AppConfig: Codable, Equatable, Sendable {
         public var cc: String
         public var ccapi: String
         public var ccodex: String
+
+        public init(cc: String, ccapi: String, ccodex: String) {
+            self.cc = cc
+            self.ccapi = ccapi
+            self.ccodex = ccodex
+        }
     }
 
     public struct ClaudeAPI: Codable, Equatable, Sendable {
         public var model: String
+
+        public init(model: String) {
+            self.model = model
+        }
     }
 
     public struct Codex: Codable, Equatable, Sendable {
         public var opusModel: String
         public var sonnetModel: String
         public var haikuModel: String
+
+        public init(opusModel: String, sonnetModel: String, haikuModel: String) {
+            self.opusModel = opusModel
+            self.sonnetModel = sonnetModel
+            self.haikuModel = haikuModel
+        }
     }
 
     public var port: Int

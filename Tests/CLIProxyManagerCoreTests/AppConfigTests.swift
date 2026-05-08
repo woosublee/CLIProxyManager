@@ -16,7 +16,7 @@ final class AppConfigTests: XCTestCase {
         XCTAssertFalse(config.includeDangerouslySkipPermissions)
     }
 
-    func testManagedPathsCanBeRootedInTemporaryDirectory() throws {
+    func testManagedPathsCanBeRootedInTemporaryDirectory() {
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent(UUID().uuidString)
         let paths = ManagedPaths(rootDirectory: root)
@@ -26,5 +26,13 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(paths.configFile, root.appendingPathComponent("config.json"))
         XCTAssertEqual(paths.logsDirectory, root.appendingPathComponent("logs"))
         XCTAssertEqual(paths.clipProxyDirectory, root.appendingPathComponent("cliproxyapi"))
+        XCTAssertEqual(
+            paths.clipProxyConfigFile,
+            root.appendingPathComponent("cliproxyapi").appendingPathComponent("config.yaml")
+        )
+        XCTAssertEqual(
+            paths.clipProxyBinary,
+            root.appendingPathComponent("cliproxyapi").appendingPathComponent("cliproxyapi")
+        )
     }
 }
