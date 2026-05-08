@@ -5,8 +5,12 @@ public struct ShellProfileInstaller: @unchecked Sendable {
     private let zshrcFile: URL
     private let fileManager: FileManager
 
-    private var markerLine: String { "# CLIProxyAPI Manager" }
-    private var sourceLine: String { "source \(paths.functionsFile.path)" }
+    private var beginMarkerLine: String { "# >>> CLIProxyAPI Manager >>>" }
+    private var endMarkerLine: String { "# <<< CLIProxyAPI Manager <<<" }
+    private var sourceLine: String { "source \(shellSingleQuoted(paths.functionsFile.path))" }
+    private var managedBlock: String {
+        beginMarkerLine + "\n" + sourceLine + "\n" + endMarkerLine + "\n"
+    }
 
     public init(
         paths: ManagedPaths,
@@ -41,7 +45,7 @@ public struct ShellProfileInstaller: @unchecked Sendable {
 
     public func isInstalled() -> Bool {
         guard let profile = try? readProfileIfPresent() else { return false }
-        return profile.components(separatedBy: .newlines).contains(sourceLine)
+        return containsManagedBlock(in: profile)
     }
 
     private func readProfileIfPresent() throws -> String {
@@ -54,28 +58,64 @@ public struct ShellProfileInstaller: @unchecked Sendable {
         if !updatedProfile.isEmpty, !updatedProfile.hasSuffix("\n") {
             updatedProfile += "\n"
         }
-        return updatedProfile + markerLine + "\n" + sourceLine + "\n"
+        return updatedProfile + managedBlock
     }
 
     private func profileByUninstalling(from profile: String) -> String {
-        let hadTrailingNewline = profile.hasSuffix("\n")
-        let lines = profile.components(separatedBy: .newlines)
-        var keptLines: [String] = []
-        keptLines.reserveCapacity(lines.count)
+        var updatedProfile = ""
+        var searchStart = profile.startIndex
 
-        for line in lines {
-            if line == markerLine || line == sourceLine { continue }
-            keptLines.append(line)
-        }
-        if hadTrailingNewline, keptLines.last == "" {
-            keptLines.removeLast()
+        while let blockRange = nextManagedBlockRange(in: profile, from: searchStart) {
+            updatedProfile += profile[searchStart..<blockRange.lowerBound]
+            searchStart = blockRange.upperBound
         }
 
-        var updatedProfile = keptLines.joined(separator: "\n")
-        if hadTrailingNewline, !updatedProfile.isEmpty, !updatedProfile.hasSuffix("\n") {
-            updatedProfile += "\n"
-        }
+        updatedProfile += profile[searchStart...]
         return updatedProfile
+    }
+
+    private func containsManagedBlock(in profile: String) -> Bool {
+        guard let blockRange = nextManagedBlockRange(in: profile, from: profile.startIndex) else { return false }
+        return profile[blockRange].components(separatedBy: .newlines).contains(sourceLine)
+    }
+
+    private func nextManagedBlockRange(in profile: String, from startIndex: String.Index) -> Range<String.Index>? {
+        var searchStart = startIndex
+
+        while let beginRange = profile.range(of: beginMarkerLine, range: searchStart..<profile.endIndex) {
+            let beginsAtLineStart = beginRange.lowerBound == profile.startIndex || profile[profile.index(before: beginRange.lowerBound)] == "\n"
+            let beginLineEnd = profile[beginRange.upperBound...].firstIndex(of: "\n") ?? profile.endIndex
+            let beginIsFullLine = beginLineEnd == beginRange.upperBound
+
+            guard beginsAtLineStart, beginIsFullLine else {
+                searchStart = beginRange.upperBound
+                continue
+            }
+
+            let contentStart = beginLineEnd == profile.endIndex ? profile.endIndex : profile.index(after: beginLineEnd)
+            guard let endRange = profile.range(of: endMarkerLine, range: contentStart..<profile.endIndex) else {
+                return nil
+            }
+
+            let endStartsAtLineStart = endRange.lowerBound == profile.startIndex || profile[profile.index(before: endRange.lowerBound)] == "\n"
+            let endLineEnd = profile[endRange.upperBound...].firstIndex(of: "\n") ?? profile.endIndex
+            let endIsFullLine = endLineEnd == endRange.upperBound
+
+            guard endStartsAtLineStart, endIsFullLine else {
+                searchStart = endRange.upperBound
+                continue
+            }
+
+            let blockEnd = endLineEnd == profile.endIndex ? profile.endIndex : profile.index(after: endLineEnd)
+            return beginRange.lowerBound..<blockEnd
+        }
+
+        return nil
+    }
+
+    private func shellSingleQuoted(_ value: String) -> String {
+        guard !value.isEmpty else { return "''" }
+        return "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     private func backupProfileIfPresent() throws {
