@@ -45,11 +45,14 @@ struct DashboardView: View {
                     }
                 }
 
-                StatusPanel(title: "CLIProxyAPI Server", status: viewModel.serverStatus) {
-                    Task {
-                        await viewModel.startServer()
-                    }
-                }
+                StatusPanel(
+                    title: "CLIProxyAPI Server",
+                    status: viewModel.serverStatus,
+                    isActionInProgress: viewModel.isServerActionInProgress,
+                    startAction: { Task { await viewModel.startServer() } },
+                    stopAction: { Task { await viewModel.stopServer() } },
+                    restartAction: { Task { await viewModel.restartServer() } }
+                )
             }
             .padding(32)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -193,7 +196,10 @@ private struct ProfileCardView: View {
 private struct StatusPanel: View {
     let title: String
     let status: DiagnosticStatus
+    let isActionInProgress: Bool
     let startAction: () -> Void
+    let stopAction: () -> Void
+    let restartAction: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -201,7 +207,12 @@ private struct StatusPanel: View {
                 Text(title)
                     .font(.title2.weight(.semibold))
                 Spacer()
-                Button("Start Server", action: startAction)
+                HStack {
+                    Button("Start", action: startAction)
+                    Button("Stop", action: stopAction)
+                    Button("Restart", action: restartAction)
+                }
+                .disabled(isActionInProgress)
             }
             Text(status.title)
                 .font(.headline)
