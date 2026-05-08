@@ -1,30 +1,60 @@
 import Foundation
 
+public protocol ProcessLaunching: Sendable {
+    func launch(_ executable: String, _ arguments: [String]) throws
+}
+
+public struct ProcessLauncher: ProcessLaunching {
+    public init() {}
+
+    public func launch(_ executable: String, _ arguments: [String]) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+    }
+}
+
+public enum ProxyServiceError: Error, Equatable {
+    case invalidPort(Int)
+    case writeFailed(String)
+    case launchFailed(String)
+}
+
 public struct ProxyServiceManager: @unchecked Sendable {
     private let paths: ManagedPaths
-    private let runner: any ProcessRunning
+    private let launcher: any ProcessLaunching
     private let fileManager: FileManager
 
     public init(
         paths: ManagedPaths,
-        runner: any ProcessRunning = ProcessRunner(),
+        launcher: any ProcessLaunching = ProcessLauncher(),
         fileManager: FileManager = .default
     ) {
         self.paths = paths
-        self.runner = runner
+        self.launcher = launcher
         self.fileManager = fileManager
     }
 
-    @discardableResult
-    public func start(port: Int) async -> ProcessResult {
+    public func start(port: Int) async throws {
+        guard isValidPort(port) else {
+            throw ProxyServiceError.invalidPort(port)
+        }
+
         do {
             try fileManager.createDirectory(at: paths.clipProxyDirectory, withIntermediateDirectories: true)
             try config(for: port).write(to: paths.clipProxyConfigFile, atomically: true, encoding: .utf8)
         } catch {
-            return ProcessResult(exitCode: 1, stdout: "", stderr: error.localizedDescription)
+            throw ProxyServiceError.writeFailed(error.localizedDescription)
         }
 
-        return await runner.run(paths.clipProxyBinary.path, ["--config", paths.clipProxyConfigFile.path])
+        do {
+            try launcher.launch(paths.clipProxyBinary.path, ["--config", paths.clipProxyConfigFile.path])
+        } catch {
+            throw ProxyServiceError.launchFailed(error.localizedDescription)
+        }
     }
 
     private func config(for port: Int) -> String {
@@ -37,4 +67,8 @@ public struct ProxyServiceManager: @unchecked Sendable {
           - sk-dummy
         """
     }
+}
+
+private func isValidPort(_ port: Int) -> Bool {
+    (1...65_535).contains(port)
 }

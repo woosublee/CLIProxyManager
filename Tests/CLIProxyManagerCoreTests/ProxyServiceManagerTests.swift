@@ -3,13 +3,13 @@ import XCTest
 @testable import CLIProxyManagerCore
 
 final class ProxyServiceManagerTests: XCTestCase {
-    func testStartWritesCompatibleConfigAndRunsBinaryWithConfigPath() async throws {
+    func testStartWritesCompatibleConfigAndLaunchesBinaryWithConfigPath() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
-        let runner = FakeProcessRunner()
-        let manager = ProxyServiceManager(paths: paths, runner: runner)
+        let launcher = FakeProcessLauncher()
+        let manager = ProxyServiceManager(paths: paths, launcher: launcher)
 
-        _ = await manager.start(port: 8317)
+        try await manager.start(port: 8317)
 
         var isDirectory: ObjCBool = false
         XCTAssertTrue(FileManager.default.fileExists(atPath: paths.clipProxyDirectory.path, isDirectory: &isDirectory))
@@ -23,8 +23,8 @@ final class ProxyServiceManagerTests: XCTestCase {
         XCTAssertTrue(config.contains("api-keys:"))
         XCTAssertTrue(config.contains("  - sk-dummy"))
 
-        XCTAssertEqual(runner.invocations, [
-            FakeProcessRunner.Invocation(
+        XCTAssertEqual(launcher.invocations, [
+            FakeProcessLauncher.Invocation(
                 executable: paths.clipProxyBinary.path,
                 arguments: ["--config", paths.clipProxyConfigFile.path]
             )
@@ -34,15 +34,72 @@ final class ProxyServiceManagerTests: XCTestCase {
     func testStartDoesNotUseRealHomeWhenPathsUseTemporaryRoot() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
-        let runner = FakeProcessRunner()
-        let manager = ProxyServiceManager(paths: paths, runner: runner)
+        let launcher = FakeProcessLauncher()
+        let manager = ProxyServiceManager(paths: paths, launcher: launcher)
 
-        _ = await manager.start(port: 9000)
+        try await manager.start(port: 9000)
 
         let config = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
         XCTAssertTrue(config.contains(paths.clipProxyDirectory.path) == false)
         XCTAssertTrue(config.contains(FileManager.default.homeDirectoryForCurrentUser.path) == false)
-        XCTAssertEqual(runner.invocations.first?.executable, paths.clipProxyBinary.path)
+        XCTAssertEqual(launcher.invocations.first?.executable, paths.clipProxyBinary.path)
+    }
+
+    func testStartRejectsInvalidPortBeforeWritingConfigOrLaunching() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let launcher = FakeProcessLauncher()
+        let manager = ProxyServiceManager(paths: paths, launcher: launcher)
+
+        do {
+            try await manager.start(port: 0)
+            XCTFail("Expected invalid port error")
+        } catch let error as ProxyServiceError {
+            XCTAssertEqual(error, .invalidPort(0))
+        }
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.clipProxyConfigFile.path))
+        XCTAssertEqual(launcher.invocations, [])
+    }
+
+    func testStartReportsWriteFailure() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try FileManager.default.createDirectory(at: paths.rootDirectory, withIntermediateDirectories: true)
+        try Data().write(to: paths.clipProxyDirectory)
+        let launcher = FakeProcessLauncher()
+        let manager = ProxyServiceManager(paths: paths, launcher: launcher)
+
+        do {
+            try await manager.start(port: 8317)
+            XCTFail("Expected write failure")
+        } catch let error as ProxyServiceError {
+            guard case .writeFailed = error else {
+                XCTFail("Expected writeFailed, got \(error)")
+                return
+            }
+        }
+
+        XCTAssertEqual(launcher.invocations, [])
+    }
+
+    func testStartReportsLaunchFailure() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let launcher = FakeProcessLauncher(error: NSError(domain: "test", code: 1))
+        let manager = ProxyServiceManager(paths: paths, launcher: launcher)
+
+        do {
+            try await manager.start(port: 8317)
+            XCTFail("Expected launch failure")
+        } catch let error as ProxyServiceError {
+            guard case .launchFailed = error else {
+                XCTFail("Expected launchFailed, got \(error)")
+                return
+            }
+        }
+
+        XCTAssertEqual(launcher.invocations.count, 1)
     }
 
     private func makeSandbox() throws -> URL {
@@ -55,12 +112,13 @@ final class ProxyServiceManagerTests: XCTestCase {
     }
 }
 
-private final class FakeProcessRunner: ProcessRunning, @unchecked Sendable {
+private final class FakeProcessLauncher: ProcessLaunching, @unchecked Sendable {
     struct Invocation: Equatable {
         let executable: String
         let arguments: [String]
     }
 
+    private let error: Error?
     private let lock = NSLock()
     private var _invocations: [Invocation] = []
 
@@ -68,8 +126,14 @@ private final class FakeProcessRunner: ProcessRunning, @unchecked Sendable {
         lock.withLock { _invocations }
     }
 
-    func run(_ executable: String, _ arguments: [String]) async -> ProcessResult {
+    init(error: Error? = nil) {
+        self.error = error
+    }
+
+    func launch(_ executable: String, _ arguments: [String]) throws {
         lock.withLock { _invocations.append(Invocation(executable: executable, arguments: arguments)) }
-        return ProcessResult(exitCode: 0, stdout: "", stderr: "")
+        if let error {
+            throw error
+        }
     }
 }
