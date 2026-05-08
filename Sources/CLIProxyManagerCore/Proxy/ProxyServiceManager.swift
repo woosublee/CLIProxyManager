@@ -38,6 +38,7 @@ public struct ProxyServiceManager: @unchecked Sendable {
     private let launcher: any ProcessLaunching
     private let fileManager: FileManager
     private let processState = LockedProcessState()
+    private let lifecycleLock = NSLock()
 
     public init(
         paths: ManagedPaths,
@@ -52,6 +53,25 @@ public struct ProxyServiceManager: @unchecked Sendable {
     }
 
     public func start(port: Int) async throws {
+        try lifecycleLock.withLock {
+            try startLocked(port: port)
+        }
+    }
+
+    public func stop() async throws {
+        lifecycleLock.withLock {
+            stopLocked()
+        }
+    }
+
+    public func restart(port: Int) async throws {
+        try lifecycleLock.withLock {
+            stopLocked()
+            try startLocked(port: port)
+        }
+    }
+
+    private func startLocked(port: Int) throws {
         guard isValidPort(port) else {
             throw ProxyServiceError.invalidPort(port)
         }
@@ -75,15 +95,10 @@ public struct ProxyServiceManager: @unchecked Sendable {
         }
     }
 
-    public func stop() async throws {
+    private func stopLocked() {
         let process = processState.clear()
         process?.terminate()
         process?.waitUntilExit()
-    }
-
-    public func restart(port: Int) async throws {
-        try await stop()
-        try await start(port: port)
     }
 
     private func installBundledBinaryIfNeeded() throws {
