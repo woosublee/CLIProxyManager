@@ -10,6 +10,13 @@ public struct ClaudeConnector: Sendable {
     public func status() async -> DiagnosticStatus {
         let which = await runner.run("/usr/bin/env", ["which", "claude"])
         guard which.exitCode == 0 else {
+            if which.timedOut {
+                return DiagnosticStatus(
+                    severity: .error,
+                    title: "Claude Code 확인 시간 초과",
+                    message: timeoutMessage(from: which)
+                )
+            }
             return DiagnosticStatus(
                 severity: .error,
                 title: "Claude Code 미설치",
@@ -22,12 +29,19 @@ public struct ClaudeConnector: Sendable {
             return DiagnosticStatus(
                 severity: .warning,
                 title: "Claude Code 확인 실패",
-                message: version.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+                message: versionFailureMessage(from: version)
             )
         }
 
         let auth = await runner.run("/usr/bin/env", ["claude", "auth", "status"])
         guard auth.exitCode == 0 else {
+            if auth.timedOut {
+                return DiagnosticStatus(
+                    severity: .warning,
+                    title: "Claude 로그인 상태 확인 시간 초과",
+                    message: timeoutMessage(from: auth)
+                )
+            }
             return DiagnosticStatus(
                 severity: .warning,
                 title: "Claude 로그인 필요",
@@ -48,5 +62,28 @@ public struct ClaudeConnector: Sendable {
 
     public func logoutCommand() -> [String] {
         ["claude", "auth", "logout"]
+    }
+
+    private func versionFailureMessage(from result: ProcessResult) -> String {
+        let stderr = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        if stderr.isEmpty == false {
+            return stderr
+        }
+
+        let stdout = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if stdout.isEmpty == false {
+            return stdout
+        }
+
+        return "Claude Code 버전을 확인하지 못했습니다."
+    }
+
+    private func timeoutMessage(from result: ProcessResult) -> String {
+        let stderr = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        if stderr.isEmpty == false {
+            return stderr
+        }
+
+        return "명령 실행 시간이 초과되었습니다."
     }
 }
