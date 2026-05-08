@@ -26,15 +26,18 @@ public enum ProxyServiceError: Error, Equatable {
 
 public struct ProxyServiceManager: @unchecked Sendable {
     private let paths: ManagedPaths
+    private let bundledBinaryURL: URL?
     private let launcher: any ProcessLaunching
     private let fileManager: FileManager
 
     public init(
         paths: ManagedPaths,
+        bundledBinaryURL: URL? = nil,
         launcher: any ProcessLaunching = ProcessLauncher(),
         fileManager: FileManager = .default
     ) {
         self.paths = paths
+        self.bundledBinaryURL = bundledBinaryURL
         self.launcher = launcher
         self.fileManager = fileManager
     }
@@ -44,13 +47,11 @@ public struct ProxyServiceManager: @unchecked Sendable {
             throw ProxyServiceError.invalidPort(port)
         }
 
-        guard fileManager.fileExists(atPath: paths.clipProxyBinary.path) else {
-            throw ProxyServiceError.missingBinary(paths.clipProxyBinary.path)
-        }
-
         do {
-            try fileManager.createDirectory(at: paths.clipProxyDirectory, withIntermediateDirectories: true)
+            try installBundledBinaryIfNeeded()
             try config(for: port).write(to: paths.clipProxyConfigFile, atomically: true, encoding: .utf8)
+        } catch let error as ProxyServiceError {
+            throw error
         } catch {
             throw ProxyServiceError.writeFailed(error.localizedDescription)
         }
@@ -60,6 +61,19 @@ public struct ProxyServiceManager: @unchecked Sendable {
         } catch {
             throw ProxyServiceError.launchFailed(error.localizedDescription)
         }
+    }
+
+    private func installBundledBinaryIfNeeded() throws {
+        try fileManager.createDirectory(at: paths.clipProxyDirectory, withIntermediateDirectories: true)
+
+        guard fileManager.fileExists(atPath: paths.clipProxyBinary.path) == false else { return }
+
+        guard let bundledBinaryURL, fileManager.fileExists(atPath: bundledBinaryURL.path) else {
+            throw ProxyServiceError.missingBinary(paths.clipProxyBinary.path)
+        }
+
+        try fileManager.copyItem(at: bundledBinaryURL, to: paths.clipProxyBinary)
+        try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: paths.clipProxyBinary.path)
     }
 
     private func config(for port: Int) -> String {

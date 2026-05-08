@@ -11,4 +11,14 @@ final class LicenseResourceTests: XCTestCase {
         XCTAssertTrue(text.contains("Permission is hereby granted"))
         XCTAssertTrue(text.contains("THE SOFTWARE IS PROVIDED \"AS IS\""))
     }
+
+    func testCLIProxyAPIBinaryResourceIsBundled() throws {
+        let url = try XCTUnwrap(BundledProxyBinary.url())
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    func testBundledProxyBinaryCreatesServiceManager() {
+        _ = BundledProxyBinary.serviceManager()
+    }
 }

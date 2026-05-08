@@ -32,6 +32,21 @@ final class ProxyServiceManagerTests: XCTestCase {
         ])
     }
 
+    func testStartCopiesBundledBinaryWhenManagedBinaryIsMissing() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let bundledBinary = sandbox.appendingPathComponent("bundle/cliproxyapi")
+        try createBinary(at: bundledBinary, contents: "#!/bin/sh\necho bundled\n")
+        let launcher = FakeProcessLauncher()
+        let manager = ProxyServiceManager(paths: paths, bundledBinaryURL: bundledBinary, launcher: launcher)
+
+        try await manager.start(port: 8317)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: paths.clipProxyBinary.path))
+        XCTAssertEqual(try String(contentsOf: paths.clipProxyBinary, encoding: .utf8), "#!/bin/sh\necho bundled\n")
+        XCTAssertEqual(launcher.invocations.first?.executable, paths.clipProxyBinary.path)
+    }
+
     func testStartDoesNotUseRealHomeWhenPathsUseTemporaryRoot() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
@@ -131,9 +146,9 @@ final class ProxyServiceManagerTests: XCTestCase {
         return sandbox
     }
 
-    private func createBinary(at url: URL) throws {
+    private func createBinary(at url: URL, contents: String = "#!/bin/sh\n") throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data("#!/bin/sh\n".utf8).write(to: url)
+        try Data(contents.utf8).write(to: url)
     }
 }
 

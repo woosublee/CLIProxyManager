@@ -100,13 +100,26 @@ final class ShellFunctionRendererTests: XCTestCase {
         XCTAssertFalse(script.contains("ANTHROPIC_MODEL=\"\(model)\""))
     }
 
+    func testCCAPIStopsWhenSecretHelperFails() throws {
+        let script = try ShellFunctionRenderer(
+            config: .default,
+            helperCommand: "/usr/local/bin/cliproxy-manager"
+        ).render()
+
+        XCTAssertTrue(script.contains("local anthropic_auth_token"))
+        XCTAssertTrue(script.contains("if ! anthropic_auth_token=\"$( '/usr/local/bin/cliproxy-manager' secret get claude-api-key )\"; then"))
+        XCTAssertTrue(script.contains("Claude API key를 읽을 수 없습니다."))
+        XCTAssertTrue(script.contains("return 1"))
+        XCTAssertTrue(script.contains(#"ANTHROPIC_AUTH_TOKEN="$anthropic_auth_token" \"#))
+    }
+
     func testHelperCommandPathWithSpacesAndSingleQuoteIsEscapedInCommandSubstitution() throws {
         let script = try ShellFunctionRenderer(
             config: .default,
             helperCommand: "/Applications/CLI Proxy/cliproxy-manager's bin"
         ).render()
 
-        XCTAssertTrue(script.contains("ANTHROPIC_AUTH_TOKEN=\"$( '/Applications/CLI Proxy/cliproxy-manager'\\''s bin' secret get claude-api-key )\""))
+        XCTAssertTrue(script.contains("if ! anthropic_auth_token=\"$( '/Applications/CLI Proxy/cliproxy-manager'\\''s bin' secret get claude-api-key )\"; then"))
     }
 
     func testDefaultGeneratedScriptPassesZshSyntaxCheck() throws {

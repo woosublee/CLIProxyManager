@@ -35,7 +35,13 @@ public struct ShellFunctionRenderer: Sendable {
         }
 
         \(config.commands.ccapi)() {
-          ANTHROPIC_AUTH_TOKEN="$( \(helperCommand) secret get claude-api-key )" \\
+          local anthropic_auth_token
+          if ! anthropic_auth_token="$( \(helperCommand) secret get claude-api-key )"; then
+            echo "Claude API key를 읽을 수 없습니다. CLIProxy Manager에서 API key를 저장해 주세요."
+            return 1
+          fi
+
+          ANTHROPIC_AUTH_TOKEN="$anthropic_auth_token" \\
           ANTHROPIC_MODEL=\(shellSingleQuoted(config.ccapi.model)) \\
           \(claudeCommand)
         }
