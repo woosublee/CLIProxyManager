@@ -3,6 +3,7 @@ import SwiftUI
 
 struct DashboardView: View {
     @StateObject private var viewModel = DashboardViewModel()
+    @State private var selection = DashboardSection.dashboard
 
     private let columns = [
         GridItem(.adaptive(minimum: 240), spacing: 16)
@@ -10,36 +11,101 @@ struct DashboardView: View {
 
     var body: some View {
         NavigationSplitView {
-            List {
-                Label("Dashboard", systemImage: "gauge.with.dots.needle.67percent")
-                Label("Accounts", systemImage: "person.crop.circle")
-                Label("Models", systemImage: "cpu")
-                Label("Logs", systemImage: "list.bullet.rectangle")
-                Label("Settings", systemImage: "gearshape")
-            }
-            .navigationTitle("CLIProxy")
-        } detail: {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    Text("Profiles")
-                        .font(.largeTitle.bold())
-
-                    LazyVGrid(columns: columns, alignment: .leading, spacing: 16) {
-                        ForEach(viewModel.cards) { card in
-                            ProfileCardView(card: card)
-                        }
-                    }
-
-                    StatusPanel(status: viewModel.serverStatus)
+            List(DashboardSection.allCases, selection: $selection) { section in
+                NavigationLink(value: section) {
+                    Label(section.title, systemImage: section.systemImage)
                 }
-                .padding(32)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .navigationTitle("CLIProxy Manager")
+        } detail: {
+            switch selection {
+            case .dashboard:
+                dashboardDetail
+            case .accounts, .models, .logs, .settings:
+                PlaceholderDetail(section: selection)
             }
         }
         .task {
             await viewModel.refresh()
         }
         .frame(minWidth: 900, minHeight: 600)
+    }
+
+    private var dashboardDetail: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                Text("Profiles")
+                    .font(.largeTitle.bold())
+
+                LazyVGrid(columns: columns, alignment: .leading, spacing: 16) {
+                    ForEach(viewModel.cards) { card in
+                        ProfileCardView(card: card)
+                    }
+                }
+
+                StatusPanel(title: "CLIProxyAPI Server", status: viewModel.serverStatus)
+            }
+            .padding(32)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+private enum DashboardSection: String, CaseIterable, Identifiable {
+    case dashboard
+    case accounts
+    case models
+    case logs
+    case settings
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .dashboard:
+            "Dashboard"
+        case .accounts:
+            "Accounts"
+        case .models:
+            "Models"
+        case .logs:
+            "Logs"
+        case .settings:
+            "Settings"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .dashboard:
+            "gauge.with.dots.needle.67percent"
+        case .accounts:
+            "person.crop.circle"
+        case .models:
+            "cpu"
+        case .logs:
+            "list.bullet.rectangle"
+        case .settings:
+            "gearshape"
+        }
+    }
+}
+
+private struct PlaceholderDetail: View {
+    let section: DashboardSection
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: section.systemImage)
+                .font(.system(size: 40, weight: .semibold))
+                .foregroundStyle(.secondary)
+            Text(section.title)
+                .font(.title2.weight(.semibold))
+            Text("이 영역은 다음 단계에서 설정과 진단 화면으로 연결됩니다.")
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(32)
     }
 }
 
@@ -65,6 +131,7 @@ private struct ProfileCardView: View {
                 Image(systemName: iconName)
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(severityColor)
+                    .accessibilityHidden(true)
             }
 
             Divider()
@@ -86,6 +153,7 @@ private struct ProfileCardView: View {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(severityColor.opacity(0.28), lineWidth: 1)
         }
+        .accessibilityElement(children: .combine)
     }
 
     private var iconName: String {
@@ -112,11 +180,12 @@ private struct ProfileCardView: View {
 }
 
 private struct StatusPanel: View {
+    let title: String
     let status: DiagnosticStatus
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Server Status")
+            Text(title)
                 .font(.title2.weight(.semibold))
             Text(status.title)
                 .font(.headline)

@@ -2,7 +2,7 @@ import Combine
 
 @MainActor
 final class OnboardingViewModel: ObservableObject {
-    @Published var steps: [OnboardingStep]
+    @Published private(set) var steps: [OnboardingStep]
 
     init() {
         steps = [
