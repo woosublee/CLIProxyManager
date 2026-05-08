@@ -137,6 +137,28 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.serverStatus.severity, .error)
         XCTAssertEqual(viewModel.serverStatus.title, "CLIProxyAPI 시작 실패")
         XCTAssertEqual(viewModel.cards.first { $0.command == config.commands.ccodex }?.status.severity, .error)
+        XCTAssertFalse(viewModel.isServerActionInProgress)
+    }
+
+    func testLifecycleActionInProgressPreventsOverlappingActions() async {
+        let config = AppConfig.default
+        let proxyService = StubProxyServiceStarter()
+        let viewModel = DashboardViewModel(
+            config: config,
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
+            proxyService: proxyService,
+            claudeConnector: ClaudeConnector(runner: StubProcessRunner(results: [
+                ProcessResult(exitCode: 0, stdout: "/usr/local/bin/claude\n", stderr: ""),
+                ProcessResult(exitCode: 0, stdout: "로그인되어 있습니다.\n", stderr: ""),
+                ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: "")
+            ]))
+        )
+
+        viewModel.isServerActionInProgress = true
+        await viewModel.startServer()
+
+        XCTAssertEqual(proxyService.ports, [])
+        XCTAssertTrue(viewModel.isServerActionInProgress)
     }
 }
 

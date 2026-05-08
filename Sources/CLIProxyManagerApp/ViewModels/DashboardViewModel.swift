@@ -63,6 +63,8 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func performServerAction(title: String, action: () async throws -> Void) async {
+        guard isServerActionInProgress == false else { return }
+
         isServerActionInProgress = true
         defer { isServerActionInProgress = false }
 
