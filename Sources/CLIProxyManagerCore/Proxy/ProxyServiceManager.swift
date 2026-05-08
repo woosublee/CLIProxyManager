@@ -67,7 +67,9 @@ public struct ProxyServiceManager: @unchecked Sendable {
 
         do {
             let process = try launcher.launch(paths.clipProxyBinary.path, ["--config", paths.clipProxyConfigFile.path])
-            processState.set(process)
+            let previousProcess = processState.replace(with: process)
+            previousProcess?.terminate()
+            previousProcess?.waitUntilExit()
         } catch {
             throw ProxyServiceError.launchFailed(error.localizedDescription)
         }
@@ -108,8 +110,12 @@ private final class LockedProcessState: @unchecked Sendable {
     private let lock = NSLock()
     private var process: (any ManagedProxyProcess)?
 
-    func set(_ process: any ManagedProxyProcess) {
-        lock.withLock { self.process = process }
+    func replace(with process: any ManagedProxyProcess) -> (any ManagedProxyProcess)? {
+        lock.withLock {
+            let previousProcess = self.process
+            self.process = process
+            return previousProcess
+        }
     }
 
     func clear() -> (any ManagedProxyProcess)? {

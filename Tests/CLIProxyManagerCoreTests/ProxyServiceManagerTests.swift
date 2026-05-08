@@ -77,6 +77,23 @@ final class ProxyServiceManagerTests: XCTestCase {
         XCTAssertEqual(process.waitUntilExitCallCount, 1)
     }
 
+    func testSecondStartStopsPreviousManagedProcessBeforeReplacingIt() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let firstProcess = ManagedProxyProcessDouble()
+        let secondProcess = ManagedProxyProcessDouble()
+        let launcher = FakeProcessLauncher(processes: [firstProcess, secondProcess])
+        let manager = ProxyServiceManager(paths: paths, launcher: launcher)
+
+        try await manager.start(port: 8317)
+        try await manager.start(port: 8317)
+
+        XCTAssertEqual(firstProcess.terminateCallCount, 1)
+        XCTAssertEqual(firstProcess.waitUntilExitCallCount, 1)
+        XCTAssertEqual(secondProcess.terminateCallCount, 0)
+    }
+
     func testStartRejectsInvalidPortBeforeWritingConfigOrLaunching() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
@@ -174,8 +191,8 @@ private final class FakeProcessLauncher: ProcessLaunching, @unchecked Sendable {
     }
 
     private let error: Error?
-    private let process: any ManagedProxyProcess
     private let lock = NSLock()
+    private var processes: [any ManagedProxyProcess]
     private var _invocations: [Invocation] = []
 
     var invocations: [Invocation] {
@@ -184,7 +201,12 @@ private final class FakeProcessLauncher: ProcessLaunching, @unchecked Sendable {
 
     init(error: Error? = nil, process: any ManagedProxyProcess = ManagedProxyProcessDouble()) {
         self.error = error
-        self.process = process
+        self.processes = [process]
+    }
+
+    init(error: Error? = nil, processes: [any ManagedProxyProcess]) {
+        self.error = error
+        self.processes = processes
     }
 
     func launch(_ executable: String, _ arguments: [String]) throws -> any ManagedProxyProcess {
@@ -192,7 +214,7 @@ private final class FakeProcessLauncher: ProcessLaunching, @unchecked Sendable {
         if let error {
             throw error
         }
-        return process
+        return lock.withLock { processes.removeFirst() }
     }
 }
 
