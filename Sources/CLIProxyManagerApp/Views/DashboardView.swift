@@ -45,7 +45,11 @@ struct DashboardView: View {
                     }
                 }
 
-                StatusPanel(title: "CLIProxyAPI Server", status: viewModel.serverStatus)
+                StatusPanel(title: "CLIProxyAPI Server", status: viewModel.serverStatus) {
+                    Task {
+                        await viewModel.startServer()
+                    }
+                }
             }
             .padding(32)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -189,11 +193,16 @@ private struct ProfileCardView: View {
 private struct StatusPanel: View {
     let title: String
     let status: DiagnosticStatus
+    let startAction: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title)
-                .font(.title2.weight(.semibold))
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text(title)
+                    .font(.title2.weight(.semibold))
+                Spacer()
+                Button("Start Server", action: startAction)
+            }
             Text(status.title)
                 .font(.headline)
                 .foregroundStyle(severityColor)
