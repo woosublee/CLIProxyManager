@@ -77,6 +77,17 @@ final class ProxyServiceManagerTests: XCTestCase {
         XCTAssertEqual(process.waitUntilExitCallCount, 1)
     }
 
+    func testStopWithoutRunningProcessIsNoOp() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let launcher = FakeProcessLauncher()
+        let manager = ProxyServiceManager(paths: paths, launcher: launcher)
+
+        try await manager.stop()
+
+        XCTAssertEqual(launcher.invocations, [])
+    }
+
     func testSecondStartReplacesAndStopsPreviousManagedProcess() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
@@ -92,6 +103,38 @@ final class ProxyServiceManagerTests: XCTestCase {
         XCTAssertEqual(firstProcess.terminateCallCount, 1)
         XCTAssertEqual(firstProcess.waitUntilExitCallCount, 1)
         XCTAssertEqual(secondProcess.terminateCallCount, 0)
+    }
+
+    func testRestartStopsExistingProcessBeforeStartingAgain() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let firstProcess = ManagedProxyProcessDouble()
+        let secondProcess = ManagedProxyProcessDouble()
+        let launcher = FakeProcessLauncher(processes: [firstProcess, secondProcess])
+        let manager = ProxyServiceManager(paths: paths, launcher: launcher)
+
+        try await manager.start(port: 8317)
+        try await manager.restart(port: 9000)
+
+        XCTAssertEqual(firstProcess.terminateCallCount, 1)
+        XCTAssertEqual(firstProcess.waitUntilExitCallCount, 1)
+        XCTAssertEqual(secondProcess.terminateCallCount, 0)
+        XCTAssertEqual(secondProcess.waitUntilExitCallCount, 0)
+        XCTAssertEqual(launcher.invocations, [
+            FakeProcessLauncher.Invocation(
+                executable: paths.clipProxyBinary.path,
+                arguments: ["--config", paths.clipProxyConfigFile.path]
+            ),
+            FakeProcessLauncher.Invocation(
+                executable: paths.clipProxyBinary.path,
+                arguments: ["--config", paths.clipProxyConfigFile.path]
+            )
+        ])
+
+        let config = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
+        XCTAssertTrue(config.contains("port: 9000"))
+        XCTAssertFalse(config.contains("port: 8317"))
     }
 
     func testStartRejectsInvalidPortBeforeWritingConfigOrLaunching() async throws {

@@ -81,6 +81,11 @@ public struct ProxyServiceManager: @unchecked Sendable {
         process?.waitUntilExit()
     }
 
+    public func restart(port: Int) async throws {
+        try await stop()
+        try await start(port: port)
+    }
+
     private func installBundledBinaryIfNeeded() throws {
         try fileManager.createDirectory(at: paths.clipProxyDirectory, withIntermediateDirectories: true)
 
