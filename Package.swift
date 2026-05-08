@@ -36,6 +36,11 @@ let package = Package(
             name: "CLIProxyManagerCoreTests",
             dependencies: ["CLIProxyManagerCore"],
             path: "Tests/CLIProxyManagerCoreTests"
+        ),
+        .testTarget(
+            name: "CLIProxyManagerAppTests",
+            dependencies: ["CLIProxyManagerApp"],
+            path: "Tests/CLIProxyManagerAppTests"
         )
     ]
 )
