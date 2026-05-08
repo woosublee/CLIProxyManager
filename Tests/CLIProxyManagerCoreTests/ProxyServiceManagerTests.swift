@@ -77,7 +77,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         XCTAssertEqual(process.waitUntilExitCallCount, 1)
     }
 
-    func testSecondStartStopsPreviousManagedProcessBeforeReplacingIt() async throws {
+    func testSecondStartReplacesAndStopsPreviousManagedProcess() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         try createBinary(at: paths.clipProxyBinary)
