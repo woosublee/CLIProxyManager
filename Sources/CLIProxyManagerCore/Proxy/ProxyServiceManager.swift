@@ -1,19 +1,27 @@
 import Foundation
 
+public protocol ManagedProxyProcess: Sendable {
+    func terminate()
+    func waitUntilExit()
+}
+
+extension Process: ManagedProxyProcess {}
+
 public protocol ProcessLaunching: Sendable {
-    func launch(_ executable: String, _ arguments: [String]) throws
+    func launch(_ executable: String, _ arguments: [String]) throws -> any ManagedProxyProcess
 }
 
 public struct ProcessLauncher: ProcessLaunching {
     public init() {}
 
-    public func launch(_ executable: String, _ arguments: [String]) throws {
+    public func launch(_ executable: String, _ arguments: [String]) throws -> any ManagedProxyProcess {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try process.run()
+        return process
     }
 }
 
@@ -29,6 +37,7 @@ public struct ProxyServiceManager: @unchecked Sendable {
     private let bundledBinaryURL: URL?
     private let launcher: any ProcessLaunching
     private let fileManager: FileManager
+    private let processState = LockedProcessState()
 
     public init(
         paths: ManagedPaths,
@@ -57,10 +66,17 @@ public struct ProxyServiceManager: @unchecked Sendable {
         }
 
         do {
-            try launcher.launch(paths.clipProxyBinary.path, ["--config", paths.clipProxyConfigFile.path])
+            let process = try launcher.launch(paths.clipProxyBinary.path, ["--config", paths.clipProxyConfigFile.path])
+            processState.set(process)
         } catch {
             throw ProxyServiceError.launchFailed(error.localizedDescription)
         }
+    }
+
+    public func stop() async throws {
+        let process = processState.clear()
+        process?.terminate()
+        process?.waitUntilExit()
     }
 
     private func installBundledBinaryIfNeeded() throws {
@@ -85,6 +101,23 @@ public struct ProxyServiceManager: @unchecked Sendable {
         api-keys:
           - sk-dummy
         """
+    }
+}
+
+private final class LockedProcessState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: (any ManagedProxyProcess)?
+
+    func set(_ process: any ManagedProxyProcess) {
+        lock.withLock { self.process = process }
+    }
+
+    func clear() -> (any ManagedProxyProcess)? {
+        lock.withLock {
+            let process = self.process
+            self.process = nil
+            return process
+        }
     }
 }
 

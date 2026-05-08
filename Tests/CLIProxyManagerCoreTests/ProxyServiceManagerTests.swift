@@ -62,6 +62,21 @@ final class ProxyServiceManagerTests: XCTestCase {
         XCTAssertEqual(launcher.invocations.first?.executable, paths.clipProxyBinary.path)
     }
 
+    func testStopTerminatesAppManagedProcess() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let process = ManagedProxyProcessDouble()
+        let launcher = FakeProcessLauncher(process: process)
+        let manager = ProxyServiceManager(paths: paths, launcher: launcher)
+
+        try await manager.start(port: 8317)
+        try await manager.stop()
+
+        XCTAssertEqual(process.terminateCallCount, 1)
+        XCTAssertEqual(process.waitUntilExitCallCount, 1)
+    }
+
     func testStartRejectsInvalidPortBeforeWritingConfigOrLaunching() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
@@ -159,6 +174,7 @@ private final class FakeProcessLauncher: ProcessLaunching, @unchecked Sendable {
     }
 
     private let error: Error?
+    private let process: any ManagedProxyProcess
     private let lock = NSLock()
     private var _invocations: [Invocation] = []
 
@@ -166,14 +182,38 @@ private final class FakeProcessLauncher: ProcessLaunching, @unchecked Sendable {
         lock.withLock { _invocations }
     }
 
-    init(error: Error? = nil) {
+    init(error: Error? = nil, process: any ManagedProxyProcess = ManagedProxyProcessDouble()) {
         self.error = error
+        self.process = process
     }
 
-    func launch(_ executable: String, _ arguments: [String]) throws {
+    func launch(_ executable: String, _ arguments: [String]) throws -> any ManagedProxyProcess {
         lock.withLock { _invocations.append(Invocation(executable: executable, arguments: arguments)) }
         if let error {
             throw error
         }
+        return process
+    }
+}
+
+private final class ManagedProxyProcessDouble: ManagedProxyProcess, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _terminateCallCount = 0
+    private var _waitUntilExitCallCount = 0
+
+    var terminateCallCount: Int {
+        lock.withLock { _terminateCallCount }
+    }
+
+    var waitUntilExitCallCount: Int {
+        lock.withLock { _waitUntilExitCallCount }
+    }
+
+    func terminate() {
+        lock.withLock { _terminateCallCount += 1 }
+    }
+
+    func waitUntilExit() {
+        lock.withLock { _waitUntilExitCallCount += 1 }
     }
 }
