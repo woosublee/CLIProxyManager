@@ -19,7 +19,7 @@ It is designed for users who want one place to:
 
 ## Releases
 
-DMG release builds and publishing steps are documented in [docs/release.md](docs/release.md). Public DMGs are ad-hoc signed and not notarized by default. A Developer ID signing identity can be provided, but notarization is not part of the current release flow.
+Release artifacts are distributed as ad-hoc signed, non-notarized DMGs on GitHub Releases.
 
 ## Quick start
 
