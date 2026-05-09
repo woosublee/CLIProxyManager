@@ -1,0 +1,116 @@
+import SwiftUI
+
+struct ProviderListView: View {
+    @ObservedObject var viewModel: DashboardViewModel
+    @State private var activeProvider: ProviderRowState.ID?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("Providers")
+                    .font(.title2.bold())
+                Spacer()
+                Button {
+                    viewModel.addProvider()
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .help("Add provider")
+            }
+
+            VStack(spacing: 10) {
+                ForEach(viewModel.providerRows) { provider in
+                    ProviderRowView(
+                        provider: provider,
+                        connect: { connect(provider.id) },
+                        disconnect: { disconnect(provider.id) },
+                        settings: { activeProvider = provider.id }
+                    )
+                }
+            }
+
+            if let message = viewModel.settingsMessage {
+                Text(message)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(24)
+        .sheet(item: $activeProvider) { provider in
+            providerSettingsSheet(provider)
+        }
+    }
+
+    private func connect(_ provider: ProviderRowState.ID) {
+        Task { await viewModel.connectProvider(provider) }
+    }
+
+    private func disconnect(_ provider: ProviderRowState.ID) {
+        viewModel.disconnectProvider(provider)
+    }
+
+    @ViewBuilder
+    private func providerSettingsSheet(_ provider: ProviderRowState.ID) -> some View {
+        switch provider {
+        case .claude:
+            ClaudeOAuthProviderSettingsSheet(config: viewModel.config) { functionName, dangerousPermissionsEnabled in
+                try viewModel.saveClaudeOAuthSettings(functionName: functionName, dangerousPermissionsEnabled: dangerousPermissionsEnabled)
+            }
+        case .codex:
+            CodexProviderSettingsSheet(
+                config: viewModel.config,
+                availableModels: viewModel.availableCodexModels,
+                refreshModels: { Task { await viewModel.loadCodexModels() } },
+                save: { functionName, codex, dangerousPermissionsEnabled in
+                    try viewModel.saveCodexSettings(
+                        functionName: functionName,
+                        codex: codex,
+                        dangerousPermissionsEnabled: dangerousPermissionsEnabled
+                    )
+                }
+            )
+        }
+    }
+}
+
+private struct ProviderRowView: View {
+    let provider: ProviderRowState
+    let connect: () -> Void
+    let disconnect: () -> Void
+    let settings: () -> Void
+
+    var body: some View {
+        HStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(provider.name)
+                    .font(.headline)
+                Text(provider.connectionDetail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            VStack(alignment: .trailing, spacing: 4) {
+                Text(provider.connectionTitle)
+                    .foregroundStyle(provider.isConnected ? .green : .orange)
+                Text(provider.functionName)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+            }
+
+            if provider.isConnected {
+                Button("Disconnect", action: disconnect)
+            } else {
+                Button("Connect", action: connect)
+            }
+            Button("Settings", action: settings)
+        }
+        .padding(14)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+extension ProviderRowState.ID: Identifiable {
+    var id: String { rawValue }
+}
