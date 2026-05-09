@@ -69,10 +69,16 @@ public struct ShellProfileInstaller: @unchecked Sendable {
 
     private func conflictingNames(_ names: [String], in profile: String) -> [String] {
         let unmanagedProfile = profileByUninstalling(from: profile)
+        let lines = unmanagedProfile.components(separatedBy: .newlines)
         return names.filter { name in
-            unmanagedProfile.contains("alias \(name)=") ||
-                unmanagedProfile.contains("\(name)()") ||
-                unmanagedProfile.contains("function \(name)")
+            lines.contains { line in
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                return trimmed.hasPrefix("alias \(name)=") ||
+                    trimmed.hasPrefix("\(name)()") ||
+                    trimmed == "function \(name)" ||
+                    trimmed.hasPrefix("function \(name) ") ||
+                    trimmed.hasPrefix("function \(name)()")
+            }
         }
     }
 

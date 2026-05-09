@@ -58,6 +58,20 @@ final class ProxyServiceManagerTests: XCTestCase {
         XCTAssertEqual(launcher.invocations.first?.executable, paths.clipProxyBinary.path)
     }
 
+    func testStartReplacesManagedBinaryWhenBundledBinaryChanges() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary, contents: "#!/bin/sh\necho old\n")
+        let bundledBinary = sandbox.appendingPathComponent("bundle/cliproxyapi")
+        try createBinary(at: bundledBinary, contents: "#!/bin/sh\necho new\n")
+        let launcher = FakeProcessLauncher()
+        let manager = ProxyServiceManager(paths: paths, bundledBinaryURL: bundledBinary, launcher: launcher)
+
+        try await manager.start(port: 8317)
+
+        XCTAssertEqual(try String(contentsOf: paths.clipProxyBinary, encoding: .utf8), "#!/bin/sh\necho new\n")
+    }
+
     func testStartDoesNotUseRealHomeWhenPathsUseTemporaryRoot() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
@@ -85,7 +99,23 @@ final class ProxyServiceManagerTests: XCTestCase {
         try await manager.stop()
 
         XCTAssertEqual(process.terminateCallCount, 1)
-        XCTAssertEqual(process.waitUntilExitCallCount, 1)
+        XCTAssertEventuallyEqual(process.waitUntilExitCallCount, 1)
+    }
+
+    func testStopReturnsWithoutBlockingOnProcessExitWait() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let process = ManagedProxyProcessDouble(waitDelay: 0.5)
+        let launcher = FakeProcessLauncher(process: process)
+        let manager = ProxyServiceManager(paths: paths, launcher: launcher)
+
+        try await manager.start(port: 8317)
+        let startedAt = Date()
+        try await manager.stop()
+
+        XCTAssertLessThan(Date().timeIntervalSince(startedAt), 0.2)
+        XCTAssertEqual(process.terminateCallCount, 1)
     }
 
     func testStopWithoutRunningProcessIsNoOp() async throws {
@@ -111,7 +141,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         try await manager.stop()
 
         XCTAssertEqual(process.terminateCallCount, 1)
-        XCTAssertEqual(process.waitUntilExitCallCount, 1)
+        XCTAssertEventuallyEqual(process.waitUntilExitCallCount, 1)
     }
 
     func testSecondStartStopsPreviousManagedProcessBeforeLaunchingReplacement() async throws {
@@ -253,6 +283,22 @@ final class ProxyServiceManagerTests: XCTestCase {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data(contents.utf8).write(to: url)
     }
+
+    private func XCTAssertEventuallyEqual<T: Equatable>(
+        _ expression: @autoclosure () -> T,
+        _ expected: T,
+        timeout: TimeInterval = 1,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let deadline = Date().addingTimeInterval(timeout)
+        var value = expression()
+        while value != expected, Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+            value = expression()
+        }
+        XCTAssertEqual(value, expected, file: file, line: line)
+    }
 }
 
 private final class FakeProcessLauncher: ProcessLaunching, @unchecked Sendable {
@@ -303,6 +349,7 @@ private final class ManagedProxyProcessDouble: ManagedProxyProcess, @unchecked S
     private let lock = NSLock()
     private var _terminateCallCount = 0
     private var _waitUntilExitCallCount = 0
+    private let waitDelay: TimeInterval
 
     var terminateCallCount: Int {
         lock.withLock { _terminateCallCount }
@@ -312,9 +359,10 @@ private final class ManagedProxyProcessDouble: ManagedProxyProcess, @unchecked S
         lock.withLock { _waitUntilExitCallCount }
     }
 
-    init(name: String? = nil, events: ProxyLifecycleEventLog? = nil) {
+    init(name: String? = nil, events: ProxyLifecycleEventLog? = nil, waitDelay: TimeInterval = 0) {
         self.name = name
         self.events = events
+        self.waitDelay = waitDelay
     }
 
     func terminate() {
@@ -325,6 +373,9 @@ private final class ManagedProxyProcessDouble: ManagedProxyProcess, @unchecked S
     }
 
     func waitUntilExit() {
+        if waitDelay > 0 {
+            Thread.sleep(forTimeInterval: waitDelay)
+        }
         lock.withLock { _waitUntilExitCallCount += 1 }
         if let name {
             events?.append("\(name) wait")

@@ -111,18 +111,31 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
     }
 
     private func stopLocked() {
-        let process = processState.clear()
-        process?.terminate()
-        process?.waitUntilExit()
+        guard let process = processState.clear() else { return }
+        process.terminate()
+        Task.detached(priority: .utility) {
+            process.waitUntilExit()
+        }
     }
 
     private func installBundledBinaryIfNeeded() throws {
         try fileManager.createDirectory(at: paths.clipProxyDirectory, withIntermediateDirectories: true)
 
-        guard fileManager.fileExists(atPath: paths.clipProxyBinary.path) == false else { return }
-
         guard let bundledBinaryURL, fileManager.fileExists(atPath: bundledBinaryURL.path) else {
+            if fileManager.fileExists(atPath: paths.clipProxyBinary.path) {
+                return
+            }
             throw ProxyServiceError.missingBinary(paths.clipProxyBinary.path)
+        }
+
+        if fileManager.fileExists(atPath: paths.clipProxyBinary.path) {
+            let installedData = try Data(contentsOf: paths.clipProxyBinary)
+            let bundledData = try Data(contentsOf: bundledBinaryURL)
+            if installedData == bundledData {
+                try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: paths.clipProxyBinary.path)
+                return
+            }
+            try fileManager.removeItem(at: paths.clipProxyBinary)
         }
 
         try fileManager.copyItem(at: bundledBinaryURL, to: paths.clipProxyBinary)

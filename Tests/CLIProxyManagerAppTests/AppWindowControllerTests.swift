@@ -21,25 +21,13 @@ final class AppWindowControllerTests: XCTestCase {
 
         XCTAssertEqual(appController.openedWindowIDs, ["settings"])
         XCTAssertEqual(appController.activationCount, 1)
-        XCTAssertEqual(appController.centerSettingsWindowCount, 1)
     }
 
-    func testRevealSettingsActivatesAppAndCentersExistingWindow() {
+    func testCloseKeyWindowClosesKeyWindow() {
         let appController = StubAppController()
         let windowController = AppWindowController(appController: appController)
 
-        windowController.revealSettings()
-
-        XCTAssertEqual(appController.centerSettingsWindowCount, 1)
-        XCTAssertEqual(appController.activationCount, 1)
-        XCTAssertEqual(appController.openedWindowIDs, [])
-    }
-
-    func testCloseSettingsClosesKeyWindow() {
-        let appController = StubAppController()
-        let windowController = AppWindowController(appController: appController)
-
-        windowController.closeSettings()
+        windowController.closeKeyWindow()
 
         XCTAssertEqual(appController.closeKeyWindowCount, 1)
     }
@@ -50,7 +38,6 @@ private final class StubAppController: AppControlling {
     private(set) var openedWindowIDs: [String] = []
     private(set) var activationCount = 0
     private(set) var closeKeyWindowCount = 0
-    private(set) var centerSettingsWindowCount = 0
 
     func openWindow(id: String) {
         openedWindowIDs.append(id)
@@ -62,9 +49,5 @@ private final class StubAppController: AppControlling {
 
     func closeKeyWindow() {
         closeKeyWindowCount += 1
-    }
-
-    func centerSettingsWindow() {
-        centerSettingsWindowCount += 1
     }
 }

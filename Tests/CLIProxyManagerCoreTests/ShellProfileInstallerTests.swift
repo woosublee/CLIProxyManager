@@ -94,6 +94,24 @@ final class ShellProfileInstallerTests: XCTestCase {
         XCTAssertEqual(profile, "alias ccmcodex='old command'\n")
     }
 
+    func testInstallIgnoresCommentsAndSubstringMatchesWhenDetectingFunctionConflicts() throws {
+        let sandbox = try makeSandbox()
+        let zshrcFile = sandbox.appendingPathComponent(".zshrc")
+        try """
+        # alias ccmcodex='old command'
+        alias ccmcodex_old='old command'
+        my_ccmcodex() { echo nope }
+        function ccmcodex_old { echo nope }
+        """.write(to: zshrcFile, atomically: true, encoding: .utf8)
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let installer = ShellProfileInstaller(paths: paths, zshrcFile: zshrcFile)
+
+        try installer.install(functionScript: "ccmcodex() {}\n", functionNames: ["ccmcodex"])
+
+        let profile = try String(contentsOf: zshrcFile, encoding: .utf8)
+        XCTAssertTrue(profile.contains("source '\(paths.functionsFile.path)'"))
+    }
+
     func testInstallIgnoresFunctionNameInsideManagedBlock() throws {
         let sandbox = try makeSandbox()
         let zshrcFile = sandbox.appendingPathComponent(".zshrc")

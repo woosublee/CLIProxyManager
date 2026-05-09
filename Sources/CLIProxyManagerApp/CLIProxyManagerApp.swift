@@ -33,10 +33,6 @@ struct CLIProxyManagerApp: App {
 
         WindowGroup("Settings", id: "settings") {
             SettingsView(viewModel: viewModel)
-                .task {
-                    try? await Task.sleep(nanoseconds: 200_000_000)
-                    appWindowController.revealSettings()
-                }
         }
         .windowStyle(.titleBar)
         .defaultSize(width: AppWindowMetrics.settingsWidth, height: AppWindowMetrics.settingsHeight)
@@ -51,7 +47,7 @@ struct CLIProxyManagerApp: App {
             }
             CommandGroup(replacing: .saveItem) {
                 Button("Close Window") {
-                    appWindowController.closeSettings()
+                    appWindowController.closeKeyWindow()
                 }
                 .keyboardShortcut("w", modifiers: .command)
             }
