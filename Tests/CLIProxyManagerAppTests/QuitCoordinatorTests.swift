@@ -1,4 +1,5 @@
 import XCTest
+import CLIProxyManagerCore
 @testable import CLIProxyManagerApp
 
 @MainActor
@@ -55,6 +56,10 @@ final class QuitCoordinatorTests: XCTestCase {
         coordinator.requestQuit()
 
         XCTAssertEqual(presenter.confirmationCount, 1)
+    }
+
+    func testServerControlStateRequiresStopBeforeQuitWhileStopping() {
+        XCTAssertTrue(ServerControlState.stopping.shouldStopServerBeforeQuit)
     }
 
     func testConfirmQuitStopsServerBeforeTerminating() async {

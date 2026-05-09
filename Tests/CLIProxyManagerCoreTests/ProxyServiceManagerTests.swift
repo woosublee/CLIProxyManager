@@ -366,6 +366,19 @@ final class ProxyServiceManagerTests: XCTestCase {
         XCTAssertEqual(commandRunner.invocations, [["list"]])
     }
 
+    func testLaunchctlRunnerPreservesSpacesInMatchingLabels() throws {
+        let commandRunner = FakeLaunchctlCommandRunner(results: [
+            LaunchctlCommandResult(
+                exitStatus: 0,
+                stdout: "56022\t0\tcom.cliproxymanager.runtime.test label\n",
+                stderr: ""
+            )
+        ])
+        let launchctl = LaunchctlRunner(commandRunner: commandRunner)
+
+        XCTAssertEqual(try launchctl.labels(matchingPID: 56022), ["com.cliproxymanager.runtime.test label"])
+    }
+
     func testManagedCliproxyapiCommandRequiresManagedConfigPath() {
         XCTAssertTrue(ProxyServiceManager.isManagedCliproxyapiCommand(
             "/tmp/managed/cliproxyapi --config /tmp/managed/config.yaml",

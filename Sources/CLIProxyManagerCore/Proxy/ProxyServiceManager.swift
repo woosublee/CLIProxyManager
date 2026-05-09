@@ -171,9 +171,9 @@ struct LaunchctlRunner: LaunchctlManaging {
 
     private static func labels(fromLaunchctlListOutput text: String, matchingPID pid: pid_t) -> [String] {
         text.split(whereSeparator: { $0 == "\n" }).compactMap { line in
-            let columns = line.split(whereSeparator: { $0 == "\t" || $0 == " " }).map(String.init)
-            guard columns.count >= 3, pid_t(columns[0]) == pid else { return nil }
-            return columns[2]
+            let columns = line.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
+            guard columns.count == 3, pid_t(columns[0]) == pid else { return nil }
+            return String(columns[2])
         }
     }
 }

@@ -75,3 +75,14 @@ final class QuitCoordinator: ObservableObject {
         }
     }
 }
+
+extension ServerControlState {
+    var shouldStopServerBeforeQuit: Bool {
+        switch self {
+        case .starting, .running, .stopping:
+            return true
+        case .stopped, .error:
+            return false
+        }
+    }
+}
