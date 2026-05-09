@@ -10,6 +10,8 @@
     <string>6.0</string>
     <key>CFBundleIdentifier</key>
     <string>com.woosublee.CLIProxyManager</string>
+    <key>CFBundleIconFile</key>
+    <string>CLIProxyManager</string>
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>CFBundleShortVersionString</key>
