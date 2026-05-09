@@ -35,22 +35,22 @@ final class QuitCoordinator: ObservableObject {
     private let proxyService: any ProxyServiceControlling
     private let appTerminator: any AppTerminating
     private let quitConfirmationPresenter: any QuitConfirmationPresenting
-    private let isServerRunning: @MainActor @Sendable () -> Bool
+    private let shouldStopServerBeforeQuit: @MainActor @Sendable () -> Bool
 
     init(
         proxyService: any ProxyServiceControlling = BundledProxyBinary.serviceManager(),
         appTerminator: any AppTerminating = NSApplicationTerminator(),
         quitConfirmationPresenter: any QuitConfirmationPresenting = NSAlertQuitConfirmationPresenter(),
-        isServerRunning: @escaping @MainActor @Sendable () -> Bool = { true }
+        shouldStopServerBeforeQuit: @escaping @MainActor @Sendable () -> Bool = { true }
     ) {
         self.proxyService = proxyService
         self.appTerminator = appTerminator
         self.quitConfirmationPresenter = quitConfirmationPresenter
-        self.isServerRunning = isServerRunning
+        self.shouldStopServerBeforeQuit = shouldStopServerBeforeQuit
     }
 
     func requestQuit() {
-        guard isServerRunning() else {
+        guard shouldStopServerBeforeQuit() else {
             appTerminator.terminate()
             return
         }

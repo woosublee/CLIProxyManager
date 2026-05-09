@@ -9,7 +9,14 @@ struct CLIProxyManagerApp: App {
     init() {
         let viewModel = DashboardViewModel()
         _viewModel = StateObject(wrappedValue: viewModel)
-        _quitCoordinator = StateObject(wrappedValue: QuitCoordinator(isServerRunning: { viewModel.serverControlState.isRunning }))
+        _quitCoordinator = StateObject(wrappedValue: QuitCoordinator(shouldStopServerBeforeQuit: {
+            switch viewModel.serverControlState {
+            case .starting, .running:
+                return true
+            case .stopped, .stopping, .error:
+                return false
+            }
+        }))
     }
 
     private var appWindowController: AppWindowController {
