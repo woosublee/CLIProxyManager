@@ -352,6 +352,33 @@ final class ProxyServiceManagerTests: XCTestCase {
         XCTAssertEqual(probe.sleepCount, 2)
     }
 
+    func testLaunchctlRunnerListsLabelsMatchingPID() throws {
+        let commandRunner = FakeLaunchctlCommandRunner(results: [
+            LaunchctlCommandResult(
+                exitStatus: 0,
+                stdout: "56022\t0\tcom.cliproxymanager.runtime.abc\n23098\t0\thomebrew.mxcl.cliproxyapi\n",
+                stderr: ""
+            )
+        ])
+        let launchctl = LaunchctlRunner(commandRunner: commandRunner)
+
+        XCTAssertEqual(try launchctl.labels(matchingPID: 56022), ["com.cliproxymanager.runtime.abc"])
+        XCTAssertEqual(commandRunner.invocations, [["list"]])
+    }
+
+    func testLaunchctlRunnerPreservesSpacesInMatchingLabels() throws {
+        let commandRunner = FakeLaunchctlCommandRunner(results: [
+            LaunchctlCommandResult(
+                exitStatus: 0,
+                stdout: "56022\t0\tcom.cliproxymanager.runtime.test label\n",
+                stderr: ""
+            )
+        ])
+        let launchctl = LaunchctlRunner(commandRunner: commandRunner)
+
+        XCTAssertEqual(try launchctl.labels(matchingPID: 56022), ["com.cliproxymanager.runtime.test label"])
+    }
+
     func testManagedCliproxyapiCommandRequiresManagedConfigPath() {
         XCTAssertTrue(ProxyServiceManager.isManagedCliproxyapiCommand(
             "/tmp/managed/cliproxyapi --config /tmp/managed/config.yaml",
@@ -448,6 +475,7 @@ private struct FakeLaunchctl: LaunchctlManaging {
     func remove(label: String) throws {}
     func submit(label: String, executable: String, arguments: [String]) throws {}
     func lookupPID(label: String) throws -> pid_t { 123 }
+    func labels(matchingPID pid: pid_t) throws -> [String] { [] }
 }
 
 private final class FakeProcessLauncher: ProcessLaunching, @unchecked Sendable {

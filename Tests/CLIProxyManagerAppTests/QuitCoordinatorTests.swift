@@ -1,4 +1,5 @@
 import XCTest
+import CLIProxyManagerCore
 @testable import CLIProxyManagerApp
 
 @MainActor
@@ -35,7 +36,7 @@ final class QuitCoordinatorTests: XCTestCase {
             proxyService: proxyService,
             appTerminator: terminator,
             quitConfirmationPresenter: presenter,
-            isServerRunning: { false }
+            shouldStopServerBeforeQuit: { false }
         )
 
         coordinator.requestQuit()
@@ -43,6 +44,22 @@ final class QuitCoordinatorTests: XCTestCase {
         XCTAssertEqual(presenter.confirmationCount, 0)
         XCTAssertEqual(proxyService.stopCount, 0)
         XCTAssertEqual(terminator.terminateCount, 1)
+    }
+
+    func testRequestQuitAsksForConfirmationWhenServerIsStarting() {
+        let presenter = StubQuitConfirmationPresenter(shouldConfirm: false)
+        let coordinator = QuitCoordinator(
+            quitConfirmationPresenter: presenter,
+            shouldStopServerBeforeQuit: { true }
+        )
+
+        coordinator.requestQuit()
+
+        XCTAssertEqual(presenter.confirmationCount, 1)
+    }
+
+    func testServerControlStateRequiresStopBeforeQuitWhileStopping() {
+        XCTAssertTrue(ServerControlState.stopping.shouldStopServerBeforeQuit)
     }
 
     func testConfirmQuitStopsServerBeforeTerminating() async {
