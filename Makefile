@@ -5,6 +5,8 @@ BUILD_NUMBER ?= 1
 BUILD_DIR ?= build
 CONFIGURATION ?= release
 CODESIGN_IDENTITY ?= Apple Development
+ICON_NAME ?= CLIProxyManager
+ICON_FILE ?= $(ICON_NAME).icns
 
 APP_BUNDLE := $(BUILD_DIR)/$(APP_NAME).app
 CONTENTS_DIR := $(APP_BUNDLE)/Contents
@@ -15,6 +17,7 @@ SWIFT_BUILD_DIR = $(shell swift build -c $(CONFIGURATION) --show-bin-path)
 APP_EXECUTABLE = $(SWIFT_BUILD_DIR)/$(APP_NAME)
 HELPER_EXECUTABLE = $(SWIFT_BUILD_DIR)/cliproxy-manager
 BUNDLED_HELPER := $(HELPERS_DIR)/cliproxy-manager
+BUNDLED_ICON := $(RESOURCES_DIR)/$(ICON_FILE)
 INFO_PLIST := Info.plist
 ENTITLEMENTS := CLIProxyManager.entitlements
 
@@ -26,18 +29,21 @@ swift-build:
 	swift build -c $(CONFIGURATION) --product $(APP_NAME)
 	swift build -c $(CONFIGURATION) --product cliproxy-manager
 
-bundle: swift-build $(INFO_PLIST) $(ENTITLEMENTS)
+bundle: swift-build $(INFO_PLIST) $(ENTITLEMENTS) $(ICON_FILE)
 	test -x "$(APP_EXECUTABLE)" || { echo "Missing executable: $(APP_EXECUTABLE)"; exit 1; }
 	test -x "$(HELPER_EXECUTABLE)" || { echo "Missing executable: $(HELPER_EXECUTABLE)"; exit 1; }
+	test -f "$(ICON_FILE)" || { echo "Missing icon: $(ICON_FILE)"; exit 1; }
 	rm -rf "$(APP_BUNDLE)"
 	mkdir -p "$(MACOS_DIR)" "$(RESOURCES_DIR)" "$(HELPERS_DIR)"
 	ditto --norsrc --noextattr "$(APP_EXECUTABLE)" "$(MACOS_DIR)/$(APP_NAME)"
 	ditto --norsrc --noextattr "$(HELPER_EXECUTABLE)" "$(BUNDLED_HELPER)"
+	ditto --norsrc --noextattr "$(ICON_FILE)" "$(BUNDLED_ICON)"
 	cp "$(INFO_PLIST)" "$(CONTENTS_DIR)/Info.plist"
 	plutil -replace CFBundleName -string "$(APP_NAME)" "$(CONTENTS_DIR)/Info.plist"
 	plutil -replace CFBundleDisplayName -string "$(APP_NAME)" "$(CONTENTS_DIR)/Info.plist"
 	plutil -replace CFBundleExecutable -string "$(APP_NAME)" "$(CONTENTS_DIR)/Info.plist"
 	plutil -replace CFBundleIdentifier -string "$(BUNDLE_ID)" "$(CONTENTS_DIR)/Info.plist"
+	plutil -replace CFBundleIconFile -string "$(ICON_NAME)" "$(CONTENTS_DIR)/Info.plist"
 	plutil -replace CFBundleShortVersionString -string "$(VERSION)" "$(CONTENTS_DIR)/Info.plist"
 	plutil -replace CFBundleVersion -string "$(BUILD_NUMBER)" "$(CONTENTS_DIR)/Info.plist"
 	@for bundle in $(SWIFT_BUILD_DIR)/*CLIProxyManagerApp*.bundle; do \
@@ -83,6 +89,8 @@ verify: sign
 	ditto --norsrc --noextattr "$(APP_BUNDLE)" "$$VERIFY_APP"; \
 	xattr -cr "$$VERIFY_APP"; \
 	codesign --verify --deep --strict --verbose=2 "$$VERIFY_APP"; \
+	test -f "$$VERIFY_APP/Contents/Resources/$(ICON_FILE)" || { echo "Missing bundled icon: $$VERIFY_APP/Contents/Resources/$(ICON_FILE)"; exit 1; }; \
+	plutil -extract CFBundleIconFile raw "$$VERIFY_APP/Contents/Info.plist" | grep -Fx "$(ICON_NAME)" >/dev/null || { echo "Missing CFBundleIconFile: $(ICON_NAME)"; exit 1; }; \
 	test -x "$$VERIFY_APP/Contents/Helpers/cliproxy-manager" || { echo "Missing bundled helper: $$VERIFY_APP/Contents/Helpers/cliproxy-manager"; exit 1; }; \
 	test ! -e "$$VERIFY_APP/Contents/Resources/cliproxy-manager" || { echo "Helper must not be bundled in Contents/Resources"; exit 1; }; \
 	echo "codesign verification passed"
