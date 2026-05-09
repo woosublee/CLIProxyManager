@@ -18,9 +18,7 @@ public struct ShellFunctionRenderer: Sendable {
 
     public func render() throws -> String {
         try validate(functionName: config.commands.cc)
-        if includeClaudeAPI {
-            try validate(functionName: config.commands.ccapi)
-        }
+        try validate(functionName: config.commands.ccapi)
         try validate(functionName: config.commands.ccodex)
         try validate(port: config.port)
 

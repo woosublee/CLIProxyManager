@@ -14,8 +14,9 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
             claudeConnector: connectedClaudeConnector()
         )
 
-        XCTAssertEqual(installer.installedFunctionNames, ["ccm", "ccmapi", "ccmcodex"])
-        XCTAssertTrue(installer.installedScript?.contains("ccm() {") == true)
+        XCTAssertEqual(installer.installedFunctionNames, ["cc", "ccodex"])
+        XCTAssertTrue(installer.installedScript?.contains("cc() {") == true)
+        XCTAssertFalse(installer.installedScript?.contains("ccapi() {") == true)
     }
 
     func testApplyRendersAndInstallsCurrentConfig() throws {
@@ -26,8 +27,34 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
 
         try service.apply(config: config)
 
-        XCTAssertEqual(installer.installedFunctionNames, ["ccm", "ccmapi", "codexcustom"])
+        XCTAssertEqual(installer.installedFunctionNames, ["cc", "codexcustom"])
         XCTAssertTrue(installer.installedScript?.contains("codexcustom() {") == true)
+    }
+
+    func testApplyOmitsClaudeAPIOnlyWhenSecretIsMissing() throws {
+        let installer = StubShellInstaller()
+        let service = AutomaticShellInstallService(
+            installer: installer,
+            secretStore: FailingSecretStore(error: SecretStoreError.missingSecret(SecretKey.claudeAPIKey.rawValue)),
+            helperCommand: "/usr/local/bin/cliproxy-manager"
+        )
+
+        try service.apply(config: .default)
+
+        XCTAssertEqual(installer.installedFunctionNames, ["cc", "ccodex"])
+        XCTAssertFalse(installer.installedScript?.contains("ccmapi() {") == true)
+    }
+
+    func testApplyPropagatesSecretReadFailure() {
+        let service = AutomaticShellInstallService(
+            installer: StubShellInstaller(),
+            secretStore: FailingSecretStore(error: SecretStoreError.readFailed(SecretKey.claudeAPIKey.rawValue)),
+            helperCommand: "/usr/local/bin/cliproxy-manager"
+        )
+
+        XCTAssertThrowsError(try service.apply(config: .default)) { error in
+            XCTAssertEqual(error as? SecretStoreError, .readFailed(SecretKey.claudeAPIKey.rawValue))
+        }
     }
 }
 
@@ -52,6 +79,14 @@ private final class StubShellInstaller: ShellFunctionInstalling, @unchecked Send
     }
 
     func isInstalled() -> Bool { installedScript != nil }
+}
+
+private struct FailingSecretStore: SecretStore {
+    let error: Error
+
+    func get(_ key: SecretKey) throws -> String { throw error }
+    func set(_ value: String, for key: SecretKey) throws {}
+    func delete(_ key: SecretKey) throws {}
 }
 
 private final class StubProxyService: ProxyServiceControlling, @unchecked Sendable {

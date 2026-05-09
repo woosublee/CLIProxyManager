@@ -64,12 +64,11 @@ final class DashboardViewModel: ObservableObject {
     @Published private(set) var config: AppConfig
     @Published var availableCodexModels: [String] = []
 
-    /// Picks the most recent "main" GPT model (e.g. `gpt-5.5`) — excluding `-mini`,
-    /// `-codex`, `-codex-spark`, `auto-review`, etc. Returns nil if none match.
     var latestBaseCodexModel: String? {
-        let mainPattern = #"^gpt-\d+(\.\d+)?$"#
-        return availableCodexModels.first {
-            $0.range(of: mainPattern, options: .regularExpression) != nil
+        let excludedKeywords = ["mini", "preview", "codex", "spark", "review"]
+        return availableCodexModels.first { model in
+            let lowercasedModel = model.lowercased()
+            return lowercasedModel.hasPrefix("gpt-") && !excludedKeywords.contains { lowercasedModel.contains($0) }
         } ?? availableCodexModels.first
     }
     @Published var settingsMessage: String?
@@ -436,16 +435,19 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func installShellFunctions(helperCommand: String = "/usr/local/bin/cliproxy-manager") throws {
-        try automaticShellInstallService.apply(config: config)
+        try automaticShellInstallService.apply(config: config, helperCommand: helperCommand)
         settingsMessage = "설치가 완료되었습니다. 새 터미널을 열거나 source ~/.zshrc를 실행하세요."
         rebuildOptionRows()
     }
 
-    func saveSetting(_ action: () throws -> Void) {
+    @discardableResult
+    func saveSetting(_ action: () throws -> Void) -> Bool {
         do {
             try action()
+            return true
         } catch {
             settingsMessage = error.localizedDescription
+            return false
         }
     }
 
@@ -497,7 +499,8 @@ final class DashboardViewModel: ObservableObject {
                         profile: claudeEnabled ?? claudeAny,
                         fallback: claudeStatus?.message ?? "번들 CLIProxyAPI의 Claude OAuth profile을 연결하세요."
                     ),
-                    isConnected: claudeEnabled != nil
+                    isConnected: claudeEnabled != nil,
+                    isErrored: claudeAny?.expired != nil || claudeStatus?.severity == .error
                 )
             )
         }
@@ -513,7 +516,8 @@ final class DashboardViewModel: ObservableObject {
                         profile: codexEnabled ?? codexAny,
                         fallback: codexStatus?.message ?? "번들 CLIProxyAPI의 Codex OAuth profile을 연결하세요."
                     ),
-                    isConnected: codexEnabled != nil
+                    isConnected: codexEnabled != nil,
+                    isErrored: codexAny?.expired != nil || codexStatus?.severity == .error
                 )
             )
         }

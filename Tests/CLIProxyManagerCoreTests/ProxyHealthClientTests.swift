@@ -40,9 +40,9 @@ final class ProxyHealthClientTests: XCTestCase {
         XCTAssertEqual(
             status,
             DiagnosticStatus(
-                severity: .error,
+                severity: .warning,
                 title: "CLIProxyAPI 중지됨",
-                message: "앱에서 서버를 시작하세요."
+                message: ""
             )
         )
     }

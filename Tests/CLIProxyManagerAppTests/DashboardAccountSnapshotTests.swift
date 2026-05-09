@@ -44,4 +44,32 @@ final class DashboardAccountSnapshotTests: XCTestCase {
         XCTAssertEqual(snapshot.primaryActionTitle, "Connect")
         XCTAssertFalse(snapshot.showsMoreMenu)
     }
+
+    func testWhitespaceOnlyNicknameFallsBackToProviderName() {
+        let row = ProviderRowState(
+            id: .claude,
+            name: "Claude OAuth",
+            nickname: "  \n  ",
+            functionName: "ccm",
+            connectionTitle: "연결됨",
+            connectionDetail: "claude@example.com",
+            isConnected: true
+        )
+
+        XCTAssertEqual(row.displayTitle, "Claude OAuth")
+    }
+
+    func testDisplayTitleUsesTrimmedNickname() {
+        let row = ProviderRowState(
+            id: .claude,
+            name: "Claude OAuth",
+            nickname: "  Work  \n",
+            functionName: "ccm",
+            connectionTitle: "연결됨",
+            connectionDetail: "claude@example.com",
+            isConnected: true
+        )
+
+        XCTAssertEqual(row.displayTitle, "Work")
+    }
 }

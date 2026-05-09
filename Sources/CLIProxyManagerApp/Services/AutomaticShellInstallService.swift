@@ -3,7 +3,7 @@ import CLIProxyManagerCore
 struct AutomaticShellInstallService: Sendable {
     private let installer: any ShellFunctionInstalling
     private let secretStore: any SecretStore
-    private let helperCommand: String
+    private let defaultHelperCommand: String
 
     init(
         installer: any ShellFunctionInstalling,
@@ -12,14 +12,19 @@ struct AutomaticShellInstallService: Sendable {
     ) {
         self.installer = installer
         self.secretStore = secretStore
-        self.helperCommand = helperCommand
+        self.defaultHelperCommand = helperCommand
     }
 
-    func apply(config: AppConfig) throws {
-        let includeClaudeAPI = (try? secretStore.get(.claudeAPIKey)).map { !$0.isEmpty } ?? false
+    func apply(config: AppConfig, helperCommand: String? = nil) throws {
+        let includeClaudeAPI: Bool
+        do {
+            includeClaudeAPI = try !secretStore.get(.claudeAPIKey).isEmpty
+        } catch SecretStoreError.missingSecret {
+            includeClaudeAPI = false
+        }
         let script = try ShellFunctionRenderer(
             config: config,
-            helperCommand: helperCommand,
+            helperCommand: helperCommand ?? defaultHelperCommand,
             includeClaudeAPI: includeClaudeAPI
         ).render()
         var functionNames = [config.commands.cc, config.commands.ccodex]

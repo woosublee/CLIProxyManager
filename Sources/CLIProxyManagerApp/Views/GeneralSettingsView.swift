@@ -64,9 +64,8 @@ struct ServerSettingsView: View {
                         ),
                         range: 1024...65_535,
                         commit: { newPort in
-                            viewModel.saveSetting { try viewModel.savePort(newPort) }
-                            // If the server is running, restart with the new port.
-                            if viewModel.serverControlState.isRunning {
+                            let didSave = viewModel.saveSetting { try viewModel.savePort(newPort) }
+                            if didSave, viewModel.serverControlState.isRunning, !viewModel.isServerActionInProgress {
                                 Task { await viewModel.restartServer() }
                             }
                         }

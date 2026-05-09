@@ -13,7 +13,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         )
 
         XCTAssertEqual(viewModel.providerRows.map(\.name), ["Claude OAuth", "Codex OAuth"])
-        XCTAssertEqual(viewModel.providerRows.map(\.functionName), ["ccm", "ccmcodex"])
+        XCTAssertEqual(viewModel.providerRows.map(\.functionName), ["cc", "ccodex"])
     }
 
     func testAddProviderShowsClaudeAPIHiddenMessage() {

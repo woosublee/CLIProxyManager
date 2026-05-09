@@ -6,9 +6,9 @@ final class AppConfigTests: XCTestCase {
         let config = AppConfig.default
 
         XCTAssertEqual(config.port, 18_317)
-        XCTAssertEqual(config.commands.cc, "ccm")
-        XCTAssertEqual(config.commands.ccapi, "ccmapi")
-        XCTAssertEqual(config.commands.ccodex, "ccmcodex")
+        XCTAssertEqual(config.commands.cc, "cc")
+        XCTAssertEqual(config.commands.ccapi, "ccapi")
+        XCTAssertEqual(config.commands.ccodex, "ccodex")
         XCTAssertEqual(config.ccapi.model, "claude-opus-4-7")
         XCTAssertEqual(config.ccodex.opus, AppConfig.CodexRole(model: "gpt-5.5", reasoning: .xhigh, contextWindow: .auto))
         XCTAssertEqual(config.ccodex.sonnet, AppConfig.CodexRole(model: "gpt-5.5", reasoning: .medium, contextWindow: .auto))

@@ -16,98 +16,181 @@ public protocol ProxyRuntimePreparing: Sendable {
 }
 
 public struct ProcessLauncher: ProcessLaunching {
-    public init() {}
+    private let launchctl: any LaunchctlManaging
+    private let processExists: @Sendable (pid_t) -> Bool
+
+    public init() {
+        self.launchctl = LaunchctlRunner()
+        self.processExists = { kill($0, 0) == 0 }
+    }
+
+    init(launchctl: any LaunchctlManaging, processExists: @escaping @Sendable (pid_t) -> Bool) {
+        self.launchctl = launchctl
+        self.processExists = processExists
+    }
 
     public func launch(_ executable: String, _ arguments: [String]) throws -> any ManagedProxyProcess {
-        // Spawn detached from this session so the child's networking isn't subject to
-        // any session-scoped policies inherited from the SwiftUI app process.
-        return try DetachedProcess.spawn(executable: executable, arguments: arguments)
+        let label = Self.label(for: arguments)
+        try? launchctl.remove(label: label)
+        try launchctl.submit(label: label, executable: executable, arguments: arguments)
+        let pid = try launchctl.lookupPID(label: label)
+        return DetachedProcess(pid: pid, label: label, launchctl: launchctl, processExists: processExists)
+    }
+
+    private static func label(for arguments: [String]) -> String {
+        if let configPath = configPath(from: arguments), let port = port(fromConfigAtPath: configPath) {
+            return "com.cliproxymanager.port.\(port)"
+        }
+        return "com.cliproxymanager.runtime.\(UUID().uuidString)"
+    }
+
+    private static func configPath(from arguments: [String]) -> String? {
+        guard let configFlagIndex = arguments.firstIndex(of: "--config") else { return nil }
+        let pathIndex = arguments.index(after: configFlagIndex)
+        guard pathIndex < arguments.endIndex else { return nil }
+        return arguments[pathIndex]
+    }
+
+    private static func port(fromConfigAtPath path: String) -> Int? {
+        guard let yaml = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
+        for line in yaml.split(whereSeparator: { $0 == "\n" || $0 == "\r" }) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("port:") {
+                return Int(trimmed.dropFirst("port:".count).trimmingCharacters(in: .whitespaces))
+            }
+        }
+        return nil
     }
 }
 
-private final class DetachedProcess: ManagedProxyProcess, @unchecked Sendable {
+struct LaunchctlCommandResult: Equatable, Sendable {
+    let exitStatus: Int32
+    let stdout: String
+    let stderr: String
+}
+
+protocol LaunchctlCommandRunning: Sendable {
+    func run(_ arguments: [String]) throws -> LaunchctlCommandResult
+}
+
+struct ProcessLaunchctlCommandRunner: LaunchctlCommandRunning {
+    func run(_ arguments: [String]) throws -> LaunchctlCommandResult {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        task.arguments = arguments
+        let stdout = Pipe()
+        let stderr = Pipe()
+        task.standardOutput = stdout
+        task.standardError = stderr
+        try task.run()
+        task.waitUntilExit()
+        return LaunchctlCommandResult(
+            exitStatus: task.terminationStatus,
+            stdout: String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "",
+            stderr: String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        )
+    }
+}
+
+protocol LaunchctlManaging: Sendable {
+    func remove(label: String) throws
+    func submit(label: String, executable: String, arguments: [String]) throws
+    func lookupPID(label: String) throws -> pid_t
+}
+
+struct LaunchctlRunner: LaunchctlManaging {
+    private let commandRunner: any LaunchctlCommandRunning
+    private let sleep: @Sendable (TimeInterval) -> Void
+
+    init(
+        commandRunner: any LaunchctlCommandRunning = ProcessLaunchctlCommandRunner(),
+        sleep: @escaping @Sendable (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }
+    ) {
+        self.commandRunner = commandRunner
+        self.sleep = sleep
+    }
+
+    func remove(label: String) throws {
+        let result = try commandRunner.run(["remove", label])
+        try check(result, operation: "remove")
+    }
+
+    func submit(label: String, executable: String, arguments: [String]) throws {
+        var args = ["submit", "-l", label, "--", executable]
+        args.append(contentsOf: arguments)
+        let result = try commandRunner.run(args)
+        try check(result, operation: "submit")
+    }
+
+    func lookupPID(label: String) throws -> pid_t {
+        var lastError = ""
+        for _ in 0..<20 {
+            let result = try commandRunner.run(["list", label])
+            lastError = result.stderr
+            if result.exitStatus == 0, let pid = Self.pid(fromLaunchctlListOutput: result.stdout) {
+                return pid
+            }
+            sleep(0.05)
+        }
+        let suffix = lastError.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : ": \(lastError.trimmingCharacters(in: .whitespacesAndNewlines))"
+        throw NSError(domain: NSPOSIXErrorDomain, code: 0, userInfo: [
+            NSLocalizedDescriptionKey: "launchctl spawned job did not report a PID for \(label)\(suffix)"
+        ])
+    }
+
+    private func check(_ result: LaunchctlCommandResult, operation: String) throws {
+        guard result.exitStatus == 0 else {
+            let stderr = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            let suffix = stderr.isEmpty ? "" : ": \(stderr)"
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(result.exitStatus), userInfo: [
+                NSLocalizedDescriptionKey: "launchctl \(operation) failed with exit code \(result.exitStatus)\(suffix)"
+            ])
+        }
+    }
+
+    private static func pid(fromLaunchctlListOutput text: String) -> pid_t? {
+        for line in text.split(whereSeparator: { $0 == "\n" }) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("\"PID\""),
+                  let eq = trimmed.firstIndex(of: "="),
+                  let semi = trimmed.lastIndex(of: ";") else { continue }
+            let raw = trimmed[trimmed.index(after: eq)..<semi].trimmingCharacters(in: .whitespaces)
+            if let pid = pid_t(raw), pid > 0 {
+                return pid
+            }
+        }
+        return nil
+    }
+}
+
+final class DetachedProcess: ManagedProxyProcess, @unchecked Sendable {
     private let pid: pid_t
     private let label: String?
+    private let launchctl: any LaunchctlManaging
+    private let processExists: @Sendable (pid_t) -> Bool
+    private let sleep: @Sendable (TimeInterval) -> Void
     private var hasBeenWaitedFor = false
     private let lock = NSLock()
 
-    private init(pid: pid_t, label: String? = nil) {
+    init(
+        pid: pid_t,
+        label: String? = nil,
+        launchctl: any LaunchctlManaging,
+        processExists: @escaping @Sendable (pid_t) -> Bool = { kill($0, 0) == 0 },
+        sleep: @escaping @Sendable (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }
+    ) {
         self.pid = pid
         self.label = label
-    }
-
-    static func spawn(executable: String, arguments: [String]) throws -> DetachedProcess {
-        // Spawn through `launchctl submit` so the child is reparented to launchd and
-        // doesn't inherit the SwiftUI app's networking session. This sidesteps a macOS
-        // restriction where the parent app cannot make TCP loopback connections to a
-        // direct child it spawned via posix_spawn.
-        let label = "com.cliproxymanager.runtime.\(UUID().uuidString)"
-
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        var args = ["submit", "-l", label, "--"]
-        args.append(executable)
-        args.append(contentsOf: arguments)
-        task.arguments = args
-        task.standardOutput = FileHandle.nullDevice
-        task.standardError = FileHandle.nullDevice
-        do {
-            try task.run()
-            task.waitUntilExit()
-        } catch {
-            throw NSError(domain: NSPOSIXErrorDomain, code: 0, userInfo: [
-                NSLocalizedDescriptionKey: "launchctl submit failed: \(error.localizedDescription)"
-            ])
-        }
-
-        // Find the launchd-managed PID by querying `launchctl list <label>`.
-        let pid = try Self.lookupPID(label: label)
-        return DetachedProcess(pid: pid, label: label)
-    }
-
-    private static func lookupPID(label: String, attempts: Int = 20) throws -> pid_t {
-        for _ in 0..<attempts {
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-            task.arguments = ["list", label]
-            let pipe = Pipe()
-            task.standardOutput = pipe
-            task.standardError = FileHandle.nullDevice
-            try? task.run()
-            task.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let text = String(data: data, encoding: .utf8) ?? ""
-            for line in text.split(whereSeparator: { $0 == "\n" }) {
-                let trimmed = line.trimmingCharacters(in: .whitespaces)
-                if trimmed.hasPrefix("\"PID\"") {
-                    if let eq = trimmed.firstIndex(of: "="),
-                       let semi = trimmed.lastIndex(of: ";") {
-                        let raw = trimmed[trimmed.index(after: eq)..<semi].trimmingCharacters(in: .whitespaces)
-                        if let pid = pid_t(raw), pid > 0 {
-                            return pid
-                        }
-                    }
-                }
-            }
-            Thread.sleep(forTimeInterval: 0.05)
-        }
-        throw NSError(domain: NSPOSIXErrorDomain, code: 0, userInfo: [
-            NSLocalizedDescriptionKey: "launchctl spawned job did not report a PID for \(label)"
-        ])
+        self.launchctl = launchctl
+        self.processExists = processExists
+        self.sleep = sleep
     }
 
     func terminate() {
         if let label {
-            // Tell launchd to tear down the job (also kills the process).
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-            task.arguments = ["remove", label]
-            task.standardOutput = FileHandle.nullDevice
-            task.standardError = FileHandle.nullDevice
-            try? task.run()
-            task.waitUntilExit()
+            try? launchctl.remove(label: label)
         }
-        if !isExited() {
+        if processExists(pid) {
             _ = kill(pid, SIGTERM)
         }
     }
@@ -120,31 +203,10 @@ private final class DetachedProcess: ManagedProxyProcess, @unchecked Sendable {
         }
         lock.unlock()
 
-        var status: Int32 = 0
-        // Polling waitpid since the child is in a different session.
-        while true {
-            let result = waitpid(pid, &status, WNOHANG)
-            if result == pid {
-                lock.withLock { hasBeenWaitedFor = true }
-                return
-            }
-            if result == -1 {
-                // ECHILD or other; treat as exited.
-                lock.withLock { hasBeenWaitedFor = true }
-                return
-            }
-            // Still running.
-            if isExited() {
-                lock.withLock { hasBeenWaitedFor = true }
-                return
-            }
-            Thread.sleep(forTimeInterval: 0.05)
+        while processExists(pid) {
+            sleep(0.05)
         }
-    }
-
-    private func isExited() -> Bool {
-        // kill(pid, 0) returns 0 if process exists, -1 (with errno) otherwise.
-        return kill(pid, 0) != 0
+        lock.withLock { hasBeenWaitedFor = true }
     }
 }
 
@@ -259,7 +321,11 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
     private func isCliproxyapiListening(onPort port: Int) -> Bool {
         guard let pid = pidListening(onPort: port),
               let command = processCommand(pid: pid) else { return false }
-        return command.contains("cliproxyapi")
+        return Self.isManagedCliproxyapiCommand(
+            command,
+            binaryPath: paths.clipProxyBinary.path,
+            configPath: paths.clipProxyConfigFile.path
+        )
     }
 
     private func readPortFromConfig() -> Int? {
@@ -276,8 +342,12 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
 
     private func killOrphanCliproxyapi(onPort port: Int) {
         guard let pid = pidListening(onPort: port) else { return }
-        guard let command = processCommand(pid: pid), command.contains("cliproxyapi") else { return }
-        // Avoid killing ourselves (paranoia — we're the SwiftUI app, not cliproxyapi, but be safe).
+        guard let command = processCommand(pid: pid),
+              Self.isManagedCliproxyapiCommand(
+                command,
+                binaryPath: paths.clipProxyBinary.path,
+                configPath: paths.clipProxyConfigFile.path
+              ) else { return }
         guard pid != getpid() else { return }
         _ = kill(pid, SIGTERM)
         for _ in 0..<20 {
@@ -321,6 +391,13 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func isManagedCliproxyapiCommand(_ command: String, binaryPath: String, configPath: String) -> Bool {
+        let arguments = command.split(separator: " ").map(String.init)
+        return arguments.contains(binaryPath)
+            && arguments.contains("--config")
+            && arguments.contains(configPath)
     }
 
     private func installBundledBinaryIfNeeded() throws {

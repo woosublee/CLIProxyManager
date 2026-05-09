@@ -50,7 +50,16 @@ struct StatusLED: View {
                 .fill(color)
                 .frame(width: size, height: size)
         }
-        .onAppear { if pulse { pulsePhase = true } }
+        .onAppear { updatePulsePhase(for: state) }
+        .onChange(of: state) { updatePulsePhase(for: $0) }
+    }
+
+    private func updatePulsePhase(for state: State) {
+        guard pulse, state == .running else {
+            pulsePhase = false
+            return
+        }
+        pulsePhase.toggle()
     }
 
     private var color: Color {

@@ -36,6 +36,8 @@ struct LicensesSheet: View {
                         .background(Circle().fill(Color.primary.opacity(0.06)))
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("닫기")
+                .accessibilityHint("오픈소스 고지 시트를 닫습니다.")
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)

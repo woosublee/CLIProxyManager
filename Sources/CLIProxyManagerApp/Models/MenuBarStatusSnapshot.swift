@@ -35,8 +35,6 @@ struct MenuBarStatusSnapshot: Equatable {
                     connectionDetail: provider.connectionDetail
                 )
             }
-        erroredCount = providers.filter { provider in
-            !provider.isConnected && provider.connectionTitle.lowercased().contains("error")
-        }.count
+        erroredCount = providers.filter(\.isErrored).count
     }
 }

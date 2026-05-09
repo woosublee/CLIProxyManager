@@ -11,8 +11,30 @@ struct ProviderRowState: Identifiable, Equatable {
     let connectionTitle: String
     let connectionDetail: String
     let isConnected: Bool
+    let isErrored: Bool
+
+    init(
+        id: ID,
+        name: String,
+        nickname: String,
+        functionName: String,
+        connectionTitle: String,
+        connectionDetail: String,
+        isConnected: Bool,
+        isErrored: Bool = false
+    ) {
+        self.id = id
+        self.name = name
+        self.nickname = nickname
+        self.functionName = functionName
+        self.connectionTitle = connectionTitle
+        self.connectionDetail = connectionDetail
+        self.isConnected = isConnected
+        self.isErrored = isErrored
+    }
 
     var displayTitle: String {
-        nickname.isEmpty ? name : nickname
+        let trimmedNickname = nickname.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedNickname.isEmpty ? name : trimmedNickname
     }
 }
