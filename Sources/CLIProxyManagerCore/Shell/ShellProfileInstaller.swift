@@ -1,5 +1,9 @@
 import Foundation
 
+public enum ShellProfileInstallerError: Error, Equatable {
+    case functionNameConflicts([String])
+}
+
 public struct ShellProfileInstaller: @unchecked Sendable {
     private let paths: ManagedPaths
     private let zshrcFile: URL
@@ -23,10 +27,20 @@ public struct ShellProfileInstaller: @unchecked Sendable {
     }
 
     public func install(functionScript: String) throws {
+        try install(functionScript: functionScript, functionNames: [])
+    }
+
+    public func install(functionScript: String, functionNames: [String]) throws {
         try fileManager.createDirectory(at: paths.rootDirectory, withIntermediateDirectories: true)
-        try functionScript.write(to: paths.functionsFile, atomically: true, encoding: .utf8)
 
         let currentProfile = try readProfileIfPresent()
+        let conflicts = conflictingNames(functionNames, in: currentProfile)
+        guard conflicts.isEmpty else {
+            throw ShellProfileInstallerError.functionNameConflicts(conflicts)
+        }
+
+        try functionScript.write(to: paths.functionsFile, atomically: true, encoding: .utf8)
+
         let updatedProfile = profileByInstalling(in: currentProfile)
         guard updatedProfile != currentProfile else { return }
 
@@ -51,6 +65,15 @@ public struct ShellProfileInstaller: @unchecked Sendable {
     private func readProfileIfPresent() throws -> String {
         guard fileManager.fileExists(atPath: zshrcFile.path) else { return "" }
         return try String(contentsOf: zshrcFile, encoding: .utf8)
+    }
+
+    private func conflictingNames(_ names: [String], in profile: String) -> [String] {
+        let unmanagedProfile = profileByUninstalling(from: profile)
+        return names.filter { name in
+            unmanagedProfile.contains("alias \(name)=") ||
+                unmanagedProfile.contains("\(name)()") ||
+                unmanagedProfile.contains("function \(name)")
+        }
     }
 
     private func profileByInstalling(in profile: String) -> String {

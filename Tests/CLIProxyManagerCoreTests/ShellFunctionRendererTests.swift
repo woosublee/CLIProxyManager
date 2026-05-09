@@ -10,9 +10,9 @@ final class ShellFunctionRendererTests: XCTestCase {
 
         let script = try renderer.render()
 
-        XCTAssertTrue(script.contains("cc() {"))
-        XCTAssertTrue(script.contains("ccapi() {"))
-        XCTAssertTrue(script.contains("ccodex() {"))
+        XCTAssertTrue(script.contains("ccm() {"))
+        XCTAssertTrue(script.contains("ccmapi() {"))
+        XCTAssertTrue(script.contains("ccmcodex() {"))
         XCTAssertFalse(script.contains("alias cc="))
         XCTAssertFalse(script.contains("export ANTHROPIC_BASE_URL"))
         XCTAssertFalse(script.contains("export ANTHROPIC_AUTH_TOKEN"))
@@ -27,13 +27,29 @@ final class ShellFunctionRendererTests: XCTestCase {
         XCTAssertEqual(script.components(separatedBy: "claude \"$@\"").count - 1, 3)
     }
 
+    func testClaudeOAuthFunctionUsesBundledProxyAndClaudeModelDefaults() throws {
+        let script = try ShellFunctionRenderer(
+            config: .default,
+            helperCommand: "/usr/local/bin/cliproxy-manager"
+        ).render()
+
+        XCTAssertTrue(script.contains("ccm() {"))
+        XCTAssertTrue(script.contains("ANTHROPIC_BASE_URL=\"http://127.0.0.1:18317\""))
+        XCTAssertTrue(script.contains("ANTHROPIC_AUTH_TOKEN='sk-dummy'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='claude-opus-4-7'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL='claude-sonnet-4-6'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL='claude-haiku-4-5-20251001'"))
+    }
+
     func testRenderUsesConfiguredModelsAndPort() throws {
         var config = AppConfig.default
         config.port = 8320
         config.ccapi.model = "claude-sonnet-4-6"
-        config.ccodex.opusModel = "gpt-5.3-codex(xhigh)"
-        config.ccodex.sonnetModel = "gpt-5.3-codex(medium)"
-        config.ccodex.haikuModel = "gpt-5.3-codex(low)"
+        config.ccodex = AppConfig.Codex(
+            opus: AppConfig.CodexRole(model: "gpt-5.3-codex", reasoning: .xhigh, contextWindow: .auto),
+            sonnet: AppConfig.CodexRole(model: "gpt-5.3-codex", reasoning: .medium, contextWindow: .auto),
+            haiku: AppConfig.CodexRole(model: "gpt-5.3-codex", reasoning: .low, contextWindow: .auto)
+        )
 
         let script = try ShellFunctionRenderer(
             config: config,
@@ -46,6 +62,37 @@ final class ShellFunctionRendererTests: XCTestCase {
         XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL='gpt-5.3-codex(medium)'"))
         XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL='gpt-5.3-codex(low)'"))
         XCTAssertTrue(script.contains("'/opt/cliproxy-manager/bin/cliproxy-manager' secret get claude-api-key"))
+    }
+
+    func testRenderUsesConfiguredCodexRoleSettings() throws {
+        var config = AppConfig.default
+        config.port = 18_888
+        config.ccodex = AppConfig.Codex(
+            opus: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .xhigh, contextWindow: .context1m),
+            sonnet: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .medium, contextWindow: .context400k),
+            haiku: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .auto, contextWindow: .auto)
+        )
+
+        let script = try ShellFunctionRenderer(
+            config: config,
+            helperCommand: "/usr/local/bin/cliproxy-manager"
+        ).render()
+
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='gpt-5.5(xhigh)'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL='gpt-5.5(medium)'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL='gpt-5.5'"))
+        XCTAssertFalse(script.contains("1m"))
+        XCTAssertFalse(script.contains("400k"))
+    }
+
+    func testCodexPrecheckUsesLocalAPIKeyHeader() throws {
+        let script = try ShellFunctionRenderer(
+            config: .default,
+            helperCommand: "/usr/local/bin/cliproxy-manager"
+        ).render()
+
+        XCTAssertTrue(script.contains("curl -sf -H 'Authorization: Bearer sk-dummy'"))
+        XCTAssertTrue(script.contains("http://127.0.0.1:18317/v1/models"))
     }
 
     func testDangerousPermissionFlagIsOptIn() throws {

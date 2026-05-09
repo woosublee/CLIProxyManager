@@ -9,7 +9,7 @@ public enum HTTPClientError: Error, Equatable {
 }
 
 public protocol HTTPClient: Sendable {
-    func get(_ url: URL) async throws -> Data
+    func get(_ url: URL, headers: [String: String]) async throws -> Data
 }
 
 public struct URLSessionHTTPClient: HTTPClient {
@@ -19,8 +19,13 @@ public struct URLSessionHTTPClient: HTTPClient {
         self.session = session
     }
 
-    public func get(_ url: URL) async throws -> Data {
-        let (data, response) = try await session.data(from: url)
+    public func get(_ url: URL, headers: [String: String] = [:]) async throws -> Data {
+        var request = URLRequest(url: url)
+        for (name, value) in headers {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
+
+        let (data, response) = try await session.data(for: request)
         if let httpResponse = response as? HTTPURLResponse,
            !(200..<300).contains(httpResponse.statusCode) {
             throw HTTPClientError.badStatus(httpResponse.statusCode)
@@ -32,10 +37,12 @@ public struct URLSessionHTTPClient: HTTPClient {
 public struct ProxyHealthClient: Sendable {
     private let httpClient: any HTTPClient
     private let timeout: TimeInterval
+    private let localAPIKey: String
 
-    public init(httpClient: any HTTPClient = URLSessionHTTPClient(), timeout: TimeInterval = 2) {
+    public init(httpClient: any HTTPClient = URLSessionHTTPClient(), timeout: TimeInterval = 2, localAPIKey: String = "sk-dummy") {
         self.httpClient = httpClient
         self.timeout = timeout
+        self.localAPIKey = localAPIKey
     }
 
     public func status(port: Int) async -> DiagnosticStatus {
@@ -62,6 +69,12 @@ public struct ProxyHealthClient: Sendable {
                 title: "CLIProxyAPI 응답 시간 초과",
                 message: "서버가 시간 내에 응답하지 않았습니다."
             )
+        } catch HTTPClientError.badStatus(401) {
+            return DiagnosticStatus(
+                severity: .warning,
+                title: "CLIProxyAPI 인증 설정 확인 필요",
+                message: "서버는 응답했지만 sk-dummy local API key로 모델 목록을 불러오지 못했습니다."
+            )
         } catch HTTPClientError.badStatus(let statusCode) {
             return DiagnosticStatus(
                 severity: .warning,
@@ -75,8 +88,12 @@ public struct ProxyHealthClient: Sendable {
 
     private func getWithTimeout(_ url: URL) async throws -> Data {
         try await withTimeout(seconds: timeout) {
-            try await httpClient.get(url)
+            try await httpClient.get(url, headers: authHeaders)
         }
+    }
+
+    private var authHeaders: [String: String] {
+        ["Authorization": "Bearer \(localAPIKey)"]
     }
 
     private var stoppedStatus: DiagnosticStatus {

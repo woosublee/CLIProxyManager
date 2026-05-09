@@ -25,8 +25,15 @@ final class DashboardViewModelTests: XCTestCase {
             port: 9444,
             commands: AppConfig.Commands(cc: "claude-local", ccapi: "api-local", ccodex: "codex-local"),
             ccapi: AppConfig.ClaudeAPI(model: "test-claude"),
-            ccodex: AppConfig.Codex(opusModel: "test-opus", sonnetModel: "test-sonnet", haikuModel: "test-haiku"),
-            includeDangerouslySkipPermissions: false
+            ccodex: AppConfig.Codex(
+                opus: AppConfig.CodexRole(model: "test-opus", reasoning: .auto, contextWindow: .auto),
+                sonnet: AppConfig.CodexRole(model: "test-sonnet", reasoning: .auto, contextWindow: .auto),
+                haiku: AppConfig.CodexRole(model: "test-haiku", reasoning: .auto, contextWindow: .auto)
+            ),
+            includeDangerouslySkipPermissions: false,
+            startAtLogin: false,
+            showDockIcon: true,
+            showMenuBarIcon: true
         )
 
         let cards = ProfileCard.makeDefaultCards(config: config)

@@ -79,6 +79,34 @@ final class ShellProfileInstallerTests: XCTestCase {
         XCTAssertTrue(profile.contains("after\n"))
     }
 
+    func testInstallRefusesFunctionNameConflictOutsideManagedBlock() throws {
+        let sandbox = try makeSandbox()
+        let zshrcFile = sandbox.appendingPathComponent(".zshrc")
+        try "alias ccmcodex='old command'\n".write(to: zshrcFile, atomically: true, encoding: .utf8)
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let installer = ShellProfileInstaller(paths: paths, zshrcFile: zshrcFile)
+
+        XCTAssertThrowsError(try installer.install(functionScript: "ccmcodex() {}\n", functionNames: ["ccmcodex"])) { error in
+            XCTAssertEqual(error as? ShellProfileInstallerError, .functionNameConflicts(["ccmcodex"]))
+        }
+
+        let profile = try String(contentsOf: zshrcFile, encoding: .utf8)
+        XCTAssertEqual(profile, "alias ccmcodex='old command'\n")
+    }
+
+    func testInstallIgnoresFunctionNameInsideManagedBlock() throws {
+        let sandbox = try makeSandbox()
+        let zshrcFile = sandbox.appendingPathComponent(".zshrc")
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let installer = ShellProfileInstaller(paths: paths, zshrcFile: zshrcFile)
+
+        try installer.install(functionScript: "ccmcodex() {}\n", functionNames: ["ccmcodex"])
+        try installer.install(functionScript: "ccmcodex() { claude \"$@\" }\n", functionNames: ["ccmcodex"])
+
+        let profile = try String(contentsOf: zshrcFile, encoding: .utf8)
+        XCTAssertEqual(profile.components(separatedBy: "# >>> CLIProxyAPI Manager >>>").count - 1, 1)
+    }
+
     func testInstallCreatesBackupBeforeChangingZshrc() throws {
         let sandbox = try makeSandbox()
         let zshrcFile = sandbox.appendingPathComponent(".zshrc")

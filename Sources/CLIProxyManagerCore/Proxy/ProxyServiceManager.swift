@@ -11,6 +11,10 @@ public protocol ProcessLaunching: Sendable {
     func launch(_ executable: String, _ arguments: [String]) throws -> any ManagedProxyProcess
 }
 
+public protocol ProxyRuntimePreparing: Sendable {
+    func prepare(port: Int) throws
+}
+
 public struct ProcessLauncher: ProcessLaunching {
     public init() {}
 
@@ -32,7 +36,7 @@ public enum ProxyServiceError: Error, Equatable {
     case launchFailed(String)
 }
 
-public struct ProxyServiceManager: @unchecked Sendable {
+public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
     private let paths: ManagedPaths
     private let bundledBinaryURL: URL?
     private let launcher: any ProcessLaunching
@@ -50,6 +54,12 @@ public struct ProxyServiceManager: @unchecked Sendable {
         self.bundledBinaryURL = bundledBinaryURL
         self.launcher = launcher
         self.fileManager = fileManager
+    }
+
+    public func prepare(port: Int) throws {
+        try lifecycleLock.withLock {
+            try prepareLocked(port: port)
+        }
     }
 
     public func start(port: Int) async throws {
@@ -71,19 +81,24 @@ public struct ProxyServiceManager: @unchecked Sendable {
         }
     }
 
-    private func startLocked(port: Int) throws {
+    private func prepareLocked(port: Int) throws {
         guard isValidPort(port) else {
             throw ProxyServiceError.invalidPort(port)
         }
 
         do {
             try installBundledBinaryIfNeeded()
+            try fileManager.createDirectory(at: paths.authDirectory, withIntermediateDirectories: true)
             try config(for: port).write(to: paths.clipProxyConfigFile, atomically: true, encoding: .utf8)
         } catch let error as ProxyServiceError {
             throw error
         } catch {
             throw ProxyServiceError.writeFailed(error.localizedDescription)
         }
+    }
+
+    private func startLocked(port: Int) throws {
+        try prepareLocked(port: port)
 
         stopLocked()
 
@@ -117,12 +132,18 @@ public struct ProxyServiceManager: @unchecked Sendable {
     private func config(for port: Int) -> String {
         """
         port: \(port)
-        auth-dir: "~/.cli-proxy-api"
+        auth-dir: \(yamlDoubleQuoted(paths.authDirectory.path))
         logging-to-file: true
         debug: false
         api-keys:
           - sk-dummy
         """
+    }
+
+    private func yamlDoubleQuoted(_ value: String) -> String {
+        "\"" + value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"") + "\""
     }
 }
 

@@ -3,6 +3,13 @@ import XCTest
 @testable import CLIProxyManagerCore
 
 final class ProxyServiceManagerTests: XCTestCase {
+    func testManagedPathsExposeAppManagedAuthDirectory() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+
+        XCTAssertEqual(paths.authDirectory, sandbox.appendingPathComponent("managed/auth", isDirectory: true))
+    }
+
     func testStartWritesCompatibleConfigAndLaunchesBinaryWithConfigPath() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
@@ -15,10 +22,14 @@ final class ProxyServiceManagerTests: XCTestCase {
         var isDirectory: ObjCBool = false
         XCTAssertTrue(FileManager.default.fileExists(atPath: paths.clipProxyDirectory.path, isDirectory: &isDirectory))
         XCTAssertTrue(isDirectory.boolValue)
+        var authIsDirectory: ObjCBool = false
+        XCTAssertTrue(FileManager.default.fileExists(atPath: paths.authDirectory.path, isDirectory: &authIsDirectory))
+        XCTAssertTrue(authIsDirectory.boolValue)
 
         let config = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
         XCTAssertTrue(config.contains("port: 8317"))
-        XCTAssertTrue(config.contains("auth-dir: \"~/.cli-proxy-api\""))
+        XCTAssertTrue(config.contains("auth-dir: \"\(paths.authDirectory.path)\""))
+        XCTAssertFalse(config.contains("~/.cli-proxy-api"))
         XCTAssertTrue(config.contains("logging-to-file: true"))
         XCTAssertTrue(config.contains("debug: false"))
         XCTAssertTrue(config.contains("api-keys:"))
@@ -86,6 +97,21 @@ final class ProxyServiceManagerTests: XCTestCase {
         try await manager.stop()
 
         XCTAssertEqual(launcher.invocations, [])
+    }
+
+    func testStopDoesNotTerminateExternalCLIProxyAPIProcessByDefault() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let process = ManagedProxyProcessDouble()
+        let launcher = FakeProcessLauncher(process: process)
+        let manager = ProxyServiceManager(paths: paths, launcher: launcher)
+
+        try await manager.start(port: 18_317)
+        try await manager.stop()
+
+        XCTAssertEqual(process.terminateCallCount, 1)
+        XCTAssertEqual(process.waitUntilExitCallCount, 1)
     }
 
     func testSecondStartStopsPreviousManagedProcessBeforeLaunchingReplacement() async throws {
@@ -318,3 +344,4 @@ private final class ProxyLifecycleEventLog: @unchecked Sendable {
         lock.withLock { _values.append(value) }
     }
 }
+

@@ -23,6 +23,10 @@ public struct ManagedPaths: Equatable, Sendable {
         rootDirectory.appendingPathComponent("cliproxyapi")
     }
 
+    public var authDirectory: URL {
+        rootDirectory.appendingPathComponent("auth", isDirectory: true)
+    }
+
     public var clipProxyConfigFile: URL {
         clipProxyDirectory.appendingPathComponent("config.yaml")
     }
