@@ -17,6 +17,10 @@ It is designed for users who want one place to:
 - A Claude account, Codex/OpenAI OAuth account, or Claude API key depending on which shell function you want to use.
 - zsh if you want the app to manage shell functions automatically.
 
+## Releases
+
+DMG release builds and publishing steps are documented in [docs/release.md](docs/release.md). Public DMGs are ad-hoc signed and not notarized by default. A Developer ID signing identity can be provided, but notarization is not part of the current release flow.
+
 ## Quick start
 
 1. Open CLIProxyManager.
