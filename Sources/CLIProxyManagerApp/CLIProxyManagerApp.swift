@@ -2,10 +2,15 @@ import SwiftUI
 
 @main
 struct CLIProxyManagerApp: App {
-    @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
     @Environment(\.openWindow) private var openWindow
-    @StateObject private var viewModel = DashboardViewModel()
-    @StateObject private var quitCoordinator = QuitCoordinator()
+    @StateObject private var viewModel: DashboardViewModel
+    @StateObject private var quitCoordinator: QuitCoordinator
+
+    init() {
+        let viewModel = DashboardViewModel()
+        _viewModel = StateObject(wrappedValue: viewModel)
+        _quitCoordinator = StateObject(wrappedValue: QuitCoordinator(isServerRunning: { viewModel.serverControlState.isRunning }))
+    }
 
     private var appWindowController: AppWindowController {
         AppWindowController(appController: SwiftUIAppController(openWindow: openWindow))
@@ -13,20 +18,11 @@ struct CLIProxyManagerApp: App {
 
     var body: some Scene {
         WindowGroup("CLIProxyManager", id: "main") {
-            if hasCompletedOnboarding {
-                DashboardView(
-                    viewModel: viewModel,
-                    openSettings: { appWindowController.openSettings() },
-                    quit: { quitCoordinator.requestQuit() }
-                )
-            } else {
-                OnboardingView()
-                    .toolbar {
-                        Button("Get Started") {
-                            hasCompletedOnboarding = true
-                        }
-                    }
-            }
+            DashboardView(
+                viewModel: viewModel,
+                openSettings: { appWindowController.openSettings() },
+                quit: { quitCoordinator.requestQuit() }
+            )
         }
         .windowStyle(.titleBar)
         .windowResizability(.contentSize)
@@ -40,7 +36,6 @@ struct CLIProxyManagerApp: App {
         .commands {
             CommandGroup(replacing: .appSettings) {
                 Button("Settings…") {
-                    hasCompletedOnboarding = true
                     appWindowController.openSettings()
                 }
                 .keyboardShortcut(",", modifiers: .command)
@@ -63,11 +58,9 @@ struct CLIProxyManagerApp: App {
             MenuBarStatusView(
                 viewModel: viewModel,
                 openMain: {
-                    hasCompletedOnboarding = true
                     appWindowController.openMain()
                 },
                 openSettings: {
-                    hasCompletedOnboarding = true
                     appWindowController.openSettings()
                 },
                 quit: { quitCoordinator.requestQuit() }

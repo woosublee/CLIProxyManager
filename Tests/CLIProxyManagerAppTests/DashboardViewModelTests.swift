@@ -4,19 +4,6 @@ import CLIProxyManagerCore
 
 @MainActor
 final class DashboardViewModelRefreshTests: XCTestCase {
-    func testOnboardingStepsMatchSetupFlow() {
-        let viewModel = OnboardingViewModel()
-
-        XCTAssertEqual(viewModel.steps.map(\.title), [
-            "Claude Code 설치 확인",
-            "Claude 구독 연결",
-            "Claude API key 선택 입력",
-            "OpenAI/Codex 연결",
-            "shell functions 설치",
-            "프로필 테스트"
-        ])
-    }
-
     func testRefreshUpdatesClaudeAndCodexCardsByCommandAndPreservesClaudeAPICard() async {
         let config = AppConfig(
             port: 9444,

@@ -27,6 +27,24 @@ final class QuitCoordinatorTests: XCTestCase {
         XCTAssertEqual(terminator.terminateCount, 0)
     }
 
+    func testRequestQuitTerminatesImmediatelyWhenServerIsStopped() {
+        let proxyService = StubProxyService()
+        let terminator = StubAppTerminator()
+        let presenter = StubQuitConfirmationPresenter(shouldConfirm: true)
+        let coordinator = QuitCoordinator(
+            proxyService: proxyService,
+            appTerminator: terminator,
+            quitConfirmationPresenter: presenter,
+            isServerRunning: { false }
+        )
+
+        coordinator.requestQuit()
+
+        XCTAssertEqual(presenter.confirmationCount, 0)
+        XCTAssertEqual(proxyService.stopCount, 0)
+        XCTAssertEqual(terminator.terminateCount, 1)
+    }
+
     func testConfirmQuitStopsServerBeforeTerminating() async {
         let events = QuitEventLog()
         let proxyService = StubProxyService(events: events)
