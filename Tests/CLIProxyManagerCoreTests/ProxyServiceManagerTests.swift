@@ -304,6 +304,72 @@ final class ProxyServiceManagerTests: XCTestCase {
         XCTAssertEqual(launcher.invocations.count, 1)
     }
 
+    func testLaunchctlRunnerChecksSubmitStatusAndReportsStderr() throws {
+        let commandRunner = FakeLaunchctlCommandRunner(results: [
+            LaunchctlCommandResult(exitStatus: 5, stdout: "", stderr: "bad label")
+        ])
+        let launchctl = LaunchctlRunner(commandRunner: commandRunner)
+
+        XCTAssertThrowsError(try launchctl.submit(label: "com.cliproxymanager.port.8317", executable: "/tmp/cliproxyapi", arguments: [])) { error in
+            XCTAssertTrue(error.localizedDescription.contains("launchctl submit failed with exit code 5"))
+            XCTAssertTrue(error.localizedDescription.contains("bad label"))
+        }
+    }
+
+    func testProcessLauncherUsesStablePortLabelAndRemovesExistingLaunchctlJobBeforeSubmit() throws {
+        let sandbox = try makeSandbox()
+        let configURL = sandbox.appendingPathComponent("config.yaml")
+        try "port: 8317\n".write(to: configURL, atomically: true, encoding: .utf8)
+        let commandRunner = FakeLaunchctlCommandRunner(results: [
+            LaunchctlCommandResult(exitStatus: 0, stdout: "", stderr: ""),
+            LaunchctlCommandResult(exitStatus: 0, stdout: "", stderr: ""),
+            LaunchctlCommandResult(exitStatus: 0, stdout: "\"PID\" = 123;\n", stderr: "")
+        ])
+        let launchctl = LaunchctlRunner(commandRunner: commandRunner, sleep: { _ in })
+        let launcher = ProcessLauncher(launchctl: launchctl, processExists: { _ in false })
+
+        _ = try launcher.launch("/tmp/cliproxyapi", ["--config", configURL.path])
+
+        XCTAssertEqual(commandRunner.invocations, [
+            ["remove", "com.cliproxymanager.port.8317"],
+            ["submit", "-l", "com.cliproxymanager.port.8317", "--", "/tmp/cliproxyapi", "--config", configURL.path],
+            ["list", "com.cliproxymanager.port.8317"]
+        ])
+    }
+
+    func testDetachedProcessWaitUntilExitPollsProcessExistence() {
+        let probe = ProcessExistenceProbe(values: [true, true, false])
+        let process = DetachedProcess(
+            pid: 123,
+            label: "com.cliproxymanager.port.8317",
+            launchctl: FakeLaunchctl(),
+            processExists: { _ in probe.next() },
+            sleep: { _ in probe.recordSleep() }
+        )
+
+        process.waitUntilExit()
+
+        XCTAssertEqual(probe.sleepCount, 2)
+    }
+
+    func testManagedCliproxyapiCommandRequiresManagedConfigPath() {
+        XCTAssertTrue(ProxyServiceManager.isManagedCliproxyapiCommand(
+            "/tmp/managed/cliproxyapi --config /tmp/managed/config.yaml",
+            binaryPath: "/tmp/managed/cliproxyapi",
+            configPath: "/tmp/managed/config.yaml"
+        ))
+        XCTAssertFalse(ProxyServiceManager.isManagedCliproxyapiCommand(
+            "/usr/local/bin/cliproxyapi --config /tmp/other/config.yaml",
+            binaryPath: "/tmp/managed/cliproxyapi",
+            configPath: "/tmp/managed/config.yaml"
+        ))
+        XCTAssertFalse(ProxyServiceManager.isManagedCliproxyapiCommand(
+            "/tmp/managed/cliproxyapi-old --config /tmp/managed/config.yaml.bak",
+            binaryPath: "/tmp/managed/cliproxyapi",
+            configPath: "/tmp/managed/config.yaml"
+        ))
+    }
+
     private func makeSandbox() throws -> URL {
         let sandbox = FileManager.default.temporaryDirectory
             .appendingPathComponent("CLIProxyManagerTests")
@@ -333,6 +399,55 @@ final class ProxyServiceManagerTests: XCTestCase {
         }
         XCTAssertEqual(value, expected, file: file, line: line)
     }
+}
+
+private final class ProcessExistenceProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [Bool]
+    private var _sleepCount = 0
+
+    var sleepCount: Int {
+        lock.withLock { _sleepCount }
+    }
+
+    init(values: [Bool]) {
+        self.values = values
+    }
+
+    func next() -> Bool {
+        lock.withLock { values.removeFirst() }
+    }
+
+    func recordSleep() {
+        lock.withLock { _sleepCount += 1 }
+    }
+}
+
+private final class FakeLaunchctlCommandRunner: LaunchctlCommandRunning, @unchecked Sendable {
+    private let lock = NSLock()
+    private var results: [LaunchctlCommandResult]
+    private var _invocations: [[String]] = []
+
+    var invocations: [[String]] {
+        lock.withLock { _invocations }
+    }
+
+    init(results: [LaunchctlCommandResult]) {
+        self.results = results
+    }
+
+    func run(_ arguments: [String]) throws -> LaunchctlCommandResult {
+        lock.withLock {
+            _invocations.append(arguments)
+            return results.removeFirst()
+        }
+    }
+}
+
+private struct FakeLaunchctl: LaunchctlManaging {
+    func remove(label: String) throws {}
+    func submit(label: String, executable: String, arguments: [String]) throws {}
+    func lookupPID(label: String) throws -> pid_t { 123 }
 }
 
 private final class FakeProcessLauncher: ProcessLaunching, @unchecked Sendable {

@@ -160,9 +160,14 @@ private final class StubLoginItemService: LoginItemControlling, @unchecked Senda
 @MainActor
 private final class StubAppAppearanceService: AppAppearanceApplying, @unchecked Sendable {
     private(set) var showDockIconValues: [Bool] = []
+    private(set) var appearanceValues: [AppearanceMode] = []
 
     func apply(showDockIcon: Bool) {
         showDockIconValues.append(showDockIcon)
+    }
+
+    func apply(appearance: AppearanceMode) {
+        appearanceValues.append(appearance)
     }
 }
 

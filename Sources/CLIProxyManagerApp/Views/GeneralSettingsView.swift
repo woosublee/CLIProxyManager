@@ -7,8 +7,11 @@ struct GeneralSettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsGroup(title: "Appearance") {
-                SettingsRow(label: "Appearance", description: "Follow the system theme for now.", isEnabled: false) {
-                    SettingsSegmentedControl(options: ["System", "Light", "Dark"], selected: "System")
+                SettingsRow(label: "Appearance", description: "Match the macOS system theme or pick one.") {
+                    AppearancePicker(
+                        selection: viewModel.config.appearance,
+                        onChange: { mode in viewModel.saveSetting { try viewModel.saveAppearance(mode) } }
+                    )
                 }
                 SettingsRow(label: "Language", description: "Language switching is a design placeholder.", isEnabled: false) {
                     SettingsSegmentedControl(options: ["English", "한국어"], selected: "English")
@@ -16,7 +19,7 @@ struct GeneralSettingsView: View {
             }
 
             SettingsGroup(title: "Behavior") {
-                SettingsRow(label: "Start at login", description: "Launch CLIProxyManager automatically after signing in.") {
+                SettingsRow(label: "Launch at login", description: "Start CLIProxyManager when you log in.") {
                     Toggle("", isOn: Binding(
                         get: { viewModel.config.startAtLogin },
                         set: { value in viewModel.saveSetting { try viewModel.saveStartAtLogin(value) } }
@@ -24,26 +27,21 @@ struct GeneralSettingsView: View {
                     .labelsHidden()
                     .toggleStyle(SettingsToggleStyle())
                 }
-                SettingsRow(label: "Show Dock icon", description: "Keep the app visible in the macOS Dock.") {
+                SettingsRow(label: "Menu bar only", description: "Hide the Dock icon — runs as a menu bar app.") {
                     Toggle("", isOn: Binding(
-                        get: { viewModel.config.showDockIcon },
-                        set: { value in viewModel.saveSetting { try viewModel.saveDockIconVisible(value) } }
+                        get: { !viewModel.config.showDockIcon },
+                        set: { value in viewModel.saveSetting { try viewModel.saveMenuBarOnly(value) } }
                     ))
                     .labelsHidden()
                     .toggleStyle(SettingsToggleStyle())
                 }
-                SettingsRow(label: "Show menu bar icon", description: "Show the compact status menu in the menu bar.") {
+                SettingsRow(label: "Show notifications", description: "Notify me about token expiries and errors.") {
                     Toggle("", isOn: Binding(
-                        get: { viewModel.config.showMenuBarIcon },
-                        set: { value in viewModel.saveSetting { try viewModel.saveMenuBarIconVisible(value) } }
+                        get: { viewModel.config.showNotifications },
+                        set: { value in viewModel.saveSetting { try viewModel.saveShowNotifications(value) } }
                     ))
                     .labelsHidden()
                     .toggleStyle(SettingsToggleStyle())
-                }
-                SettingsRow(label: "Notifications", description: "OAuth and server status notifications are not wired yet.", isEnabled: false) {
-                    Toggle("", isOn: .constant(true))
-                        .labelsHidden()
-                        .toggleStyle(SettingsToggleStyle())
                 }
             }
         }
@@ -54,57 +52,51 @@ struct GeneralSettingsView: View {
 
 struct ServerSettingsView: View {
     @ObservedObject var viewModel: DashboardViewModel
-    @State private var portText: String = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsGroup(title: "Server") {
-                SettingsRow(label: viewModel.serverStatus.title, description: viewModel.serverStatus.message) {
+                SettingsRow(label: "Listen port", description: "Local port the proxy server binds to.") {
+                    SettingsStepper(
+                        value: Binding(
+                            get: { viewModel.config.port },
+                            set: { _ in }
+                        ),
+                        range: 1024...65_535,
+                        commit: { newPort in
+                            let didSave = viewModel.saveSetting { try viewModel.savePort(newPort) }
+                            if didSave, viewModel.serverControlState.isRunning, !viewModel.isServerActionInProgress {
+                                Task { await viewModel.restartServer() }
+                            }
+                        }
+                    )
+                }
+                SettingsRow(label: "Bind address", description: "Use 0.0.0.0 to allow access from other devices on the LAN.") {
+                    SettingsSegmentedPicker(
+                        options: [
+                            (value: "127.0.0.1", label: "127.0.0.1"),
+                            (value: "0.0.0.0", label: "0.0.0.0")
+                        ],
+                        selection: Binding(
+                            get: { viewModel.config.bindAddress },
+                            set: { newValue in
+                                viewModel.saveSetting { try viewModel.saveBindAddress(newValue) }
+                            }
+                        )
+                    )
+                }
+                SettingsRow(label: "Start server on launch", description: "Automatically begin proxying when the app opens.") {
                     Toggle("", isOn: Binding(
-                        get: { viewModel.serverStatus.severity == .ready },
-                        set: { isOn in Task { await viewModel.setServerEnabled(isOn) } }
+                        get: { viewModel.config.autostartServer },
+                        set: { value in viewModel.saveSetting { try viewModel.saveAutostartServer(value) } }
                     ))
                     .labelsHidden()
                     .toggleStyle(SettingsToggleStyle())
-                    .disabled(viewModel.isServerActionInProgress)
-                }
-                SettingsRow(label: "Port", description: "Local CLIProxyAPI listening port.") {
-                    HStack(spacing: 8) {
-                        TextField("18317", text: Binding(
-                            get: { portText.isEmpty ? String(viewModel.config.port) : portText },
-                            set: { portText = $0 }
-                        ))
-                        .font(.caption.monospaced())
-                        .multilineTextAlignment(.center)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 84)
-                        Button("Save") {
-                            if let port = Int(portText.isEmpty ? String(viewModel.config.port) : portText) {
-                                viewModel.saveSetting { try viewModel.savePort(port) }
-                            }
-                        }
-                        .controlSize(.small)
-                    }
-                }
-                SettingsRow(label: "Restart", description: "Restart the bundled proxy runtime with the current settings.") {
-                    Button("Restart") {
-                        Task { await viewModel.restartServer() }
-                    }
-                    .controlSize(.small)
-                    .disabled(viewModel.isServerActionInProgress)
-                }
-                SettingsRow(label: "Bind address", description: "Network bind selection is a design placeholder.", isEnabled: false) {
-                    SettingsSegmentedControl(options: ["127.0.0.1", "0.0.0.0"], selected: "127.0.0.1")
-                }
-                SettingsRow(label: "Autostart server", description: "Automatic server start will be wired later.", isEnabled: false) {
-                    Toggle("", isOn: .constant(false))
-                        .labelsHidden()
-                        .toggleStyle(SettingsToggleStyle())
                 }
             }
 
             SettingsGroup(title: "Routing") {
-                SettingsRow(label: "Round robin", description: "Multi-account routing is a design placeholder.", isEnabled: false) {
+                SettingsRow(label: "Round-robin balancing", description: "Distribute requests across connected accounts of the same provider.", isEnabled: false) {
                     Toggle("", isOn: .constant(false))
                         .labelsHidden()
                         .toggleStyle(SettingsToggleStyle())
@@ -118,110 +110,129 @@ struct ServerSettingsView: View {
 
 struct AdvancedSettingsView: View {
     @ObservedObject var viewModel: DashboardViewModel
-    @State private var activeSheet: AdvancedSettingsSheet?
+    @State private var confirmReset: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            SettingsGroup(title: "Shell") {
-                SettingsRow(label: "Install status", description: "Current shell integration state.") {
-                    Text(viewModel.optionRows.first { $0.id == "install" }?.value ?? "Unknown")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            SettingsGroup(title: "Advanced") {
+                SettingsRow(label: "Log level", description: "Verbosity for in-app logs and the diagnostics file.") {
+                    SettingsSegmentedPicker<LogLevel>(
+                        options: [
+                            (value: .error, label: "Error"),
+                            (value: .warn, label: "Warn"),
+                            (value: .info, label: "Info"),
+                            (value: .debug, label: "Debug")
+                        ],
+                        selection: Binding(
+                            get: { viewModel.config.logLevel },
+                            set: { newValue in
+                                viewModel.saveSetting { try viewModel.saveLogLevel(newValue) }
+                            }
+                        )
+                    )
                 }
-                SettingsRow(label: "Shell functions", description: "Review or reinstall the generated launcher functions.") {
-                    HStack(spacing: 8) {
-                        Button("View…") { activeSheet = .functions }
-                            .controlSize(.small)
-                        Button("Reinstall") { try? viewModel.installShellFunctions() }
-                            .controlSize(.small)
+                SettingsRow(label: "Diagnostics", description: "Reveal log file in Finder for troubleshooting.") {
+                    Button("Reveal") {
+                        viewModel.revealLogsInFinder()
                     }
+                    .controlSize(.small)
                 }
             }
 
-            SettingsGroup(title: "Diagnostics") {
-                SettingsRow(label: "Log level", description: "Detailed log level control is a design placeholder.", isEnabled: false) {
-                    SettingsSegmentedControl(options: ["Error", "Warn", "Info", "Debug"], selected: "Info")
-                }
-                SettingsRow(label: "Reveal logs", description: "Log folder reveal action will be wired later.", isEnabled: false) {
-                    Button("Reveal") {}
-                        .controlSize(.small)
-                }
-            }
-
-            SettingsGroup(title: "Models and permissions") {
-                SettingsRow(label: "Models", description: "Configure default model mappings.") {
-                    Button("Models…") { activeSheet = .models }
-                        .controlSize(.small)
-                }
-                SettingsRow(label: "Permissions", description: "Opt in to dangerous skip-permissions launch arguments.") {
-                    Button("Permissions…") { activeSheet = .permissions }
-                        .controlSize(.small)
+            SettingsGroup(title: "Reset") {
+                SettingsRow(label: "Reset all settings", description: "Clears preferences but keeps connected accounts.") {
+                    Button(action: { confirmReset = true }) {
+                        Text("Reset…")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(BrandPalette.statusError)
+                            .padding(.horizontal, 10)
+                            .frame(height: 22)
+                            .background(
+                                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                    .fill(.regularMaterial)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                    .stroke(Color.primary.opacity(0.14), lineWidth: 0.5)
+                            )
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }
         .padding(.horizontal, 32)
         .padding(.vertical, 28)
-        .sheet(item: $activeSheet) { sheet in
-            switch sheet {
-            case .functions:
-                ShellFunctionsSettingsSheet(commands: viewModel.config.commands) { try viewModel.saveCommands($0) }
-            case .models:
-                ModelsSettingsSheet(
-                    config: viewModel.config,
-                    availableModels: viewModel.availableCodexModels,
-                    refreshModels: { Task { await viewModel.loadCodexModels() } },
-                    save: { ccapi, ccodex in try viewModel.saveModels(ccapi: ccapi, ccodex: ccodex) }
-                )
-            case .permissions:
-                PermissionsSettingsSheet(isEnabled: viewModel.config.includeDangerouslySkipPermissions) {
-                    try viewModel.saveDangerousPermissionsEnabled($0)
-                }
+        .confirmationDialog(
+            "Reset all settings?",
+            isPresented: $confirmReset,
+            titleVisibility: .visible
+        ) {
+            Button("Reset", role: .destructive) {
+                viewModel.resetAllSettings()
             }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Preferences (appearance, server, behavior) will return to defaults. Connected accounts and command names are preserved.")
         }
     }
 }
 
-private enum AdvancedSettingsSheet: Identifiable {
-    case functions
-    case models
-    case permissions
-
-    var id: String { String(describing: self) }
-}
-
 struct AboutSettingsView: View {
+    @State private var showLicenses: Bool = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            SettingsGroup(title: "About") {
-                VStack(spacing: 10) {
-                    Image(systemName: "point.3.connected.trianglepath.dotted")
-                        .font(.system(size: 44))
-                        .foregroundStyle(.blue)
+            VStack(spacing: 12) {
+                AppIconView(size: 72)
+                VStack(spacing: 4) {
                     Text("CLIProxyManager")
-                        .font(.title2.bold())
-                    Text("CLIProxyAPI Manager for Claude Code profiles")
-                        .font(.caption)
+                        .font(.system(size: 18, weight: .bold, design: .rounded))
+                    Text("Built for the people who proxy")
+                        .font(.system(size: 12))
                         .foregroundStyle(.secondary)
+                    Text(verbatim: "Version 0.0.1 (beta)")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                        .padding(.top, 8)
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 18)
             }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 24)
 
             SettingsGroup(title: "Updates") {
-                SettingsRow(label: "Automatically check for updates", description: "Updater integration is a design placeholder.", isEnabled: false) {
-                    Toggle("", isOn: .constant(true))
+                SettingsRow(label: "Check for updates", description: "Automatically check for new versions on launch.", isEnabled: false) {
+                    Toggle("", isOn: .constant(false))
                         .labelsHidden()
                         .toggleStyle(SettingsToggleStyle())
                 }
+                SettingsRow(label: "Check now", description: "Updater integration is a design placeholder.", isEnabled: false) {
+                    Button("Check now") {}
+                        .controlSize(.small)
+                }
             }
 
-            SettingsGroup(title: "Licenses") {
-                LicensesView()
-                    .frame(minHeight: 220)
-                    .padding(12)
+            VStack(spacing: 6) {
+                Text(verbatim: "© 2026 CLIProxyManager")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+                HStack(spacing: 4) {
+                    Text("Includes CLIProxyAPI — MIT license.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                    Button("View") {
+                        showLicenses = true
+                    }
+                    .buttonStyle(.link)
+                    .font(.system(size: 11))
+                }
             }
+            .frame(maxWidth: .infinity)
+            .padding(.top, 16)
         }
         .padding(.horizontal, 32)
         .padding(.vertical, 28)
+        .sheet(isPresented: $showLicenses) {
+            LicensesSheet(onClose: { showLicenses = false })
+        }
     }
 }

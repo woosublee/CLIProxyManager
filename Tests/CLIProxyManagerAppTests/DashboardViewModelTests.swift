@@ -65,7 +65,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.cards.first { $0.command == "codex-local" }?.status, serverStatus)
     }
 
-    func testDefaultProviderRowsShowOnlyClaudeAndCodexOAuthProfiles() {
+    func testDefaultProviderRowsHideProfilesUntilAuthExists() {
         let viewModel = DashboardViewModel(
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
@@ -73,9 +73,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             claudeConnector: connectedClaudeConnector()
         )
 
-        XCTAssertEqual(viewModel.providerRows.map(\.id), [.claude, .codex])
-        XCTAssertEqual(viewModel.providerRows.map(\.name), ["Claude OAuth", "Codex OAuth"])
-        XCTAssertFalse(viewModel.providerRows.contains { $0.name == "Claude API" })
+        XCTAssertEqual(viewModel.providerRows, [])
     }
 
     func testAddProviderExplainsClaudeAPIIsHiddenFromDefaultProfiles() {
@@ -131,6 +129,19 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertFalse(viewModel.isProfileLoginInProgress)
     }
 
+    func testExpiredProviderRowIsErrored() {
+        let viewModel = DashboardViewModel(
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: "2026-05-09T11:24:01+09:00", disabled: false)
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.isErrored, true)
+    }
+
     func testDisconnectProviderDisablesAuthProfileAndRefreshesRows() {
         let authStore = StubAuthProfileStore(profiles: [
             AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: nil, disabled: false)
@@ -158,6 +169,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let store = StubConfigStore(config: .default)
         let viewModel = DashboardViewModel(
             configStore: store,
+            shellInstaller: StubShellInstaller(),
             proxyService: StubProxyServiceStarter(),
             claudeConnector: connectedClaudeConnector()
         )
@@ -167,6 +179,21 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(store.savedConfigs.last?.port, 18_888)
         XCTAssertEqual(viewModel.config.port, 18_888)
         XCTAssertTrue(viewModel.optionRows.contains { $0.title == "Port" && $0.value == "18888" })
+    }
+
+    func testSaveSettingReturnsFalseWhenPortSaveFails() {
+        let store = StubConfigStore(config: .default, saveError: NSError(domain: "test", code: 1))
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        let didSave = viewModel.saveSetting { try viewModel.savePort(18_888) }
+
+        XCTAssertFalse(didSave)
+        XCTAssertEqual(viewModel.config.port, AppConfig.default.port)
+        XCTAssertEqual(store.savedConfigs, [])
     }
 
     func testInstallShellFunctionsRendersAndInstallsCurrentConfig() throws {
@@ -183,8 +210,27 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         try viewModel.installShellFunctions(helperCommand: "/usr/local/bin/cliproxy-manager")
 
-        XCTAssertEqual(installer.installedFunctionNames, ["ccm", "ccmapi", "customcodex"])
+        XCTAssertEqual(installer.installedFunctionNames, ["cc", "customcodex"])
         XCTAssertTrue(installer.installedScript?.contains("customcodex() {") == true)
+    }
+
+    func testInstallShellFunctionsUsesProvidedHelperCommand() throws {
+        let installer = StubShellInstaller()
+        let automaticInstaller = AutomaticShellInstallService(
+            installer: installer,
+            secretStore: InMemorySecretStore(values: [.claudeAPIKey: "sk-test"]),
+            helperCommand: "/usr/local/bin/cliproxy-manager"
+        )
+        let viewModel = DashboardViewModel(
+            shellInstaller: installer,
+            automaticShellInstallService: automaticInstaller,
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        try viewModel.installShellFunctions(helperCommand: "/Applications/CLI Proxy/cliproxy-manager")
+
+        XCTAssertTrue(installer.installedScript?.contains("'/Applications/CLI Proxy/cliproxy-manager' secret get claude-api-key") == true)
     }
 
     func testLoadCodexModelsFetchesBaseModelsFromCurrentPort() async {
@@ -201,6 +247,19 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.availableCodexModels, ["gpt-5.5", "gpt-5.6"])
     }
 
+    func testLatestBaseCodexModelPrefersMainGptModelWithSuffix() async {
+        let modelClient = StubProxyModelClient(models: ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo"])
+        let viewModel = DashboardViewModel(
+            modelClient: modelClient,
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        await viewModel.loadCodexModels()
+
+        XCTAssertEqual(viewModel.latestBaseCodexModel, "gpt-4o")
+    }
+
     func testSetServerEnabledStartsAndStopsServer() async {
         let proxyService = StubProxyServiceStarter()
         let viewModel = DashboardViewModel(
@@ -215,6 +274,47 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         XCTAssertEqual(proxyService.ports, [18_317])
         XCTAssertEqual(proxyService.stopCount, 1)
+    }
+
+    func testServerToggleEntersStartingStateImmediately() async {
+        let proxyService = StubProxyServiceStarter(startDelayNanoseconds: 50_000_000)
+        let viewModel = DashboardViewModel(
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            serverStatusRetryDelayNanoseconds: 0
+        )
+
+        let task = Task { await viewModel.setServerEnabled(true) }
+        await Task.yield()
+
+        XCTAssertEqual(viewModel.serverControlState, .starting)
+
+        await task.value
+        XCTAssertEqual(viewModel.serverControlState, .running)
+    }
+
+    func testServerToggleEntersStoppingStateImmediately() async {
+        let proxyService = StubProxyServiceStarter(stopDelayNanoseconds: 50_000_000)
+        let httpClient = SequencedHTTPClient(results: [
+            .success(Data("{}".utf8)),
+            .failure(URLError(.cannotConnectToHost))
+        ])
+        let viewModel = DashboardViewModel(
+            proxyHealthClient: ProxyHealthClient(httpClient: httpClient, timeout: 0.1),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            serverStatusRetryDelayNanoseconds: 0
+        )
+        await viewModel.refresh()
+
+        let task = Task { await viewModel.setServerEnabled(false) }
+        await Task.yield()
+
+        XCTAssertEqual(viewModel.serverControlState, .stopping)
+
+        await task.value
+        XCTAssertEqual(viewModel.serverControlState, .stopped)
     }
 
     func testStartServerUsesInjectedProxyServiceAndRefreshesStatus() async {
@@ -385,11 +485,13 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
 private final class StubConfigStore: AppConfigStoring, @unchecked Sendable {
     private let lock = NSLock()
+    private let saveError: Error?
     private(set) var savedConfigs: [AppConfig] = []
     var config: AppConfig
 
-    init(config: AppConfig = .default) {
+    init(config: AppConfig = .default, saveError: Error? = nil) {
         self.config = config
+        self.saveError = saveError
     }
 
     func load() throws -> AppConfig {
@@ -397,6 +499,9 @@ private final class StubConfigStore: AppConfigStoring, @unchecked Sendable {
     }
 
     func save(_ config: AppConfig) throws {
+        if let saveError {
+            throw saveError
+        }
         lock.withLock { savedConfigs.append(config) }
         self.config = config
     }
@@ -458,6 +563,14 @@ private final class StubAuthProfileStore: AuthProfileManaging, @unchecked Sendab
                 self.nextProfiles = nil
             }
             return _profiles
+        }
+    }
+
+    func delete(for type: AuthProfileType) throws -> Int {
+        lock.withLock {
+            let count = _profiles.filter { $0.type == type }.count
+            _profiles.removeAll { $0.type == type }
+            return count
         }
     }
 
@@ -530,6 +643,8 @@ private final class StubProcessRunner: ProcessRunning, @unchecked Sendable {
 
 private final class StubProxyServiceStarter: ProxyServiceControlling, @unchecked Sendable {
     private let error: Error?
+    private let startDelayNanoseconds: UInt64
+    private let stopDelayNanoseconds: UInt64
     private let lock = NSLock()
     private var _ports: [Int] = []
     private var _restartPorts: [Int] = []
@@ -547,12 +662,17 @@ private final class StubProxyServiceStarter: ProxyServiceControlling, @unchecked
         lock.withLock { _stopCount }
     }
 
-    init(error: Error? = nil) {
+    init(error: Error? = nil, startDelayNanoseconds: UInt64 = 0, stopDelayNanoseconds: UInt64 = 0) {
         self.error = error
+        self.startDelayNanoseconds = startDelayNanoseconds
+        self.stopDelayNanoseconds = stopDelayNanoseconds
     }
 
     func start(port: Int) async throws {
         lock.withLock { _ports.append(port) }
+        if startDelayNanoseconds > 0 {
+            try? await Task.sleep(nanoseconds: startDelayNanoseconds)
+        }
         if let error {
             throw error
         }
@@ -560,6 +680,9 @@ private final class StubProxyServiceStarter: ProxyServiceControlling, @unchecked
 
     func stop() async throws {
         lock.withLock { _stopCount += 1 }
+        if stopDelayNanoseconds > 0 {
+            try? await Task.sleep(nanoseconds: stopDelayNanoseconds)
+        }
         if let error {
             throw error
         }

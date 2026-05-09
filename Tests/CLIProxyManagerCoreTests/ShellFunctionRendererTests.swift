@@ -5,14 +5,15 @@ final class ShellFunctionRendererTests: XCTestCase {
     func testRenderUsesFunctionsNotAliasesOrGlobalExports() throws {
         let renderer = ShellFunctionRenderer(
             config: .default,
-            helperCommand: "/usr/local/bin/cliproxy-manager"
+            helperCommand: "/usr/local/bin/cliproxy-manager",
+            includeClaudeAPI: true
         )
 
         let script = try renderer.render()
 
-        XCTAssertTrue(script.contains("ccm() {"))
-        XCTAssertTrue(script.contains("ccmapi() {"))
-        XCTAssertTrue(script.contains("ccmcodex() {"))
+        XCTAssertTrue(script.contains("cc() {"))
+        XCTAssertTrue(script.contains("ccapi() {"))
+        XCTAssertTrue(script.contains("ccodex() {"))
         XCTAssertFalse(script.contains("alias cc="))
         XCTAssertFalse(script.contains("export ANTHROPIC_BASE_URL"))
         XCTAssertFalse(script.contains("export ANTHROPIC_AUTH_TOKEN"))
@@ -21,7 +22,8 @@ final class ShellFunctionRendererTests: XCTestCase {
     func testRenderPassesArgumentsThroughToClaude() throws {
         let script = try ShellFunctionRenderer(
             config: .default,
-            helperCommand: "/usr/local/bin/cliproxy-manager"
+            helperCommand: "/usr/local/bin/cliproxy-manager",
+            includeClaudeAPI: true
         ).render()
 
         XCTAssertEqual(script.components(separatedBy: "claude \"$@\"").count - 1, 3)
@@ -33,7 +35,7 @@ final class ShellFunctionRendererTests: XCTestCase {
             helperCommand: "/usr/local/bin/cliproxy-manager"
         ).render()
 
-        XCTAssertTrue(script.contains("ccm() {"))
+        XCTAssertTrue(script.contains("cc() {"))
         XCTAssertTrue(script.contains("ANTHROPIC_BASE_URL=\"http://127.0.0.1:18317\""))
         XCTAssertTrue(script.contains("ANTHROPIC_AUTH_TOKEN='sk-dummy'"))
         XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='claude-opus-4-7'"))
@@ -53,7 +55,8 @@ final class ShellFunctionRendererTests: XCTestCase {
 
         let script = try ShellFunctionRenderer(
             config: config,
-            helperCommand: "/opt/cliproxy-manager/bin/cliproxy-manager"
+            helperCommand: "/opt/cliproxy-manager/bin/cliproxy-manager",
+            includeClaudeAPI: true
         ).render()
 
         XCTAssertTrue(script.contains("http://127.0.0.1:8320/v1/models"))
@@ -119,6 +122,19 @@ final class ShellFunctionRendererTests: XCTestCase {
         }
     }
 
+    func testInvalidClaudeAPICommandNameThrowsEvenWhenFunctionIsNotRendered() {
+        var config = AppConfig.default
+        config.commands.ccapi = "bad;rm"
+
+        XCTAssertThrowsError(try ShellFunctionRenderer(
+            config: config,
+            helperCommand: "/usr/local/bin/cliproxy-manager",
+            includeClaudeAPI: false
+        ).render()) { error in
+            XCTAssertEqual(error as? ShellFunctionRendererError, .invalidFunctionName("bad;rm"))
+        }
+    }
+
     func testInvalidPortsThrow() {
         for port in [0, 70_000] {
             var config = AppConfig.default
@@ -140,7 +156,8 @@ final class ShellFunctionRendererTests: XCTestCase {
 
         let script = try ShellFunctionRenderer(
             config: config,
-            helperCommand: "/usr/local/bin/cliproxy-manager"
+            helperCommand: "/usr/local/bin/cliproxy-manager",
+            includeClaudeAPI: true
         ).render()
 
         XCTAssertTrue(script.contains("ANTHROPIC_MODEL='foo$(touch /tmp/pwned)\"'\\''\\bar'"))
@@ -150,7 +167,8 @@ final class ShellFunctionRendererTests: XCTestCase {
     func testCCAPIStopsWhenSecretHelperFails() throws {
         let script = try ShellFunctionRenderer(
             config: .default,
-            helperCommand: "/usr/local/bin/cliproxy-manager"
+            helperCommand: "/usr/local/bin/cliproxy-manager",
+            includeClaudeAPI: true
         ).render()
 
         XCTAssertTrue(script.contains("local anthropic_auth_token"))
@@ -163,7 +181,8 @@ final class ShellFunctionRendererTests: XCTestCase {
     func testHelperCommandPathWithSpacesAndSingleQuoteIsEscapedInCommandSubstitution() throws {
         let script = try ShellFunctionRenderer(
             config: .default,
-            helperCommand: "/Applications/CLI Proxy/cliproxy-manager's bin"
+            helperCommand: "/Applications/CLI Proxy/cliproxy-manager's bin",
+            includeClaudeAPI: true
         ).render()
 
         XCTAssertTrue(script.contains("if ! anthropic_auth_token=\"$( '/Applications/CLI Proxy/cliproxy-manager'\\''s bin' secret get claude-api-key )\"; then"))

@@ -2,18 +2,33 @@ import CLIProxyManagerCore
 
 struct AutomaticShellInstallService: Sendable {
     private let installer: any ShellFunctionInstalling
-    private let helperCommand: String
+    private let secretStore: any SecretStore
+    private let defaultHelperCommand: String
 
-    init(installer: any ShellFunctionInstalling, helperCommand: String = "/usr/local/bin/cliproxy-manager") {
+    init(
+        installer: any ShellFunctionInstalling,
+        secretStore: any SecretStore = KeychainSecretStore(),
+        helperCommand: String = "/usr/local/bin/cliproxy-manager"
+    ) {
         self.installer = installer
-        self.helperCommand = helperCommand
+        self.secretStore = secretStore
+        self.defaultHelperCommand = helperCommand
     }
 
-    func apply(config: AppConfig) throws {
-        let script = try ShellFunctionRenderer(config: config, helperCommand: helperCommand).render()
-        try installer.install(
-            functionScript: script,
-            functionNames: [config.commands.cc, config.commands.ccapi, config.commands.ccodex]
-        )
+    func apply(config: AppConfig, helperCommand: String? = nil) throws {
+        let includeClaudeAPI: Bool
+        do {
+            includeClaudeAPI = try !secretStore.get(.claudeAPIKey).isEmpty
+        } catch SecretStoreError.missingSecret {
+            includeClaudeAPI = false
+        }
+        let script = try ShellFunctionRenderer(
+            config: config,
+            helperCommand: helperCommand ?? defaultHelperCommand,
+            includeClaudeAPI: includeClaudeAPI
+        ).render()
+        var functionNames = [config.commands.cc, config.commands.ccodex]
+        if includeClaudeAPI { functionNames.append(config.commands.ccapi) }
+        try installer.install(functionScript: script, functionNames: functionNames)
     }
 }

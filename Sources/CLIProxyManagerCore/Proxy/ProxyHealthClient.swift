@@ -15,8 +15,18 @@ public protocol HTTPClient: Sendable {
 public struct URLSessionHTTPClient: HTTPClient {
     private let session: URLSession
 
-    public init(session: URLSession = .shared) {
+    public init(session: URLSession = URLSessionHTTPClient.makeDefaultSession()) {
         self.session = session
+    }
+
+    public static func makeDefaultSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 5
+        configuration.timeoutIntervalForResource = 10
+        // Bypass any system HTTP proxies for loopback so the connection stays on lo0.
+        configuration.connectionProxyDictionary = [:]
+        configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        return URLSession(configuration: configuration)
     }
 
     public func get(_ url: URL, headers: [String: String] = [:]) async throws -> Data {
@@ -98,9 +108,9 @@ public struct ProxyHealthClient: Sendable {
 
     private var stoppedStatus: DiagnosticStatus {
         DiagnosticStatus(
-            severity: .error,
+            severity: .warning,
             title: "CLIProxyAPI 중지됨",
-            message: "앱에서 서버를 시작하세요."
+            message: ""
         )
     }
 }

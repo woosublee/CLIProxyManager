@@ -1,5 +1,18 @@
 import Foundation
 
+public enum AppearanceMode: String, Codable, CaseIterable, Sendable {
+    case system
+    case light
+    case dark
+}
+
+public enum LogLevel: String, Codable, CaseIterable, Sendable {
+    case error
+    case warn
+    case info
+    case debug
+}
+
 public struct AppConfig: Codable, Equatable, Sendable {
     public struct Commands: Codable, Equatable, Sendable {
         public var cc: String
@@ -69,6 +82,16 @@ public struct AppConfig: Codable, Equatable, Sendable {
         }
     }
 
+    public struct Nicknames: Codable, Equatable, Sendable {
+        public var cc: String
+        public var ccodex: String
+
+        public init(cc: String = "", ccodex: String = "") {
+            self.cc = cc
+            self.ccodex = ccodex
+        }
+    }
+
     public var port: Int
     public var commands: Commands
     public var ccapi: ClaudeAPI
@@ -77,6 +100,13 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var startAtLogin: Bool
     public var showDockIcon: Bool
     public var showMenuBarIcon: Bool
+    public var showNotifications: Bool
+    public var appearance: AppearanceMode
+    public var nicknames: Nicknames
+    public var bindAddress: String
+    public var autostartServer: Bool
+    public var roundRobinEnabled: Bool
+    public var logLevel: LogLevel
 
     public init(
         port: Int,
@@ -86,7 +116,14 @@ public struct AppConfig: Codable, Equatable, Sendable {
         includeDangerouslySkipPermissions: Bool,
         startAtLogin: Bool,
         showDockIcon: Bool,
-        showMenuBarIcon: Bool
+        showMenuBarIcon: Bool,
+        showNotifications: Bool = true,
+        appearance: AppearanceMode = .system,
+        nicknames: Nicknames = Nicknames(),
+        bindAddress: String = "127.0.0.1",
+        autostartServer: Bool = false,
+        roundRobinEnabled: Bool = false,
+        logLevel: LogLevel = .info
     ) {
         self.port = port
         self.commands = commands
@@ -96,11 +133,49 @@ public struct AppConfig: Codable, Equatable, Sendable {
         self.startAtLogin = startAtLogin
         self.showDockIcon = showDockIcon
         self.showMenuBarIcon = showMenuBarIcon
+        self.showNotifications = showNotifications
+        self.appearance = appearance
+        self.nicknames = nicknames
+        self.bindAddress = bindAddress
+        self.autostartServer = autostartServer
+        self.roundRobinEnabled = roundRobinEnabled
+        self.logLevel = logLevel
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case port, commands, ccapi, ccodex
+        case includeDangerouslySkipPermissions
+        case startAtLogin, showDockIcon, showMenuBarIcon
+        case showNotifications
+        case appearance
+        case nicknames
+        case bindAddress, autostartServer, roundRobinEnabled
+        case logLevel
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.port = try c.decode(Int.self, forKey: .port)
+        self.commands = try c.decode(Commands.self, forKey: .commands)
+        self.ccapi = try c.decode(ClaudeAPI.self, forKey: .ccapi)
+        self.ccodex = try c.decode(Codex.self, forKey: .ccodex)
+        self.includeDangerouslySkipPermissions = try c.decode(Bool.self, forKey: .includeDangerouslySkipPermissions)
+        self.startAtLogin = try c.decode(Bool.self, forKey: .startAtLogin)
+        self.showDockIcon = try c.decode(Bool.self, forKey: .showDockIcon)
+        self.showMenuBarIcon = try c.decode(Bool.self, forKey: .showMenuBarIcon)
+        // Backwards-compat: existing config.json files won't have these keys.
+        self.showNotifications = try c.decodeIfPresent(Bool.self, forKey: .showNotifications) ?? true
+        self.appearance = try c.decodeIfPresent(AppearanceMode.self, forKey: .appearance) ?? .system
+        self.nicknames = try c.decodeIfPresent(Nicknames.self, forKey: .nicknames) ?? Nicknames()
+        self.bindAddress = try c.decodeIfPresent(String.self, forKey: .bindAddress) ?? "127.0.0.1"
+        self.autostartServer = try c.decodeIfPresent(Bool.self, forKey: .autostartServer) ?? false
+        self.roundRobinEnabled = try c.decodeIfPresent(Bool.self, forKey: .roundRobinEnabled) ?? false
+        self.logLevel = try c.decodeIfPresent(LogLevel.self, forKey: .logLevel) ?? .info
     }
 
     public static let `default` = AppConfig(
         port: 18_317,
-        commands: Commands(cc: "ccm", ccapi: "ccmapi", ccodex: "ccmcodex"),
+        commands: Commands(cc: "cc", ccapi: "ccapi", ccodex: "ccodex"),
         ccapi: ClaudeAPI(model: "claude-opus-4-7"),
         ccodex: Codex(
             opus: CodexRole(model: "gpt-5.5", reasoning: .xhigh, contextWindow: .auto),
@@ -110,6 +185,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         includeDangerouslySkipPermissions: false,
         startAtLogin: false,
         showDockIcon: true,
-        showMenuBarIcon: true
+        showMenuBarIcon: true,
+        appearance: .system
     )
 }
