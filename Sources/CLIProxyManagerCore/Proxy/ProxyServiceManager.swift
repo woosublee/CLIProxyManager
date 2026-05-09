@@ -96,6 +96,7 @@ protocol LaunchctlManaging: Sendable {
     func remove(label: String) throws
     func submit(label: String, executable: String, arguments: [String]) throws
     func lookupPID(label: String) throws -> pid_t
+    func labels(matchingPID pid: pid_t) throws -> [String]
 }
 
 struct LaunchctlRunner: LaunchctlManaging {
@@ -138,6 +139,12 @@ struct LaunchctlRunner: LaunchctlManaging {
         ])
     }
 
+    func labels(matchingPID pid: pid_t) throws -> [String] {
+        let result = try commandRunner.run(["list"])
+        try check(result, operation: "list")
+        return Self.labels(fromLaunchctlListOutput: result.stdout, matchingPID: pid)
+    }
+
     private func check(_ result: LaunchctlCommandResult, operation: String) throws {
         guard result.exitStatus == 0 else {
             let stderr = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -160,6 +167,14 @@ struct LaunchctlRunner: LaunchctlManaging {
             }
         }
         return nil
+    }
+
+    private static func labels(fromLaunchctlListOutput text: String, matchingPID pid: pid_t) -> [String] {
+        text.split(whereSeparator: { $0 == "\n" }).compactMap { line in
+            let columns = line.split(whereSeparator: { $0 == "\t" || $0 == " " }).map(String.init)
+            guard columns.count >= 3, pid_t(columns[0]) == pid else { return nil }
+            return columns[2]
+        }
     }
 }
 
@@ -221,6 +236,7 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
     private let paths: ManagedPaths
     private let bundledBinaryURL: URL?
     private let launcher: any ProcessLaunching
+    private let launchctl: any LaunchctlManaging
     private let fileManager: FileManager
     private let processState = LockedProcessState()
     private let lifecycleLock = NSLock()
@@ -231,9 +247,26 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         launcher: any ProcessLaunching = ProcessLauncher(),
         fileManager: FileManager = .default
     ) {
+        self.init(
+            paths: paths,
+            bundledBinaryURL: bundledBinaryURL,
+            launcher: launcher,
+            launchctl: LaunchctlRunner(),
+            fileManager: fileManager
+        )
+    }
+
+    init(
+        paths: ManagedPaths,
+        bundledBinaryURL: URL? = nil,
+        launcher: any ProcessLaunching = ProcessLauncher(),
+        launchctl: any LaunchctlManaging,
+        fileManager: FileManager = .default
+    ) {
         self.paths = paths
         self.bundledBinaryURL = bundledBinaryURL
         self.launcher = launcher
+        self.launchctl = launchctl
         self.fileManager = fileManager
     }
 
@@ -349,12 +382,20 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
                 configPath: paths.clipProxyConfigFile.path
               ) else { return }
         guard pid != getpid() else { return }
+        removeLaunchdJobs(forPID: pid)
         _ = kill(pid, SIGTERM)
         for _ in 0..<20 {
             if kill(pid, 0) != 0 { return }
             Thread.sleep(forTimeInterval: 0.05)
         }
         _ = kill(pid, SIGKILL)
+    }
+
+    private func removeLaunchdJobs(forPID pid: pid_t) {
+        guard let labels = try? launchctl.labels(matchingPID: pid) else { return }
+        for label in labels where label.hasPrefix("com.cliproxymanager.") {
+            try? launchctl.remove(label: label)
+        }
     }
 
     private func pidListening(onPort port: Int) -> pid_t? {
