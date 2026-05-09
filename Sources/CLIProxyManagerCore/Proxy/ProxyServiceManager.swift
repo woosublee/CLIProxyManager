@@ -19,13 +19,132 @@ public struct ProcessLauncher: ProcessLaunching {
     public init() {}
 
     public func launch(_ executable: String, _ arguments: [String]) throws -> any ManagedProxyProcess {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = arguments
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        try process.run()
-        return process
+        // Spawn detached from this session so the child's networking isn't subject to
+        // any session-scoped policies inherited from the SwiftUI app process.
+        return try DetachedProcess.spawn(executable: executable, arguments: arguments)
+    }
+}
+
+private final class DetachedProcess: ManagedProxyProcess, @unchecked Sendable {
+    private let pid: pid_t
+    private let label: String?
+    private var hasBeenWaitedFor = false
+    private let lock = NSLock()
+
+    private init(pid: pid_t, label: String? = nil) {
+        self.pid = pid
+        self.label = label
+    }
+
+    static func spawn(executable: String, arguments: [String]) throws -> DetachedProcess {
+        // Spawn through `launchctl submit` so the child is reparented to launchd and
+        // doesn't inherit the SwiftUI app's networking session. This sidesteps a macOS
+        // restriction where the parent app cannot make TCP loopback connections to a
+        // direct child it spawned via posix_spawn.
+        let label = "com.cliproxymanager.runtime.\(UUID().uuidString)"
+
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        var args = ["submit", "-l", label, "--"]
+        args.append(executable)
+        args.append(contentsOf: arguments)
+        task.arguments = args
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+        do {
+            try task.run()
+            task.waitUntilExit()
+        } catch {
+            throw NSError(domain: NSPOSIXErrorDomain, code: 0, userInfo: [
+                NSLocalizedDescriptionKey: "launchctl submit failed: \(error.localizedDescription)"
+            ])
+        }
+
+        // Find the launchd-managed PID by querying `launchctl list <label>`.
+        let pid = try Self.lookupPID(label: label)
+        return DetachedProcess(pid: pid, label: label)
+    }
+
+    private static func lookupPID(label: String, attempts: Int = 20) throws -> pid_t {
+        for _ in 0..<attempts {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+            task.arguments = ["list", label]
+            let pipe = Pipe()
+            task.standardOutput = pipe
+            task.standardError = FileHandle.nullDevice
+            try? task.run()
+            task.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let text = String(data: data, encoding: .utf8) ?? ""
+            for line in text.split(whereSeparator: { $0 == "\n" }) {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("\"PID\"") {
+                    if let eq = trimmed.firstIndex(of: "="),
+                       let semi = trimmed.lastIndex(of: ";") {
+                        let raw = trimmed[trimmed.index(after: eq)..<semi].trimmingCharacters(in: .whitespaces)
+                        if let pid = pid_t(raw), pid > 0 {
+                            return pid
+                        }
+                    }
+                }
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        throw NSError(domain: NSPOSIXErrorDomain, code: 0, userInfo: [
+            NSLocalizedDescriptionKey: "launchctl spawned job did not report a PID for \(label)"
+        ])
+    }
+
+    func terminate() {
+        if let label {
+            // Tell launchd to tear down the job (also kills the process).
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+            task.arguments = ["remove", label]
+            task.standardOutput = FileHandle.nullDevice
+            task.standardError = FileHandle.nullDevice
+            try? task.run()
+            task.waitUntilExit()
+        }
+        if !isExited() {
+            _ = kill(pid, SIGTERM)
+        }
+    }
+
+    func waitUntilExit() {
+        lock.lock()
+        if hasBeenWaitedFor {
+            lock.unlock()
+            return
+        }
+        lock.unlock()
+
+        var status: Int32 = 0
+        // Polling waitpid since the child is in a different session.
+        while true {
+            let result = waitpid(pid, &status, WNOHANG)
+            if result == pid {
+                lock.withLock { hasBeenWaitedFor = true }
+                return
+            }
+            if result == -1 {
+                // ECHILD or other; treat as exited.
+                lock.withLock { hasBeenWaitedFor = true }
+                return
+            }
+            // Still running.
+            if isExited() {
+                lock.withLock { hasBeenWaitedFor = true }
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+    }
+
+    private func isExited() -> Bool {
+        // kill(pid, 0) returns 0 if process exists, -1 (with errno) otherwise.
+        return kill(pid, 0) != 0
     }
 }
 
@@ -100,7 +219,13 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
     private func startLocked(port: Int) throws {
         try prepareLocked(port: port)
 
-        stopLocked(waitUntilExit: true)
+        terminateTrackedLocked(waitUntilExit: true)
+
+        // If a cliproxyapi instance is already serving on the configured port (e.g. from a
+        // previous app run), adopt it instead of fighting for the port.
+        if isCliproxyapiListening(onPort: port) {
+            return
+        }
 
         do {
             let process = try launcher.launch(paths.clipProxyBinary.path, ["--config", paths.clipProxyConfigFile.path])
@@ -111,6 +236,15 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
     }
 
     private func stopLocked(waitUntilExit: Bool = false) {
+        terminateTrackedLocked(waitUntilExit: waitUntilExit)
+
+        // Sweep up any cliproxyapi (tracked or adopted) still listening on the configured port.
+        if let port = readPortFromConfig() {
+            killOrphanCliproxyapi(onPort: port)
+        }
+    }
+
+    private func terminateTrackedLocked(waitUntilExit: Bool) {
         guard let process = processState.clear() else { return }
         process.terminate()
         if waitUntilExit {
@@ -120,6 +254,73 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
                 process.waitUntilExit()
             }
         }
+    }
+
+    private func isCliproxyapiListening(onPort port: Int) -> Bool {
+        guard let pid = pidListening(onPort: port),
+              let command = processCommand(pid: pid) else { return false }
+        return command.contains("cliproxyapi")
+    }
+
+    private func readPortFromConfig() -> Int? {
+        guard let yaml = try? String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8) else { return nil }
+        for line in yaml.split(whereSeparator: { $0 == "\n" || $0 == "\r" }) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("port:") {
+                let value = trimmed.dropFirst("port:".count).trimmingCharacters(in: .whitespaces)
+                return Int(value)
+            }
+        }
+        return nil
+    }
+
+    private func killOrphanCliproxyapi(onPort port: Int) {
+        guard let pid = pidListening(onPort: port) else { return }
+        guard let command = processCommand(pid: pid), command.contains("cliproxyapi") else { return }
+        // Avoid killing ourselves (paranoia — we're the SwiftUI app, not cliproxyapi, but be safe).
+        guard pid != getpid() else { return }
+        _ = kill(pid, SIGTERM)
+        for _ in 0..<20 {
+            if kill(pid, 0) != 0 { return }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        _ = kill(pid, SIGKILL)
+    }
+
+    private func pidListening(onPort port: Int) -> pid_t? {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        task.arguments = ["-nP", "-ti", "tcp:\(port)", "-sTCP:LISTEN"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = FileHandle.nullDevice
+        do {
+            try task.run()
+            task.waitUntilExit()
+        } catch {
+            return nil
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        guard let raw = String(data: data, encoding: .utf8) else { return nil }
+        let first = raw.split(whereSeparator: { $0.isNewline }).first.map(String.init) ?? ""
+        return pid_t(first.trimmingCharacters(in: .whitespaces))
+    }
+
+    private func processCommand(pid: pid_t) -> String? {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/ps")
+        task.arguments = ["-p", "\(pid)", "-o", "command="]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = FileHandle.nullDevice
+        do {
+            try task.run()
+            task.waitUntilExit()
+        } catch {
+            return nil
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func installBundledBinaryIfNeeded() throws {

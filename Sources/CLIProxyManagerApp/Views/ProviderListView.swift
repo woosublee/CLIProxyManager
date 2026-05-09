@@ -53,17 +53,33 @@ struct ProviderListView: View {
     private func providerSettingsSheet(_ provider: ProviderRowState.ID) -> some View {
         switch provider {
         case .claude:
-            ClaudeOAuthProviderSettingsSheet(config: viewModel.config) { functionName, dangerousPermissionsEnabled in
-                try viewModel.saveClaudeOAuthSettings(functionName: functionName, dangerousPermissionsEnabled: dangerousPermissionsEnabled)
-            }
+            let row = viewModel.providerRows.first { $0.id == .claude }
+            ClaudeOAuthProviderSettingsSheet(
+                config: viewModel.config,
+                connectionDetail: row?.connectionDetail ?? "",
+                isConnected: row?.isConnected ?? false,
+                onDisconnect: { viewModel.disconnectProvider(.claude) },
+                save: { functionName, nickname, dangerousPermissionsEnabled in
+                    try viewModel.saveClaudeOAuthSettings(
+                        functionName: functionName,
+                        nickname: nickname,
+                        dangerousPermissionsEnabled: dangerousPermissionsEnabled
+                    )
+                }
+            )
         case .codex:
+            let row = viewModel.providerRows.first { $0.id == .codex }
             CodexProviderSettingsSheet(
                 config: viewModel.config,
+                connectionDetail: row?.connectionDetail ?? "",
+                isConnected: row?.isConnected ?? false,
                 availableModels: viewModel.availableCodexModels,
                 refreshModels: { Task { await viewModel.loadCodexModels() } },
-                save: { functionName, codex, dangerousPermissionsEnabled in
+                onDisconnect: { viewModel.disconnectProvider(.codex) },
+                save: { functionName, nickname, codex, dangerousPermissionsEnabled in
                     try viewModel.saveCodexSettings(
                         functionName: functionName,
+                        nickname: nickname,
                         codex: codex,
                         dangerousPermissionsEnabled: dangerousPermissionsEnabled
                     )

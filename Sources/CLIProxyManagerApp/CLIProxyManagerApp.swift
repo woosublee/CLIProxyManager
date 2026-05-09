@@ -59,7 +59,7 @@ struct CLIProxyManagerApp: App {
             }
         }
 
-        MenuBarExtra("CLIProxyManager", systemImage: "point.3.connected.trianglepath.dotted") {
+        MenuBarExtra {
             MenuBarStatusView(
                 viewModel: viewModel,
                 openMain: {
@@ -72,6 +72,13 @@ struct CLIProxyManagerApp: App {
                 },
                 quit: { quitCoordinator.requestQuit() }
             )
+        } label: {
+            if let image = AppMarkRenderer.menuBarTemplate() {
+                Image(nsImage: image)
+            } else {
+                Image(systemName: "waveform.path")
+            }
         }
+        .menuBarExtraStyle(.window)
     }
 }

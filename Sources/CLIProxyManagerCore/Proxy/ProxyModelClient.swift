@@ -16,7 +16,9 @@ public struct ProxyModelClient: Sendable {
         let url = URL(string: "http://127.0.0.1:\(port)/v1/models")!
         let data = try await httpClient.get(url, headers: ["Authorization": "Bearer \(localAPIKey)"])
         let response = try JSONDecoder().decode(ModelsResponse.self, from: data)
-        return response.data.map(\.id)
+        // Sort by `created` descending so callers naturally see newest first.
+        let sorted = response.data.sorted { ($0.created ?? 0) > ($1.created ?? 0) }
+        return sorted.map(\.id)
     }
 
     public func baseModels(port: Int) async throws -> [String] {
@@ -43,5 +45,6 @@ private struct ModelsResponse: Decodable {
 
     struct Model: Decodable {
         var id: String
+        var created: Int64?
     }
 }

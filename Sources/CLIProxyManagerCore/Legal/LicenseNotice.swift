@@ -24,8 +24,8 @@ public struct LicenseNotice: Equatable, Sendable {
     public static let cliProxyAPI = LicenseNotice(
         name: "CLIProxyAPI",
         licenseName: "MIT License",
-        requiredNotice: "CLIProxyAPI는 MIT License로 배포됩니다. 이 앱이 CLIProxyAPI를 번들하거나 함께 배포하는 경우, upstream copyright notice와 MIT permission notice 전문을 앱 및 배포물에 포함해야 합니다.",
-        providerTermsNotice: "이 앱은 Claude, OpenAI, Codex 등 각 provider의 공식 보증 제품이 아닙니다. 사용자는 자신의 계정과 인증 정보로 각 provider 약관을 확인하고 준수해야 합니다.",
+        requiredNotice: "CLIProxyAPI is distributed under the MIT License. When this app bundles or distributes CLIProxyAPI, the upstream copyright notice and the full MIT permission notice must be included in the app and any release materials.",
+        providerTermsNotice: "CLIProxyManager is not an official product of Anthropic, OpenAI, Codex, or any other model provider. Users are responsible for using their own accounts and credentials in compliance with each provider's terms of service.",
         fullLicenseText: cliProxyAPILicenseText
     )
 

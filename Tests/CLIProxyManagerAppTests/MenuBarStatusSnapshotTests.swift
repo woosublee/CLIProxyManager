@@ -14,6 +14,7 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
                 ProviderRowState(
                     id: .claude,
                     name: "Claude OAuth",
+                    nickname: "",
                     functionName: "ccm",
                     connectionTitle: "연결됨",
                     connectionDetail: "claude@example.com",
@@ -22,6 +23,7 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
                 ProviderRowState(
                     id: .codex,
                     name: "Codex OAuth",
+                    nickname: "",
                     functionName: "ccmcodex",
                     connectionTitle: "연결됨",
                     connectionDetail: "codex@example.com",
@@ -35,9 +37,9 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
         XCTAssertTrue(snapshot.isServerRunning)
         XCTAssertEqual(snapshot.serverActionTitle, "Stop Server")
         XCTAssertEqual(snapshot.endpointTitle, "localhost:18317")
-        XCTAssertEqual(snapshot.connectedProviders.map(\.name), ["Claude OAuth", "Codex OAuth"])
-        XCTAssertEqual(snapshot.connectedProviders.map(\.functionName), ["ccm", "ccmcodex"])
-        XCTAssertEqual(snapshot.connectedProviders.map(\.connectionDetail), ["claude@example.com", "codex@example.com"])
+        XCTAssertEqual(snapshot.connectedProviders.map { $0.name }, ["Claude OAuth", "Codex OAuth"])
+        XCTAssertEqual(snapshot.connectedProviders.map { $0.functionName }, ["ccm", "ccmcodex"])
+        XCTAssertEqual(snapshot.connectedProviders.map { $0.connectionDetail }, ["claude@example.com", "codex@example.com"])
     }
 
     func testSnapshotShowsEmptyMessageWhenNoProviderIsConnected() {
@@ -51,6 +53,7 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
                 ProviderRowState(
                     id: .claude,
                     name: "Claude",
+                    nickname: "",
                     functionName: "ccm",
                     connectionTitle: "확인 필요",
                     connectionDetail: "Claude Code OAuth 상태를 확인하세요.",

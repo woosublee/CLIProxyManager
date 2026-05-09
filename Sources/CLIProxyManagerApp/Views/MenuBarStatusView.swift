@@ -18,153 +18,188 @@ struct MenuBarStatusView: View {
         VStack(alignment: .leading, spacing: 0) {
             statusBlock
                 .padding(.horizontal, 14)
-                .padding(.vertical, 10)
+                .padding(.top, 10)
+                .padding(.bottom, 10)
 
-            Divider().padding(.horizontal, 6)
+            menuSeparator
 
-            MenuBarActionRow(
-                title: snapshot.serverActionTitle,
-                systemImage: snapshot.isServerRunning ? "stop.fill" : "play.fill",
-                action: {
-                    Task {
-                        if snapshot.isServerRunning {
-                            await viewModel.stopServer()
-                        } else {
-                            await viewModel.startServer()
-                        }
+            MenuItemRow(
+                icon: snapshot.isServerRunning ? "stop.fill" : "play.fill",
+                label: snapshot.isServerRunning ? "Stop server" : "Start server",
+                disabled: viewModel.isServerActionInProgress
+            ) {
+                Task {
+                    if snapshot.isServerRunning {
+                        await viewModel.stopServer()
+                    } else {
+                        await viewModel.startServer()
                     }
                 }
-            )
-            .disabled(viewModel.isServerActionInProgress)
+            }
 
-            Divider().padding(.horizontal, 6)
+            menuSeparator
 
-            MenuBarActionRow(title: "Open CLIProxyManager", systemImage: "macwindow", action: openMain)
-            MenuBarActionRow(title: "Preferences…", systemImage: "gearshape", shortcut: "⌘ ,", action: openSettings)
+            MenuItemRow(icon: "macwindow", label: "Open CLIProxyManager", action: openMain)
+            MenuItemRow(icon: "gearshape", label: "Preferences…", shortcut: "⌘,", action: openSettings)
 
-            Divider().padding(.horizontal, 6)
+            menuSeparator
 
-            MenuBarActionRow(title: "Quit CLIProxyManager", systemImage: nil, shortcut: "⌘ Q", action: quit)
+            MenuItemRow(icon: nil, label: "Quit CLIProxyManager", shortcut: "⌘Q", action: quit)
         }
         .padding(.vertical, 5)
         .frame(width: AppWindowMetrics.menuBarWidth)
     }
 
+    // MARK: - Status header
+
     private var statusBlock: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Circle()
-                    .fill(snapshot.isServerRunning ? Color.green : Color.secondary)
-                    .frame(width: 8, height: 8)
-                Text(snapshot.serverTitle)
-                    .font(.headline)
-                Spacer()
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                StatusLED(state: ledState, size: 10, pulse: false)
+                Text(statusLabel)
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer(minLength: 8)
+                if snapshot.isServerRunning {
+                    Text(verbatim: "localhost:\(viewModel.config.port)")
+                        .font(.system(size: 11.5, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
             }
+
             accountsBlock
-            if let endpointTitle = snapshot.endpointTitle {
-                Text(endpointTitle)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
+
+            if snapshot.erroredCount > 0 {
+                Text("\(snapshot.erroredCount) error\(snapshot.erroredCount == 1 ? "" : "s")")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(BrandPalette.statusError)
             }
         }
     }
 
+    private var ledState: StatusLED.State {
+        switch viewModel.serverControlState {
+        case .running, .starting: return .running
+        case .stopped, .stopping: return .stopped
+        case .error: return .error
+        }
+    }
+
+    private var statusLabel: String {
+        switch viewModel.serverControlState {
+        case .stopped:  return "Stopped"
+        case .starting: return "Starting"
+        case .running:  return "Running"
+        case .stopping: return "Stopping"
+        case .error:    return "Error"
+        }
+    }
+
+    @ViewBuilder
     private var accountsBlock: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if snapshot.connectedProviders.isEmpty {
-                Text(snapshot.emptyProviderMessage)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .italic()
-            } else {
+        if snapshot.connectedProviders.isEmpty {
+            Text(snapshot.emptyProviderMessage)
+                .font(.system(size: 11.5))
+                .foregroundStyle(.tertiary)
+                .italic()
+        } else {
+            VStack(alignment: .leading, spacing: 2) {
                 ForEach(snapshot.connectedProviders) { provider in
-                    HStack(spacing: 8) {
-                        ProviderMiniMark(providerID: provider.id)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(provider.name)
-                                .font(.caption.weight(.medium))
-                            Text("$ \(provider.functionName)")
-                                .font(.caption2.monospaced())
-                                .foregroundStyle(.tertiary)
-                        }
-                        Spacer()
-                        Circle()
-                            .fill(.green)
-                            .frame(width: 6, height: 6)
-                    }
-                    .padding(.vertical, 3)
+                    MenuBarAccountRow(provider: provider)
                 }
             }
         }
     }
+
+    // MARK: - Separators
+
+    private var menuSeparator: some View {
+        Rectangle()
+            .fill(Color.primary.opacity(0.10))
+            .frame(height: 0.5)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
+    }
 }
 
-private struct MenuBarActionRow: View {
-    let title: String
-    let systemImage: String?
-    var shortcut: String?
+// MARK: - Account row
+
+private struct MenuBarAccountRow: View {
+    let provider: MenuBarConnectedProvider
+
+    var body: some View {
+        HStack(spacing: 9) {
+            ProviderAvatar(providerID: provider.id, size: 22)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(provider.displayName)
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(verbatim: "$ \(provider.functionName)")
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            StatusLED(state: .running, size: 8, pulse: false)
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+// MARK: - Menu item row (NSMenu-style hover)
+
+private struct MenuItemRow: View {
+    let icon: String?
+    let label: String
+    var shortcut: String? = nil
+    var disabled: Bool = false
     let action: () -> Void
+
+    @State private var hovering: Bool = false
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 9) {
                 Group {
-                    if let systemImage {
-                        Image(systemName: systemImage)
+                    if let icon {
+                        Image(systemName: icon)
+                            .font(.system(size: 11, weight: .medium))
                     } else {
                         Color.clear
                     }
                 }
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
                 .frame(width: 14)
+                .foregroundStyle(hovering ? Color.white : Color.secondary)
 
-                Text(title)
-                    .font(.caption)
-                Spacer()
+                Text(label)
+                    .font(.system(size: 13))
+                    .foregroundStyle(hovering ? Color.white : Color.primary)
+
+                Spacer(minLength: 4)
+
                 if let shortcut {
                     Text(shortcut)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.tertiary)
+                        .font(.system(size: 11.5, design: .monospaced))
+                        .tracking(0.4)
+                        .foregroundStyle(hovering ? Color.white.opacity(0.85) : Color.secondary)
                 }
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 6)
+            .padding(.vertical, 5)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(hovering ? BrandPalette.accent : Color.clear)
+            )
+            .padding(.horizontal, 5)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-    }
-}
-
-private struct ProviderMiniMark: View {
-    let providerID: ProviderRowState.ID
-
-    var body: some View {
-        RoundedRectangle(cornerRadius: 5, style: .continuous)
-            .fill(color)
-            .frame(width: 18, height: 18)
-            .overlay {
-                Text(mark)
-                    .font(.system(size: providerID == .codex ? 7 : 10, weight: .bold))
-                    .foregroundStyle(.white)
-            }
-    }
-
-    private var mark: String {
-        switch providerID {
-        case .claude:
-            "A"
-        case .codex:
-            "<>"
-        }
-    }
-
-    private var color: Color {
-        switch providerID {
-        case .claude:
-            Color(red: 0.85, green: 0.47, blue: 0.34)
-        case .codex:
-            Color.black
+        .disabled(disabled)
+        .opacity(disabled ? 0.55 : 1)
+        .onHover { value in
+            guard !disabled else { return }
+            hovering = value
         }
     }
 }

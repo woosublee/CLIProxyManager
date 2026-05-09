@@ -12,63 +12,76 @@ enum LicenseResource {
               let text = try? String(contentsOf: url, encoding: .utf8) else {
             return LicenseNotice.cliProxyAPILicenseText
         }
-
         return text
     }
 }
 
-struct LicensesView: View {
+/// Compact attribution sheet — opened from the About tab.
+struct LicensesSheet: View {
+    let onClose: () -> Void
     private let notice = LicenseNotice.cliProxyAPI
-    private let fullLicenseText: String
-
-    init(fullLicenseText: String = LicenseResource.cliProxyAPILicenseText()) {
-        self.fullLicenseText = fullLicenseText
-    }
+    private let fullLicenseText = LicenseResource.cliProxyAPILicenseText()
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                Text("Licenses & Notices")
-                    .font(.largeTitle.bold())
-
-                VStack(alignment: .leading, spacing: 12) {
-                    Text(notice.name)
-                        .font(.title2.weight(.semibold))
-                    Text(notice.licenseName)
-                        .font(.headline)
+        VStack(spacing: 0) {
+            HStack {
+                Text("Open-source attribution")
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.secondary)
-                    Text(notice.requiredNotice)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(width: 22, height: 22)
+                        .background(Circle().fill(Color.primary.opacity(0.06)))
                 }
-                .padding(24)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("CLIProxyAPI License Text")
-                        .font(.title2.weight(.semibold))
-                    Text(fullLicenseText)
-                        .font(.system(.body, design: .monospaced))
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(24)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Provider Terms")
-                        .font(.title2.weight(.semibold))
-                    Text(notice.providerTermsNotice)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(24)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .buttonStyle(.plain)
             }
-            .padding(32)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.thinMaterial)
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(notice.name)
+                            .font(.system(size: 13, weight: .semibold))
+                        Text(notice.licenseName)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Text(notice.requiredNotice)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    DisclosureGroup("Full license text") {
+                        Text(fullLicenseText)
+                            .font(.system(size: 11, design: .monospaced))
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, 8)
+                    }
+                    .font(.system(size: 12, weight: .medium))
+
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Provider Terms")
+                            .font(.system(size: 12, weight: .semibold))
+                        Text(notice.providerTermsNotice)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(18)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
+        .frame(width: 480, height: 480)
     }
 }

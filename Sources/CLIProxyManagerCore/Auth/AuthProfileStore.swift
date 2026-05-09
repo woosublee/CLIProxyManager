@@ -35,6 +35,33 @@ public struct AuthProfileStore: @unchecked Sendable {
         try profiles().first { $0.type == type && $0.disabled == false }
     }
 
+    /// Deletes every auth file matching the given provider type. Returns the number of files removed.
+    @discardableResult
+    public func delete(for type: AuthProfileType) throws -> Int {
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: authDirectory.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            return 0
+        }
+
+        let fileURLs = try fileManager.contentsOfDirectory(
+            at: authDirectory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )
+
+        var deletedCount = 0
+        for fileURL in fileURLs where fileURL.pathExtension == "json" {
+            guard let data = try? Data(contentsOf: fileURL),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  json["type"] as? String == type.rawValue else {
+                continue
+            }
+            try fileManager.removeItem(at: fileURL)
+            deletedCount += 1
+        }
+        return deletedCount
+    }
+
     @discardableResult
     public func setDisabled(_ disabled: Bool, for type: AuthProfileType) throws -> Int {
         var isDirectory: ObjCBool = false

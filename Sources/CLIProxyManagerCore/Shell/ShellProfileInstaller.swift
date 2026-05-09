@@ -1,7 +1,15 @@
 import Foundation
 
-public enum ShellProfileInstallerError: Error, Equatable {
+public enum ShellProfileInstallerError: LocalizedError, Equatable {
     case functionNameConflicts([String])
+
+    public var errorDescription: String? {
+        switch self {
+        case .functionNameConflicts(let names):
+            let list = names.map { "`\($0)`" }.joined(separator: ", ")
+            return "Cannot install shell functions: \(list) is already defined as an alias or function in ~/.zshrc. Pick a different command name in account settings, or remove the existing definition from your shell profile."
+        }
+    }
 }
 
 public struct ShellProfileInstaller: @unchecked Sendable {

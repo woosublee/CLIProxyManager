@@ -8,22 +8,28 @@ struct SettingsView: View {
         VStack(spacing: 0) {
             HStack {
                 Spacer()
-                HStack(spacing: 6) {
+                HStack(spacing: 4) {
                     ForEach(SettingsTab.allCases) { tab in
                         Button {
                             selection = tab
                         } label: {
-                            Label(tab.title, systemImage: tab.systemImage)
-                                .font(.caption.weight(.medium))
-                                .padding(.horizontal, 12)
-                                .frame(height: 26)
-                                .background(selection == tab ? AnyShapeStyle(.regularMaterial) : AnyShapeStyle(.clear), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                                .overlay {
-                                    if selection == tab {
-                                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                            .strokeBorder(.primary.opacity(0.14), lineWidth: 0.5)
-                                    }
+                            HStack(spacing: 6) {
+                                Image(systemName: tab.systemImage)
+                                Text(tab.title)
+                            }
+                            .font(.system(size: 12, weight: .medium))
+                            .padding(.horizontal, 12)
+                            .frame(height: 26)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .fill(selection == tab ? AnyShapeStyle(.regularMaterial) : AnyShapeStyle(Color.clear))
+                            )
+                            .overlay {
+                                if selection == tab {
+                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                        .strokeBorder(.primary.opacity(0.14), lineWidth: 0.5)
                                 }
+                            }
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(selection == tab ? .primary : .secondary)
@@ -34,6 +40,11 @@ struct SettingsView: View {
             .padding(.horizontal, 12)
             .frame(height: 44)
             .background(.thinMaterial)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(Color.primary.opacity(0.08))
+                    .frame(height: 0.5)
+            }
 
             ScrollView {
                 switch selection {

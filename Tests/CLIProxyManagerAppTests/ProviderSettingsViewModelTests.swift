@@ -53,7 +53,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             claudeConnector: connectedClaudeConnector()
         )
 
-        try viewModel.saveClaudeOAuthSettings(functionName: "myclaude", dangerousPermissionsEnabled: true)
+        try viewModel.saveClaudeOAuthSettings(functionName: "myclaude", nickname: "", dangerousPermissionsEnabled: true)
 
         XCTAssertEqual(store.savedConfigs.last?.commands.cc, "myclaude")
         XCTAssertEqual(store.savedConfigs.last?.includeDangerouslySkipPermissions, true)
@@ -74,7 +74,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             haiku: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .low, contextWindow: .auto)
         )
 
-        try viewModel.saveCodexSettings(functionName: "mycodex", codex: codex, dangerousPermissionsEnabled: true)
+        try viewModel.saveCodexSettings(functionName: "mycodex", nickname: "", codex: codex, dangerousPermissionsEnabled: true)
 
         XCTAssertEqual(store.savedConfigs.last?.commands.ccodex, "mycodex")
         XCTAssertEqual(store.savedConfigs.last?.ccodex, codex)
@@ -96,10 +96,10 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             haiku: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .low, contextWindow: .auto)
         )
 
-        XCTAssertThrowsError(try viewModel.saveCodexSettings(functionName: "mycodex", codex: codex, dangerousPermissionsEnabled: true))
+        XCTAssertThrowsError(try viewModel.saveCodexSettings(functionName: "mycodex", nickname: "", codex: codex, dangerousPermissionsEnabled: true))
 
         XCTAssertEqual(viewModel.config, .default)
-        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.functionName, "ccmcodex")
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.functionName, "ccodex")
         XCTAssertEqual(store.savedConfigs, [])
     }
 

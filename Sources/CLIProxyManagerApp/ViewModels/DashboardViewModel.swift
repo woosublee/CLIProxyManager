@@ -1,5 +1,9 @@
 import Combine
 import CLIProxyManagerCore
+import Foundation
+#if canImport(AppKit)
+import AppKit
+#endif
 
 protocol ProxyServiceControlling: Sendable {
     func start(port: Int) async throws
@@ -32,6 +36,7 @@ extension ProxyModelClient: ProxyModelListing {}
 protocol AuthProfileManaging: Sendable {
     func profiles() throws -> [AuthProfile]
     func setDisabled(_ disabled: Bool, for type: AuthProfileType) throws -> Int
+    func delete(for type: AuthProfileType) throws -> Int
 }
 
 extension AuthProfileStore: AuthProfileManaging {}
@@ -53,10 +58,20 @@ struct DashboardOptionRow: Identifiable, Equatable {
 final class DashboardViewModel: ObservableObject {
     @Published var cards: [ProfileCard]
     @Published var serverStatus: DiagnosticStatus
+    @Published var serverControlState: ServerControlState = .stopped
     @Published var isServerActionInProgress = false
     @Published var isProfileLoginInProgress = false
     @Published private(set) var config: AppConfig
     @Published var availableCodexModels: [String] = []
+
+    /// Picks the most recent "main" GPT model (e.g. `gpt-5.5`) — excluding `-mini`,
+    /// `-codex`, `-codex-spark`, `auto-review`, etc. Returns nil if none match.
+    var latestBaseCodexModel: String? {
+        let mainPattern = #"^gpt-\d+(\.\d+)?$"#
+        return availableCodexModels.first {
+            $0.range(of: mainPattern, options: .regularExpression) != nil
+        } ?? availableCodexModels.first
+    }
     @Published var settingsMessage: String?
     @Published var optionRows: [DashboardOptionRow] = []
     @Published var providerRows: [ProviderRowState] = []
@@ -90,7 +105,7 @@ final class DashboardViewModel: ObservableObject {
         claudeConnector: ClaudeConnector = ClaudeConnector(),
         loginItemService: any LoginItemControlling = LoginItemService(),
         appAppearanceService: any AppAppearanceApplying = AppAppearanceService(),
-        serverStatusRetryDelayNanoseconds: UInt64 = 300_000_000
+        serverStatusRetryDelayNanoseconds: UInt64 = 500_000_000
     ) {
         self.configStore = configStore
         self.shellInstaller = shellInstaller
@@ -117,7 +132,82 @@ final class DashboardViewModel: ObservableObject {
         rebuildOptionRows()
         rebuildProviderRows(claudeStatus: nil, codexStatus: nil)
         appAppearanceService.apply(showDockIcon: initialConfig.showDockIcon)
+        appAppearanceService.apply(appearance: initialConfig.appearance)
         applyInitialShellInstall()
+    }
+
+    func saveAppearance(_ mode: AppearanceMode) throws {
+        var updatedConfig = config
+        updatedConfig.appearance = mode
+        try saveConfig(updatedConfig)
+        appAppearanceService.apply(appearance: mode)
+    }
+
+    func saveMenuBarOnly(_ menuBarOnly: Bool) throws {
+        var updatedConfig = config
+        updatedConfig.showDockIcon = !menuBarOnly
+        // The menu bar icon is the only entry point in menu-bar-only mode, so keep it on.
+        if menuBarOnly { updatedConfig.showMenuBarIcon = true }
+        try saveConfig(updatedConfig)
+        appAppearanceService.apply(showDockIcon: updatedConfig.showDockIcon)
+    }
+
+    func saveShowNotifications(_ enabled: Bool) throws {
+        var updatedConfig = config
+        updatedConfig.showNotifications = enabled
+        try saveConfig(updatedConfig)
+    }
+
+    func saveBindAddress(_ address: String) throws {
+        var updatedConfig = config
+        updatedConfig.bindAddress = address
+        try saveConfig(updatedConfig)
+    }
+
+    func saveAutostartServer(_ enabled: Bool) throws {
+        var updatedConfig = config
+        updatedConfig.autostartServer = enabled
+        try saveConfig(updatedConfig)
+    }
+
+    func saveRoundRobinEnabled(_ enabled: Bool) throws {
+        var updatedConfig = config
+        updatedConfig.roundRobinEnabled = enabled
+        try saveConfig(updatedConfig)
+    }
+
+    func saveLogLevel(_ level: LogLevel) throws {
+        var updatedConfig = config
+        updatedConfig.logLevel = level
+        try saveConfig(updatedConfig)
+    }
+
+    func revealLogsInFinder() {
+        #if canImport(AppKit)
+        let url = ManagedPaths().logsDirectory
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(url)
+        #endif
+    }
+
+    func resetAllSettings() {
+        // Preserve user-managed accounts (auth profiles in ~/.cliproxy-manager/auth) and the
+        // commands/nicknames the user typed; only reset the *preferences* the design Reset
+        // button targets: appearance, behavior, server config, log level.
+        var updatedConfig = AppConfig.default
+        updatedConfig.commands = config.commands
+        updatedConfig.ccapi = config.ccapi
+        updatedConfig.ccodex = config.ccodex
+        updatedConfig.nicknames = config.nicknames
+        updatedConfig.includeDangerouslySkipPermissions = config.includeDangerouslySkipPermissions
+        do {
+            try saveConfig(updatedConfig)
+            appAppearanceService.apply(showDockIcon: updatedConfig.showDockIcon)
+            appAppearanceService.apply(appearance: updatedConfig.appearance)
+            settingsMessage = "Settings reset to defaults."
+        } catch {
+            settingsMessage = "Reset failed: \(error.localizedDescription)"
+        }
     }
 
     func refresh() async {
@@ -126,20 +216,34 @@ final class DashboardViewModel: ObservableObject {
         updateStatuses(serverStatus: updatedServerStatus, claudeStatus: claudeStatus)
     }
 
+    /// Called once on app launch. Auto-starts the server if the user opted in.
+    func performAutostartIfEnabled() async {
+        guard config.autostartServer, !serverControlState.isRunning else { return }
+        await setServerEnabled(true)
+    }
+
     func startServer() async {
-        await performServerAction(title: "CLIProxyAPI 시작 실패", waitForReady: true) {
+        await performServerAction(
+            title: "CLIProxyAPI 시작 실패",
+            transitionState: .starting,
+            waitForReady: true
+        ) {
             try await proxyService.start(port: config.port)
         }
     }
 
     func stopServer() async {
-        await performServerAction(title: "CLIProxyAPI 중지 실패") {
+        await performServerAction(title: "CLIProxyAPI 중지 실패", transitionState: .stopping) {
             try await proxyService.stop()
         }
     }
 
     func restartServer() async {
-        await performServerAction(title: "CLIProxyAPI 재시작 실패", waitForReady: true) {
+        await performServerAction(
+            title: "CLIProxyAPI 재시작 실패",
+            transitionState: .starting,
+            waitForReady: true
+        ) {
             try await proxyService.restart(port: config.port)
         }
     }
@@ -184,6 +288,32 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
+    func removeProvider(_ provider: ProviderRowState.ID) {
+        let profileType: AuthProfileType
+        let providerName: String
+        switch provider {
+        case .claude:
+            profileType = .claude
+            providerName = "Claude OAuth"
+        case .codex:
+            profileType = .codex
+            providerName = "Codex OAuth"
+        }
+
+        do {
+            let deletedCount = try authProfileStore.delete(for: profileType)
+            refreshProfiles()
+            if deletedCount == 0 {
+                settingsMessage = "삭제할 \(providerName) auth 파일을 찾지 못했습니다."
+            } else {
+                settingsMessage = "\(providerName) 계정을 제거했습니다."
+            }
+        } catch {
+            refreshProfiles()
+            settingsMessage = "\(providerName) 계정 제거에 실패했습니다: \(error.localizedDescription)"
+        }
+    }
+
     func disconnectProvider(_ provider: ProviderRowState.ID) {
         let profileType: AuthProfileType
         let providerName: String
@@ -220,9 +350,10 @@ final class DashboardViewModel: ObservableObject {
         try saveCommands(commands)
     }
 
-    func saveClaudeOAuthSettings(functionName: String, dangerousPermissionsEnabled: Bool) throws {
+    func saveClaudeOAuthSettings(functionName: String, nickname: String, dangerousPermissionsEnabled: Bool) throws {
         var updatedConfig = config
         updatedConfig.commands.cc = functionName
+        updatedConfig.nicknames.cc = nickname
         updatedConfig.includeDangerouslySkipPermissions = dangerousPermissionsEnabled
         try saveConfig(updatedConfig, validateShellFunctions: true)
     }
@@ -241,9 +372,10 @@ final class DashboardViewModel: ObservableObject {
         try saveConfig(updatedConfig, validateShellFunctions: true)
     }
 
-    func saveCodexSettings(functionName: String, codex: AppConfig.Codex, dangerousPermissionsEnabled: Bool) throws {
+    func saveCodexSettings(functionName: String, nickname: String, codex: AppConfig.Codex, dangerousPermissionsEnabled: Bool) throws {
         var updatedConfig = config
         updatedConfig.commands.ccodex = functionName
+        updatedConfig.nicknames.ccodex = nickname
         updatedConfig.ccodex = codex
         updatedConfig.includeDangerouslySkipPermissions = dangerousPermissionsEnabled
         try saveConfig(updatedConfig, validateShellFunctions: true)
@@ -304,11 +436,7 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func installShellFunctions(helperCommand: String = "/usr/local/bin/cliproxy-manager") throws {
-        let script = try ShellFunctionRenderer(config: config, helperCommand: helperCommand).render()
-        try shellInstaller.install(
-            functionScript: script,
-            functionNames: [config.commands.cc, config.commands.ccapi, config.commands.ccodex]
-        )
+        try automaticShellInstallService.apply(config: config)
         settingsMessage = "설치가 완료되었습니다. 새 터미널을 열거나 source ~/.zshrc를 실행하세요."
         rebuildOptionRows()
     }
@@ -351,33 +479,45 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func rebuildProviderRows(claudeStatus: DiagnosticStatus?, codexStatus: DiagnosticStatus?) {
-        let claudeProfile = authProfiles.first { $0.type == .claude && $0.disabled == false }
-        let codexProfile = authProfiles.first { $0.type == .codex && $0.disabled == false }
+        let claudeAny = authProfiles.first { $0.type == .claude }
+        let codexAny = authProfiles.first { $0.type == .codex }
+        let claudeEnabled = claudeAny.flatMap { $0.disabled ? nil : $0 }
+        let codexEnabled = codexAny.flatMap { $0.disabled ? nil : $0 }
 
-        providerRows = [
-            ProviderRowState(
-                id: .claude,
-                name: "Claude OAuth",
-                functionName: config.commands.cc,
-                connectionTitle: claudeProfile == nil ? "연결 필요" : "연결됨",
-                connectionDetail: profileDetail(
-                    profile: claudeProfile,
-                    fallback: claudeStatus?.message ?? "번들 CLIProxyAPI의 Claude OAuth profile을 연결하세요."
-                ),
-                isConnected: claudeProfile != nil
-            ),
-            ProviderRowState(
-                id: .codex,
-                name: "Codex OAuth",
-                functionName: config.commands.ccodex,
-                connectionTitle: codexProfile == nil ? "연결 필요" : "연결됨",
-                connectionDetail: profileDetail(
-                    profile: codexProfile,
-                    fallback: codexStatus?.message ?? "번들 CLIProxyAPI의 Codex OAuth profile을 연결하세요."
-                ),
-                isConnected: codexProfile != nil
+        var rows: [ProviderRowState] = []
+        if claudeAny != nil {
+            rows.append(
+                ProviderRowState(
+                    id: .claude,
+                    name: "Claude OAuth",
+                    nickname: config.nicknames.cc,
+                    functionName: config.commands.cc,
+                    connectionTitle: claudeEnabled == nil ? "연결 필요" : "연결됨",
+                    connectionDetail: profileDetail(
+                        profile: claudeEnabled ?? claudeAny,
+                        fallback: claudeStatus?.message ?? "번들 CLIProxyAPI의 Claude OAuth profile을 연결하세요."
+                    ),
+                    isConnected: claudeEnabled != nil
+                )
             )
-        ]
+        }
+        if codexAny != nil {
+            rows.append(
+                ProviderRowState(
+                    id: .codex,
+                    name: "Codex OAuth",
+                    nickname: config.nicknames.ccodex,
+                    functionName: config.commands.ccodex,
+                    connectionTitle: codexEnabled == nil ? "연결 필요" : "연결됨",
+                    connectionDetail: profileDetail(
+                        profile: codexEnabled ?? codexAny,
+                        fallback: codexStatus?.message ?? "번들 CLIProxyAPI의 Codex OAuth profile을 연결하세요."
+                    ),
+                    isConnected: codexEnabled != nil
+                )
+            )
+        }
+        providerRows = rows
     }
 
     private func rebuildOptionRows() {
@@ -390,10 +530,16 @@ final class DashboardViewModel: ObservableObject {
         ]
     }
 
-    private func performServerAction(title: String, waitForReady: Bool = false, action: () async throws -> Void) async {
+    private func performServerAction(
+        title: String,
+        transitionState: ServerControlState,
+        waitForReady: Bool = false,
+        action: () async throws -> Void
+    ) async {
         guard isServerActionInProgress == false else { return }
 
         isServerActionInProgress = true
+        serverControlState = transitionState
         defer { isServerActionInProgress = false }
 
         do {
@@ -403,25 +549,39 @@ final class DashboardViewModel: ObservableObject {
             } else {
                 await refresh()
             }
+            // After action completes, derive final state from the latest health.
+            serverControlState = serverStatus.severity == .ready ? .running : .stopped
         } catch {
+            let message = error.localizedDescription
             updateStatuses(
                 serverStatus: DiagnosticStatus(
                     severity: .error,
                     title: title,
-                    message: error.localizedDescription
+                    message: message
                 ),
                 claudeStatus: nil
             )
+            serverControlState = .error(message)
         }
     }
 
     private func refreshUntilServerIsReady() async {
         let claudeStatus = await claudeConnector.status()
-        for attempt in 0..<5 {
+        // Up to ~12 seconds: child process launch latency + CFNetwork loopback warm-up
+        // can take several seconds on macOS Sequoia/Tahoe even after the binary binds.
+        let maxAttempts = 24
+        for attempt in 0..<maxAttempts {
             let updatedServerStatus = await proxyHealthClient.status(port: config.port)
-            updateStatuses(serverStatus: updatedServerStatus, claudeStatus: claudeStatus)
+            // While the server is still warming up, keep the visible status as "Working…"
+            // (severity .warning) instead of flashing red. Only commit a non-error severity
+            // (or a final attempt's result) to the UI.
+            if updatedServerStatus.severity == .ready
+                || updatedServerStatus.severity == .warning
+                || attempt == maxAttempts - 1 {
+                updateStatuses(serverStatus: updatedServerStatus, claudeStatus: claudeStatus)
+            }
             guard updatedServerStatus.severity != .ready else { return }
-            if attempt < 4 {
+            if attempt < maxAttempts - 1 {
                 try? await Task.sleep(nanoseconds: serverStatusRetryDelayNanoseconds)
             }
         }
@@ -429,6 +589,18 @@ final class DashboardViewModel: ObservableObject {
 
     private func updateStatuses(serverStatus updatedServerStatus: DiagnosticStatus, claudeStatus: DiagnosticStatus?) {
         serverStatus = updatedServerStatus
+        // Mirror the diagnostic into the explicit control state, but never overwrite a
+        // transient transition (.starting / .stopping) — that's owned by performServerAction.
+        if !serverControlState.isTransitioning {
+            switch updatedServerStatus.severity {
+            case .ready:
+                serverControlState = .running
+            case .warning:
+                serverControlState = .stopped
+            case .error:
+                serverControlState = .error(updatedServerStatus.message)
+            }
+        }
         lastCodexStatus = updatedServerStatus
         if let claudeStatus {
             lastClaudeStatus = claudeStatus

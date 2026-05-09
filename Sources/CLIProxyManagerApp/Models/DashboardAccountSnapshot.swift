@@ -15,7 +15,7 @@ struct DashboardAccountSnapshot: Equatable, Identifiable {
 
     init(provider: ProviderRowState) {
         id = provider.id
-        title = provider.name
+        title = provider.displayTitle
         commandName = provider.functionName
         commandSlug = "$ \(provider.functionName)"
         detail = provider.connectionDetail

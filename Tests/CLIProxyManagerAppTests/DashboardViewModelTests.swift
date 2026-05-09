@@ -217,6 +217,43 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(proxyService.stopCount, 1)
     }
 
+    func testServerToggleEntersStartingStateImmediately() async {
+        let proxyService = StubProxyServiceStarter(startDelayNanoseconds: 50_000_000)
+        let viewModel = DashboardViewModel(
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            serverStatusRetryDelayNanoseconds: 0
+        )
+
+        let task = Task { await viewModel.setServerEnabled(true) }
+        await Task.yield()
+
+        XCTAssertEqual(viewModel.serverControlState, .starting)
+
+        await task.value
+        XCTAssertEqual(viewModel.serverControlState, .running)
+    }
+
+    func testServerToggleEntersStoppingStateImmediately() async {
+        let proxyService = StubProxyServiceStarter(stopDelayNanoseconds: 50_000_000)
+        let viewModel = DashboardViewModel(
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            serverStatusRetryDelayNanoseconds: 0
+        )
+        await viewModel.refresh()
+
+        let task = Task { await viewModel.setServerEnabled(false) }
+        await Task.yield()
+
+        XCTAssertEqual(viewModel.serverControlState, .stopping)
+
+        await task.value
+        XCTAssertEqual(viewModel.serverControlState, .running)
+    }
+
     func testStartServerUsesInjectedProxyServiceAndRefreshesStatus() async {
         let config = AppConfig.default
         let proxyService = StubProxyServiceStarter()
@@ -461,6 +498,14 @@ private final class StubAuthProfileStore: AuthProfileManaging, @unchecked Sendab
         }
     }
 
+    func delete(for type: AuthProfileType) throws -> Int {
+        lock.withLock {
+            let count = _profiles.filter { $0.type == type }.count
+            _profiles.removeAll { $0.type == type }
+            return count
+        }
+    }
+
     func setDisabled(_ disabled: Bool, for type: AuthProfileType) throws -> Int {
         lock.withLock {
             _disabledUpdates.append(DisabledUpdate(type: type, disabled: disabled))
@@ -530,6 +575,8 @@ private final class StubProcessRunner: ProcessRunning, @unchecked Sendable {
 
 private final class StubProxyServiceStarter: ProxyServiceControlling, @unchecked Sendable {
     private let error: Error?
+    private let startDelayNanoseconds: UInt64
+    private let stopDelayNanoseconds: UInt64
     private let lock = NSLock()
     private var _ports: [Int] = []
     private var _restartPorts: [Int] = []
@@ -547,12 +594,17 @@ private final class StubProxyServiceStarter: ProxyServiceControlling, @unchecked
         lock.withLock { _stopCount }
     }
 
-    init(error: Error? = nil) {
+    init(error: Error? = nil, startDelayNanoseconds: UInt64 = 0, stopDelayNanoseconds: UInt64 = 0) {
         self.error = error
+        self.startDelayNanoseconds = startDelayNanoseconds
+        self.stopDelayNanoseconds = stopDelayNanoseconds
     }
 
     func start(port: Int) async throws {
         lock.withLock { _ports.append(port) }
+        if startDelayNanoseconds > 0 {
+            try? await Task.sleep(nanoseconds: startDelayNanoseconds)
+        }
         if let error {
             throw error
         }
@@ -560,6 +612,9 @@ private final class StubProxyServiceStarter: ProxyServiceControlling, @unchecked
 
     func stop() async throws {
         lock.withLock { _stopCount += 1 }
+        if stopDelayNanoseconds > 0 {
+            try? await Task.sleep(nanoseconds: stopDelayNanoseconds)
+        }
         if let error {
             throw error
         }
