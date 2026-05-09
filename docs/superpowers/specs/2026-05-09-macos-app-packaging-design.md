@@ -135,17 +135,14 @@ build/CLIProxyManager.app
 
 ### `make install`
 
-Builds the app, copies it to:
+Builds the app, stages both the signed app bundle and helper, backs up any existing installed app/helper, then swaps both staged artifacts into place:
 
 ```text
 /Applications/CLIProxyManager.app
-```
-
-Then installs:
-
-```text
 /usr/local/bin/cliproxy-manager
 ```
+
+If either swap fails after backups are made, the install rolls both paths back to their previous state so the app and helper stay in sync.
 
 ### `make install-and-run`
 
@@ -163,8 +160,9 @@ Optional deeper clean that removes both `build` and `.build`.
 
 - Missing Swift release executable: fail and instruct the user to run `swift build -c release` through `make all`.
 - Missing signing identity: fail with a message showing how to set `CODESIGN_IDENTITY`.
-- `/Applications` copy failure: fail without deleting the existing installed app.
-- Helper install failure: fail after app build, with a message explaining `/usr/local/bin/cliproxy-manager` could not be written.
+- Install staging failure: fail before changing existing installed files if either the app bundle or helper cannot be staged.
+- Install swap failure: after staging both artifacts, back up any existing `/Applications/CLIProxyManager.app` and `/usr/local/bin/cliproxy-manager`, swap the app and helper together, and roll both paths back if either swap fails.
+- Helper install failure: fail with a clear message and preserve or restore the previous helper so a new app is not left installed with an old or missing helper.
 
 ## Testing and verification
 

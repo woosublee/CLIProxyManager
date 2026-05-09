@@ -10,9 +10,9 @@ APP_BUNDLE := $(BUILD_DIR)/$(APP_NAME).app
 CONTENTS_DIR := $(APP_BUNDLE)/Contents
 MACOS_DIR := $(CONTENTS_DIR)/MacOS
 RESOURCES_DIR := $(CONTENTS_DIR)/Resources
-SWIFT_BUILD_DIR := $(shell swift build -c $(CONFIGURATION) --show-bin-path)
-APP_EXECUTABLE := $(SWIFT_BUILD_DIR)/$(APP_NAME)
-HELPER_EXECUTABLE := $(SWIFT_BUILD_DIR)/cliproxy-manager
+SWIFT_BUILD_DIR = $(shell swift build -c $(CONFIGURATION) --show-bin-path)
+APP_EXECUTABLE = $(SWIFT_BUILD_DIR)/$(APP_NAME)
+HELPER_EXECUTABLE = $(SWIFT_BUILD_DIR)/cliproxy-manager
 INFO_PLIST := Info.plist
 ENTITLEMENTS := CLIProxyManager.entitlements
 
@@ -29,8 +29,8 @@ bundle: swift-build $(INFO_PLIST) $(ENTITLEMENTS)
 	test -x "$(HELPER_EXECUTABLE)" || { echo "Missing executable: $(HELPER_EXECUTABLE)"; exit 1; }
 	rm -rf "$(APP_BUNDLE)"
 	mkdir -p "$(MACOS_DIR)" "$(RESOURCES_DIR)"
-	cp "$(APP_EXECUTABLE)" "$(MACOS_DIR)/$(APP_NAME)"
-	cp "$(HELPER_EXECUTABLE)" "$(RESOURCES_DIR)/cliproxy-manager"
+	ditto --norsrc --noextattr "$(APP_EXECUTABLE)" "$(MACOS_DIR)/$(APP_NAME)"
+	ditto --norsrc --noextattr "$(HELPER_EXECUTABLE)" "$(RESOURCES_DIR)/cliproxy-manager"
 	cp "$(INFO_PLIST)" "$(CONTENTS_DIR)/Info.plist"
 	plutil -replace CFBundleName -string "$(APP_NAME)" "$(CONTENTS_DIR)/Info.plist"
 	plutil -replace CFBundleDisplayName -string "$(APP_NAME)" "$(CONTENTS_DIR)/Info.plist"
@@ -80,28 +80,48 @@ verify: sign
 
 install-helper: sign
 	mkdir -p /usr/local/bin
-	cp "$(HELPER_EXECUTABLE)" "/usr/local/bin/cliproxy-manager"
+	ditto --norsrc --noextattr "$(HELPER_EXECUTABLE)" "/usr/local/bin/cliproxy-manager"
 	chmod +x "/usr/local/bin/cliproxy-manager"
 	@echo "Installed helper to /usr/local/bin/cliproxy-manager"
 
-install: sign install-helper
+install: sign
 	@set -e; \
 	INSTALL_PATH="/Applications/$(APP_NAME).app"; \
-	STAGING_PATH="/Applications/.$(APP_NAME).app.staging"; \
-	PREVIOUS_PATH="/Applications/.$(APP_NAME).app.previous"; \
-	rm -rf "$$STAGING_PATH"; \
-	cp -R "$(APP_BUNDLE)" "$$STAGING_PATH"; \
-	rm -rf "$$PREVIOUS_PATH"; \
-	if [ -d "$$INSTALL_PATH" ]; then mv "$$INSTALL_PATH" "$$PREVIOUS_PATH"; fi; \
-	if mv "$$STAGING_PATH" "$$INSTALL_PATH"; then \
-		rm -rf "$$PREVIOUS_PATH"; \
-		echo "Installed $$INSTALL_PATH"; \
-	else \
+	HELPER_PATH="/usr/local/bin/cliproxy-manager"; \
+	HELPER_DIR=$$(dirname "$$HELPER_PATH"); \
+	APP_STAGING="/Applications/.$(APP_NAME).app.staging"; \
+	APP_PREVIOUS="/Applications/.$(APP_NAME).app.previous"; \
+	HELPER_STAGING="$$HELPER_DIR/.cliproxy-manager.staging"; \
+	HELPER_PREVIOUS="$$HELPER_DIR/.cliproxy-manager.previous"; \
+	cleanup_staging() { rm -rf "$$APP_STAGING" "$$HELPER_STAGING"; }; \
+	rollback() { \
 		status=$$?; \
+		echo "Install failed; rolling back app and helper." >&2; \
 		rm -rf "$$INSTALL_PATH"; \
-		if [ -d "$$PREVIOUS_PATH" ]; then mv "$$PREVIOUS_PATH" "$$INSTALL_PATH"; fi; \
+		if [ -d "$$APP_PREVIOUS" ]; then mv "$$APP_PREVIOUS" "$$INSTALL_PATH" || true; fi; \
+		rm -f "$$HELPER_PATH"; \
+		if [ -e "$$HELPER_PREVIOUS" ]; then mv "$$HELPER_PREVIOUS" "$$HELPER_PATH" || true; fi; \
+		cleanup_staging; \
 		exit $$status; \
-	fi
+	}; \
+	rm -rf "$$APP_STAGING" "$$APP_PREVIOUS" "$$HELPER_STAGING" "$$HELPER_PREVIOUS"; \
+	if ! mkdir -p "$$HELPER_DIR" || \
+	   ! ditto --norsrc --noextattr "$(APP_BUNDLE)" "$$APP_STAGING" || \
+	   ! ditto --norsrc --noextattr "$(HELPER_EXECUTABLE)" "$$HELPER_STAGING" || \
+	   ! chmod +x "$$HELPER_STAGING"; then \
+		echo "Install failed during staging; existing app and helper were left unchanged." >&2; \
+		cleanup_staging; \
+		exit 1; \
+	fi; \
+	trap rollback ERR; \
+	if [ -d "$$INSTALL_PATH" ]; then mv "$$INSTALL_PATH" "$$APP_PREVIOUS"; fi; \
+	if [ -e "$$HELPER_PATH" ]; then mv "$$HELPER_PATH" "$$HELPER_PREVIOUS"; fi; \
+	mv "$$APP_STAGING" "$$INSTALL_PATH"; \
+	mv "$$HELPER_STAGING" "$$HELPER_PATH"; \
+	trap - ERR; \
+	rm -rf "$$APP_PREVIOUS" "$$HELPER_PREVIOUS"; \
+	echo "Installed $$INSTALL_PATH"; \
+	echo "Installed helper to $$HELPER_PATH"
 
 run: sign
 	open "$(APP_BUNDLE)"
