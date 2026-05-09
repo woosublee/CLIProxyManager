@@ -17,6 +17,10 @@ It is designed for users who want one place to:
 - A Claude account, Codex/OpenAI OAuth account, or Claude API key depending on which shell function you want to use.
 - zsh if you want the app to manage shell functions automatically.
 
+## Releases
+
+Release artifacts are distributed as ad-hoc signed, non-notarized DMGs on GitHub Releases.
+
 ## Quick start
 
 1. Open CLIProxyManager.

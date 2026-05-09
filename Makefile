@@ -4,11 +4,16 @@ VERSION ?= 0.1.0
 BUILD_NUMBER ?= 1
 BUILD_DIR ?= build
 CONFIGURATION ?= release
-CODESIGN_IDENTITY ?= Apple Development
+LOCAL_CODESIGN_IDENTITY ?= CLIProxyManager Local Release
+RELEASE_CODESIGN_IDENTITY ?= -
+CODESIGN_IDENTITY ?= $(LOCAL_CODESIGN_IDENTITY)
 ICON_NAME ?= CLIProxyManager
 ICON_FILE ?= $(ICON_NAME).icns
 
 APP_BUNDLE := $(BUILD_DIR)/$(APP_NAME).app
+DMG_NAME := $(APP_NAME)-$(VERSION).dmg
+DMG_PATH := $(BUILD_DIR)/$(DMG_NAME)
+DMG_STAGING_TEMPLATE := /tmp/$(APP_NAME).dmg-src.XXXXXX
 CONTENTS_DIR := $(APP_BUNDLE)/Contents
 MACOS_DIR := $(CONTENTS_DIR)/MacOS
 RESOURCES_DIR := $(CONTENTS_DIR)/Resources
@@ -21,7 +26,7 @@ BUNDLED_ICON := $(RESOURCES_DIR)/$(ICON_FILE)
 INFO_PLIST := Info.plist
 ENTITLEMENTS := CLIProxyManager.entitlements
 
-.PHONY: all swift-build bundle sign verify install-helper install run install-and-run clean distclean
+.PHONY: all swift-build bundle sign release-sign verify install-helper install run install-and-run dmg verify-dmg clean distclean
 
 all: sign
 
@@ -79,6 +84,9 @@ sign: bundle
 	xattr -r -c "$(APP_BUNDLE)"; \
 	xattr -c "$(APP_BUNDLE)"; \
 	xattr -d com.apple.FinderInfo "$(APP_BUNDLE)" 2>/dev/null || true
+
+release-sign:
+	$(MAKE) sign CODESIGN_IDENTITY="$(RELEASE_CODESIGN_IDENTITY)"
 
 verify: sign
 	@set -e; \
@@ -146,6 +154,38 @@ run: sign
 install-and-run: install
 	-pkill -x "$(APP_NAME)"
 	open "/Applications/$(APP_NAME).app"
+
+dmg: release-sign
+	@set -e; \
+	rm -f "$(DMG_PATH)"; \
+	DMG_STAGING_DIR=$$(mktemp -d "$(DMG_STAGING_TEMPLATE)"); \
+	cleanup() { rm -rf "$$DMG_STAGING_DIR"; }; \
+	trap cleanup EXIT; \
+	ditto --norsrc --noextattr "$(APP_BUNDLE)" "$$DMG_STAGING_DIR/$(APP_NAME).app"; \
+	xattr -r -c "$$DMG_STAGING_DIR/$(APP_NAME).app"; \
+	xattr -d com.apple.FinderInfo "$$DMG_STAGING_DIR/$(APP_NAME).app" 2>/dev/null || true; \
+	ln -s /Applications "$$DMG_STAGING_DIR/Applications"; \
+	hdiutil create \
+		-volname "$(APP_NAME)" \
+		-srcfolder "$$DMG_STAGING_DIR" \
+		-ov \
+		-format UDZO \
+		"$(DMG_PATH)"; \
+	echo "Created $(DMG_PATH)"
+
+verify-dmg: dmg
+	@set -e; \
+	test -f "$(DMG_PATH)" || { echo "Missing DMG: $(DMG_PATH)"; exit 1; }; \
+	hdiutil verify "$(DMG_PATH)"; \
+	MOUNT_DIR=$$(mktemp -d "/tmp/$(APP_NAME).dmg.XXXXXX"); \
+	cleanup() { hdiutil detach "$$MOUNT_DIR" >/dev/null 2>&1 || hdiutil detach -force "$$MOUNT_DIR" >/dev/null 2>&1 || true; rm -rf "$$MOUNT_DIR"; }; \
+	trap cleanup EXIT; \
+	hdiutil attach "$(DMG_PATH)" -mountpoint "$$MOUNT_DIR" -nobrowse -quiet; \
+	test -d "$$MOUNT_DIR/$(APP_NAME).app" || { echo "Missing app in DMG"; exit 1; }; \
+	test -L "$$MOUNT_DIR/Applications" || { echo "Missing Applications symlink in DMG"; exit 1; }; \
+	test "$$(readlink "$$MOUNT_DIR/Applications")" = "/Applications" || { echo "Applications symlink points to wrong target"; exit 1; }; \
+	codesign --verify --deep --strict --verbose=2 "$$MOUNT_DIR/$(APP_NAME).app"; \
+	echo "DMG verification passed"
 
 clean:
 	rm -rf "$(BUILD_DIR)"
