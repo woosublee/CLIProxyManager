@@ -10,9 +10,11 @@ APP_BUNDLE := $(BUILD_DIR)/$(APP_NAME).app
 CONTENTS_DIR := $(APP_BUNDLE)/Contents
 MACOS_DIR := $(CONTENTS_DIR)/MacOS
 RESOURCES_DIR := $(CONTENTS_DIR)/Resources
+HELPERS_DIR := $(CONTENTS_DIR)/Helpers
 SWIFT_BUILD_DIR = $(shell swift build -c $(CONFIGURATION) --show-bin-path)
 APP_EXECUTABLE = $(SWIFT_BUILD_DIR)/$(APP_NAME)
 HELPER_EXECUTABLE = $(SWIFT_BUILD_DIR)/cliproxy-manager
+BUNDLED_HELPER := $(HELPERS_DIR)/cliproxy-manager
 INFO_PLIST := Info.plist
 ENTITLEMENTS := CLIProxyManager.entitlements
 
@@ -28,9 +30,9 @@ bundle: swift-build $(INFO_PLIST) $(ENTITLEMENTS)
 	test -x "$(APP_EXECUTABLE)" || { echo "Missing executable: $(APP_EXECUTABLE)"; exit 1; }
 	test -x "$(HELPER_EXECUTABLE)" || { echo "Missing executable: $(HELPER_EXECUTABLE)"; exit 1; }
 	rm -rf "$(APP_BUNDLE)"
-	mkdir -p "$(MACOS_DIR)" "$(RESOURCES_DIR)"
+	mkdir -p "$(MACOS_DIR)" "$(RESOURCES_DIR)" "$(HELPERS_DIR)"
 	ditto --norsrc --noextattr "$(APP_EXECUTABLE)" "$(MACOS_DIR)/$(APP_NAME)"
-	ditto --norsrc --noextattr "$(HELPER_EXECUTABLE)" "$(RESOURCES_DIR)/cliproxy-manager"
+	ditto --norsrc --noextattr "$(HELPER_EXECUTABLE)" "$(BUNDLED_HELPER)"
 	cp "$(INFO_PLIST)" "$(CONTENTS_DIR)/Info.plist"
 	plutil -replace CFBundleName -string "$(APP_NAME)" "$(CONTENTS_DIR)/Info.plist"
 	plutil -replace CFBundleDisplayName -string "$(APP_NAME)" "$(CONTENTS_DIR)/Info.plist"
@@ -44,7 +46,7 @@ bundle: swift-build $(INFO_PLIST) $(ENTITLEMENTS)
 		fi; \
 	done
 	chmod -R u+w "$(APP_BUNDLE)"
-	chmod +x "$(MACOS_DIR)/$(APP_NAME)" "$(RESOURCES_DIR)/cliproxy-manager"
+	chmod +x "$(MACOS_DIR)/$(APP_NAME)" "$(BUNDLED_HELPER)"
 	xattr -r -c "$(APP_BUNDLE)"
 	@echo "Bundled $(APP_BUNDLE)"
 
@@ -55,6 +57,11 @@ sign: bundle
 	trap cleanup EXIT; \
 	STAGED_APP="$$STAGING_DIR/$(APP_NAME).app"; \
 	ditto --norsrc --noextattr "$(APP_BUNDLE)" "$$STAGED_APP"; \
+	codesign --force --sign "$(CODESIGN_IDENTITY)" "$$STAGED_APP/Contents/Helpers/cliproxy-manager" || { \
+		status=$$?; \
+		echo "helper codesign failed. Override the signing identity with: make CODESIGN_IDENTITY=\"Your Signing Identity\""; \
+		exit $$status; \
+	}; \
 	codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" --entitlements "$(ENTITLEMENTS)" "$$STAGED_APP" || { \
 		status=$$?; \
 		echo "codesign failed. Override the signing identity with: make CODESIGN_IDENTITY=\"Your Signing Identity\""; \
@@ -76,11 +83,13 @@ verify: sign
 	ditto --norsrc --noextattr "$(APP_BUNDLE)" "$$VERIFY_APP"; \
 	xattr -cr "$$VERIFY_APP"; \
 	codesign --verify --deep --strict --verbose=2 "$$VERIFY_APP"; \
+	test -x "$$VERIFY_APP/Contents/Helpers/cliproxy-manager" || { echo "Missing bundled helper: $$VERIFY_APP/Contents/Helpers/cliproxy-manager"; exit 1; }; \
+	test ! -e "$$VERIFY_APP/Contents/Resources/cliproxy-manager" || { echo "Helper must not be bundled in Contents/Resources"; exit 1; }; \
 	echo "codesign verification passed"
 
 install-helper: sign
 	mkdir -p /usr/local/bin
-	ditto --norsrc --noextattr "$(HELPER_EXECUTABLE)" "/usr/local/bin/cliproxy-manager"
+	ditto --norsrc --noextattr "$(BUNDLED_HELPER)" "/usr/local/bin/cliproxy-manager"
 	chmod +x "/usr/local/bin/cliproxy-manager"
 	@echo "Installed helper to /usr/local/bin/cliproxy-manager"
 
@@ -107,7 +116,7 @@ install: sign
 	rm -rf "$$APP_STAGING" "$$APP_PREVIOUS" "$$HELPER_STAGING" "$$HELPER_PREVIOUS"; \
 	if ! mkdir -p "$$HELPER_DIR" || \
 	   ! ditto --norsrc --noextattr "$(APP_BUNDLE)" "$$APP_STAGING" || \
-	   ! ditto --norsrc --noextattr "$(HELPER_EXECUTABLE)" "$$HELPER_STAGING" || \
+	   ! ditto --norsrc --noextattr "$(BUNDLED_HELPER)" "$$HELPER_STAGING" || \
 	   ! chmod +x "$$HELPER_STAGING"; then \
 		echo "Install failed during staging; existing app and helper were left unchanged." >&2; \
 		cleanup_staging; \

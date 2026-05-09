@@ -22,7 +22,7 @@ This should produce a signed `CLIProxyManager.app`, copy it into `/Applications`
 - Add a minimal entitlements file for local signing.
 - Sign the app with a local Apple Development identity by default.
 - Install `/Applications/CLIProxyManager.app`.
-- Install or update `/usr/local/bin/cliproxy-manager` from the release build.
+- Install or update `/usr/local/bin/cliproxy-manager` from the signed helper bundled inside the app.
 
 ### Out of scope
 
@@ -49,8 +49,9 @@ build/CLIProxyManager.app/
     Info.plist
     MacOS/
       CLIProxyManager
-    Resources/
+    Helpers/
       cliproxy-manager
+    Resources/
       cliproxyapi/
         cliproxyapi
       Licenses/
@@ -81,9 +82,10 @@ Add `CLIProxyManager.entitlements` as a minimal plist with an empty dictionary.
 
 Do not enable App Sandbox. CLIProxyManager manages files under the user's home directory, edits shell profile files, launches the bundled proxy process, reads/writes Keychain secrets, and installs a command-line helper. Sandboxing this now would require a separate permission and helper design.
 
-The Makefile will sign with hardened runtime:
+The Makefile will sign the nested helper first, then sign the app with hardened runtime:
 
 ```zsh
+codesign --force --sign "$(CODESIGN_IDENTITY)" build/CLIProxyManager.app/Contents/Helpers/cliproxy-manager
 codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" --entitlements CLIProxyManager.entitlements build/CLIProxyManager.app
 ```
 
@@ -103,19 +105,19 @@ If signing fails because no matching certificate exists, the Makefile should fai
 
 ## Helper command installation
 
-The app currently renders shell functions with `/usr/local/bin/cliproxy-manager` as the helper command. To preserve that behavior, `make install` will copy the release helper executable to:
+The app currently renders shell functions with `/usr/local/bin/cliproxy-manager` as the helper command. To preserve that behavior, `make install` will copy the signed bundled helper to:
 
 ```text
 /usr/local/bin/cliproxy-manager
 ```
 
-The installed app bundle will also include the helper in:
+The installed app bundle will include the helper in:
 
 ```text
-CLIProxyManager.app/Contents/Resources/cliproxy-manager
+CLIProxyManager.app/Contents/Helpers/cliproxy-manager
 ```
 
-This keeps the app bundle self-contained for later improvements while preserving current shell function compatibility.
+This keeps the app bundle self-contained, installs the same signed helper that ships in the app, and preserves current shell function compatibility.
 
 If `/usr/local/bin` does not exist or is not writable, `make install` should create it when possible and otherwise fail with a clear message. The user can rerun the command with appropriate local permissions.
 
@@ -180,7 +182,7 @@ open /Applications/CLIProxyManager.app
 swift test
 ```
 
-`make verify` signs `build/CLIProxyManager.app`, copies it to a `/tmp` app with `ditto --norsrc --noextattr`, removes extended attributes from that copy, and runs `codesign --verify --deep --strict --verbose=2` there. This avoids false failures from the worktree file-provider reattaching `com.apple.FinderInfo` to package directories. `spctl` may still report local-development limitations depending on the certificate trust state. The hard requirement for this iteration is successful `make verify` and local launch.
+`make verify` signs the nested helper, signs `build/CLIProxyManager.app`, copies it to a `/tmp` app with `ditto --norsrc --noextattr`, removes extended attributes from that copy, and runs `codesign --verify --deep --strict --verbose=2` there. It also verifies the helper exists at `Contents/Helpers/cliproxy-manager` and not at `Contents/Resources/cliproxy-manager`. This avoids false failures from the worktree file-provider reattaching `com.apple.FinderInfo` to package directories. `spctl` may still report local-development limitations depending on the certificate trust state. The hard requirement for this iteration is successful `make verify` and local launch.
 
 ## Future distribution path
 
