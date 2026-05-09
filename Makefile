@@ -1,0 +1,117 @@
+APP_NAME ?= CLIProxyManager
+BUNDLE_ID ?= com.woosublee.CLIProxyManager
+VERSION ?= 0.1.0
+BUILD_NUMBER ?= 1
+BUILD_DIR ?= build
+CONFIGURATION ?= release
+CODESIGN_IDENTITY ?= Apple Development
+
+APP_BUNDLE := $(BUILD_DIR)/$(APP_NAME).app
+CONTENTS_DIR := $(APP_BUNDLE)/Contents
+MACOS_DIR := $(CONTENTS_DIR)/MacOS
+RESOURCES_DIR := $(CONTENTS_DIR)/Resources
+SWIFT_BUILD_DIR := $(shell swift build -c $(CONFIGURATION) --show-bin-path)
+APP_EXECUTABLE := $(SWIFT_BUILD_DIR)/$(APP_NAME)
+HELPER_EXECUTABLE := $(SWIFT_BUILD_DIR)/cliproxy-manager
+INFO_PLIST := Info.plist
+ENTITLEMENTS := CLIProxyManager.entitlements
+
+.PHONY: all swift-build bundle sign verify install-helper install run install-and-run clean distclean
+
+all: sign
+
+swift-build:
+	swift build -c $(CONFIGURATION) --product $(APP_NAME)
+	swift build -c $(CONFIGURATION) --product cliproxy-manager
+
+bundle: swift-build $(INFO_PLIST) $(ENTITLEMENTS)
+	test -x "$(APP_EXECUTABLE)" || { echo "Missing executable: $(APP_EXECUTABLE)"; exit 1; }
+	test -x "$(HELPER_EXECUTABLE)" || { echo "Missing executable: $(HELPER_EXECUTABLE)"; exit 1; }
+	rm -rf "$(APP_BUNDLE)"
+	mkdir -p "$(MACOS_DIR)" "$(RESOURCES_DIR)"
+	cp "$(APP_EXECUTABLE)" "$(MACOS_DIR)/$(APP_NAME)"
+	cp "$(HELPER_EXECUTABLE)" "$(RESOURCES_DIR)/cliproxy-manager"
+	cp "$(INFO_PLIST)" "$(CONTENTS_DIR)/Info.plist"
+	plutil -replace CFBundleName -string "$(APP_NAME)" "$(CONTENTS_DIR)/Info.plist"
+	plutil -replace CFBundleDisplayName -string "$(APP_NAME)" "$(CONTENTS_DIR)/Info.plist"
+	plutil -replace CFBundleExecutable -string "$(APP_NAME)" "$(CONTENTS_DIR)/Info.plist"
+	plutil -replace CFBundleIdentifier -string "$(BUNDLE_ID)" "$(CONTENTS_DIR)/Info.plist"
+	plutil -replace CFBundleShortVersionString -string "$(VERSION)" "$(CONTENTS_DIR)/Info.plist"
+	plutil -replace CFBundleVersion -string "$(BUILD_NUMBER)" "$(CONTENTS_DIR)/Info.plist"
+	@for bundle in $(SWIFT_BUILD_DIR)/*CLIProxyManagerApp*.bundle; do \
+		if [ -d "$$bundle" ]; then \
+			ditto --norsrc --noextattr "$$bundle" "$(RESOURCES_DIR)"; \
+		fi; \
+	done
+	chmod -R u+w "$(APP_BUNDLE)"
+	chmod +x "$(MACOS_DIR)/$(APP_NAME)" "$(RESOURCES_DIR)/cliproxy-manager"
+	xattr -r -c "$(APP_BUNDLE)"
+	@echo "Bundled $(APP_BUNDLE)"
+
+sign: bundle
+	@set -e; \
+	STAGING_DIR=$$(mktemp -d "/tmp/$(APP_NAME).sign.XXXXXX"); \
+	cleanup() { rm -rf "$$STAGING_DIR"; }; \
+	trap cleanup EXIT; \
+	STAGED_APP="$$STAGING_DIR/$(APP_NAME).app"; \
+	ditto --norsrc --noextattr "$(APP_BUNDLE)" "$$STAGED_APP"; \
+	codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" --entitlements "$(ENTITLEMENTS)" "$$STAGED_APP" || { \
+		status=$$?; \
+		echo "codesign failed. Override the signing identity with: make CODESIGN_IDENTITY=\"Your Signing Identity\""; \
+		exit $$status; \
+	}; \
+	rm -rf "$(APP_BUNDLE)"; \
+	ditto --norsrc --noextattr "$$STAGED_APP" "$(APP_BUNDLE)"; \
+	chmod -R u+w "$(APP_BUNDLE)"; \
+	xattr -r -c "$(APP_BUNDLE)"; \
+	xattr -c "$(APP_BUNDLE)"; \
+	xattr -d com.apple.FinderInfo "$(APP_BUNDLE)" 2>/dev/null || true
+
+verify: sign
+	@set -e; \
+	VERIFY_DIR=$$(mktemp -d "/tmp/$(APP_NAME).verify.XXXXXX"); \
+	cleanup() { rm -rf "$$VERIFY_DIR"; }; \
+	trap cleanup EXIT; \
+	VERIFY_APP="$$VERIFY_DIR/$(APP_NAME).app"; \
+	ditto --norsrc --noextattr "$(APP_BUNDLE)" "$$VERIFY_APP"; \
+	xattr -cr "$$VERIFY_APP"; \
+	codesign --verify --deep --strict --verbose=2 "$$VERIFY_APP"; \
+	echo "codesign verification passed"
+
+install-helper: sign
+	mkdir -p /usr/local/bin
+	cp "$(HELPER_EXECUTABLE)" "/usr/local/bin/cliproxy-manager"
+	chmod +x "/usr/local/bin/cliproxy-manager"
+	@echo "Installed helper to /usr/local/bin/cliproxy-manager"
+
+install: sign install-helper
+	@set -e; \
+	INSTALL_PATH="/Applications/$(APP_NAME).app"; \
+	STAGING_PATH="/Applications/.$(APP_NAME).app.staging"; \
+	PREVIOUS_PATH="/Applications/.$(APP_NAME).app.previous"; \
+	rm -rf "$$STAGING_PATH"; \
+	cp -R "$(APP_BUNDLE)" "$$STAGING_PATH"; \
+	rm -rf "$$PREVIOUS_PATH"; \
+	if [ -d "$$INSTALL_PATH" ]; then mv "$$INSTALL_PATH" "$$PREVIOUS_PATH"; fi; \
+	if mv "$$STAGING_PATH" "$$INSTALL_PATH"; then \
+		rm -rf "$$PREVIOUS_PATH"; \
+		echo "Installed $$INSTALL_PATH"; \
+	else \
+		status=$$?; \
+		rm -rf "$$INSTALL_PATH"; \
+		if [ -d "$$PREVIOUS_PATH" ]; then mv "$$PREVIOUS_PATH" "$$INSTALL_PATH"; fi; \
+		exit $$status; \
+	fi
+
+run: sign
+	open "$(APP_BUNDLE)"
+
+install-and-run: install
+	-pkill -x "$(APP_NAME)"
+	open "/Applications/$(APP_NAME).app"
+
+clean:
+	rm -rf "$(BUILD_DIR)"
+
+distclean: clean
+	rm -rf .build

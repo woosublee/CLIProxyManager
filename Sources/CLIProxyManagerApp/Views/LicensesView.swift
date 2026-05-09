@@ -3,12 +3,13 @@ import Foundation
 import SwiftUI
 
 enum LicenseResource {
-    static func cliProxyAPILicenseURL(bundle: Bundle = .module) -> URL? {
-        bundle.url(forResource: "CLIProxyAPI-LICENSE", withExtension: "txt", subdirectory: "Licenses")
+    static func cliProxyAPILicenseURL(bundle: Bundle = .module, appBundle: Bundle = .main) -> URL? {
+        appBundle.url(forResource: "CLIProxyAPI-LICENSE", withExtension: "txt", subdirectory: "Licenses")
+            ?? bundle.url(forResource: "CLIProxyAPI-LICENSE", withExtension: "txt", subdirectory: "Licenses")
     }
 
-    static func cliProxyAPILicenseText(bundle: Bundle = .module) -> String {
-        guard let url = cliProxyAPILicenseURL(bundle: bundle),
+    static func cliProxyAPILicenseText(bundle: Bundle = .module, appBundle: Bundle = .main) -> String {
+        guard let url = cliProxyAPILicenseURL(bundle: bundle, appBundle: appBundle),
               let text = try? String(contentsOf: url, encoding: .utf8) else {
             return LicenseNotice.cliProxyAPILicenseText
         }
