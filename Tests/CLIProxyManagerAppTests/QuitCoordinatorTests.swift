@@ -28,8 +28,9 @@ final class QuitCoordinatorTests: XCTestCase {
     }
 
     func testConfirmQuitStopsServerBeforeTerminating() async {
-        let proxyService = StubProxyService()
-        let terminator = StubAppTerminator()
+        let events = QuitEventLog()
+        let proxyService = StubProxyService(events: events)
+        let terminator = StubAppTerminator(events: events)
         let coordinator = QuitCoordinator(
             proxyService: proxyService,
             appTerminator: terminator,
@@ -40,6 +41,7 @@ final class QuitCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(proxyService.stopCount, 1)
         XCTAssertEqual(terminator.terminateCount, 1)
+        XCTAssertEqual(events.values, ["stop", "terminate"])
         XCTAssertFalse(coordinator.isQuitConfirmationPresented)
         XCTAssertNil(coordinator.quitErrorMessage)
     }
@@ -64,20 +66,23 @@ final class QuitCoordinatorTests: XCTestCase {
 private final class StubProxyService: ProxyServiceControlling, @unchecked Sendable {
     private let lock = NSLock()
     private let stopError: Error?
+    private let events: QuitEventLog?
     private var _stopCount = 0
 
     var stopCount: Int {
         lock.withLock { _stopCount }
     }
 
-    init(stopError: Error? = nil) {
+    init(stopError: Error? = nil, events: QuitEventLog? = nil) {
         self.stopError = stopError
+        self.events = events
     }
 
     func start(port: Int) async throws {}
 
     func stop() async throws {
         lock.withLock { _stopCount += 1 }
+        events?.append("stop")
         if let stopError {
             throw stopError
         }
@@ -103,13 +108,32 @@ private final class StubQuitConfirmationPresenter: QuitConfirmationPresenting, @
 
 private final class StubAppTerminator: AppTerminating, @unchecked Sendable {
     private let lock = NSLock()
+    private let events: QuitEventLog?
     private var _terminateCount = 0
 
     var terminateCount: Int {
         lock.withLock { _terminateCount }
     }
 
+    init(events: QuitEventLog? = nil) {
+        self.events = events
+    }
+
     func terminate() {
         lock.withLock { _terminateCount += 1 }
+        events?.append("terminate")
+    }
+}
+
+private final class QuitEventLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _values: [String] = []
+
+    var values: [String] {
+        lock.withLock { _values }
+    }
+
+    func append(_ value: String) {
+        lock.withLock { _values.append(value) }
     }
 }

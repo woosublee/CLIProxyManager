@@ -36,6 +36,24 @@ final class AppAppearanceServiceTests: XCTestCase {
         XCTAssertEqual(store.savedConfigs.last?.startAtLogin, true)
     }
 
+    func testStartAtLoginDoesNotUpdateLoginItemWhenConfigSaveFails() {
+        let store = StubConfigStore(config: .default, saveError: NSError(domain: "test", code: 1))
+        let loginService = StubLoginItemService()
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector(),
+            loginItemService: loginService,
+            appAppearanceService: StubAppAppearanceService()
+        )
+
+        XCTAssertThrowsError(try viewModel.saveStartAtLogin(true))
+
+        XCTAssertEqual(loginService.enabledValues, [])
+        XCTAssertEqual(viewModel.config.startAtLogin, false)
+    }
+
     func testDockIconToggleAppliesActivationPolicyAndPersistsConfig() throws {
         let store = StubConfigStore(config: .default)
         let appearanceService = StubAppAppearanceService()
@@ -101,16 +119,21 @@ final class AppAppearanceServiceTests: XCTestCase {
 
 private final class StubConfigStore: AppConfigStoring, @unchecked Sendable {
     private let lock = NSLock()
+    private let saveError: Error?
     private(set) var savedConfigs: [AppConfig] = []
     var config: AppConfig
 
-    init(config: AppConfig) {
+    init(config: AppConfig, saveError: Error? = nil) {
         self.config = config
+        self.saveError = saveError
     }
 
     func load() throws -> AppConfig { config }
 
     func save(_ config: AppConfig) throws {
+        if let saveError {
+            throw saveError
+        }
         lock.withLock { savedConfigs.append(config) }
         self.config = config
     }

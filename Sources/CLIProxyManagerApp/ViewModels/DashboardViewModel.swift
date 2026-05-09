@@ -278,8 +278,8 @@ final class DashboardViewModel: ObservableObject {
     func saveStartAtLogin(_ isEnabled: Bool) throws {
         var updatedConfig = config
         updatedConfig.startAtLogin = isEnabled
-        try loginItemService.setStartAtLoginEnabled(isEnabled)
         try saveConfig(updatedConfig)
+        try loginItemService.setStartAtLoginEnabled(isEnabled)
     }
 
     func saveDockIconVisible(_ isVisible: Bool) throws {
