@@ -10,6 +10,9 @@ public struct ProxyModelClient: Sendable {
     }
 
     public func models(port: Int) async throws -> [String] {
+        guard (1...65_535).contains(port) else {
+            throw ProxyServiceError.invalidPort(port)
+        }
         let url = URL(string: "http://127.0.0.1:\(port)/v1/models")!
         let data = try await httpClient.get(url, headers: ["Authorization": "Bearer \(localAPIKey)"])
         let response = try JSONDecoder().decode(ModelsResponse.self, from: data)

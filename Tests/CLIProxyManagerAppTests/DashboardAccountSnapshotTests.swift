@@ -8,7 +8,7 @@ final class DashboardAccountSnapshotTests: XCTestCase {
             name: "Claude OAuth",
             functionName: "ccm",
             connectionTitle: "연결됨",
-            connectionDetail: "woosub@classting.com",
+            connectionDetail: "claude@example.com",
             isConnected: true
         )
 
@@ -17,7 +17,7 @@ final class DashboardAccountSnapshotTests: XCTestCase {
         XCTAssertEqual(snapshot.title, "Claude OAuth")
         XCTAssertEqual(snapshot.commandName, "ccm")
         XCTAssertEqual(snapshot.commandSlug, "$ ccm")
-        XCTAssertEqual(snapshot.detail, "woosub@classting.com")
+        XCTAssertEqual(snapshot.detail, "claude@example.com")
         XCTAssertEqual(snapshot.status, .connected)
         XCTAssertEqual(snapshot.primaryActionTitle, "Settings")
         XCTAssertTrue(snapshot.showsMoreMenu)

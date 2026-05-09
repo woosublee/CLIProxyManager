@@ -22,7 +22,6 @@ final class QuitCoordinatorTests: XCTestCase {
         )
 
         coordinator.requestQuit()
-        await Task.yield()
 
         XCTAssertEqual(proxyService.stopCount, 0)
         XCTAssertEqual(terminator.terminateCount, 0)
@@ -42,21 +41,46 @@ final class QuitCoordinatorTests: XCTestCase {
         XCTAssertEqual(proxyService.stopCount, 1)
         XCTAssertEqual(terminator.terminateCount, 1)
         XCTAssertFalse(coordinator.isQuitConfirmationPresented)
+        XCTAssertNil(coordinator.quitErrorMessage)
+    }
+
+    func testConfirmQuitDoesNotTerminateWhenServerStopFails() async {
+        let proxyService = StubProxyService(stopError: NSError(domain: "test", code: 1))
+        let terminator = StubAppTerminator()
+        let coordinator = QuitCoordinator(
+            proxyService: proxyService,
+            appTerminator: terminator,
+            quitConfirmationPresenter: StubQuitConfirmationPresenter(shouldConfirm: true)
+        )
+
+        await coordinator.confirmQuit()
+
+        XCTAssertEqual(proxyService.stopCount, 1)
+        XCTAssertEqual(terminator.terminateCount, 0)
+        XCTAssertEqual(coordinator.quitErrorMessage, "CLIProxyAPI 서버 종료에 실패했습니다. 앱 종료를 중단했습니다.")
     }
 }
 
 private final class StubProxyService: ProxyServiceControlling, @unchecked Sendable {
     private let lock = NSLock()
+    private let stopError: Error?
     private var _stopCount = 0
 
     var stopCount: Int {
         lock.withLock { _stopCount }
     }
 
+    init(stopError: Error? = nil) {
+        self.stopError = stopError
+    }
+
     func start(port: Int) async throws {}
 
     func stop() async throws {
         lock.withLock { _stopCount += 1 }
+        if let stopError {
+            throw stopError
+        }
     }
 
     func restart(port: Int) async throws {}

@@ -32,7 +32,7 @@ public struct LicenseNotice: Equatable, Sendable {
     public static let cliProxyAPILicenseText = """
     MIT License
 
-    Copyright (c) 2025-2005.9 Luis Pater
+    Copyright (c) 2025 Luis Pater
     Copyright (c) 2025.9-present Router-For.ME
 
     Permission is hereby granted, free of charge, to any person obtaining a copy

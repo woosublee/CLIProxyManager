@@ -1,6 +1,6 @@
 import Foundation
 
-public struct AuthProfileStore: Sendable {
+public struct AuthProfileStore: @unchecked Sendable {
     private let authDirectory: URL
     private let fileManager: FileManager
 

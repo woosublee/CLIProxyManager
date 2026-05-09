@@ -1,10 +1,24 @@
 import CLIProxyManagerCore
 import SwiftUI
 
+private extension View {
+    func saveErrorAlert(message: Binding<String?>) -> some View {
+        alert("Save Failed", isPresented: Binding(
+            get: { message.wrappedValue != nil },
+            set: { if !$0 { message.wrappedValue = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(message.wrappedValue ?? "")
+        }
+    }
+}
+
 struct ClaudeOAuthProviderSettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var functionName: String
     @State private var dangerousPermissionsEnabled: Bool
+    @State private var saveErrorMessage: String?
     let save: (String, Bool) throws -> Void
 
     init(config: AppConfig, save: @escaping (String, Bool) throws -> Void) {
@@ -27,6 +41,7 @@ struct ClaudeOAuthProviderSettingsSheet: View {
         }
         .padding(24)
         .frame(width: 460)
+        .saveErrorAlert(message: $saveErrorMessage)
     }
 
     private var footer: some View {
@@ -34,8 +49,12 @@ struct ClaudeOAuthProviderSettingsSheet: View {
             Spacer()
             Button("Cancel") { dismiss() }
             Button("Save") {
-                try? save(functionName, dangerousPermissionsEnabled)
-                dismiss()
+                do {
+                    try save(functionName, dangerousPermissionsEnabled)
+                    dismiss()
+                } catch {
+                    saveErrorMessage = error.localizedDescription
+                }
             }
             .keyboardShortcut(.defaultAction)
         }
@@ -46,6 +65,7 @@ struct ClaudeAPIProviderSettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var functionName: String
     @State private var model: String
+    @State private var saveErrorMessage: String?
     let save: (String, String) throws -> Void
 
     init(config: AppConfig, save: @escaping (String, String) throws -> Void) {
@@ -66,6 +86,7 @@ struct ClaudeAPIProviderSettingsSheet: View {
         }
         .padding(24)
         .frame(width: 460)
+        .saveErrorAlert(message: $saveErrorMessage)
     }
 
     private var footer: some View {
@@ -73,8 +94,12 @@ struct ClaudeAPIProviderSettingsSheet: View {
             Spacer()
             Button("Cancel") { dismiss() }
             Button("Save") {
-                try? save(functionName, model)
-                dismiss()
+                do {
+                    try save(functionName, model)
+                    dismiss()
+                } catch {
+                    saveErrorMessage = error.localizedDescription
+                }
             }
             .keyboardShortcut(.defaultAction)
         }
@@ -88,6 +113,7 @@ struct CodexProviderSettingsSheet: View {
     @State private var sonnet: AppConfig.CodexRole
     @State private var haiku: AppConfig.CodexRole
     @State private var dangerousPermissionsEnabled: Bool
+    @State private var saveErrorMessage: String?
     let availableModels: [String]
     let refreshModels: () -> Void
     let save: (String, AppConfig.Codex, Bool) throws -> Void
@@ -137,14 +163,19 @@ struct CodexProviderSettingsSheet: View {
                 Spacer()
                 Button("Cancel") { dismiss() }
                 Button("Save") {
-                    try? save(functionName, AppConfig.Codex(opus: opus, sonnet: sonnet, haiku: haiku), dangerousPermissionsEnabled)
-                    dismiss()
+                    do {
+                        try save(functionName, AppConfig.Codex(opus: opus, sonnet: sonnet, haiku: haiku), dangerousPermissionsEnabled)
+                        dismiss()
+                    } catch {
+                        saveErrorMessage = error.localizedDescription
+                    }
                 }
                 .keyboardShortcut(.defaultAction)
             }
         }
         .padding(24)
         .frame(width: 620)
+        .saveErrorAlert(message: $saveErrorMessage)
         .task {
             if availableModels.isEmpty {
                 refreshModels()

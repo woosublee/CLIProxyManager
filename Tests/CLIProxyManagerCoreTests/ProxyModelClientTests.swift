@@ -23,6 +23,20 @@ final class ProxyModelClientTests: XCTestCase {
 
         XCTAssertEqual(models, ["gpt-5.5", "gpt-5.6"])
     }
+
+    func testModelsRejectsInvalidPortBeforeRequestingModels() async throws {
+        let httpClient = StubHTTPClient(result: .success(Data(#"{"data":[]}"#.utf8)))
+        let client = ProxyModelClient(httpClient: httpClient)
+
+        do {
+            _ = try await client.models(port: 0)
+            XCTFail("Expected invalid port error")
+        } catch let error as ProxyServiceError {
+            XCTAssertEqual(error, .invalidPort(0))
+        }
+
+        XCTAssertEqual(httpClient.requests.count, 0)
+    }
 }
 
 private final class StubHTTPClient: HTTPClient, @unchecked Sendable {

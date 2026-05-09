@@ -7,7 +7,7 @@ final class LicenseResourceTests: XCTestCase {
         let text = try String(contentsOf: url, encoding: .utf8)
 
         XCTAssertTrue(text.contains("MIT License"))
-        XCTAssertTrue(text.contains("Copyright (c) 2025-2005.9 Luis Pater"))
+        XCTAssertTrue(text.contains("Copyright (c) 2025 Luis Pater"))
         XCTAssertTrue(text.contains("Permission is hereby granted"))
         XCTAssertTrue(text.contains("THE SOFTWARE IS PROVIDED \"AS IS\""))
     }

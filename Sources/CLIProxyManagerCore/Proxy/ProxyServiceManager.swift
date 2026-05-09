@@ -76,7 +76,7 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
 
     public func restart(port: Int) async throws {
         try lifecycleLock.withLock {
-            stopLocked()
+            stopLocked(waitUntilExit: true)
             try startLocked(port: port)
         }
     }
@@ -100,7 +100,7 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
     private func startLocked(port: Int) throws {
         try prepareLocked(port: port)
 
-        stopLocked()
+        stopLocked(waitUntilExit: true)
 
         do {
             let process = try launcher.launch(paths.clipProxyBinary.path, ["--config", paths.clipProxyConfigFile.path])
@@ -110,11 +110,15 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         }
     }
 
-    private func stopLocked() {
+    private func stopLocked(waitUntilExit: Bool = false) {
         guard let process = processState.clear() else { return }
         process.terminate()
-        Task.detached(priority: .utility) {
+        if waitUntilExit {
             process.waitUntilExit()
+        } else {
+            Task.detached(priority: .utility) {
+                process.waitUntilExit()
+            }
         }
     }
 
@@ -154,9 +158,30 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
     }
 
     private func yamlDoubleQuoted(_ value: String) -> String {
-        "\"" + value
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"") + "\""
+        var escaped = ""
+        for scalar in value.unicodeScalars {
+            switch scalar {
+            case "\\":
+                escaped += "\\\\"
+            case "\"":
+                escaped += "\\\""
+            case "\n":
+                escaped += "\\n"
+            case "\t":
+                escaped += "\\t"
+            case "\r":
+                escaped += "\\r"
+            case "\u{08}":
+                escaped += "\\b"
+            case "\u{0C}":
+                escaped += "\\f"
+            case let scalar where scalar.value < 0x20:
+                escaped += String(format: "\\x%02X", scalar.value)
+            default:
+                escaped.unicodeScalars.append(scalar)
+            }
+        }
+        return "\"\(escaped)\""
     }
 }
 

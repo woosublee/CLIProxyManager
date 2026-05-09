@@ -43,6 +43,24 @@ final class ProxyServiceManagerTests: XCTestCase {
         ])
     }
 
+    func testStartEscapesControlCharactersInYAMLAuthDirectory() async throws {
+        let sandbox = try makeSandbox()
+        let root = sandbox.appendingPathComponent("managed\nroot\twith\rcontrol")
+        let paths = ManagedPaths(rootDirectory: root)
+        try createBinary(at: paths.clipProxyBinary)
+        let manager = ProxyServiceManager(paths: paths, launcher: FakeProcessLauncher())
+
+        try await manager.start(port: 8317)
+
+        let escapedAuthPath = paths.authDirectory.path
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\t", with: "\\t")
+            .replacingOccurrences(of: "\r", with: "\\r")
+        let config = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
+        XCTAssertTrue(config.contains("auth-dir: \"\(escapedAuthPath)\""))
+        XCTAssertFalse(config.contains("managed\nroot\twith\rcontrol/auth"))
+    }
+
     func testStartCopiesBundledBinaryWhenManagedBinaryIsMissing() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
@@ -193,6 +211,22 @@ final class ProxyServiceManagerTests: XCTestCase {
         let config = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
         XCTAssertTrue(config.contains("port: 9000"))
         XCTAssertFalse(config.contains("port: 8317"))
+    }
+
+    func testRestartWaitsForExistingProcessExitBeforeLaunchingReplacement() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let events = ProxyLifecycleEventLog()
+        let firstProcess = ManagedProxyProcessDouble(name: "first", events: events, waitDelay: 0.1)
+        let secondProcess = ManagedProxyProcessDouble(name: "second", events: events)
+        let launcher = FakeProcessLauncher(processes: [firstProcess, secondProcess], events: events)
+        let manager = ProxyServiceManager(paths: paths, launcher: launcher)
+
+        try await manager.start(port: 8317)
+        try await manager.restart(port: 9000)
+
+        XCTAssertEqual(events.values, ["launch", "first terminate", "first wait", "launch"])
     }
 
     func testStartRejectsInvalidPortBeforeWritingConfigOrLaunching() async throws {

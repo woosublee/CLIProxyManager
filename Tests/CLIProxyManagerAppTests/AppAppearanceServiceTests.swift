@@ -150,6 +150,7 @@ private final class StubProxyService: ProxyServiceControlling, @unchecked Sendab
 }
 
 private final class StubProcessRunner: ProcessRunning, @unchecked Sendable {
+    private let lock = NSLock()
     private var results: [ProcessResult]
 
     init(results: [ProcessResult]) {
@@ -157,6 +158,12 @@ private final class StubProcessRunner: ProcessRunning, @unchecked Sendable {
     }
 
     func run(_ executable: String, _ arguments: [String]) async -> ProcessResult {
-        results.removeFirst()
+        lock.withLock {
+            guard results.isEmpty == false else {
+                XCTFail("Unexpected process run: \(executable) \(arguments.joined(separator: " "))")
+                return ProcessResult(exitCode: 1, stdout: "", stderr: "unexpected process run")
+            }
+            return results.removeFirst()
+        }
     }
 }

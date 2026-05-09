@@ -16,7 +16,7 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
                     name: "Claude OAuth",
                     functionName: "ccm",
                     connectionTitle: "연결됨",
-                    connectionDetail: "woosub@classting.com",
+                    connectionDetail: "claude@example.com",
                     isConnected: true
                 ),
                 ProviderRowState(
@@ -37,7 +37,7 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
         XCTAssertEqual(snapshot.endpointTitle, "localhost:18317")
         XCTAssertEqual(snapshot.connectedProviders.map(\.name), ["Claude OAuth", "Codex OAuth"])
         XCTAssertEqual(snapshot.connectedProviders.map(\.functionName), ["ccm", "ccmcodex"])
-        XCTAssertEqual(snapshot.connectedProviders.map(\.connectionDetail), ["woosub@classting.com", "codex@example.com"])
+        XCTAssertEqual(snapshot.connectedProviders.map(\.connectionDetail), ["claude@example.com", "codex@example.com"])
     }
 
     func testSnapshotShowsEmptyMessageWhenNoProviderIsConnected() {
@@ -63,6 +63,6 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
         XCTAssertFalse(snapshot.isServerRunning)
         XCTAssertEqual(snapshot.serverActionTitle, "Start Server")
         XCTAssertEqual(snapshot.endpointTitle, nil)
-        XCTAssertEqual(snapshot.emptyProviderMessage, "연결된 계정 없음")
+        XCTAssertEqual(snapshot.emptyProviderMessage, "No connected accounts")
     }
 }

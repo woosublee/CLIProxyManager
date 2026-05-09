@@ -108,7 +108,7 @@ XCTAssertTrue(authIsDirectory.boolValue)
 Run:
 
 ```bash
-swift test --package-path "/Users/woosublee/Documents/dev/CLIProxyManager" --filter ProxyServiceManagerTests
+swift test --package-path "${REPO_ROOT:-.}" --filter ProxyServiceManagerTests
 ```
 
 Expected: FAIL because `ManagedPaths.authDirectory` does not exist and config still writes `~/.cli-proxy-api`.
@@ -214,7 +214,7 @@ private func yamlDoubleQuoted(_ value: String) -> String {
 Run:
 
 ```bash
-swift test --package-path "/Users/woosublee/Documents/dev/CLIProxyManager" --filter ProxyServiceManagerTests
+swift test --package-path "${REPO_ROOT:-.}" --filter ProxyServiceManagerTests
 ```
 
 Expected: PASS. The generated config contains `auth-dir: "<managed-root>/auth"` and no `~/.cli-proxy-api`.
@@ -251,7 +251,7 @@ final class AuthProfileStoreTests: XCTestCase {
         let sandbox = try makeSandbox()
         let authDirectory = sandbox.appendingPathComponent("auth", isDirectory: true)
         try FileManager.default.createDirectory(at: authDirectory, withIntermediateDirectories: true)
-        try Data(#"{"type":"claude","email":"woosub@classting.com","expired":"2026-05-09T11:24:01+09:00","access_token":"secret"}"#.utf8)
+        try Data(#"{"type":"claude","email":"claude@example.com","expired":"2026-05-09T11:24:01+09:00","access_token":"secret"}"#.utf8)
             .write(to: authDirectory.appendingPathComponent("claude.json"))
         try Data(#"{"type":"codex","email":"codex@example.com","account_id":"acct_123","disabled":false,"refresh_token":"secret"}"#.utf8)
             .write(to: authDirectory.appendingPathComponent("codex.json"))
@@ -260,7 +260,7 @@ final class AuthProfileStoreTests: XCTestCase {
         let profiles = try store.profiles()
 
         XCTAssertEqual(profiles, [
-            AuthProfile(fileName: "claude.json", type: .claude, email: "woosub@classting.com", accountID: nil, expired: "2026-05-09T11:24:01+09:00", disabled: false),
+            AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: "2026-05-09T11:24:01+09:00", disabled: false),
             AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: nil, disabled: false)
         ])
     }
@@ -316,7 +316,7 @@ final class AuthProfileStoreTests: XCTestCase {
 Run:
 
 ```bash
-swift test --package-path "/Users/woosublee/Documents/dev/CLIProxyManager" --filter AuthProfileStoreTests
+swift test --package-path "${REPO_ROOT:-.}" --filter AuthProfileStoreTests
 ```
 
 Expected: FAIL because `AuthProfileStore`, `AuthProfile`, and `AuthProfileType` do not exist.
@@ -449,7 +449,7 @@ private struct AuthFile: Decodable {
 Run:
 
 ```bash
-swift test --package-path "/Users/woosublee/Documents/dev/CLIProxyManager" --filter AuthProfileStoreTests
+swift test --package-path "${REPO_ROOT:-.}" --filter AuthProfileStoreTests
 ```
 
 Expected: PASS.
@@ -564,7 +564,7 @@ private final class StubProcessRunner: ProcessRunning, @unchecked Sendable {
 Run:
 
 ```bash
-swift test --package-path "/Users/woosublee/Documents/dev/CLIProxyManager" --filter OAuthLoginServiceTests
+swift test --package-path "${REPO_ROOT:-.}" --filter OAuthLoginServiceTests
 ```
 
 Expected: FAIL because `OAuthLoginService`, `OAuthLoginProvider`, and `OAuthLoginError` do not exist.
@@ -641,7 +641,7 @@ public struct OAuthLoginService: Sendable {
 Run:
 
 ```bash
-swift test --package-path "/Users/woosublee/Documents/dev/CLIProxyManager" --filter OAuthLoginServiceTests
+swift test --package-path "${REPO_ROOT:-.}" --filter OAuthLoginServiceTests
 ```
 
 Expected: PASS.
@@ -685,7 +685,7 @@ func testDefaultProviderRowsShowOnlyClaudeAndCodexOAuthProfiles() {
 
 func testProviderRowsShowOAuthProfileEmailsFromAppManagedAuthStore() {
     let profiles = [
-        AuthProfile(fileName: "claude.json", type: .claude, email: "woosub@classting.com", accountID: nil, expired: nil, disabled: false),
+        AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false),
         AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: nil, disabled: false)
     ]
     let viewModel = DashboardViewModel(
@@ -696,7 +696,7 @@ func testProviderRowsShowOAuthProfileEmailsFromAppManagedAuthStore() {
     )
 
     XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.connectionTitle, "연결됨")
-    XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.connectionDetail, "woosub@classting.com")
+    XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.connectionDetail, "claude@example.com")
     XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.connectionTitle, "연결됨")
     XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.connectionDetail, "codex@example.com")
 }
@@ -764,7 +764,7 @@ private final class StubOAuthLoginService: OAuthLoginStarting, @unchecked Sendab
 Run:
 
 ```bash
-swift test --package-path "/Users/woosublee/Documents/dev/CLIProxyManager" --filter DashboardViewModelRefreshTests
+swift test --package-path "${REPO_ROOT:-.}" --filter DashboardViewModelRefreshTests
 ```
 
 Expected: FAIL because `AuthProfileReading`, `OAuthLoginStarting`, `isProfileLoginInProgress`, and `connectProvider` do not exist, and provider rows still include Claude API.
@@ -970,7 +970,7 @@ private func updateStatuses(serverStatus updatedServerStatus: DiagnosticStatus, 
 Run:
 
 ```bash
-swift test --package-path "/Users/woosublee/Documents/dev/CLIProxyManager" --filter DashboardViewModelRefreshTests
+swift test --package-path "${REPO_ROOT:-.}" --filter DashboardViewModelRefreshTests
 ```
 
 Expected: PASS.
@@ -1017,7 +1017,7 @@ func testAddProviderExplainsClaudeAPIIsHiddenFromDefaultProfiles() {
 Run:
 
 ```bash
-swift test --package-path "/Users/woosublee/Documents/dev/CLIProxyManager" --filter DashboardViewModelRefreshTests/testAddProviderExplainsClaudeAPIIsHiddenFromDefaultProfiles
+swift test --package-path "${REPO_ROOT:-.}" --filter DashboardViewModelRefreshTests/testAddProviderExplainsClaudeAPIIsHiddenFromDefaultProfiles
 ```
 
 Expected: PASS if Task 4 already updated `addProvider`; otherwise FAIL with the old message.
@@ -1066,7 +1066,7 @@ private func providerSettingsSheet(_ provider: ProviderRowState.ID) -> some View
 Run:
 
 ```bash
-swift build --package-path "/Users/woosublee/Documents/dev/CLIProxyManager" --product CLIProxyManager
+swift build --package-path "${REPO_ROOT:-.}" --product CLIProxyManager
 ```
 
 Expected: PASS.
@@ -1120,7 +1120,7 @@ XCTAssertEqual(script.components(separatedBy: "claude \"$@\"").count - 1, 3)
 Run:
 
 ```bash
-swift test --package-path "/Users/woosublee/Documents/dev/CLIProxyManager" --filter ShellFunctionRendererTests/testClaudeOAuthFunctionUsesBundledProxyAndClaudeModelDefaults
+swift test --package-path "${REPO_ROOT:-.}" --filter ShellFunctionRendererTests/testClaudeOAuthFunctionUsesBundledProxyAndClaudeModelDefaults
 ```
 
 Expected: FAIL because `ccm()` still calls local `claude "$@"` without proxy environment.
@@ -1166,7 +1166,7 @@ with:
 Run:
 
 ```bash
-swift test --package-path "/Users/woosublee/Documents/dev/CLIProxyManager" --filter ShellFunctionRendererTests
+swift test --package-path "${REPO_ROOT:-.}" --filter ShellFunctionRendererTests
 ```
 
 Expected: PASS.
@@ -1194,7 +1194,7 @@ git commit -m "feat: route claude oauth function through proxy"
 Run:
 
 ```bash
-swift test --package-path "/Users/woosublee/Documents/dev/CLIProxyManager"
+swift test --package-path "${REPO_ROOT:-.}"
 ```
 
 Expected: PASS.
@@ -1204,7 +1204,7 @@ Expected: PASS.
 Run:
 
 ```bash
-swift build --package-path "/Users/woosublee/Documents/dev/CLIProxyManager" --product CLIProxyManager
+swift build --package-path "${REPO_ROOT:-.}" --product CLIProxyManager
 ```
 
 Expected: PASS.
@@ -1214,7 +1214,7 @@ Expected: PASS.
 Run:
 
 ```bash
-"/Users/woosublee/Documents/dev/CLIProxyManager/.build/debug/CLIProxyManager"
+"${REPO_ROOT:-.}/.build/debug/CLIProxyManager"
 ```
 
 Expected: Settings window appears and menu bar item remains available.
@@ -1291,7 +1291,7 @@ Expected:
 Run:
 
 ```bash
-git -C "/Users/woosublee/Documents/dev/CLIProxyManager" status --short
+git -C "${REPO_ROOT:-.}" status --short
 ```
 
 Expected: Only intended source, test, and plan files are modified.

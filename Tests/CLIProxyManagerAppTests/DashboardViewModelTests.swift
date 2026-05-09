@@ -93,7 +93,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testProviderRowsShowOAuthProfileEmailsFromAppManagedAuthStore() {
         let profiles = [
-            AuthProfile(fileName: "claude.json", type: .claude, email: "woosub@classting.com", accountID: nil, expired: nil, disabled: false),
+            AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false),
             AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: nil, disabled: false)
         ]
         let viewModel = DashboardViewModel(
@@ -104,7 +104,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         )
 
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.connectionTitle, "연결됨")
-        XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.connectionDetail, "woosub@classting.com")
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.connectionDetail, "claude@example.com")
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.connectionTitle, "연결됨")
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.connectionDetail, "codex@example.com")
     }

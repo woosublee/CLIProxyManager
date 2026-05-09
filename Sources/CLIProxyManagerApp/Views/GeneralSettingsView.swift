@@ -19,7 +19,7 @@ struct GeneralSettingsView: View {
                 SettingsRow(label: "Start at login", description: "Launch CLIProxyManager automatically after signing in.") {
                     Toggle("", isOn: Binding(
                         get: { viewModel.config.startAtLogin },
-                        set: { value in try? viewModel.saveStartAtLogin(value) }
+                        set: { value in viewModel.saveSetting { try viewModel.saveStartAtLogin(value) } }
                     ))
                     .labelsHidden()
                     .toggleStyle(SettingsToggleStyle())
@@ -27,7 +27,7 @@ struct GeneralSettingsView: View {
                 SettingsRow(label: "Show Dock icon", description: "Keep the app visible in the macOS Dock.") {
                     Toggle("", isOn: Binding(
                         get: { viewModel.config.showDockIcon },
-                        set: { value in try? viewModel.saveDockIconVisible(value) }
+                        set: { value in viewModel.saveSetting { try viewModel.saveDockIconVisible(value) } }
                     ))
                     .labelsHidden()
                     .toggleStyle(SettingsToggleStyle())
@@ -35,7 +35,7 @@ struct GeneralSettingsView: View {
                 SettingsRow(label: "Show menu bar icon", description: "Show the compact status menu in the menu bar.") {
                     Toggle("", isOn: Binding(
                         get: { viewModel.config.showMenuBarIcon },
-                        set: { value in try? viewModel.saveMenuBarIconVisible(value) }
+                        set: { value in viewModel.saveSetting { try viewModel.saveMenuBarIconVisible(value) } }
                     ))
                     .labelsHidden()
                     .toggleStyle(SettingsToggleStyle())
@@ -80,7 +80,7 @@ struct ServerSettingsView: View {
                         .frame(width: 84)
                         Button("Save") {
                             if let port = Int(portText.isEmpty ? String(viewModel.config.port) : portText) {
-                                try? viewModel.savePort(port)
+                                viewModel.saveSetting { try viewModel.savePort(port) }
                             }
                         }
                         .controlSize(.small)

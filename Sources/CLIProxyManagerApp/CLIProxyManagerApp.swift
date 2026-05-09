@@ -22,7 +22,7 @@ struct CLIProxyManagerApp: App {
             } else {
                 OnboardingView()
                     .toolbar {
-                        Button("시작하기") {
+                        Button("Get Started") {
                             hasCompletedOnboarding = true
                         }
                     }

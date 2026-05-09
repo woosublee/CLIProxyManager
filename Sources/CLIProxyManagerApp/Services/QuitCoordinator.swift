@@ -30,6 +30,7 @@ struct NSApplicationTerminator: AppTerminating {
 @MainActor
 final class QuitCoordinator: ObservableObject {
     @Published var isQuitConfirmationPresented = false
+    @Published private(set) var quitErrorMessage: String?
 
     private let proxyService: any ProxyServiceControlling
     private let appTerminator: any AppTerminating
@@ -57,7 +58,12 @@ final class QuitCoordinator: ObservableObject {
 
     func confirmQuit() async {
         isQuitConfirmationPresented = false
-        try? await proxyService.stop()
-        appTerminator.terminate()
+        quitErrorMessage = nil
+        do {
+            try await proxyService.stop()
+            appTerminator.terminate()
+        } catch {
+            quitErrorMessage = "CLIProxyAPI 서버 종료에 실패했습니다. 앱 종료를 중단했습니다."
+        }
     }
 }

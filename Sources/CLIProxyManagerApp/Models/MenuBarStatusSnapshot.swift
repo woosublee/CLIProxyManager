@@ -14,7 +14,7 @@ struct MenuBarStatusSnapshot: Equatable {
     let serverActionTitle: String
     let endpointTitle: String?
     let connectedProviders: [MenuBarConnectedProvider]
-    let emptyProviderMessage = "연결된 계정 없음"
+    let emptyProviderMessage = "No connected accounts"
 
     init(serverStatus: DiagnosticStatus, providers: [ProviderRowState], port: Int = 18_317) {
         serverTitle = serverStatus.title

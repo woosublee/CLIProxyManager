@@ -221,61 +221,65 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func saveClaudeOAuthSettings(functionName: String, dangerousPermissionsEnabled: Bool) throws {
-        var commands = config.commands
-        commands.cc = functionName
-        config.includeDangerouslySkipPermissions = dangerousPermissionsEnabled
-        try saveCommands(commands)
+        var updatedConfig = config
+        updatedConfig.commands.cc = functionName
+        updatedConfig.includeDangerouslySkipPermissions = dangerousPermissionsEnabled
+        try saveConfig(updatedConfig, validateShellFunctions: true)
     }
 
     func saveClaudeAPISettings(functionName: String, model: String) throws {
-        var commands = config.commands
-        commands.ccapi = functionName
-        config.ccapi = AppConfig.ClaudeAPI(model: model)
-        try saveCommands(commands)
+        var updatedConfig = config
+        updatedConfig.commands.ccapi = functionName
+        updatedConfig.ccapi = AppConfig.ClaudeAPI(model: model)
+        try saveConfig(updatedConfig, validateShellFunctions: true)
     }
 
     func saveCodexSettings(functionName: String, codex: AppConfig.Codex) throws {
-        var commands = config.commands
-        commands.ccodex = functionName
-        config.ccodex = codex
-        try saveCommands(commands)
+        var updatedConfig = config
+        updatedConfig.commands.ccodex = functionName
+        updatedConfig.ccodex = codex
+        try saveConfig(updatedConfig, validateShellFunctions: true)
     }
 
     func saveCodexSettings(functionName: String, codex: AppConfig.Codex, dangerousPermissionsEnabled: Bool) throws {
-        var commands = config.commands
-        commands.ccodex = functionName
-        config.ccodex = codex
-        config.includeDangerouslySkipPermissions = dangerousPermissionsEnabled
-        try saveCommands(commands)
+        var updatedConfig = config
+        updatedConfig.commands.ccodex = functionName
+        updatedConfig.ccodex = codex
+        updatedConfig.includeDangerouslySkipPermissions = dangerousPermissionsEnabled
+        try saveConfig(updatedConfig, validateShellFunctions: true)
     }
 
     func savePort(_ port: Int) throws {
         guard (1...65_535).contains(port) else { throw ShellFunctionRendererError.invalidPort(port) }
-        config.port = port
-        try persistConfig()
+        var updatedConfig = config
+        updatedConfig.port = port
+        try saveConfig(updatedConfig)
     }
 
     func saveCommands(_ commands: AppConfig.Commands) throws {
-        config.commands = commands
-        _ = try ShellFunctionRenderer(config: config, helperCommand: "/usr/bin/true").render()
-        try persistConfig()
+        var updatedConfig = config
+        updatedConfig.commands = commands
+        try saveConfig(updatedConfig, validateShellFunctions: true)
     }
 
     func saveModels(ccapi: AppConfig.ClaudeAPI, ccodex: AppConfig.Codex) throws {
-        config.ccapi = ccapi
-        config.ccodex = ccodex
-        try persistConfig()
+        var updatedConfig = config
+        updatedConfig.ccapi = ccapi
+        updatedConfig.ccodex = ccodex
+        try saveConfig(updatedConfig)
     }
 
     func saveDangerousPermissionsEnabled(_ isEnabled: Bool) throws {
-        config.includeDangerouslySkipPermissions = isEnabled
-        try persistConfig()
+        var updatedConfig = config
+        updatedConfig.includeDangerouslySkipPermissions = isEnabled
+        try saveConfig(updatedConfig)
     }
 
     func saveStartAtLogin(_ isEnabled: Bool) throws {
+        var updatedConfig = config
+        updatedConfig.startAtLogin = isEnabled
         try loginItemService.setStartAtLoginEnabled(isEnabled)
-        config.startAtLogin = isEnabled
-        try persistConfig()
+        try saveConfig(updatedConfig)
     }
 
     func saveDockIconVisible(_ isVisible: Bool) throws {
@@ -283,9 +287,10 @@ final class DashboardViewModel: ObservableObject {
             settingsMessage = "Dock 아이콘과 메뉴바 아이콘 중 하나는 켜져 있어야 합니다."
             return
         }
+        var updatedConfig = config
+        updatedConfig.showDockIcon = isVisible
+        try saveConfig(updatedConfig)
         appAppearanceService.apply(showDockIcon: isVisible)
-        config.showDockIcon = isVisible
-        try persistConfig()
     }
 
     func saveMenuBarIconVisible(_ isVisible: Bool) throws {
@@ -293,8 +298,9 @@ final class DashboardViewModel: ObservableObject {
             settingsMessage = "Dock 아이콘과 메뉴바 아이콘 중 하나는 켜져 있어야 합니다."
             return
         }
-        config.showMenuBarIcon = isVisible
-        try persistConfig()
+        var updatedConfig = config
+        updatedConfig.showMenuBarIcon = isVisible
+        try saveConfig(updatedConfig)
     }
 
     func installShellFunctions(helperCommand: String = "/usr/local/bin/cliproxy-manager") throws {
@@ -307,6 +313,14 @@ final class DashboardViewModel: ObservableObject {
         rebuildOptionRows()
     }
 
+    func saveSetting(_ action: () throws -> Void) {
+        do {
+            try action()
+        } catch {
+            settingsMessage = error.localizedDescription
+        }
+    }
+
     func loadCodexModels() async {
         do {
             availableCodexModels = try await modelClient.baseModels(port: config.port)
@@ -316,10 +330,14 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
-    private func persistConfig() throws {
-        try automaticShellInstallService.apply(config: config)
-        try configStore.save(config)
-        cards = ProfileCard.makeDefaultCards(config: config)
+    private func saveConfig(_ updatedConfig: AppConfig, validateShellFunctions: Bool = false) throws {
+        if validateShellFunctions {
+            _ = try ShellFunctionRenderer(config: updatedConfig, helperCommand: "/usr/bin/true").render()
+        }
+        try automaticShellInstallService.apply(config: updatedConfig)
+        try configStore.save(updatedConfig)
+        config = updatedConfig
+        cards = ProfileCard.makeDefaultCards(config: updatedConfig)
         rebuildOptionRows()
         rebuildProviderRows(claudeStatus: nil, codexStatus: nil)
     }

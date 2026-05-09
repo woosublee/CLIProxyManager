@@ -104,8 +104,8 @@ showMenuBarIcon: true
 - [ ] **Step 2: Run tests to verify failure**
 
 ```bash
-swift test --package-path "/Users/woosublee/Documents/dev/CLIProxyManager" --filter AppConfigTests
-swift test --package-path "/Users/woosublee/Documents/dev/CLIProxyManager" --filter AppConfigStoreTests
+swift test --package-path "${REPO_ROOT:-.}" --filter AppConfigTests
+swift test --package-path "${REPO_ROOT:-.}" --filter AppConfigStoreTests
 ```
 
 Expected: FAIL because fields do not exist.
@@ -141,8 +141,8 @@ showMenuBarIcon: true
 - [ ] **Step 5: Verify**
 
 ```bash
-swift test --package-path "/Users/woosublee/Documents/dev/CLIProxyManager" --filter AppConfigTests
-swift test --package-path "/Users/woosublee/Documents/dev/CLIProxyManager" --filter AppConfigStoreTests
+swift test --package-path "${REPO_ROOT:-.}" --filter AppConfigTests
+swift test --package-path "${REPO_ROOT:-.}" --filter AppConfigStoreTests
 ```
 
 Expected: PASS.
@@ -186,7 +186,7 @@ Expected: config saves and automatic shell install is invoked.
 - [ ] **Step 2: Run tests to verify failure**
 
 ```bash
-swift test --package-path "/Users/woosublee/Documents/dev/CLIProxyManager" --filter ProviderSettingsViewModelTests
+swift test --package-path "${REPO_ROOT:-.}" --filter ProviderSettingsViewModelTests
 ```
 
 Expected: FAIL because provider state/actions do not exist.
@@ -257,8 +257,8 @@ If introducing `PermissionMode` is too large, keep using existing `includeDanger
 - [ ] **Step 6: Verify**
 
 ```bash
-swift test --package-path "/Users/woosublee/Documents/dev/CLIProxyManager" --filter ProviderSettingsViewModelTests
-swift test --package-path "/Users/woosublee/Documents/dev/CLIProxyManager" --filter DashboardViewModelRefreshTests
+swift test --package-path "${REPO_ROOT:-.}" --filter ProviderSettingsViewModelTests
+swift test --package-path "${REPO_ROOT:-.}" --filter DashboardViewModelRefreshTests
 ```
 
 Expected: PASS.
@@ -284,7 +284,7 @@ Tests:
 - [ ] **Step 2: Run tests to verify failure**
 
 ```bash
-swift test --package-path "/Users/woosublee/Documents/dev/CLIProxyManager" --filter AutomaticShellInstallServiceTests
+swift test --package-path "${REPO_ROOT:-.}" --filter AutomaticShellInstallServiceTests
 ```
 
 Expected: FAIL because service does not exist.
@@ -324,8 +324,8 @@ After every provider/general setting save, call `automaticShellInstallService.ap
 - [ ] **Step 5: Verify**
 
 ```bash
-swift test --package-path "/Users/woosublee/Documents/dev/CLIProxyManager" --filter AutomaticShellInstallServiceTests
-swift test --package-path "/Users/woosublee/Documents/dev/CLIProxyManager" --filter ProviderSettingsViewModelTests
+swift test --package-path "${REPO_ROOT:-.}" --filter AutomaticShellInstallServiceTests
+swift test --package-path "${REPO_ROOT:-.}" --filter ProviderSettingsViewModelTests
 ```
 
 Expected: PASS.
@@ -394,7 +394,7 @@ Use `SettingsView()` as main window content. Remove visible `Dashboard` naming.
 - [ ] **Step 6: Build**
 
 ```bash
-swift build --package-path "/Users/woosublee/Documents/dev/CLIProxyManager" --product CLIProxyManager
+swift build --package-path "${REPO_ROOT:-.}" --product CLIProxyManager
 ```
 
 Expected: PASS.
@@ -437,7 +437,7 @@ Add commands so `Command + ,` opens the Settings window.
 - [ ] **Step 4: Build**
 
 ```bash
-swift build --package-path "/Users/woosublee/Documents/dev/CLIProxyManager" --product CLIProxyManager
+swift build --package-path "${REPO_ROOT:-.}" --product CLIProxyManager
 ```
 
 Expected: PASS.
@@ -482,8 +482,8 @@ Validate at least one of Dock/menu bar is visible.
 - [ ] **Step 5: Verify**
 
 ```bash
-swift test --package-path "/Users/woosublee/Documents/dev/CLIProxyManager" --filter AppAppearanceServiceTests
-swift build --package-path "/Users/woosublee/Documents/dev/CLIProxyManager" --product CLIProxyManager
+swift test --package-path "${REPO_ROOT:-.}" --filter AppAppearanceServiceTests
+swift build --package-path "${REPO_ROOT:-.}" --product CLIProxyManager
 ```
 
 Expected: PASS.
@@ -539,7 +539,7 @@ Run app and check:
 - [ ] **Step 1: Run full tests**
 
 ```bash
-swift test --package-path "/Users/woosublee/Documents/dev/CLIProxyManager"
+swift test --package-path "${REPO_ROOT:-.}"
 ```
 
 Expected: PASS.
@@ -547,7 +547,7 @@ Expected: PASS.
 - [ ] **Step 2: Build app**
 
 ```bash
-swift build --package-path "/Users/woosublee/Documents/dev/CLIProxyManager" --product CLIProxyManager
+swift build --package-path "${REPO_ROOT:-.}" --product CLIProxyManager
 ```
 
 Expected: PASS.
@@ -555,7 +555,7 @@ Expected: PASS.
 - [ ] **Step 3: Launch app**
 
 ```bash
-"/Users/woosublee/Documents/dev/CLIProxyManager/.build/debug/CLIProxyManager"
+"${REPO_ROOT:-.}/.build/debug/CLIProxyManager"
 ```
 
 Manual checks:

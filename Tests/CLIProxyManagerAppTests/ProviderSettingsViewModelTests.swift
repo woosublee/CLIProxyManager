@@ -82,6 +82,27 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.functionName, "mycodex")
     }
 
+    func testSaveCodexSettingsKeepsCurrentConfigWhenPersistenceFails() {
+        let store = StubConfigStore(config: .default, saveError: NSError(domain: "test", code: 1))
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+        let codex = AppConfig.Codex(
+            opus: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .xhigh, contextWindow: .auto),
+            sonnet: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .medium, contextWindow: .auto),
+            haiku: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .low, contextWindow: .auto)
+        )
+
+        XCTAssertThrowsError(try viewModel.saveCodexSettings(functionName: "mycodex", codex: codex, dangerousPermissionsEnabled: true))
+
+        XCTAssertEqual(viewModel.config, .default)
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.functionName, "ccmcodex")
+        XCTAssertEqual(store.savedConfigs, [])
+    }
+
     private func connectedClaudeConnector() -> ClaudeConnector {
         ClaudeConnector(runner: StubProcessRunner(results: Array(repeating: [
             ProcessResult(exitCode: 0, stdout: "/usr/local/bin/claude\n", stderr: ""),
@@ -93,16 +114,21 @@ final class ProviderSettingsViewModelTests: XCTestCase {
 
 private final class StubConfigStore: AppConfigStoring, @unchecked Sendable {
     private let lock = NSLock()
+    private let saveError: Error?
     private(set) var savedConfigs: [AppConfig] = []
     var config: AppConfig
 
-    init(config: AppConfig) {
+    init(config: AppConfig, saveError: Error? = nil) {
         self.config = config
+        self.saveError = saveError
     }
 
     func load() throws -> AppConfig { config }
 
     func save(_ config: AppConfig) throws {
+        if let saveError {
+            throw saveError
+        }
         lock.withLock { savedConfigs.append(config) }
         self.config = config
     }

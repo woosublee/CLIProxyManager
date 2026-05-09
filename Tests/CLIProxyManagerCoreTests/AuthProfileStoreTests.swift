@@ -6,7 +6,7 @@ final class AuthProfileStoreTests: XCTestCase {
         let sandbox = try makeSandbox()
         let authDirectory = sandbox.appendingPathComponent("auth", isDirectory: true)
         try FileManager.default.createDirectory(at: authDirectory, withIntermediateDirectories: true)
-        try Data(#"{"type":"claude","email":"woosub@classting.com","expired":"2026-05-09T11:24:01+09:00","access_token":"secret"}"#.utf8)
+        try Data(#"{"type":"claude","email":"claude@example.com","expired":"2026-05-09T11:24:01+09:00","access_token":"secret"}"#.utf8)
             .write(to: authDirectory.appendingPathComponent("claude.json"))
         try Data(#"{"type":"codex","email":"codex@example.com","account_id":"acct_123","disabled":false,"refresh_token":"secret"}"#.utf8)
             .write(to: authDirectory.appendingPathComponent("codex.json"))
@@ -15,7 +15,7 @@ final class AuthProfileStoreTests: XCTestCase {
         let profiles = try store.profiles()
 
         XCTAssertEqual(profiles, [
-            AuthProfile(fileName: "claude.json", type: .claude, email: "woosub@classting.com", accountID: nil, expired: "2026-05-09T11:24:01+09:00", disabled: false),
+            AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: "2026-05-09T11:24:01+09:00", disabled: false),
             AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: nil, disabled: false)
         ])
     }
