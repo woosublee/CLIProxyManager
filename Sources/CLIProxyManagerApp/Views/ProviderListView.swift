@@ -59,6 +59,9 @@ struct ProviderListView: View {
                 connectionDetail: row?.connectionDetail ?? "",
                 isConnected: row?.isConnected ?? false,
                 onDisconnect: { viewModel.disconnectProvider(.claude) },
+                checkCommandName: { functionName in
+                    await viewModel.commandNameAvailability(provider: .claude, functionName: functionName)
+                },
                 save: { functionName, nickname, dangerousPermissionsEnabled in
                     try viewModel.saveClaudeOAuthSettings(
                         functionName: functionName,
@@ -76,6 +79,9 @@ struct ProviderListView: View {
                 availableModels: viewModel.availableCodexModels,
                 refreshModels: { Task { await viewModel.loadCodexModels() } },
                 onDisconnect: { viewModel.disconnectProvider(.codex) },
+                checkCommandName: { functionName in
+                    await viewModel.commandNameAvailability(provider: .codex, functionName: functionName)
+                },
                 save: { functionName, nickname, codex, dangerousPermissionsEnabled in
                     try viewModel.saveCodexSettings(
                         functionName: functionName,

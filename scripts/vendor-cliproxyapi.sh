@@ -121,8 +121,8 @@ vendor_release() {
   local tag="v$version"
   local asset="CLIProxyAPI_${version}_darwin_aarch64.tar.gz"
   local tmpdir
-  tmpdir="$(mktemp -d /tmp/cliproxyapi-${version}.XXXXXX)"
-  trap "rm -rf '$tmpdir'" EXIT
+  tmpdir="$(mktemp -d "/tmp/cliproxyapi-${version}.XXXXXX")"
+  trap 'rm -rf "$tmpdir"' EXIT
 
   gh release download "$tag" --repo "$UPSTREAM_REPOSITORY" --dir "$tmpdir" --pattern "$asset" --pattern checksums.txt
   (cd "$tmpdir" && shasum -a 256 -c --ignore-missing checksums.txt && tar -xzf "$asset")
@@ -144,6 +144,11 @@ fi
 
 if [[ "${1:-}" == "--local" ]]; then
   source_binary="${2:-}"
+  if [[ -z "$source_binary" ]]; then
+    echo "Error: --local requires a binary path argument." >&2
+    usage >&2
+    exit 1
+  fi
   source_label="$source_binary"
   shift 2
   while [[ $# -gt 0 ]]; do
@@ -159,8 +164,8 @@ if [[ "${1:-}" == "--local" ]]; then
         ;;
     esac
   done
-  if [[ -z "$source_binary" || ! -f "$source_binary" ]]; then
-    echo "cliproxyapi binary not found. Pass the binary path explicitly." >&2
+  if [[ ! -f "$source_binary" ]]; then
+    echo "cliproxyapi binary not found at: $source_binary" >&2
     exit 1
   fi
   vendor_binary "$source_binary" "$source_label" "" "" ""

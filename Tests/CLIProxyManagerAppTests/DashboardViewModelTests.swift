@@ -205,7 +205,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertTrue(installer.installedScript?.contains("customcodex() {") == true)
     }
 
-    func testInstallShellFunctionsUsesProvidedHelperCommandForActiveProviders() throws {
+    func testInstallShellFunctionsInstallsActiveProvidersOnly() throws {
         let installer = StubShellInstaller()
         let automaticInstaller = AutomaticShellInstallService(
             installer: installer,
@@ -213,6 +213,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             helperCommand: "/usr/local/bin/cliproxy-manager"
         )
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
             shellInstaller: installer,
             authProfileStore: StubAuthProfileStore(profiles: [
                 AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
@@ -226,6 +227,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         XCTAssertEqual(installer.installedFunctionNames, ["cc"])
         XCTAssertTrue(installer.installedScript?.contains("cc() {") == true)
+        XCTAssertFalse(installer.installedScript?.contains("ccodex() {") == true)
+        XCTAssertFalse(installer.installedScript?.contains("ccapi() {") == true)
     }
 
     func testLoadCodexModelsFetchesBaseModelsFromCurrentPort() async {

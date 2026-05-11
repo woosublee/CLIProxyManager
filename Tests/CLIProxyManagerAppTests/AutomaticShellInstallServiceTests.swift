@@ -15,6 +15,7 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
         _ = DashboardViewModel(
             configStore: StubConfigStore(config: .default),
             shellInstaller: installer,
+            authProfileStore: StubAuthProfileStore(profiles: []),
             automaticShellInstallService: automaticInstaller,
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector()

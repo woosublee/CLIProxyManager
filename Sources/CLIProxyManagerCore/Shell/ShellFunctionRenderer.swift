@@ -1,8 +1,55 @@
 import Foundation
 
-public enum ShellFunctionRendererError: Error, Equatable {
+public enum ShellFunctionRendererError: LocalizedError, Equatable {
+    case duplicateFunctionNames([String])
     case invalidFunctionName(String)
     case invalidPort(Int)
+
+    public var errorDescription: String? {
+        switch self {
+        case .duplicateFunctionNames(let names):
+            let list = names.map { "`\($0)`" }.joined(separator: ", ")
+            return "Command name \(list) is already used by another provider."
+        case .invalidFunctionName(let name):
+            return "Invalid command name `\(name)`. Use lowercase ASCII letters, numbers, and underscores. The first character must be a lowercase letter or underscore."
+        case .invalidPort(let port):
+            return "Invalid port `\(port)`. Use a value from 1 to 65535."
+        }
+    }
+}
+
+public enum ShellCommandNameValidator {
+    public static func validate(_ functionNames: [String]) throws {
+        try functionNames.forEach(validate)
+
+        var seen: Set<String> = []
+        var duplicates: [String] = []
+        for functionName in functionNames {
+            if seen.contains(functionName), !duplicates.contains(functionName) {
+                duplicates.append(functionName)
+            }
+            seen.insert(functionName)
+        }
+
+        guard duplicates.isEmpty else {
+            throw ShellFunctionRendererError.duplicateFunctionNames(duplicates)
+        }
+    }
+
+    public static func validate(_ functionName: String) throws {
+        guard let firstCharacter = functionName.first else {
+            throw ShellFunctionRendererError.invalidFunctionName(functionName)
+        }
+
+        let firstCharacterIsValid = firstCharacter.isASCII && (firstCharacter.isLowercase || firstCharacter == "_")
+        let remainingCharactersAreValid = functionName.dropFirst().allSatisfy { character in
+            character.isASCII && (character.isLowercase || character.isNumber || character == "_")
+        }
+
+        guard firstCharacterIsValid && remainingCharactersAreValid else {
+            throw ShellFunctionRendererError.invalidFunctionName(functionName)
+        }
+    }
 }
 
 public struct ShellFunctionRenderer: Sendable {
@@ -39,9 +86,11 @@ public struct ShellFunctionRenderer: Sendable {
     }
 
     public func render() throws -> String {
-        try validate(functionName: config.commands.cc)
-        try validate(functionName: config.commands.ccapi)
-        try validate(functionName: config.commands.ccodex)
+        try ShellCommandNameValidator.validate([
+            config.commands.cc,
+            config.commands.ccapi,
+            config.commands.ccodex
+        ])
         try validate(port: config.port)
 
         let claudeCommand = config.includeDangerouslySkipPermissions
@@ -121,18 +170,7 @@ public struct ShellFunctionRenderer: Sendable {
     }
 
     private func validate(functionName: String) throws {
-        guard let firstCharacter = functionName.first else {
-            throw ShellFunctionRendererError.invalidFunctionName(functionName)
-        }
-
-        let firstCharacterIsValid = firstCharacter.isASCII && (firstCharacter.isLowercase || firstCharacter == "_")
-        let remainingCharactersAreValid = functionName.dropFirst().allSatisfy { character in
-            character.isASCII && (character.isLowercase || character.isNumber || character == "_")
-        }
-
-        guard firstCharacterIsValid && remainingCharactersAreValid else {
-            throw ShellFunctionRendererError.invalidFunctionName(functionName)
-        }
+        try ShellCommandNameValidator.validate(functionName)
     }
 
     private func validate(port: Int) throws {

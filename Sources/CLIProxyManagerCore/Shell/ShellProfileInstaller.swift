@@ -38,7 +38,7 @@ public struct ShellProfileInstaller: @unchecked Sendable {
         try install(functionScript: functionScript, functionNames: [])
     }
 
-    public func install(functionScript: String, functionNames: [String]) throws {
+    public func install(functionScript: String, functionNames _: [String]) throws {
         try fileManager.createDirectory(at: paths.rootDirectory, withIntermediateDirectories: true)
 
         let currentProfile = try readProfileIfPresent()

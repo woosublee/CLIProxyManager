@@ -136,6 +136,37 @@ final class ShellFunctionRendererTests: XCTestCase {
         XCTAssertTrue(script.contains("claude --dangerously-skip-permissions \"$@\""))
     }
 
+    func testCommandNameValidatorAcceptsAllowedShellFunctionNames() throws {
+        for name in ["cc", "c2", "cc_2", "_cc", "a"] {
+            try ShellCommandNameValidator.validate(name)
+        }
+    }
+
+    func testCommandNameValidatorRejectsUnsupportedShellFunctionNames() {
+        let invalidNames = ["", "//", "cc/foo", "cc-foo", "2cc", "Cc", "cc foo", "cc.foo", "cc$foo", "한글", "éclair"]
+
+        for name in invalidNames {
+            XCTAssertThrowsError(try ShellCommandNameValidator.validate(name)) { error in
+                XCTAssertEqual(error as? ShellFunctionRendererError, .invalidFunctionName(name))
+            }
+        }
+    }
+
+    func testCommandNameValidatorRejectsDuplicateShellFunctionNames() {
+        XCTAssertThrowsError(try ShellCommandNameValidator.validate(["cc", "ccodex", "cc"])) { error in
+            XCTAssertEqual(error as? ShellFunctionRendererError, .duplicateFunctionNames(["cc"]))
+        }
+    }
+
+    func testInvalidCommandNameLocalizedDescriptionExplainsAllowedCharacters() {
+        let error = ShellFunctionRendererError.invalidFunctionName("//")
+
+        XCTAssertEqual(
+            error.localizedDescription,
+            "Invalid command name `//`. Use lowercase ASCII letters, numbers, and underscores. The first character must be a lowercase letter or underscore."
+        )
+    }
+
     func testInvalidCommandNameThrows() {
         var config = AppConfig.default
         config.commands.cc = "bad;rm"

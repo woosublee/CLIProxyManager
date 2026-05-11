@@ -45,6 +45,43 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.providerRows.first?.functionName, "myclaude")
     }
 
+
+    func testSaveClaudeFunctionNameRejectsInvalidShellName() throws {
+        let store = StubConfigStore(config: .default)
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        XCTAssertThrowsError(try viewModel.saveClaudeFunctionName("//")) { error in
+            XCTAssertEqual(error as? ShellFunctionRendererError, .invalidFunctionName("//"))
+        }
+
+        XCTAssertEqual(store.savedConfigs, [])
+        XCTAssertEqual(viewModel.config.commands.cc, "cc")
+    }
+
+    func testSaveClaudeOAuthSettingsRejectsInvalidShellName() throws {
+        let store = StubConfigStore(config: .default)
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        XCTAssertThrowsError(try viewModel.saveClaudeOAuthSettings(functionName: "//", nickname: "", dangerousPermissionsEnabled: false)) { error in
+            XCTAssertEqual(error as? ShellFunctionRendererError, .invalidFunctionName("//"))
+        }
+
+        XCTAssertEqual(store.savedConfigs, [])
+        XCTAssertEqual(viewModel.config.commands.cc, "cc")
+    }
+
     func testSaveClaudeOAuthSettingsValidatesActiveFunctionNameBeforePersisting() throws {
         let store = StubConfigStore(config: .default)
         let installer = StubShellInstaller(validationError: ShellProfileInstallerError.functionNameConflicts(["cc"]))
@@ -60,7 +97,86 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             XCTAssertEqual(error as? ShellProfileInstallerError, .functionNameConflicts(["cc"]))
         }
 
-        XCTAssertEqual(installer.validatedFunctionNames, [["cc"]])
+        XCTAssertEqual(installer.validatedFunctionNames, [["cc"], ["cc"]])
+        XCTAssertEqual(store.savedConfigs, [])
+    }
+
+    func testCommandNameAvailabilityReportsValidNamesAsAvailable() async {
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile(), codexProfile()]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        let availability = await viewModel.commandNameAvailability(provider: .claude, functionName: "myclaude")
+
+        XCTAssertEqual(availability, .available)
+    }
+
+    func testCommandNameAvailabilityReportsInvalidNames() async {
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        let availability = await viewModel.commandNameAvailability(provider: .claude, functionName: "//")
+
+        XCTAssertEqual(availability, .unavailable("Invalid command name `//`. Use lowercase ASCII letters, numbers, and underscores. The first character must be a lowercase letter or underscore."))
+    }
+
+    func testCommandNameAvailabilityReportsZshrcConflicts() async {
+        let installer = StubShellInstaller(validationError: ShellProfileInstallerError.functionNameConflicts(["myclaude"]))
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: installer,
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        let availability = await viewModel.commandNameAvailability(provider: .claude, functionName: "myclaude")
+
+        XCTAssertEqual(installer.validatedFunctionNames, [["cc"], ["myclaude"]])
+        XCTAssertEqual(availability, .unavailable("Cannot install shell functions: `myclaude` is already defined as an alias or function in ~/.zshrc. Pick a different command name in account settings, or remove the existing definition from your shell profile."))
+    }
+
+    func testCommandNameAvailabilityReportsDuplicateActiveProviderNames() async {
+        var config = AppConfig.default
+        config.commands.ccodex = "same"
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile(), codexProfile()]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        let availability = await viewModel.commandNameAvailability(provider: .claude, functionName: "same")
+
+        XCTAssertEqual(availability, .unavailable("Command name `same` is already used by another provider."))
+    }
+
+    func testSaveClaudeOAuthSettingsRejectsDuplicateActiveProviderNames() throws {
+        var config = AppConfig.default
+        config.commands.ccodex = "same"
+        let store = StubConfigStore(config: config)
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile(), codexProfile()]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        XCTAssertThrowsError(try viewModel.saveClaudeOAuthSettings(functionName: "same", nickname: "", dangerousPermissionsEnabled: false)) { error in
+            XCTAssertEqual(error as? ShellFunctionRendererError, .duplicateFunctionNames(["same"]))
+        }
+
         XCTAssertEqual(store.savedConfigs, [])
     }
 

@@ -55,6 +55,11 @@ struct DashboardOptionRow: Identifiable, Equatable {
     let detail: String
 }
 
+enum CommandNameAvailability: Equatable, Sendable {
+    case available
+    case unavailable(String)
+}
+
 @MainActor
 final class DashboardViewModel: ObservableObject {
     @Published var cards: [ProfileCard]
@@ -345,6 +350,26 @@ final class DashboardViewModel: ObservableObject {
         settingsMessage = "Claude API profile 추가는 이번 단계의 기본 목록에서 숨겨져 있습니다."
     }
 
+    func commandNameAvailability(provider: ProviderRowState.ID, functionName: String) async -> CommandNameAvailability {
+        let trimmedName = functionName.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            try ShellCommandNameValidator.validate(trimmedName)
+            var updatedConfig = config
+            switch provider {
+            case .claude:
+                updatedConfig.commands.cc = trimmedName
+            case .codex:
+                updatedConfig.commands.ccodex = trimmedName
+            }
+            let activeNames = activeFunctionNames(in: updatedConfig)
+            try ShellCommandNameValidator.validate(activeNames)
+            try shellInstaller.validateFunctionNames(activeNames)
+            return .available
+        } catch {
+            return .unavailable(error.localizedDescription)
+        }
+    }
+
     func saveClaudeFunctionName(_ functionName: String) throws {
         var commands = config.commands
         commands.cc = functionName
@@ -465,7 +490,9 @@ final class DashboardViewModel: ObservableObject {
     private func saveConfig(_ updatedConfig: AppConfig, validateShellFunctions: Bool = false) throws {
         if validateShellFunctions {
             _ = try ShellFunctionRenderer(config: updatedConfig, helperCommand: "/usr/bin/true").render()
-            try shellInstaller.validateFunctionNames(activeFunctionNames(in: updatedConfig))
+            let activeNames = activeFunctionNames(in: updatedConfig)
+            try ShellCommandNameValidator.validate(activeNames)
+            try shellInstaller.validateFunctionNames(activeNames)
         }
         try automaticShellInstallService.apply(config: updatedConfig, enabledFunctions: enabledShellFunctions())
         try configStore.save(updatedConfig)
@@ -484,6 +511,9 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func applyShellInstallForCurrentProfiles() throws {
+        let activeNames = activeFunctionNames(in: config)
+        try ShellCommandNameValidator.validate(activeNames)
+        try shellInstaller.validateFunctionNames(activeNames)
         try automaticShellInstallService.apply(config: config, enabledFunctions: enabledShellFunctions())
     }
 
