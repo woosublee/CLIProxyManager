@@ -180,6 +180,38 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(store.savedConfigs, [])
     }
 
+    func testSaveClaudeOAuthSettingsNormalizesCommandNameBeforePersisting() throws {
+        let store = StubConfigStore(config: .default)
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        try viewModel.saveClaudeOAuthSettings(functionName: " myclaude ", nickname: "", dangerousPermissionsEnabled: false)
+
+        XCTAssertEqual(store.savedConfigs.last?.commands.cc, "myclaude")
+        XCTAssertEqual(viewModel.config.commands.cc, "myclaude")
+    }
+
+    func testSaveCodexSettingsNormalizesCommandNameBeforePersisting() throws {
+        let store = StubConfigStore(config: .default)
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [codexProfile()]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        try viewModel.saveCodexSettings(functionName: " mycodex ", nickname: "", codex: testCodex(), dangerousPermissionsEnabled: false)
+
+        XCTAssertEqual(store.savedConfigs.last?.commands.ccodex, "mycodex")
+        XCTAssertEqual(viewModel.config.commands.ccodex, "mycodex")
+    }
+
     func testSaveClaudeOAuthSettingsPersistsFunctionNameAndPermission() throws {
         let store = StubConfigStore(config: .default)
         let viewModel = DashboardViewModel(
@@ -234,6 +266,52 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(store.savedConfigs, [])
     }
 
+    func testRemoveProviderRewritesShellFunctionsWithoutDeletedProvider() {
+        let installer = StubShellInstaller()
+        let authStore = StubAuthProfileStore(profiles: [claudeProfile(), codexProfile()])
+        _ = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: installer,
+            authProfileStore: authStore,
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+        installer.reset()
+
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: installer,
+            authProfileStore: authStore,
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+        installer.reset()
+
+        viewModel.removeProvider(.claude)
+
+        XCTAssertEqual(installer.installedFunctionNames, ["ccodex"])
+        XCTAssertFalse(installer.installedScript?.contains("cc() {") == true)
+        XCTAssertTrue(installer.installedScript?.contains("ccodex() {") == true)
+    }
+
+    func testDisconnectProviderDoesNotRewriteShellFunctions() {
+        let installer = StubShellInstaller()
+        let authStore = StubAuthProfileStore(profiles: [claudeProfile(), codexProfile()])
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: installer,
+            authProfileStore: authStore,
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+        installer.reset()
+
+        viewModel.disconnectProvider(.claude)
+
+        XCTAssertNil(installer.installedScript)
+        XCTAssertEqual(installer.installedFunctionNames, [])
+    }
+
     private func testCodex() -> AppConfig.Codex {
         AppConfig.Codex(
             opus: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .xhigh, contextWindow: .auto),
@@ -283,31 +361,56 @@ private final class StubConfigStore: AppConfigStoring, @unchecked Sendable {
 
 private final class StubShellInstaller: ShellFunctionInstalling, @unchecked Sendable {
     private let validationError: Error?
+    private(set) var installedScript: String?
+    private(set) var installedFunctionNames: [String] = []
     private(set) var validatedFunctionNames: [[String]] = []
 
     init(validationError: Error? = nil) {
         self.validationError = validationError
     }
 
-    func install(functionScript: String, functionNames: [String]) throws {}
+    func install(functionScript: String, functionNames: [String]) throws {
+        installedScript = functionScript
+        installedFunctionNames = functionNames
+    }
+
     func isInstalled() -> Bool { false }
 
     func validateFunctionNames(_ names: [String]) throws {
         validatedFunctionNames.append(names)
         if let validationError { throw validationError }
     }
+
+    func reset() {
+        installedScript = nil
+        installedFunctionNames = []
+        validatedFunctionNames = []
+    }
 }
 
 private final class StubAuthProfileStore: AuthProfileManaging, @unchecked Sendable {
-    let profilesValue: [AuthProfile]
+    private var profilesValue: [AuthProfile]
 
     init(profiles: [AuthProfile]) {
         profilesValue = profiles
     }
 
     func profiles() throws -> [AuthProfile] { profilesValue }
-    func setDisabled(_ disabled: Bool, for type: AuthProfileType) throws -> Int { 0 }
-    func delete(for type: AuthProfileType) throws -> Int { 0 }
+
+    func setDisabled(_ disabled: Bool, for type: AuthProfileType) throws -> Int {
+        let matchingCount = profilesValue.filter { $0.type == type }.count
+        profilesValue = profilesValue.map { profile in
+            guard profile.type == type else { return profile }
+            return AuthProfile(fileName: profile.fileName, type: profile.type, email: profile.email, accountID: profile.accountID, expired: profile.expired, disabled: disabled)
+        }
+        return matchingCount
+    }
+
+    func delete(for type: AuthProfileType) throws -> Int {
+        let matchingCount = profilesValue.filter { $0.type == type }.count
+        profilesValue.removeAll { $0.type == type }
+        return matchingCount
+    }
 }
 
 private final class StubProxyService: ProxyServiceControlling, @unchecked Sendable {

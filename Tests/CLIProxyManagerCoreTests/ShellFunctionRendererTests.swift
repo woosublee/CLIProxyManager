@@ -179,17 +179,34 @@ final class ShellFunctionRendererTests: XCTestCase {
         }
     }
 
-    func testInvalidClaudeAPICommandNameThrowsEvenWhenFunctionIsNotRendered() {
+    func testInvalidDisabledClaudeAPICommandNameDoesNotBlockRendering() throws {
         var config = AppConfig.default
         config.commands.ccapi = "bad;rm"
 
-        XCTAssertThrowsError(try ShellFunctionRenderer(
+        let script = try ShellFunctionRenderer(
             config: config,
             helperCommand: "/usr/local/bin/cliproxy-manager",
             includeClaudeAPI: false
-        ).render()) { error in
-            XCTAssertEqual(error as? ShellFunctionRendererError, .invalidFunctionName("bad;rm"))
-        }
+        ).render()
+
+        XCTAssertTrue(script.contains("cc() {"))
+        XCTAssertTrue(script.contains("ccodex() {"))
+        XCTAssertFalse(script.contains("ccapi() {"))
+    }
+
+    func testInvalidDisabledProviderCommandNameDoesNotBlockRendering() throws {
+        var config = AppConfig.default
+        config.commands.ccodex = "bad;rm"
+
+        let script = try ShellFunctionRenderer(
+            config: config,
+            helperCommand: "/usr/local/bin/cliproxy-manager",
+            enabledFunctions: ShellFunctionRenderer.EnabledFunctions(claudeOAuth: true, codex: false, claudeAPI: false)
+        ).render()
+
+        XCTAssertTrue(script.contains("cc() {"))
+        XCTAssertFalse(script.contains("ccodex() {"))
+        XCTAssertFalse(script.contains("ccapi() {"))
     }
 
     func testInvalidPortsThrow() {

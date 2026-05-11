@@ -86,11 +86,7 @@ public struct ShellFunctionRenderer: Sendable {
     }
 
     public func render() throws -> String {
-        try ShellCommandNameValidator.validate([
-            config.commands.cc,
-            config.commands.ccapi,
-            config.commands.ccodex
-        ])
+        try ShellCommandNameValidator.validate(functionNamesToRender())
         try validate(port: config.port)
 
         let claudeCommand = config.includeDangerouslySkipPermissions
@@ -167,6 +163,14 @@ public struct ShellFunctionRenderer: Sendable {
         }
 
         return script
+    }
+
+    private func functionNamesToRender() -> [String] {
+        var names: [String] = []
+        if enabledFunctions.claudeOAuth { names.append(config.commands.cc) }
+        if enabledFunctions.codex { names.append(config.commands.ccodex) }
+        if enabledFunctions.claudeAPI { names.append(config.commands.ccapi) }
+        return names
     }
 
     private func validate(functionName: String) throws {
