@@ -100,6 +100,7 @@ final class DashboardViewModel: ObservableObject {
     private let settingsMessageAutoClearDelayNanoseconds: UInt64
     private var authProfiles: [AuthProfile] = []
     private var oauthLoginTask: Task<Void, Never>?
+    private var oauthLoginSessionID: UUID?
     private var settingsMessageAutoClearTask: Task<Void, Never>?
     private var lastClaudeStatus: DiagnosticStatus?
     private var lastCodexStatus: DiagnosticStatus?
@@ -283,54 +284,83 @@ final class DashboardViewModel: ObservableObject {
 
     func startOAuthLogin(_ provider: ProviderRowState.ID) {
         guard oauthLoginTask == nil else { return }
+        let sessionID = UUID()
+        oauthLoginSessionID = sessionID
         completedOAuthLoginProvider = nil
         activeOAuthLoginProvider = provider
         isProfileLoginInProgress = true
         oauthLoginTask = Task { [weak self] in
-            await self?.connectProvider(provider)
+            await self?.runOAuthLogin(provider, sessionID: sessionID)
         }
     }
 
     func cancelOAuthLogin() {
+        let cancelledProvider = activeOAuthLoginProvider
         oauthLoginTask?.cancel()
         oauthLoginTask = nil
+        oauthLoginSessionID = nil
         activeOAuthLoginProvider = nil
         completedOAuthLoginProvider = nil
         isProfileLoginInProgress = false
+
+        if let cancelledProvider {
+            settingsMessage = "\(oauthProviderName(cancelledProvider)) 로그인을 취소했습니다."
+            refreshProfiles()
+        }
     }
 
     func connectProvider(_ provider: ProviderRowState.ID) async {
-        guard isProfileLoginInProgress == false || activeOAuthLoginProvider == provider else { return }
-        isProfileLoginInProgress = true
+        guard oauthLoginTask == nil, isProfileLoginInProgress == false else { return }
+        let sessionID = UUID()
+        oauthLoginSessionID = sessionID
+        completedOAuthLoginProvider = nil
         activeOAuthLoginProvider = provider
+        isProfileLoginInProgress = true
+        await runOAuthLogin(provider, sessionID: sessionID)
+    }
+
+    private func oauthProviderName(_ provider: ProviderRowState.ID) -> String {
+        switch provider {
+        case .claude:
+            "Claude OAuth"
+        case .codex:
+            "Codex OAuth"
+        }
+    }
+
+    private func runOAuthLogin(_ provider: ProviderRowState.ID, sessionID: UUID) async {
         defer {
-            isProfileLoginInProgress = false
-            activeOAuthLoginProvider = nil
-            oauthLoginTask = nil
+            if oauthLoginSessionID == sessionID {
+                isProfileLoginInProgress = false
+                activeOAuthLoginProvider = nil
+                oauthLoginTask = nil
+                oauthLoginSessionID = nil
+            }
         }
 
         let loginProvider: OAuthLoginProvider
-        let providerName: String
         switch provider {
         case .claude:
             loginProvider = .claude
-            providerName = "Claude OAuth"
         case .codex:
             loginProvider = .codex
-            providerName = "Codex OAuth"
         }
+        let providerName = oauthProviderName(provider)
 
         do {
             try await oauthLoginService.login(provider: loginProvider, port: config.port)
             try Task.checkCancellation()
+            guard oauthLoginSessionID == sessionID else { return }
             _ = try authProfileStore.setDisabled(false, for: loginProvider.authProfileType)
             refreshProfiles()
             completedOAuthLoginProvider = provider
             settingsMessage = "\(providerName) 연결 정보를 업데이트했습니다."
         } catch is CancellationError {
+            guard oauthLoginSessionID == sessionID else { return }
             settingsMessage = "\(providerName) 로그인을 취소했습니다."
             refreshProfiles()
         } catch {
+            guard oauthLoginSessionID == sessionID else { return }
             settingsMessage = "\(providerName) 로그인에 실패했습니다: \(error.localizedDescription)"
             refreshProfiles()
         }

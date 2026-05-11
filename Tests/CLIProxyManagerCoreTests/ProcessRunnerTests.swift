@@ -2,6 +2,10 @@ import XCTest
 @testable import CLIProxyManagerCore
 
 final class ProcessRunnerTests: XCTestCase {
+    func testForceTerminationGracePeriodAllowsProcessCleanup() {
+        XCTAssertEqual(ProcessRunner.forceTerminationGracePeriod, 0.5)
+    }
+
     func testDrainsLargeStdoutAndStderr() async throws {
         let runner = ProcessRunner(timeout: 5)
         let program = "BEGIN { for (i = 0; i < 100000; i++) printf \"x\"; for (i = 0; i < 100000; i++) printf \"y\" > \"/dev/stderr\" }"

@@ -77,6 +77,7 @@ struct SettingsToastView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Close")
             .padding(.top, presentation.closeButtonTopPadding)
             .padding(.trailing, presentation.closeButtonTrailingPadding)
         }

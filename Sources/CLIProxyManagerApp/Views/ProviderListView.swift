@@ -37,7 +37,7 @@ struct ProviderListView: View {
     }
 
     private func connect(_ provider: ProviderRowState.ID) {
-        Task { await viewModel.connectProvider(provider) }
+        viewModel.startOAuthLogin(provider)
     }
 
     private func disconnect(_ provider: ProviderRowState.ID) {

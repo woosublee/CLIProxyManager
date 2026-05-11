@@ -274,6 +274,54 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.settingsMessage, "Codex OAuth 로그인을 취소했습니다.")
     }
 
+    func testDirectConnectProviderDoesNotReenterActiveOAuthLoginForSameProvider() async throws {
+        let oauth = SuspendedOAuthLoginService()
+        let viewModel = DashboardViewModel(
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: oauth,
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        viewModel.startOAuthLogin(.claude)
+        await oauth.waitUntilStarted()
+        let duplicateLogin = Task { await viewModel.connectProvider(.claude) }
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        XCTAssertEqual(oauth.invocationCount, 1)
+
+        duplicateLogin.cancel()
+        viewModel.cancelOAuthLogin()
+        oauth.complete()
+        try await Task.sleep(nanoseconds: 50_000_000)
+    }
+
+    func testCancelledOAuthSessionCannotClearNewRetryState() async throws {
+        let oauth = DeferredCancellationOAuthLoginService()
+        let viewModel = DashboardViewModel(
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: oauth,
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        viewModel.startOAuthLogin(.claude)
+        await oauth.waitForInvocationCount(1)
+        viewModel.cancelOAuthLogin()
+        viewModel.startOAuthLogin(.codex)
+        await oauth.waitForInvocationCount(2)
+
+        oauth.releaseInvocation(at: 0)
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        XCTAssertEqual(viewModel.activeOAuthLoginProvider, .codex)
+        XCTAssertTrue(viewModel.isProfileLoginInProgress)
+        XCTAssertNil(viewModel.completedOAuthLoginProvider)
+
+        oauth.releaseInvocation(at: 1)
+        try await Task.sleep(nanoseconds: 50_000_000)
+    }
+
     func testRemoveInitialProviderDeletesAuthWithoutShowingRemovalMessage() {
         let authStore = StubAuthProfileStore(profiles: [
             AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
@@ -794,11 +842,14 @@ private final class SuspendedOAuthLoginService: OAuthLoginStarting, @unchecked S
     private let lock = NSLock()
     private var startedContinuation: CheckedContinuation<Void, Never>?
     private var completionContinuation: CheckedContinuation<Void, Never>?
+    private var invocationCountContinuations: [(Int, CheckedContinuation<Void, Never>)] = []
     private var hasStarted = false
     private var hasCompleted = false
     private var _wasCancelled = false
+    private var _invocationCount = 0
 
     var wasCancelled: Bool { lock.withLock { _wasCancelled } }
+    var invocationCount: Int { lock.withLock { _invocationCount } }
 
     func login(provider: OAuthLoginProvider, port: Int) async throws {
         await markStarted()
@@ -836,6 +887,19 @@ private final class SuspendedOAuthLoginService: OAuthLoginStarting, @unchecked S
         }
     }
 
+    func waitForInvocationCount(_ expectedCount: Int) async {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if _invocationCount >= expectedCount {
+                lock.unlock()
+                continuation.resume()
+            } else {
+                invocationCountContinuations.append((expectedCount, continuation))
+                lock.unlock()
+            }
+        }
+    }
+
     func complete() {
         lock.lock()
         hasCompleted = true
@@ -848,13 +912,82 @@ private final class SuspendedOAuthLoginService: OAuthLoginStarting, @unchecked S
     private func markStarted() async {
         await withCheckedContinuation { continuation in
             lock.lock()
+            _invocationCount += 1
             hasStarted = true
             let waitingContinuation = startedContinuation
             startedContinuation = nil
+            let readyContinuations = invocationCountContinuations.filter { _invocationCount >= $0.0 }.map(\.1)
+            invocationCountContinuations.removeAll { _invocationCount >= $0.0 }
             lock.unlock()
             waitingContinuation?.resume()
+            readyContinuations.forEach { $0.resume() }
             continuation.resume()
         }
+    }
+}
+
+private final class DeferredCancellationOAuthLoginService: OAuthLoginStarting, @unchecked Sendable {
+    private final class Invocation: @unchecked Sendable {
+        let lock = NSLock()
+        var continuation: CheckedContinuation<Void, Never>?
+        var isReleased = false
+    }
+
+    private let lock = NSLock()
+    private var invocations: [Invocation] = []
+    private var waiters: [(Int, CheckedContinuation<Void, Never>)] = []
+
+    func login(provider: OAuthLoginProvider, port: Int) async throws {
+        let invocation = Invocation()
+        record(invocation)
+
+        await withCheckedContinuation { continuation in
+            invocation.lock.lock()
+            if invocation.isReleased {
+                invocation.lock.unlock()
+                continuation.resume()
+            } else {
+                invocation.continuation = continuation
+                invocation.lock.unlock()
+            }
+        }
+        try Task.checkCancellation()
+    }
+
+    func waitForInvocationCount(_ expectedCount: Int) async {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if invocations.count >= expectedCount {
+                lock.unlock()
+                continuation.resume()
+            } else {
+                waiters.append((expectedCount, continuation))
+                lock.unlock()
+            }
+        }
+    }
+
+    private func record(_ invocation: Invocation) {
+        lock.lock()
+        invocations.append(invocation)
+        let count = invocations.count
+        let readyWaiters = waiters.filter { count >= $0.0 }.map(\.1)
+        waiters.removeAll { count >= $0.0 }
+        lock.unlock()
+        readyWaiters.forEach { $0.resume() }
+    }
+
+    func releaseInvocation(at index: Int) {
+        lock.lock()
+        let invocation = invocations[index]
+        lock.unlock()
+
+        invocation.lock.lock()
+        invocation.isReleased = true
+        let continuation = invocation.continuation
+        invocation.continuation = nil
+        invocation.lock.unlock()
+        continuation?.resume()
     }
 }
 

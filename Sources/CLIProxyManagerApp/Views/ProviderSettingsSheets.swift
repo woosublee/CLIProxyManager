@@ -338,6 +338,10 @@ func oauthSettingsDangerousPermissionDefault(config: AppConfig, isInitialSetup: 
     oauthSettingsInitialState(config: config, provider: .claude, isInitialSetup: isInitialSetup).dangerousPermissionsEnabled
 }
 
+func oauthSettingsInitialCodex(config: AppConfig, isInitialSetup: Bool) -> AppConfig.Codex {
+    isInitialSetup ? AppConfig.default.ccodex : config.ccodex
+}
+
 func oauthSettingsShouldBlockInitialDisplay(isInitialSetup: Bool, availability: CommandNameAvailability) -> Bool {
     switch availability {
     case .available:
@@ -524,11 +528,12 @@ struct CodexProviderSettingsSheet: View {
         save: @escaping (String, String, AppConfig.Codex, Bool) throws -> Void
     ) {
         let initialState = oauthSettingsInitialState(config: config, provider: .codex, isInitialSetup: isInitialSetup)
+        let initialCodex = oauthSettingsInitialCodex(config: config, isInitialSetup: isInitialSetup)
         _functionName = State(initialValue: initialState.functionName)
         _nickname = State(initialValue: initialState.nickname)
-        _opus = State(initialValue: config.ccodex.opus)
-        _sonnet = State(initialValue: config.ccodex.sonnet)
-        _haiku = State(initialValue: config.ccodex.haiku)
+        _opus = State(initialValue: initialCodex.opus)
+        _sonnet = State(initialValue: initialCodex.sonnet)
+        _haiku = State(initialValue: initialCodex.haiku)
         _dangerousPermissionsEnabled = State(initialValue: initialState.dangerousPermissionsEnabled)
         self.connectionDetail = connectionDetail
         self.isConnected = isConnected

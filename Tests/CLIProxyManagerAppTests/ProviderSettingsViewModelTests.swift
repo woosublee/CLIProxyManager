@@ -127,6 +127,17 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         ))
     }
 
+    func testInitialCodexSettingsUseDefaultModelRouting() {
+        var config = AppConfig.default
+        config.ccodex = AppConfig.Codex(
+            opus: AppConfig.CodexRole(model: "old-opus", reasoning: .high, contextWindow: .context200k),
+            sonnet: AppConfig.CodexRole(model: "old-sonnet", reasoning: .medium, contextWindow: .context400k),
+            haiku: AppConfig.CodexRole(model: "old-haiku", reasoning: .low, contextWindow: .context1m)
+        )
+
+        XCTAssertEqual(oauthSettingsInitialCodex(config: config, isInitialSetup: true), AppConfig.default.ccodex)
+    }
+
     func testExistingOAuthSettingsUseConfiguredCommandNamesAndNickname() {
         var config = AppConfig.default
         config.commands.cc = "customclaude"

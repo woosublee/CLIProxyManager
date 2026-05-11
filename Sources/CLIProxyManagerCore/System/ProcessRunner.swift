@@ -20,6 +20,8 @@ public protocol ProcessRunning: Sendable {
 }
 
 public struct ProcessRunner: ProcessRunning {
+    public static let forceTerminationGracePeriod: TimeInterval = 0.5
+
     private let timeout: TimeInterval
 
     public init(timeout: TimeInterval = 10) {
@@ -75,7 +77,7 @@ private final class RunningProcess: @unchecked Sendable {
 
     private func terminate(_ targetPID: pid_t) {
         terminateProcessGroup(targetPID, signal: SIGTERM)
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.2) { [weak self] in
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + ProcessRunner.forceTerminationGracePeriod) { [weak self] in
             self?.forceTerminate(targetPID)
         }
     }

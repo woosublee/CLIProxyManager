@@ -60,7 +60,10 @@ struct DashboardView: View {
                     ForEach(viewModel.providerRows.map { DashboardAccountSnapshot(provider: $0) }) { account in
                         ProviderAccountCardView(
                             account: account,
-                            connect: { Task { await viewModel.connectProvider(account.id) } },
+                            connect: {
+                                activeSheet = .addProvider
+                                viewModel.startOAuthLogin(account.id)
+                            },
                             settings: { activeSheet = .providerSettings(account.id, isInitialSetup: false) },
                             disconnect: { viewModel.disconnectProvider(account.id) },
                             remove: { viewModel.removeProvider(account.id) }
@@ -102,17 +105,17 @@ struct DashboardView: View {
                             viewModel.cancelOAuthLogin()
                         }
                     )
-                    .onChange(of: viewModel.activeOAuthLoginProvider) { provider in
-                        guard provider == nil, let connectedProvider = viewModel.completedOAuthLoginProvider else { return }
-                        activeSheet = DashboardSheet.afterOAuthLoginCompletion(connectedProvider)
-                    }
-                    .onDisappear {
-                        if viewModel.activeOAuthLoginProvider != nil {
-                            viewModel.cancelOAuthLogin()
-                        }
-                    }
                 case let .providerSettings(provider, isInitialSetup):
                     providerSettingsSheet(provider, isInitialSetup: isInitialSetup)
+                }
+            }
+            .onChange(of: viewModel.activeOAuthLoginProvider) { provider in
+                guard provider == nil, let connectedProvider = viewModel.completedOAuthLoginProvider else { return }
+                activeSheet = DashboardSheet.afterOAuthLoginCompletion(connectedProvider)
+            }
+            .onDisappear {
+                if viewModel.activeOAuthLoginProvider != nil {
+                    viewModel.cancelOAuthLogin()
                 }
             }
             .settingsToast(message: viewModel.settingsMessage, dismiss: viewModel.clearSettingsMessage)
