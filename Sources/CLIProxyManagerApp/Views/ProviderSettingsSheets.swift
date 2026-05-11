@@ -162,8 +162,25 @@ private struct StyledTextField: View {
     }
 }
 
+private enum CommandNameCheckState: Equatable {
+    case checking
+    case available
+    case unavailable(String)
+
+    var isSaveDisabled: Bool {
+        switch self {
+        case .checking, .unavailable:
+            true
+        case .available:
+            false
+        }
+    }
+}
+
 private struct CommandNameField: View {
     @Binding var value: String
+    let checkState: CommandNameCheckState
+
     var body: some View {
         HStack(spacing: 0) {
             Text("$")
@@ -177,13 +194,12 @@ private struct CommandNameField: View {
                         .frame(width: 0.5),
                     alignment: .trailing
                 )
-            TextField("function-name", text: Binding(
-                get: { value },
-                set: { value = sanitize($0) }
-            ))
-            .textFieldStyle(.plain)
-            .font(.system(size: 12, design: .monospaced))
-            .padding(.horizontal, 9)
+            TextField("function_name", text: $value)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12, design: .monospaced))
+                .padding(.horizontal, 9)
+            checkIndicator
+                .padding(.trailing, 8)
         }
         .frame(height: 28)
         .background(Color.primary.opacity(0.04))
@@ -194,10 +210,22 @@ private struct CommandNameField: View {
         )
     }
 
-    private func sanitize(_ raw: String) -> String {
-        let lowered = raw.lowercased()
-        let allowed = lowered.filter { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
-        return String(allowed)
+    @ViewBuilder
+    private var checkIndicator: some View {
+        switch checkState {
+        case .checking:
+            ProgressView()
+                .controlSize(.small)
+                .frame(width: 14, height: 14)
+        case .available:
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(BrandPalette.statusRunning)
+        case .unavailable:
+            Image(systemName: "xmark.circle.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(BrandPalette.statusError)
+        }
     }
 }
 
@@ -277,6 +305,20 @@ private func accountMeta(connectionDetail: String, providerName: String, isConne
     return AccountMeta(primary: primary, secondary: secondary, isError: !isConnected)
 }
 
+@ViewBuilder
+private func commandNameHelpText(prefix: String, checkState: CommandNameCheckState) -> some View {
+    VStack(alignment: .leading, spacing: 3) {
+        Text("\(prefix) Use lowercase ASCII letters, numbers, and underscores.")
+            .font(.system(size: 11.5))
+            .foregroundStyle(.secondary)
+        if case .unavailable(let message) = checkState {
+            Text(message)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(BrandPalette.statusError)
+        }
+    }
+}
+
 // MARK: - Claude OAuth sheet
 
 struct ClaudeOAuthProviderSettingsSheet: View {
@@ -285,10 +327,12 @@ struct ClaudeOAuthProviderSettingsSheet: View {
     @State private var nickname: String
     @State private var dangerousPermissionsEnabled: Bool
     @State private var saveErrorMessage: String?
+    @State private var commandNameCheckState: CommandNameCheckState = .checking
     @State private var confirmRemove: Bool = false
     let connectionDetail: String
     let isConnected: Bool
     let onDisconnect: () -> Void
+    let checkCommandName: (String) async -> CommandNameAvailability
     var onCancel: () -> Void = {}
     var isInitialSetup: Bool = false
     let save: (String, String, Bool) throws -> Void
@@ -298,6 +342,7 @@ struct ClaudeOAuthProviderSettingsSheet: View {
         connectionDetail: String,
         isConnected: Bool,
         onDisconnect: @escaping () -> Void,
+        checkCommandName: @escaping (String) async -> CommandNameAvailability,
         onCancel: @escaping () -> Void = {},
         isInitialSetup: Bool = false,
         save: @escaping (String, String, Bool) throws -> Void
@@ -313,6 +358,7 @@ struct ClaudeOAuthProviderSettingsSheet: View {
         self.connectionDetail = connectionDetail
         self.isConnected = isConnected
         self.onDisconnect = onDisconnect
+        self.checkCommandName = checkCommandName
         self.onCancel = onCancel
         self.isInitialSetup = isInitialSetup
         self.save = save
@@ -342,10 +388,11 @@ struct ClaudeOAuthProviderSettingsSheet: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 GroupTitle(text: "Command name")
-                CommandNameField(value: $functionName)
-                Text("The terminal command that launches Claude Code with this account. Lowercase, hyphens only.")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(.secondary)
+                CommandNameField(value: $functionName, checkState: commandNameCheckState)
+                commandNameHelpText(
+                    prefix: "The terminal command that launches Claude Code with this account.",
+                    checkState: commandNameCheckState
+                )
             }
 
             VStack(alignment: .leading, spacing: 6) {
@@ -381,8 +428,11 @@ struct ClaudeOAuthProviderSettingsSheet: View {
                         saveErrorMessage = error.localizedDescription
                     }
                 },
-                saveDisabled: functionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                saveDisabled: functionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || commandNameCheckState.isSaveDisabled
             )
+        }
+        .task(id: functionName) {
+            await updateCommandNameAvailability()
         }
         .saveErrorAlert(message: $saveErrorMessage)
         .alert("Remove this Claude account?", isPresented: $confirmRemove) {
@@ -393,6 +443,22 @@ struct ClaudeOAuthProviderSettingsSheet: View {
             }
         } message: {
             Text("The auth profile will be deleted from CLIProxyAPI. You can reconnect at any time.")
+        }
+    }
+
+    private func updateCommandNameAvailability() async {
+        commandNameCheckState = .checking
+        do {
+            try await Task.sleep(nanoseconds: 300_000_000)
+        } catch {
+            return
+        }
+
+        switch await checkCommandName(functionName) {
+        case .available:
+            commandNameCheckState = .available
+        case .unavailable(let message):
+            commandNameCheckState = .unavailable(message)
         }
     }
 }
@@ -408,12 +474,14 @@ struct CodexProviderSettingsSheet: View {
     @State private var haiku: AppConfig.CodexRole
     @State private var dangerousPermissionsEnabled: Bool
     @State private var saveErrorMessage: String?
+    @State private var commandNameCheckState: CommandNameCheckState = .checking
     @State private var confirmRemove: Bool = false
     let connectionDetail: String
     let isConnected: Bool
     let availableModels: [String]
     let refreshModels: () -> Void
     let onDisconnect: () -> Void
+    let checkCommandName: (String) async -> CommandNameAvailability
     var onCancel: () -> Void = {}
     var isInitialSetup: Bool = false
     var latestModel: () -> String? = { nil }
@@ -427,6 +495,7 @@ struct CodexProviderSettingsSheet: View {
         availableModels: [String],
         refreshModels: @escaping () -> Void,
         onDisconnect: @escaping () -> Void,
+        checkCommandName: @escaping (String) async -> CommandNameAvailability,
         onCancel: @escaping () -> Void = {},
         isInitialSetup: Bool = false,
         latestModel: @escaping () -> String? = { nil },
@@ -448,6 +517,7 @@ struct CodexProviderSettingsSheet: View {
         self.availableModels = availableModels
         self.refreshModels = refreshModels
         self.onDisconnect = onDisconnect
+        self.checkCommandName = checkCommandName
         self.onCancel = onCancel
         self.isInitialSetup = isInitialSetup
         self.latestModel = latestModel
@@ -478,10 +548,11 @@ struct CodexProviderSettingsSheet: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 GroupTitle(text: "Command name")
-                CommandNameField(value: $functionName)
-                Text("Lowercase, hyphens only. The terminal command launches Claude Code routed through Codex.")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(.secondary)
+                CommandNameField(value: $functionName, checkState: commandNameCheckState)
+                commandNameHelpText(
+                    prefix: "The terminal command launches Claude Code routed through Codex.",
+                    checkState: commandNameCheckState
+                )
             }
 
             VStack(alignment: .leading, spacing: 6) {
@@ -550,8 +621,11 @@ struct CodexProviderSettingsSheet: View {
                         saveErrorMessage = error.localizedDescription
                     }
                 },
-                saveDisabled: functionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                saveDisabled: functionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || commandNameCheckState.isSaveDisabled
             )
+        }
+        .task(id: functionName) {
+            await updateCommandNameAvailability()
         }
         .saveErrorAlert(message: $saveErrorMessage)
         .alert("Remove this Codex account?", isPresented: $confirmRemove) {
@@ -572,6 +646,22 @@ struct CodexProviderSettingsSheet: View {
         .onChange(of: availableModels) { models in
             applyDefaultModel(from: models)
             applyInitialDefaultsIfNeeded()
+        }
+    }
+
+    private func updateCommandNameAvailability() async {
+        commandNameCheckState = .checking
+        do {
+            try await Task.sleep(nanoseconds: 300_000_000)
+        } catch {
+            return
+        }
+
+        switch await checkCommandName(functionName) {
+        case .available:
+            commandNameCheckState = .available
+        case .unavailable(let message):
+            commandNameCheckState = .unavailable(message)
         }
     }
 

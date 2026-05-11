@@ -1,0 +1,15 @@
+{
+  "name": "cliproxyapi",
+  "version": "7.0.0",
+  "commit": "a44e5eb1",
+  "builtAt": "2026-05-09T18:35:35Z",
+  "source": "https://github.com/router-for-me/CLIProxyAPI/releases/download/v7.0.0/CLIProxyAPI_7.0.0_darwin_aarch64.tar.gz",
+  "upstreamRepository": "router-for-me/CLIProxyAPI",
+  "upstreamTag": "v7.0.0",
+  "upstreamAsset": "CLIProxyAPI_7.0.0_darwin_aarch64.tar.gz",
+  "upstreamAssetSha256": "6967649a138649571d4c21659a9ac8f61b897646f997426d2ba636c7f2cb7c37",
+  "vendoredBinaryName": "cliproxyapi",
+  "vendoredBinarySha256": "c9eaa4a1e94f7c4bfb34e3fb17ba71449441af524c30afaf3ba7b96a419f2299",
+  "vendoredBinarySizeBytes": 41533810,
+  "vendoredFromArchivePath": "cli-proxy-api"
+}

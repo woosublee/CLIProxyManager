@@ -193,6 +193,34 @@ Sources/CLIProxyManagerApp/Resources/Licenses/CLIProxyAPI-LICENSE.txt
 
 When distributing this app with CLIProxyAPI, keep the upstream CLIProxyAPI copyright notice and MIT permission notice in the app bundle and public release materials.
 
+## Updating the bundled CLIProxyAPI binary
+
+CLIProxyManager vendors the official macOS arm64 CLIProxyAPI release binary into:
+
+```text
+Sources/CLIProxyManagerApp/Resources/cliproxyapi/cliproxyapi
+```
+
+Use the vendoring script with an upstream release version:
+
+```zsh
+scripts/vendor-cliproxyapi.sh 7.0.0
+```
+
+The script downloads `router-for-me/CLIProxyAPI` release assets from GitHub, verifies the archive against upstream `checksums.txt`, copies the archive's `cli-proxy-api` executable as `cliproxyapi`, and writes:
+
+```text
+Sources/CLIProxyManagerApp/Resources/cliproxyapi/cliproxyapi.manifest.json
+```
+
+After updating the binary, verify it is bundled by running:
+
+```zsh
+swift test --filter LicenseResourceTests/testCLIProxyAPIBinaryResourceIsBundled
+```
+
+Commit the updated binary and manifest together.
+
 ## Provider terms
 
 CLIProxyManager is not an official product of Anthropic, OpenAI, Codex, or any other model provider. It should not be described as endorsed, certified, or guaranteed by those providers.

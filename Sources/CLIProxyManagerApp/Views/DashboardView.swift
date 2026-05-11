@@ -164,6 +164,9 @@ struct DashboardView: View {
                     viewModel.removeProvider(.claude)
                     initialSetupProvider = nil
                 },
+                checkCommandName: { functionName in
+                    await viewModel.commandNameAvailability(provider: .claude, functionName: functionName)
+                },
                 onCancel: {
                     if isInitial {
                         viewModel.removeProvider(.claude)
@@ -190,6 +193,9 @@ struct DashboardView: View {
                 onDisconnect: {
                     viewModel.removeProvider(.codex)
                     initialSetupProvider = nil
+                },
+                checkCommandName: { functionName in
+                    await viewModel.commandNameAvailability(provider: .codex, functionName: functionName)
                 },
                 onCancel: {
                     if isInitial {

@@ -23,6 +23,7 @@ extension AppConfigStore: AppConfigStoring {}
 protocol ShellFunctionInstalling: Sendable {
     func install(functionScript: String, functionNames: [String]) throws
     func isInstalled() -> Bool
+    func validateFunctionNames(_ names: [String]) throws
 }
 
 extension ShellProfileInstaller: ShellFunctionInstalling {}
@@ -52,6 +53,11 @@ struct DashboardOptionRow: Identifiable, Equatable {
     let title: String
     let value: String
     let detail: String
+}
+
+enum CommandNameAvailability: Equatable, Sendable {
+    case available
+    case unavailable(String)
 }
 
 @MainActor
@@ -280,6 +286,7 @@ final class DashboardViewModel: ObservableObject {
             try await oauthLoginService.login(provider: loginProvider, port: config.port)
             _ = try authProfileStore.setDisabled(false, for: loginProvider.authProfileType)
             refreshProfiles()
+            try applyShellInstallForCurrentProfiles()
             settingsMessage = "\(providerName) 연결 정보를 업데이트했습니다."
         } catch {
             settingsMessage = "\(providerName) 로그인에 실패했습니다: \(error.localizedDescription)"
@@ -305,6 +312,7 @@ final class DashboardViewModel: ObservableObject {
             if deletedCount == 0 {
                 settingsMessage = "삭제할 \(providerName) auth 파일을 찾지 못했습니다."
             } else {
+                try applyShellInstallForCurrentProfiles()
                 settingsMessage = "\(providerName) 계정을 제거했습니다."
             }
         } catch {
@@ -343,15 +351,35 @@ final class DashboardViewModel: ObservableObject {
         settingsMessage = "Claude API profile 추가는 이번 단계의 기본 목록에서 숨겨져 있습니다."
     }
 
+    func commandNameAvailability(provider: ProviderRowState.ID, functionName: String) async -> CommandNameAvailability {
+        let normalizedName = normalizeCommandName(functionName)
+        do {
+            try ShellCommandNameValidator.validate(normalizedName)
+            var updatedConfig = config
+            switch provider {
+            case .claude:
+                updatedConfig.commands.cc = normalizedName
+            case .codex:
+                updatedConfig.commands.ccodex = normalizedName
+            }
+            let activeNames = activeFunctionNames(in: updatedConfig)
+            try ShellCommandNameValidator.validate(activeNames)
+            try shellInstaller.validateFunctionNames(activeNames)
+            return .available
+        } catch {
+            return .unavailable(error.localizedDescription)
+        }
+    }
+
     func saveClaudeFunctionName(_ functionName: String) throws {
         var commands = config.commands
-        commands.cc = functionName
+        commands.cc = normalizeCommandName(functionName)
         try saveCommands(commands)
     }
 
     func saveClaudeOAuthSettings(functionName: String, nickname: String, dangerousPermissionsEnabled: Bool) throws {
         var updatedConfig = config
-        updatedConfig.commands.cc = functionName
+        updatedConfig.commands.cc = normalizeCommandName(functionName)
         updatedConfig.nicknames.cc = nickname
         updatedConfig.includeDangerouslySkipPermissions = dangerousPermissionsEnabled
         try saveConfig(updatedConfig, validateShellFunctions: true)
@@ -359,21 +387,21 @@ final class DashboardViewModel: ObservableObject {
 
     func saveClaudeAPISettings(functionName: String, model: String) throws {
         var updatedConfig = config
-        updatedConfig.commands.ccapi = functionName
+        updatedConfig.commands.ccapi = normalizeCommandName(functionName)
         updatedConfig.ccapi = AppConfig.ClaudeAPI(model: model)
         try saveConfig(updatedConfig, validateShellFunctions: true)
     }
 
     func saveCodexSettings(functionName: String, codex: AppConfig.Codex) throws {
         var updatedConfig = config
-        updatedConfig.commands.ccodex = functionName
+        updatedConfig.commands.ccodex = normalizeCommandName(functionName)
         updatedConfig.ccodex = codex
         try saveConfig(updatedConfig, validateShellFunctions: true)
     }
 
     func saveCodexSettings(functionName: String, nickname: String, codex: AppConfig.Codex, dangerousPermissionsEnabled: Bool) throws {
         var updatedConfig = config
-        updatedConfig.commands.ccodex = functionName
+        updatedConfig.commands.ccodex = normalizeCommandName(functionName)
         updatedConfig.nicknames.ccodex = nickname
         updatedConfig.ccodex = codex
         updatedConfig.includeDangerouslySkipPermissions = dangerousPermissionsEnabled
@@ -389,7 +417,7 @@ final class DashboardViewModel: ObservableObject {
 
     func saveCommands(_ commands: AppConfig.Commands) throws {
         var updatedConfig = config
-        updatedConfig.commands = commands
+        updatedConfig.commands = normalizedCommands(commands)
         try saveConfig(updatedConfig, validateShellFunctions: true)
     }
 
@@ -435,7 +463,7 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func installShellFunctions(helperCommand: String = "/usr/local/bin/cliproxy-manager") throws {
-        try automaticShellInstallService.apply(config: config, helperCommand: helperCommand)
+        try automaticShellInstallService.apply(config: config, helperCommand: helperCommand, enabledFunctions: enabledShellFunctions())
         settingsMessage = "설치가 완료되었습니다. 새 터미널을 열거나 source ~/.zshrc를 실행하세요."
         rebuildOptionRows()
     }
@@ -460,11 +488,25 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
+    private func normalizeCommandName(_ name: String) -> String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func normalizedCommands(_ commands: AppConfig.Commands) -> AppConfig.Commands {
+        AppConfig.Commands(
+            cc: normalizeCommandName(commands.cc),
+            ccapi: normalizeCommandName(commands.ccapi),
+            ccodex: normalizeCommandName(commands.ccodex)
+        )
+    }
+
     private func saveConfig(_ updatedConfig: AppConfig, validateShellFunctions: Bool = false) throws {
         if validateShellFunctions {
-            _ = try ShellFunctionRenderer(config: updatedConfig, helperCommand: "/usr/bin/true").render()
+            let activeNames = activeFunctionNames(in: updatedConfig)
+            try ShellCommandNameValidator.validate(activeNames)
+            try shellInstaller.validateFunctionNames(activeNames)
         }
-        try automaticShellInstallService.apply(config: updatedConfig)
+        try automaticShellInstallService.apply(config: updatedConfig, enabledFunctions: enabledShellFunctions())
         try configStore.save(updatedConfig)
         config = updatedConfig
         cards = ProfileCard.makeDefaultCards(config: updatedConfig)
@@ -474,10 +516,32 @@ final class DashboardViewModel: ObservableObject {
 
     private func applyInitialShellInstall() {
         do {
-            try automaticShellInstallService.apply(config: config)
+            try applyShellInstallForCurrentProfiles()
         } catch {
             settingsMessage = "shell functions 자동 설치에 실패했습니다: \(error.localizedDescription)"
         }
+    }
+
+    private func applyShellInstallForCurrentProfiles() throws {
+        let activeNames = activeFunctionNames(in: config)
+        try ShellCommandNameValidator.validate(activeNames)
+        try shellInstaller.validateFunctionNames(activeNames)
+        try automaticShellInstallService.apply(config: config, enabledFunctions: enabledShellFunctions())
+    }
+
+    private func enabledShellFunctions() -> AutomaticShellInstallService.EnabledFunctions {
+        AutomaticShellInstallService.EnabledFunctions(
+            claudeOAuth: authProfiles.contains { $0.type == .claude && !$0.disabled },
+            codex: authProfiles.contains { $0.type == .codex && !$0.disabled },
+            claudeAPI: false
+        )
+    }
+
+    private func activeFunctionNames(in config: AppConfig) -> [String] {
+        var names: [String] = []
+        if authProfiles.contains(where: { $0.type == .claude && !$0.disabled }) { names.append(config.commands.cc) }
+        if authProfiles.contains(where: { $0.type == .codex && !$0.disabled }) { names.append(config.commands.ccodex) }
+        return names
     }
 
     private func rebuildProviderRows(claudeStatus: DiagnosticStatus?, codexStatus: DiagnosticStatus?) {

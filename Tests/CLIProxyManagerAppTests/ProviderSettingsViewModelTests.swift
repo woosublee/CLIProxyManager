@@ -4,16 +4,16 @@ import CLIProxyManagerCore
 
 @MainActor
 final class ProviderSettingsViewModelTests: XCTestCase {
-    func testDefaultProviderRowsShowBuiltInOAuthProfilesAndFunctions() {
+    func testDefaultProviderRowsHideProfilesUntilAuthExists() {
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: .default),
             shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector()
         )
 
-        XCTAssertEqual(viewModel.providerRows.map(\.name), ["Claude OAuth", "Codex OAuth"])
-        XCTAssertEqual(viewModel.providerRows.map(\.functionName), ["cc", "ccodex"])
+        XCTAssertEqual(viewModel.providerRows, [])
     }
 
     func testAddProviderShowsClaudeAPIHiddenMessage() {
@@ -34,6 +34,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         let viewModel = DashboardViewModel(
             configStore: store,
             shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector()
         )
@@ -44,11 +45,197 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.providerRows.first?.functionName, "myclaude")
     }
 
+
+    func testSaveClaudeFunctionNameRejectsInvalidShellName() throws {
+        let store = StubConfigStore(config: .default)
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        XCTAssertThrowsError(try viewModel.saveClaudeFunctionName("//")) { error in
+            XCTAssertEqual(error as? ShellFunctionRendererError, .invalidFunctionName("//"))
+        }
+
+        XCTAssertEqual(store.savedConfigs, [])
+        XCTAssertEqual(viewModel.config.commands.cc, "cc")
+    }
+
+    func testSaveClaudeOAuthSettingsRejectsInvalidShellName() throws {
+        let store = StubConfigStore(config: .default)
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        XCTAssertThrowsError(try viewModel.saveClaudeOAuthSettings(functionName: "//", nickname: "", dangerousPermissionsEnabled: false)) { error in
+            XCTAssertEqual(error as? ShellFunctionRendererError, .invalidFunctionName("//"))
+        }
+
+        XCTAssertEqual(store.savedConfigs, [])
+        XCTAssertEqual(viewModel.config.commands.cc, "cc")
+    }
+
+    func testSaveClaudeOAuthSettingsValidatesActiveFunctionNameBeforePersisting() throws {
+        let store = StubConfigStore(config: .default)
+        let installer = StubShellInstaller(validationError: ShellProfileInstallerError.functionNameConflicts(["cc"]))
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: installer,
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        XCTAssertThrowsError(try viewModel.saveClaudeOAuthSettings(functionName: "cc", nickname: "", dangerousPermissionsEnabled: true)) { error in
+            XCTAssertEqual(error as? ShellProfileInstallerError, .functionNameConflicts(["cc"]))
+        }
+
+        XCTAssertEqual(installer.validatedFunctionNames, [["cc"], ["cc"]])
+        XCTAssertEqual(store.savedConfigs, [])
+    }
+
+    func testCommandNameAvailabilityReportsValidNamesAsAvailable() async {
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile(), codexProfile()]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        let availability = await viewModel.commandNameAvailability(provider: .claude, functionName: "myclaude")
+
+        XCTAssertEqual(availability, .available)
+    }
+
+    func testCommandNameAvailabilityReportsInvalidNames() async {
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        let availability = await viewModel.commandNameAvailability(provider: .claude, functionName: "//")
+
+        XCTAssertEqual(availability, .unavailable("Invalid command name `//`. Use lowercase ASCII letters, numbers, and underscores. The first character must be a lowercase letter or underscore."))
+    }
+
+    func testCommandNameAvailabilityReportsZshrcConflicts() async {
+        let installer = StubShellInstaller(validationError: ShellProfileInstallerError.functionNameConflicts(["myclaude"]))
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: installer,
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        let availability = await viewModel.commandNameAvailability(provider: .claude, functionName: "myclaude")
+
+        XCTAssertEqual(installer.validatedFunctionNames, [["cc"], ["myclaude"]])
+        XCTAssertEqual(availability, .unavailable("Cannot install shell functions: `myclaude` is already defined as an alias or function in ~/.zshrc. Pick a different command name in account settings, or remove the existing definition from your shell profile."))
+    }
+
+    func testCommandNameAvailabilityReportsDuplicateActiveProviderNames() async {
+        var config = AppConfig.default
+        config.commands.ccodex = "same"
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile(), codexProfile()]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        let availability = await viewModel.commandNameAvailability(provider: .claude, functionName: "same")
+
+        XCTAssertEqual(availability, .unavailable("Command name `same` is already used by another provider."))
+    }
+
+    func testSaveClaudeOAuthSettingsRejectsDuplicateActiveProviderNames() throws {
+        var config = AppConfig.default
+        config.commands.ccodex = "same"
+        let store = StubConfigStore(config: config)
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile(), codexProfile()]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        XCTAssertThrowsError(try viewModel.saveClaudeOAuthSettings(functionName: "same", nickname: "", dangerousPermissionsEnabled: false)) { error in
+            XCTAssertEqual(error as? ShellFunctionRendererError, .duplicateFunctionNames(["same"]))
+        }
+
+        XCTAssertEqual(store.savedConfigs, [])
+    }
+
+    func testSaveClaudeOAuthSettingsNormalizesCommandNameBeforePersisting() throws {
+        let store = StubConfigStore(config: .default)
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        try viewModel.saveClaudeOAuthSettings(functionName: " myclaude ", nickname: "", dangerousPermissionsEnabled: false)
+
+        XCTAssertEqual(store.savedConfigs.last?.commands.cc, "myclaude")
+        XCTAssertEqual(viewModel.config.commands.cc, "myclaude")
+    }
+
+    func testSaveClaudeOAuthSettingsIgnoresInvalidInactiveProviderCommandName() throws {
+        var config = AppConfig.default
+        config.commands.ccodex = "bad;rm"
+        let store = StubConfigStore(config: config)
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        try viewModel.saveClaudeOAuthSettings(functionName: "myclaude", nickname: "", dangerousPermissionsEnabled: false)
+
+        XCTAssertEqual(store.savedConfigs.last?.commands.cc, "myclaude")
+        XCTAssertEqual(store.savedConfigs.last?.commands.ccodex, "bad;rm")
+    }
+
+    func testSaveCodexSettingsNormalizesCommandNameBeforePersisting() throws {
+        let store = StubConfigStore(config: .default)
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [codexProfile()]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        try viewModel.saveCodexSettings(functionName: " mycodex ", nickname: "", codex: testCodex(), dangerousPermissionsEnabled: false)
+
+        XCTAssertEqual(store.savedConfigs.last?.commands.ccodex, "mycodex")
+        XCTAssertEqual(viewModel.config.commands.ccodex, "mycodex")
+    }
+
     func testSaveClaudeOAuthSettingsPersistsFunctionNameAndPermission() throws {
         let store = StubConfigStore(config: .default)
         let viewModel = DashboardViewModel(
             configStore: store,
             shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector()
         )
@@ -65,14 +252,11 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         let viewModel = DashboardViewModel(
             configStore: store,
             shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [codexProfile()]),
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector()
         )
-        let codex = AppConfig.Codex(
-            opus: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .xhigh, contextWindow: .auto),
-            sonnet: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .medium, contextWindow: .auto),
-            haiku: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .low, contextWindow: .auto)
-        )
+        let codex = testCodex()
 
         try viewModel.saveCodexSettings(functionName: "mycodex", nickname: "", codex: codex, dangerousPermissionsEnabled: true)
 
@@ -87,20 +271,79 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         let viewModel = DashboardViewModel(
             configStore: store,
             shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [codexProfile()]),
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector()
         )
-        let codex = AppConfig.Codex(
-            opus: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .xhigh, contextWindow: .auto),
-            sonnet: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .medium, contextWindow: .auto),
-            haiku: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .low, contextWindow: .auto)
-        )
+        let codex = testCodex()
 
         XCTAssertThrowsError(try viewModel.saveCodexSettings(functionName: "mycodex", nickname: "", codex: codex, dangerousPermissionsEnabled: true))
 
         XCTAssertEqual(viewModel.config, .default)
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.functionName, "ccodex")
         XCTAssertEqual(store.savedConfigs, [])
+    }
+
+    func testRemoveProviderRewritesShellFunctionsWithoutDeletedProvider() {
+        let installer = StubShellInstaller()
+        let authStore = StubAuthProfileStore(profiles: [claudeProfile(), codexProfile()])
+        _ = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: installer,
+            authProfileStore: authStore,
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+        installer.reset()
+
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: installer,
+            authProfileStore: authStore,
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+        installer.reset()
+
+        viewModel.removeProvider(.claude)
+
+        XCTAssertEqual(installer.installedFunctionNames, ["ccodex"])
+        XCTAssertFalse(installer.installedScript?.contains("cc() {") == true)
+        XCTAssertTrue(installer.installedScript?.contains("ccodex() {") == true)
+    }
+
+    func testDisconnectProviderDoesNotRewriteShellFunctions() {
+        let installer = StubShellInstaller()
+        let authStore = StubAuthProfileStore(profiles: [claudeProfile(), codexProfile()])
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: installer,
+            authProfileStore: authStore,
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+        installer.reset()
+
+        viewModel.disconnectProvider(.claude)
+
+        XCTAssertNil(installer.installedScript)
+        XCTAssertEqual(installer.installedFunctionNames, [])
+    }
+
+    private func testCodex() -> AppConfig.Codex {
+        AppConfig.Codex(
+            opus: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .xhigh, contextWindow: .auto),
+            sonnet: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .medium, contextWindow: .auto),
+            haiku: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .low, contextWindow: .auto)
+        )
+    }
+
+    private func claudeProfile() -> AuthProfile {
+        AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
+    }
+
+    private func codexProfile() -> AuthProfile {
+        AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
     }
 
     private func connectedClaudeConnector() -> ClaudeConnector {
@@ -135,8 +378,57 @@ private final class StubConfigStore: AppConfigStoring, @unchecked Sendable {
 }
 
 private final class StubShellInstaller: ShellFunctionInstalling, @unchecked Sendable {
-    func install(functionScript: String, functionNames: [String]) throws {}
+    private let validationError: Error?
+    private(set) var installedScript: String?
+    private(set) var installedFunctionNames: [String] = []
+    private(set) var validatedFunctionNames: [[String]] = []
+
+    init(validationError: Error? = nil) {
+        self.validationError = validationError
+    }
+
+    func install(functionScript: String, functionNames: [String]) throws {
+        installedScript = functionScript
+        installedFunctionNames = functionNames
+    }
+
     func isInstalled() -> Bool { false }
+
+    func validateFunctionNames(_ names: [String]) throws {
+        validatedFunctionNames.append(names)
+        if let validationError { throw validationError }
+    }
+
+    func reset() {
+        installedScript = nil
+        installedFunctionNames = []
+        validatedFunctionNames = []
+    }
+}
+
+private final class StubAuthProfileStore: AuthProfileManaging, @unchecked Sendable {
+    private var profilesValue: [AuthProfile]
+
+    init(profiles: [AuthProfile]) {
+        profilesValue = profiles
+    }
+
+    func profiles() throws -> [AuthProfile] { profilesValue }
+
+    func setDisabled(_ disabled: Bool, for type: AuthProfileType) throws -> Int {
+        let matchingCount = profilesValue.filter { $0.type == type }.count
+        profilesValue = profilesValue.map { profile in
+            guard profile.type == type else { return profile }
+            return AuthProfile(fileName: profile.fileName, type: profile.type, email: profile.email, accountID: profile.accountID, expired: profile.expired, disabled: disabled)
+        }
+        return matchingCount
+    }
+
+    func delete(for type: AuthProfileType) throws -> Int {
+        let matchingCount = profilesValue.filter { $0.type == type }.count
+        profilesValue.removeAll { $0.type == type }
+        return matchingCount
+    }
 }
 
 private final class StubProxyService: ProxyServiceControlling, @unchecked Sendable {

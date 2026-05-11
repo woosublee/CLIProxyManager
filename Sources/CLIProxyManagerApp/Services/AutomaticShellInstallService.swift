@@ -1,6 +1,15 @@
 import CLIProxyManagerCore
 
 struct AutomaticShellInstallService: Sendable {
+    struct EnabledFunctions: Sendable {
+        var claudeOAuth: Bool
+        var codex: Bool
+        var claudeAPI: Bool
+
+        static let none = EnabledFunctions(claudeOAuth: false, codex: false, claudeAPI: false)
+        static let allOAuth = EnabledFunctions(claudeOAuth: true, codex: true, claudeAPI: false)
+    }
+
     private let installer: any ShellFunctionInstalling
     private let secretStore: any SecretStore
     private let defaultHelperCommand: String
@@ -15,20 +24,29 @@ struct AutomaticShellInstallService: Sendable {
         self.defaultHelperCommand = helperCommand
     }
 
-    func apply(config: AppConfig, helperCommand: String? = nil) throws {
-        let includeClaudeAPI: Bool
-        do {
-            includeClaudeAPI = try !secretStore.get(.claudeAPIKey).isEmpty
-        } catch SecretStoreError.missingSecret {
-            includeClaudeAPI = false
-        }
+    func apply(config: AppConfig, helperCommand: String? = nil, enabledFunctions: EnabledFunctions = .allOAuth) throws {
+        let includeClaudeAPI = try enabledFunctions.claudeAPI && hasClaudeAPIKey()
         let script = try ShellFunctionRenderer(
             config: config,
             helperCommand: helperCommand ?? defaultHelperCommand,
-            includeClaudeAPI: includeClaudeAPI
+            enabledFunctions: ShellFunctionRenderer.EnabledFunctions(
+                claudeOAuth: enabledFunctions.claudeOAuth,
+                codex: enabledFunctions.codex,
+                claudeAPI: includeClaudeAPI
+            )
         ).render()
-        var functionNames = [config.commands.cc, config.commands.ccodex]
+        var functionNames: [String] = []
+        if enabledFunctions.claudeOAuth { functionNames.append(config.commands.cc) }
+        if enabledFunctions.codex { functionNames.append(config.commands.ccodex) }
         if includeClaudeAPI { functionNames.append(config.commands.ccapi) }
         try installer.install(functionScript: script, functionNames: functionNames)
+    }
+
+    private func hasClaudeAPIKey() throws -> Bool {
+        do {
+            return try !secretStore.get(.claudeAPIKey).isEmpty
+        } catch SecretStoreError.missingSecret {
+            return false
+        }
     }
 }
