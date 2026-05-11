@@ -23,6 +23,7 @@ extension AppConfigStore: AppConfigStoring {}
 protocol ShellFunctionInstalling: Sendable {
     func install(functionScript: String, functionNames: [String]) throws
     func isInstalled() -> Bool
+    func validateFunctionNames(_ names: [String]) throws
 }
 
 extension ShellProfileInstaller: ShellFunctionInstalling {}
@@ -280,6 +281,7 @@ final class DashboardViewModel: ObservableObject {
             try await oauthLoginService.login(provider: loginProvider, port: config.port)
             _ = try authProfileStore.setDisabled(false, for: loginProvider.authProfileType)
             refreshProfiles()
+            try applyShellInstallForCurrentProfiles()
             settingsMessage = "\(providerName) 연결 정보를 업데이트했습니다."
         } catch {
             settingsMessage = "\(providerName) 로그인에 실패했습니다: \(error.localizedDescription)"
@@ -435,7 +437,7 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func installShellFunctions(helperCommand: String = "/usr/local/bin/cliproxy-manager") throws {
-        try automaticShellInstallService.apply(config: config, helperCommand: helperCommand)
+        try automaticShellInstallService.apply(config: config, helperCommand: helperCommand, enabledFunctions: enabledShellFunctions())
         settingsMessage = "설치가 완료되었습니다. 새 터미널을 열거나 source ~/.zshrc를 실행하세요."
         rebuildOptionRows()
     }
@@ -463,8 +465,9 @@ final class DashboardViewModel: ObservableObject {
     private func saveConfig(_ updatedConfig: AppConfig, validateShellFunctions: Bool = false) throws {
         if validateShellFunctions {
             _ = try ShellFunctionRenderer(config: updatedConfig, helperCommand: "/usr/bin/true").render()
+            try shellInstaller.validateFunctionNames(activeFunctionNames(in: updatedConfig))
         }
-        try automaticShellInstallService.apply(config: updatedConfig)
+        try automaticShellInstallService.apply(config: updatedConfig, enabledFunctions: enabledShellFunctions())
         try configStore.save(updatedConfig)
         config = updatedConfig
         cards = ProfileCard.makeDefaultCards(config: updatedConfig)
@@ -474,10 +477,29 @@ final class DashboardViewModel: ObservableObject {
 
     private func applyInitialShellInstall() {
         do {
-            try automaticShellInstallService.apply(config: config)
+            try applyShellInstallForCurrentProfiles()
         } catch {
             settingsMessage = "shell functions 자동 설치에 실패했습니다: \(error.localizedDescription)"
         }
+    }
+
+    private func applyShellInstallForCurrentProfiles() throws {
+        try automaticShellInstallService.apply(config: config, enabledFunctions: enabledShellFunctions())
+    }
+
+    private func enabledShellFunctions() -> AutomaticShellInstallService.EnabledFunctions {
+        AutomaticShellInstallService.EnabledFunctions(
+            claudeOAuth: authProfiles.contains { $0.type == .claude && !$0.disabled },
+            codex: authProfiles.contains { $0.type == .codex && !$0.disabled },
+            claudeAPI: false
+        )
+    }
+
+    private func activeFunctionNames(in config: AppConfig) -> [String] {
+        var names: [String] = []
+        if authProfiles.contains(where: { $0.type == .claude && !$0.disabled }) { names.append(config.commands.cc) }
+        if authProfiles.contains(where: { $0.type == .codex && !$0.disabled }) { names.append(config.commands.ccodex) }
+        return names
     }
 
     private func rebuildProviderRows(claudeStatus: DiagnosticStatus?, codexStatus: DiagnosticStatus?) {

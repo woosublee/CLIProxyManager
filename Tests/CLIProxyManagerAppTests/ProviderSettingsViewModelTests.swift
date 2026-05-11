@@ -4,16 +4,16 @@ import CLIProxyManagerCore
 
 @MainActor
 final class ProviderSettingsViewModelTests: XCTestCase {
-    func testDefaultProviderRowsShowBuiltInOAuthProfilesAndFunctions() {
+    func testDefaultProviderRowsHideProfilesUntilAuthExists() {
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: .default),
             shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector()
         )
 
-        XCTAssertEqual(viewModel.providerRows.map(\.name), ["Claude OAuth", "Codex OAuth"])
-        XCTAssertEqual(viewModel.providerRows.map(\.functionName), ["cc", "ccodex"])
+        XCTAssertEqual(viewModel.providerRows, [])
     }
 
     func testAddProviderShowsClaudeAPIHiddenMessage() {
@@ -34,6 +34,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         let viewModel = DashboardViewModel(
             configStore: store,
             shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector()
         )
@@ -44,11 +45,31 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.providerRows.first?.functionName, "myclaude")
     }
 
+    func testSaveClaudeOAuthSettingsValidatesActiveFunctionNameBeforePersisting() throws {
+        let store = StubConfigStore(config: .default)
+        let installer = StubShellInstaller(validationError: ShellProfileInstallerError.functionNameConflicts(["cc"]))
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: installer,
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        XCTAssertThrowsError(try viewModel.saveClaudeOAuthSettings(functionName: "cc", nickname: "", dangerousPermissionsEnabled: true)) { error in
+            XCTAssertEqual(error as? ShellProfileInstallerError, .functionNameConflicts(["cc"]))
+        }
+
+        XCTAssertEqual(installer.validatedFunctionNames, [["cc"]])
+        XCTAssertEqual(store.savedConfigs, [])
+    }
+
     func testSaveClaudeOAuthSettingsPersistsFunctionNameAndPermission() throws {
         let store = StubConfigStore(config: .default)
         let viewModel = DashboardViewModel(
             configStore: store,
             shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector()
         )
@@ -65,14 +86,11 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         let viewModel = DashboardViewModel(
             configStore: store,
             shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [codexProfile()]),
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector()
         )
-        let codex = AppConfig.Codex(
-            opus: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .xhigh, contextWindow: .auto),
-            sonnet: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .medium, contextWindow: .auto),
-            haiku: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .low, contextWindow: .auto)
-        )
+        let codex = testCodex()
 
         try viewModel.saveCodexSettings(functionName: "mycodex", nickname: "", codex: codex, dangerousPermissionsEnabled: true)
 
@@ -87,20 +105,33 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         let viewModel = DashboardViewModel(
             configStore: store,
             shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [codexProfile()]),
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector()
         )
-        let codex = AppConfig.Codex(
-            opus: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .xhigh, contextWindow: .auto),
-            sonnet: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .medium, contextWindow: .auto),
-            haiku: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .low, contextWindow: .auto)
-        )
+        let codex = testCodex()
 
         XCTAssertThrowsError(try viewModel.saveCodexSettings(functionName: "mycodex", nickname: "", codex: codex, dangerousPermissionsEnabled: true))
 
         XCTAssertEqual(viewModel.config, .default)
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.functionName, "ccodex")
         XCTAssertEqual(store.savedConfigs, [])
+    }
+
+    private func testCodex() -> AppConfig.Codex {
+        AppConfig.Codex(
+            opus: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .xhigh, contextWindow: .auto),
+            sonnet: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .medium, contextWindow: .auto),
+            haiku: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .low, contextWindow: .auto)
+        )
+    }
+
+    private func claudeProfile() -> AuthProfile {
+        AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
+    }
+
+    private func codexProfile() -> AuthProfile {
+        AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
     }
 
     private func connectedClaudeConnector() -> ClaudeConnector {
@@ -135,8 +166,32 @@ private final class StubConfigStore: AppConfigStoring, @unchecked Sendable {
 }
 
 private final class StubShellInstaller: ShellFunctionInstalling, @unchecked Sendable {
+    private let validationError: Error?
+    private(set) var validatedFunctionNames: [[String]] = []
+
+    init(validationError: Error? = nil) {
+        self.validationError = validationError
+    }
+
     func install(functionScript: String, functionNames: [String]) throws {}
     func isInstalled() -> Bool { false }
+
+    func validateFunctionNames(_ names: [String]) throws {
+        validatedFunctionNames.append(names)
+        if let validationError { throw validationError }
+    }
+}
+
+private final class StubAuthProfileStore: AuthProfileManaging, @unchecked Sendable {
+    let profilesValue: [AuthProfile]
+
+    init(profiles: [AuthProfile]) {
+        profilesValue = profiles
+    }
+
+    func profiles() throws -> [AuthProfile] { profilesValue }
+    func setDisabled(_ disabled: Bool, for type: AuthProfileType) throws -> Int { 0 }
+    func delete(for type: AuthProfileType) throws -> Int { 0 }
 }
 
 private final class StubProxyService: ProxyServiceControlling, @unchecked Sendable {

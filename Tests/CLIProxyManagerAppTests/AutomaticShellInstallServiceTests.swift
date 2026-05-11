@@ -4,7 +4,7 @@ import CLIProxyManagerCore
 
 @MainActor
 final class AutomaticShellInstallServiceTests: XCTestCase {
-    func testViewModelInstallsDefaultShellFunctionsOnInitialization() {
+    func testViewModelCreatesEmptyShellFunctionsFileOnInitialization() {
         let installer = StubShellInstaller()
         let automaticInstaller = AutomaticShellInstallService(
             installer: installer,
@@ -20,9 +20,69 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
             claudeConnector: connectedClaudeConnector()
         )
 
-        XCTAssertEqual(installer.installedFunctionNames, ["cc", "ccodex"])
-        XCTAssertTrue(installer.installedScript?.contains("cc() {") == true)
+        XCTAssertEqual(installer.installedFunctionNames, [])
+        XCTAssertFalse(installer.installedScript?.contains("cc() {") == true)
+        XCTAssertFalse(installer.installedScript?.contains("ccodex() {") == true)
         XCTAssertFalse(installer.installedScript?.contains("ccapi() {") == true)
+    }
+
+
+    func testViewModelInstallsClaudeFunctionAfterOAuthConnection() async {
+        let installer = StubShellInstaller()
+        let authStore = StubAuthProfileStore(profiles: [])
+        authStore.nextProfiles = [
+            AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
+        ]
+        let automaticInstaller = AutomaticShellInstallService(
+            installer: installer,
+            secretStore: FailingSecretStore(error: SecretStoreError.missingSecret(SecretKey.claudeAPIKey.rawValue)),
+            helperCommand: "/usr/local/bin/cliproxy-manager"
+        )
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: installer,
+            authProfileStore: authStore,
+            oauthLoginService: StubOAuthLoginService(),
+            automaticShellInstallService: automaticInstaller,
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+        installer.reset()
+
+        await viewModel.connectProvider(.claude)
+
+        XCTAssertEqual(installer.installedFunctionNames, ["cc"])
+        XCTAssertTrue(installer.installedScript?.contains("cc() {") == true)
+        XCTAssertFalse(installer.installedScript?.contains("ccodex() {") == true)
+    }
+
+    func testViewModelInstallsCodexFunctionAfterOAuthConnection() async {
+        let installer = StubShellInstaller()
+        let authStore = StubAuthProfileStore(profiles: [])
+        authStore.nextProfiles = [
+            AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
+        ]
+        let automaticInstaller = AutomaticShellInstallService(
+            installer: installer,
+            secretStore: FailingSecretStore(error: SecretStoreError.missingSecret(SecretKey.claudeAPIKey.rawValue)),
+            helperCommand: "/usr/local/bin/cliproxy-manager"
+        )
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: installer,
+            authProfileStore: authStore,
+            oauthLoginService: StubOAuthLoginService(),
+            automaticShellInstallService: automaticInstaller,
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+        installer.reset()
+
+        await viewModel.connectProvider(.codex)
+
+        XCTAssertEqual(installer.installedFunctionNames, ["ccodex"])
+        XCTAssertFalse(installer.installedScript?.contains("cc() {") == true)
+        XCTAssertTrue(installer.installedScript?.contains("ccodex() {") == true)
     }
 
     func testApplyRendersAndInstallsCurrentConfigWithoutClaudeAPIWhenSecretIsMissing() throws {
@@ -38,6 +98,7 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
         try service.apply(config: config)
 
         XCTAssertEqual(installer.installedFunctionNames, ["cc", "codexcustom"])
+        XCTAssertTrue(installer.installedScript?.contains("cc() {") == true)
         XCTAssertTrue(installer.installedScript?.contains("codexcustom() {") == true)
         XCTAssertFalse(installer.installedScript?.contains("ccapi() {") == true)
     }
@@ -50,7 +111,10 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
             helperCommand: "/usr/local/bin/cliproxy-manager"
         )
 
-        try service.apply(config: .default)
+        try service.apply(
+            config: .default,
+            enabledFunctions: AutomaticShellInstallService.EnabledFunctions(claudeOAuth: true, codex: true, claudeAPI: true)
+        )
 
         XCTAssertEqual(installer.installedFunctionNames, ["cc", "ccodex", "ccapi"])
         XCTAssertTrue(installer.installedScript?.contains("ccapi() {") == true)
@@ -77,7 +141,10 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
             helperCommand: "/usr/local/bin/cliproxy-manager"
         )
 
-        XCTAssertThrowsError(try service.apply(config: .default)) { error in
+        XCTAssertThrowsError(try service.apply(
+            config: .default,
+            enabledFunctions: AutomaticShellInstallService.EnabledFunctions(claudeOAuth: true, codex: true, claudeAPI: true)
+        )) { error in
             XCTAssertEqual(error as? SecretStoreError, .readFailed(SecretKey.claudeAPIKey.rawValue))
         }
     }
@@ -104,6 +171,34 @@ private final class StubShellInstaller: ShellFunctionInstalling, @unchecked Send
     }
 
     func isInstalled() -> Bool { installedScript != nil }
+    func validateFunctionNames(_ names: [String]) throws {}
+
+    func reset() {
+        installedScript = nil
+        installedFunctionNames = []
+    }
+}
+
+private final class StubAuthProfileStore: AuthProfileManaging, @unchecked Sendable {
+    var profilesValue: [AuthProfile]
+    var nextProfiles: [AuthProfile]?
+
+    init(profiles: [AuthProfile]) {
+        self.profilesValue = profiles
+    }
+
+    func profiles() throws -> [AuthProfile] { profilesValue }
+
+    func setDisabled(_ disabled: Bool, for type: AuthProfileType) throws -> Int {
+        if let nextProfiles { profilesValue = nextProfiles }
+        return 1
+    }
+
+    func delete(for type: AuthProfileType) throws -> Int { 0 }
+}
+
+private final class StubOAuthLoginService: OAuthLoginStarting, @unchecked Sendable {
+    func login(provider: OAuthLoginProvider, port: Int) async throws {}
 }
 
 private struct FailingSecretStore: SecretStore {

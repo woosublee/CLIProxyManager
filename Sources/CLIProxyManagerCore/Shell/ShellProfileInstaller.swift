@@ -42,11 +42,6 @@ public struct ShellProfileInstaller: @unchecked Sendable {
         try fileManager.createDirectory(at: paths.rootDirectory, withIntermediateDirectories: true)
 
         let currentProfile = try readProfileIfPresent()
-        let conflicts = conflictingNames(functionNames, in: currentProfile)
-        guard conflicts.isEmpty else {
-            throw ShellProfileInstallerError.functionNameConflicts(conflicts)
-        }
-
         try functionScript.write(to: paths.functionsFile, atomically: true, encoding: .utf8)
 
         let updatedProfile = profileByInstalling(in: currentProfile)
@@ -68,6 +63,13 @@ public struct ShellProfileInstaller: @unchecked Sendable {
     public func isInstalled() -> Bool {
         guard let profile = try? readProfileIfPresent() else { return false }
         return containsManagedBlock(in: profile)
+    }
+
+    public func validateFunctionNames(_ names: [String]) throws {
+        let conflicts = try conflictingNames(names, in: readProfileIfPresent())
+        guard conflicts.isEmpty else {
+            throw ShellProfileInstallerError.functionNameConflicts(conflicts)
+        }
     }
 
     private func readProfileIfPresent() throws -> String {

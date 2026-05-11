@@ -142,6 +142,7 @@ private final class StubConfigStore: AppConfigStoring, @unchecked Sendable {
 private final class StubShellInstaller: ShellFunctionInstalling, @unchecked Sendable {
     func install(functionScript: String, functionNames: [String]) throws {}
     func isInstalled() -> Bool { true }
+    func validateFunctionNames(_ names: [String]) throws {}
 }
 
 private final class StubLoginItemService: LoginItemControlling, @unchecked Sendable {

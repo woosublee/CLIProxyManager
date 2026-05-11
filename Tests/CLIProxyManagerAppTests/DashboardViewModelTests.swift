@@ -191,6 +191,10 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let viewModel = DashboardViewModel(
             configStore: store,
             shellInstaller: installer,
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false),
+                AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
+            ]),
             proxyService: StubProxyServiceStarter(),
             claudeConnector: connectedClaudeConnector()
         )
@@ -201,7 +205,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertTrue(installer.installedScript?.contains("customcodex() {") == true)
     }
 
-    func testInstallShellFunctionsUsesProvidedHelperCommand() throws {
+    func testInstallShellFunctionsUsesProvidedHelperCommandForActiveProviders() throws {
         let installer = StubShellInstaller()
         let automaticInstaller = AutomaticShellInstallService(
             installer: installer,
@@ -210,6 +214,9 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         )
         let viewModel = DashboardViewModel(
             shellInstaller: installer,
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
+            ]),
             automaticShellInstallService: automaticInstaller,
             proxyService: StubProxyServiceStarter(),
             claudeConnector: connectedClaudeConnector()
@@ -217,7 +224,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         try viewModel.installShellFunctions(helperCommand: "/Applications/CLI Proxy/cliproxy-manager")
 
-        XCTAssertTrue(installer.installedScript?.contains("'/Applications/CLI Proxy/cliproxy-manager' secret get claude-api-key") == true)
+        XCTAssertEqual(installer.installedFunctionNames, ["cc"])
+        XCTAssertTrue(installer.installedScript?.contains("cc() {") == true)
     }
 
     func testLoadCodexModelsFetchesBaseModelsFromCurrentPort() async {
@@ -508,6 +516,8 @@ private final class StubShellInstaller: ShellFunctionInstalling, @unchecked Send
     func isInstalled() -> Bool {
         installed
     }
+
+    func validateFunctionNames(_ names: [String]) throws {}
 }
 
 private final class StubProxyModelClient: ProxyModelListing, @unchecked Sendable {
