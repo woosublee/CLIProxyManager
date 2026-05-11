@@ -263,25 +263,6 @@ private struct SheetFooter: View {
     }
 }
 
-private struct SaveErrorAlert: ViewModifier {
-    @Binding var message: String?
-    func body(content: Content) -> some View {
-        content.alert("Save Failed", isPresented: Binding(
-            get: { message != nil },
-            set: { if !$0 { message = nil } }
-        )) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(message ?? "")
-        }
-    }
-}
-
-private extension View {
-    func saveErrorAlert(message: Binding<String?>) -> some View {
-        modifier(SaveErrorAlert(message: message))
-    }
-}
 
 private struct AccountMeta {
     let primary: String   // email if available, else provider type
@@ -321,6 +302,51 @@ private func commandNameHelpText(prefix: String, checkState: CommandNameCheckSta
 
 // MARK: - Claude OAuth sheet
 
+struct OAuthSettingsInitialState: Equatable {
+    let functionName: String
+    let nickname: String
+    let dangerousPermissionsEnabled: Bool
+}
+
+func oauthSettingsInitialState(config: AppConfig, provider: ProviderRowState.ID, isInitialSetup: Bool) -> OAuthSettingsInitialState {
+    if isInitialSetup {
+        switch provider {
+        case .claude:
+            return OAuthSettingsInitialState(functionName: AppConfig.default.commands.cc, nickname: "", dangerousPermissionsEnabled: false)
+        case .codex:
+            return OAuthSettingsInitialState(functionName: AppConfig.default.commands.ccodex, nickname: "", dangerousPermissionsEnabled: false)
+        }
+    }
+
+    switch provider {
+    case .claude:
+        return OAuthSettingsInitialState(
+            functionName: config.commands.cc,
+            nickname: config.nicknames.cc,
+            dangerousPermissionsEnabled: config.includeDangerouslySkipPermissions
+        )
+    case .codex:
+        return OAuthSettingsInitialState(
+            functionName: config.commands.ccodex,
+            nickname: config.nicknames.ccodex,
+            dangerousPermissionsEnabled: config.includeDangerouslySkipPermissions
+        )
+    }
+}
+
+func oauthSettingsDangerousPermissionDefault(config: AppConfig, isInitialSetup: Bool) -> Bool {
+    oauthSettingsInitialState(config: config, provider: .claude, isInitialSetup: isInitialSetup).dangerousPermissionsEnabled
+}
+
+func oauthSettingsShouldBlockInitialDisplay(isInitialSetup: Bool, availability: CommandNameAvailability) -> Bool {
+    switch availability {
+    case .available:
+        return false
+    case .unavailable:
+        return !isInitialSetup
+    }
+}
+
 struct ClaudeOAuthProviderSettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var functionName: String
@@ -347,14 +373,10 @@ struct ClaudeOAuthProviderSettingsSheet: View {
         isInitialSetup: Bool = false,
         save: @escaping (String, String, Bool) throws -> Void
     ) {
-        if isInitialSetup {
-            _functionName = State(initialValue: AppConfig.default.commands.cc)
-            _nickname = State(initialValue: "")
-        } else {
-            _functionName = State(initialValue: config.commands.cc)
-            _nickname = State(initialValue: config.nicknames.cc)
-        }
-        _dangerousPermissionsEnabled = State(initialValue: config.includeDangerouslySkipPermissions)
+        let initialState = oauthSettingsInitialState(config: config, provider: .claude, isInitialSetup: isInitialSetup)
+        _functionName = State(initialValue: initialState.functionName)
+        _nickname = State(initialValue: initialState.nickname)
+        _dangerousPermissionsEnabled = State(initialValue: initialState.dangerousPermissionsEnabled)
         self.connectionDetail = connectionDetail
         self.isConnected = isConnected
         self.onDisconnect = onDisconnect
@@ -434,7 +456,7 @@ struct ClaudeOAuthProviderSettingsSheet: View {
         .task(id: functionName) {
             await updateCommandNameAvailability()
         }
-        .saveErrorAlert(message: $saveErrorMessage)
+        .settingsToast(message: saveErrorMessage, dismiss: { saveErrorMessage = nil })
         .alert("Remove this Claude account?", isPresented: $confirmRemove) {
             Button("Cancel", role: .cancel) {}
             Button("Remove", role: .destructive) {
@@ -501,17 +523,13 @@ struct CodexProviderSettingsSheet: View {
         latestModel: @escaping () -> String? = { nil },
         save: @escaping (String, String, AppConfig.Codex, Bool) throws -> Void
     ) {
-        if isInitialSetup {
-            _functionName = State(initialValue: AppConfig.default.commands.ccodex)
-            _nickname = State(initialValue: "")
-        } else {
-            _functionName = State(initialValue: config.commands.ccodex)
-            _nickname = State(initialValue: config.nicknames.ccodex)
-        }
+        let initialState = oauthSettingsInitialState(config: config, provider: .codex, isInitialSetup: isInitialSetup)
+        _functionName = State(initialValue: initialState.functionName)
+        _nickname = State(initialValue: initialState.nickname)
         _opus = State(initialValue: config.ccodex.opus)
         _sonnet = State(initialValue: config.ccodex.sonnet)
         _haiku = State(initialValue: config.ccodex.haiku)
-        _dangerousPermissionsEnabled = State(initialValue: config.includeDangerouslySkipPermissions)
+        _dangerousPermissionsEnabled = State(initialValue: initialState.dangerousPermissionsEnabled)
         self.connectionDetail = connectionDetail
         self.isConnected = isConnected
         self.availableModels = availableModels
@@ -627,7 +645,7 @@ struct CodexProviderSettingsSheet: View {
         .task(id: functionName) {
             await updateCommandNameAvailability()
         }
-        .saveErrorAlert(message: $saveErrorMessage)
+        .settingsToast(message: saveErrorMessage, dismiss: { saveErrorMessage = nil })
         .alert("Remove this Codex account?", isPresented: $confirmRemove) {
             Button("Cancel", role: .cancel) {}
             Button("Remove", role: .destructive) {
@@ -783,6 +801,6 @@ struct ClaudeAPIProviderSettingsSheet: View {
         }
         .padding(24)
         .frame(width: 460)
-        .saveErrorAlert(message: $saveErrorMessage)
+        .settingsToast(message: saveErrorMessage, dismiss: { saveErrorMessage = nil })
     }
 }

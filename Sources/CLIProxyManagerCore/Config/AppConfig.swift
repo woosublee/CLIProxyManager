@@ -117,7 +117,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         startAtLogin: Bool,
         showDockIcon: Bool,
         showMenuBarIcon: Bool,
-        showNotifications: Bool = true,
+        showNotifications: Bool = false,
         appearance: AppearanceMode = .system,
         nicknames: Nicknames = Nicknames(),
         bindAddress: String = "127.0.0.1",
@@ -163,13 +163,12 @@ public struct AppConfig: Codable, Equatable, Sendable {
         self.startAtLogin = try c.decode(Bool.self, forKey: .startAtLogin)
         self.showDockIcon = try c.decode(Bool.self, forKey: .showDockIcon)
         self.showMenuBarIcon = try c.decode(Bool.self, forKey: .showMenuBarIcon)
-        // Backwards-compat: existing config.json files won't have these keys.
-        self.showNotifications = try c.decodeIfPresent(Bool.self, forKey: .showNotifications) ?? true
+        self.showNotifications = false
         self.appearance = try c.decodeIfPresent(AppearanceMode.self, forKey: .appearance) ?? .system
         self.nicknames = try c.decodeIfPresent(Nicknames.self, forKey: .nicknames) ?? Nicknames()
         self.bindAddress = try c.decodeIfPresent(String.self, forKey: .bindAddress) ?? "127.0.0.1"
         self.autostartServer = try c.decodeIfPresent(Bool.self, forKey: .autostartServer) ?? false
-        self.roundRobinEnabled = try c.decodeIfPresent(Bool.self, forKey: .roundRobinEnabled) ?? false
+        self.roundRobinEnabled = false
         self.logLevel = try c.decodeIfPresent(LogLevel.self, forKey: .logLevel) ?? .info
     }
 

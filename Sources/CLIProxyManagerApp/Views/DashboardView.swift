@@ -1,19 +1,35 @@
 import CLIProxyManagerCore
 import SwiftUI
 
+enum DashboardSheet: Identifiable, Equatable {
+    case addProvider
+    case providerSettings(ProviderRowState.ID, isInitialSetup: Bool)
+
+    var id: String {
+        switch self {
+        case .addProvider:
+            "add-provider"
+        case let .providerSettings(provider, isInitialSetup):
+            "provider-settings-\(provider.rawValue)-initial-\(isInitialSetup)"
+        }
+    }
+
+    static func afterOAuthLoginCompletion(_ provider: ProviderRowState.ID) -> DashboardSheet {
+        .providerSettings(provider, isInitialSetup: true)
+    }
+}
+
 struct DashboardView: View {
     @ObservedObject var viewModel: DashboardViewModel
     let openSettings: () -> Void
     let quit: () -> Void
-    @State private var activeProvider: ProviderRowState.ID?
+    @State private var activeSheet: DashboardSheet?
     @State private var copiedEndpoint: Bool = false
-    @State private var showAddProvider: Bool = false
-    @State private var initialSetupProvider: ProviderRowState.ID?
 
     private var preferredHeight: CGFloat {
         min(
             AppWindowMetrics.mainMaxHeight,
-            300 + CGFloat(max(viewModel.providerRows.count, 1)) * 88 + (viewModel.settingsMessage == nil ? 0 : 32)
+            300 + CGFloat(max(viewModel.providerRows.count, 1)) * 88
         )
     }
 
@@ -45,23 +61,16 @@ struct DashboardView: View {
                         ProviderAccountCardView(
                             account: account,
                             connect: { Task { await viewModel.connectProvider(account.id) } },
-                            settings: { activeProvider = account.id },
+                            settings: { activeSheet = .providerSettings(account.id, isInitialSetup: false) },
                             disconnect: { viewModel.disconnectProvider(account.id) },
                             remove: { viewModel.removeProvider(account.id) }
                         )
                     }
 
                     AddProviderCard {
-                        showAddProvider = true
+                        activeSheet = .addProvider
                     }
                     .padding(.top, 4)
-
-                    if let message = viewModel.settingsMessage {
-                        Text(message)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .padding(.top, 4)
-                    }
                 }
                 .padding(.horizontal, 14)
                 .padding(.top, 14)
@@ -79,21 +88,34 @@ struct DashboardView: View {
         .frame(width: AppWindowMetrics.mainWidth, height: preferredHeight)
         .background(.regularMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .sheet(item: $activeProvider) { provider in
-            providerSettingsSheet(provider)
-        }
-        .sheet(isPresented: $showAddProvider) {
-            AddProviderModal { provider in
-                Task {
-                    await viewModel.connectProvider(provider)
-                    // After OAuth, if a connected row appeared, open the settings sheet
-                    // so the user can finalize nickname / command name / Codex routing.
-                    if viewModel.providerRows.contains(where: { $0.id == provider && $0.isConnected }) {
-                        initialSetupProvider = provider
-                        activeProvider = provider
+        .settingsToast(message: viewModel.settingsMessage, dismiss: viewModel.clearSettingsMessage)
+        .sheet(item: $activeSheet) { sheet in
+            Group {
+                switch sheet {
+                case .addProvider:
+                    AddProviderModal(
+                        activeOAuthLoginProvider: viewModel.activeOAuthLoginProvider,
+                        onPick: { provider in
+                            viewModel.startOAuthLogin(provider)
+                        },
+                        onCancelLogin: {
+                            viewModel.cancelOAuthLogin()
+                        }
+                    )
+                    .onChange(of: viewModel.activeOAuthLoginProvider) { provider in
+                        guard provider == nil, let connectedProvider = viewModel.completedOAuthLoginProvider else { return }
+                        activeSheet = DashboardSheet.afterOAuthLoginCompletion(connectedProvider)
                     }
+                    .onDisappear {
+                        if viewModel.activeOAuthLoginProvider != nil {
+                            viewModel.cancelOAuthLogin()
+                        }
+                    }
+                case let .providerSettings(provider, isInitialSetup):
+                    providerSettingsSheet(provider, isInitialSetup: isInitialSetup)
                 }
             }
+            .settingsToast(message: viewModel.settingsMessage, dismiss: viewModel.clearSettingsMessage)
         }
     }
 
@@ -151,9 +173,8 @@ struct DashboardView: View {
     }
 
     @ViewBuilder
-    private func providerSettingsSheet(_ provider: ProviderRowState.ID) -> some View {
+    private func providerSettingsSheet(_ provider: ProviderRowState.ID, isInitialSetup: Bool) -> some View {
         let row = viewModel.providerRows.first { $0.id == provider }
-        let isInitial = initialSetupProvider == provider
         switch provider {
         case .claude:
             ClaudeOAuthProviderSettingsSheet(
@@ -162,25 +183,25 @@ struct DashboardView: View {
                 isConnected: row?.isConnected ?? false,
                 onDisconnect: {
                     viewModel.removeProvider(.claude)
-                    initialSetupProvider = nil
+                    activeSheet = nil
                 },
                 checkCommandName: { functionName in
                     await viewModel.commandNameAvailability(provider: .claude, functionName: functionName)
                 },
                 onCancel: {
-                    if isInitial {
-                        viewModel.removeProvider(.claude)
+                    if isInitialSetup {
+                        viewModel.removeInitialProvider(.claude)
                     }
-                    initialSetupProvider = nil
+                    activeSheet = nil
                 },
-                isInitialSetup: isInitial,
+                isInitialSetup: isInitialSetup,
                 save: { functionName, nickname, dangerousPermissionsEnabled in
                     try viewModel.saveClaudeOAuthSettings(
                         functionName: functionName,
                         nickname: nickname,
                         dangerousPermissionsEnabled: dangerousPermissionsEnabled
                     )
-                    initialSetupProvider = nil
+                    activeSheet = nil
                 }
             )
         case .codex:
@@ -192,18 +213,18 @@ struct DashboardView: View {
                 refreshModels: { Task { await viewModel.loadCodexModels() } },
                 onDisconnect: {
                     viewModel.removeProvider(.codex)
-                    initialSetupProvider = nil
+                    activeSheet = nil
                 },
                 checkCommandName: { functionName in
                     await viewModel.commandNameAvailability(provider: .codex, functionName: functionName)
                 },
                 onCancel: {
-                    if isInitial {
-                        viewModel.removeProvider(.codex)
+                    if isInitialSetup {
+                        viewModel.removeInitialProvider(.codex)
                     }
-                    initialSetupProvider = nil
+                    activeSheet = nil
                 },
-                isInitialSetup: isInitial,
+                isInitialSetup: isInitialSetup,
                 latestModel: { viewModel.latestBaseCodexModel },
                 save: { functionName, nickname, codex, dangerousPermissionsEnabled in
                     try viewModel.saveCodexSettings(
@@ -212,7 +233,7 @@ struct DashboardView: View {
                         codex: codex,
                         dangerousPermissionsEnabled: dangerousPermissionsEnabled
                     )
-                    initialSetupProvider = nil
+                    activeSheet = nil
                 }
             )
         }

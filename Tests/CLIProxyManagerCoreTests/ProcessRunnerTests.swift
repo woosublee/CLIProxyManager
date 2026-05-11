@@ -60,4 +60,22 @@ final class ProcessRunnerTests: XCTestCase {
         XCTAssertFalse(result.timedOut)
         XCTAssertLessThan(Date().timeIntervalSince(start), 1.0)
     }
+
+    func testCancellationTerminatesRunningProcessGroup() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let marker = directory.appendingPathComponent("child-finished")
+        let runner = ProcessRunner(timeout: 5)
+
+        let task = Task {
+            await runner.run("/bin/sh", ["-c", "(sleep 1; touch '\(marker.path)') & sleep 5"])
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        task.cancel()
+        _ = await task.value
+        try await Task.sleep(nanoseconds: 1_300_000_000)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path))
+    }
 }

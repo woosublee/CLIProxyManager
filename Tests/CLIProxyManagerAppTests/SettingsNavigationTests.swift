@@ -7,6 +7,20 @@ final class SettingsNavigationTests: XCTestCase {
         XCTAssertEqual(SettingsTab.allCases.map(\.title), ["General", "Server", "Advanced", "About"])
         XCTAssertEqual(SettingsTab.allCases.map(\.systemImage), ["slider.horizontal.3", "server.rack", "wrench.and.screwdriver", "info.circle"])
     }
+
+    func testOAuthCompletionTransitionsAddProviderSheetToInitialProviderSettings() {
+        XCTAssertEqual(
+            DashboardSheet.afterOAuthLoginCompletion(.codex),
+            .providerSettings(.codex, isInitialSetup: true)
+        )
+    }
+
+    func testProviderSettingsSheetIdentityIncludesInitialSetupState() {
+        XCTAssertNotEqual(
+            DashboardSheet.providerSettings(.codex, isInitialSetup: true).id,
+            DashboardSheet.providerSettings(.codex, isInitialSetup: false).id
+        )
+    }
 }
 
 final class GeneralServerControlSnapshotTests: XCTestCase {

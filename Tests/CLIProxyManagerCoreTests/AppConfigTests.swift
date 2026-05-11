@@ -17,6 +17,34 @@ final class AppConfigTests: XCTestCase {
         XCTAssertFalse(config.startAtLogin)
         XCTAssertTrue(config.showDockIcon)
         XCTAssertTrue(config.showMenuBarIcon)
+        XCTAssertFalse(config.showNotifications)
+        XCTAssertFalse(config.roundRobinEnabled)
+    }
+
+    func testDecodedConfigCannotEnableUnavailableFeatures() throws {
+        let data = Data(#"""
+        {
+          "port": 18317,
+          "commands": { "cc": "cc", "ccapi": "customapi", "ccodex": "ccodex" },
+          "ccapi": { "model": "claude-opus-4-7" },
+          "ccodex": {
+            "opus": { "model": "gpt-5.5", "reasoning": "xhigh", "contextWindow": "auto" },
+            "sonnet": { "model": "gpt-5.5", "reasoning": "medium", "contextWindow": "auto" },
+            "haiku": { "model": "gpt-5.5", "reasoning": "low", "contextWindow": "auto" }
+          },
+          "includeDangerouslySkipPermissions": false,
+          "startAtLogin": false,
+          "showDockIcon": true,
+          "showMenuBarIcon": true,
+          "showNotifications": true,
+          "roundRobinEnabled": true
+        }
+        """#.utf8)
+
+        let config = try JSONDecoder().decode(AppConfig.self, from: data)
+
+        XCTAssertFalse(config.showNotifications)
+        XCTAssertFalse(config.roundRobinEnabled)
     }
 
     func testManagedPathsCanBeRootedInTemporaryDirectory() {

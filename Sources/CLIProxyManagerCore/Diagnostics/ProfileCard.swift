@@ -32,12 +32,6 @@ public struct ProfileCard: Equatable, Identifiable, Sendable {
                 status: pendingStatus
             ),
             ProfileCard(
-                command: config.commands.ccapi,
-                title: "Claude API",
-                subtitle: "Keychain API key 사용",
-                status: pendingStatus
-            ),
-            ProfileCard(
                 command: config.commands.ccodex,
                 title: "OpenAI/Codex",
                 subtitle: "CLIProxyAPI 경유",

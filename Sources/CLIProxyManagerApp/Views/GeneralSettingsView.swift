@@ -35,11 +35,8 @@ struct GeneralSettingsView: View {
                     .labelsHidden()
                     .toggleStyle(SettingsToggleStyle())
                 }
-                SettingsRow(label: "Show notifications", description: "Notify me about token expiries and errors.") {
-                    Toggle("", isOn: Binding(
-                        get: { viewModel.config.showNotifications },
-                        set: { value in viewModel.saveSetting { try viewModel.saveShowNotifications(value) } }
-                    ))
+                SettingsRow(label: "Show notifications", description: "Notification delivery is a design placeholder.", isEnabled: false) {
+                    Toggle("", isOn: .constant(false))
                     .labelsHidden()
                     .toggleStyle(SettingsToggleStyle())
                 }
