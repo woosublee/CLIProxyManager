@@ -174,6 +174,12 @@ struct AdvancedSettingsView: View {
     }
 }
 
+func aboutVersionText(bundle: Bundle = .main) -> String {
+    let version = bundle.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.2(beta)"
+    let build = bundle.infoDictionary?["CFBundleVersion"] as? String ?? "3"
+    return "Version \(version) (\(build))"
+}
+
 struct AboutSettingsView: View {
     @State private var showLicenses: Bool = false
 
@@ -187,7 +193,7 @@ struct AboutSettingsView: View {
                     Text("Built for the people who proxy")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
-                    Text(verbatim: "Version 0.0.1 (beta)")
+                    Text(verbatim: aboutVersionText())
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.tertiary)
                         .padding(.top, 8)
