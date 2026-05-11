@@ -196,6 +196,24 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.config.commands.cc, "myclaude")
     }
 
+    func testSaveClaudeOAuthSettingsIgnoresInvalidInactiveProviderCommandName() throws {
+        var config = AppConfig.default
+        config.commands.ccodex = "bad;rm"
+        let store = StubConfigStore(config: config)
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        try viewModel.saveClaudeOAuthSettings(functionName: "myclaude", nickname: "", dangerousPermissionsEnabled: false)
+
+        XCTAssertEqual(store.savedConfigs.last?.commands.cc, "myclaude")
+        XCTAssertEqual(store.savedConfigs.last?.commands.ccodex, "bad;rm")
+    }
+
     func testSaveCodexSettingsNormalizesCommandNameBeforePersisting() throws {
         let store = StubConfigStore(config: .default)
         let viewModel = DashboardViewModel(

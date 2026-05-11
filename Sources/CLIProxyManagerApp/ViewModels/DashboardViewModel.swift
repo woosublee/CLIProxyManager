@@ -502,7 +502,6 @@ final class DashboardViewModel: ObservableObject {
 
     private func saveConfig(_ updatedConfig: AppConfig, validateShellFunctions: Bool = false) throws {
         if validateShellFunctions {
-            _ = try ShellFunctionRenderer(config: updatedConfig, helperCommand: "/usr/bin/true").render()
             let activeNames = activeFunctionNames(in: updatedConfig)
             try ShellCommandNameValidator.validate(activeNames)
             try shellInstaller.validateFunctionNames(activeNames)
