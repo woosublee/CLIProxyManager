@@ -6,11 +6,11 @@ import CLIProxyManagerCore
 final class SettingsNavigationTests: XCTestCase {
     func testAboutVersionTextUsesBundleVersion() {
         let bundle = BundleMock(info: [
-            "CFBundleShortVersionString": "0.1.2(beta)",
+            "CFBundleShortVersionString": "0.1.2-beta.1",
             "CFBundleVersion": "3"
         ])
 
-        XCTAssertEqual(aboutVersionText(bundle: bundle), "Version 0.1.2(beta) (3)")
+        XCTAssertEqual(aboutVersionText(bundle: bundle), "Version 0.1.2-beta.1 (3)")
     }
 
     func testSettingsTabsAreGeneralServerAdvancedAndAbout() {

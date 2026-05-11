@@ -15,7 +15,7 @@
     <key>CFBundleVersion</key>
     <string>3</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.2(beta)</string>
+    <string>0.1.2-beta.1</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleExecutable</key>

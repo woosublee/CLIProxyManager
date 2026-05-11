@@ -175,7 +175,7 @@ struct AdvancedSettingsView: View {
 }
 
 func aboutVersionText(bundle: Bundle = .main) -> String {
-    let version = bundle.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.2(beta)"
+    let version = bundle.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.2-beta.1"
     let build = bundle.infoDictionary?["CFBundleVersion"] as? String ?? "3"
     return "Version \(version) (\(build))"
 }

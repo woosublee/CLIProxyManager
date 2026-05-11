@@ -1,6 +1,6 @@
 APP_NAME ?= CLIProxyManager
 BUNDLE_ID ?= com.woosublee.CLIProxyManager
-VERSION ?= 0.1.2(beta)
+VERSION ?= 0.1.2-beta.1
 BUILD_NUMBER ?= 3
 BUILD_DIR ?= build
 CONFIGURATION ?= release
