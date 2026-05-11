@@ -1,11 +1,48 @@
+import Foundation
 import XCTest
 @testable import CLIProxyManagerApp
 import CLIProxyManagerCore
 
 final class SettingsNavigationTests: XCTestCase {
+    func testAboutVersionTextUsesBundleVersion() {
+        let bundle = BundleMock(info: [
+            "CFBundleShortVersionString": "0.1.2(beta)",
+            "CFBundleVersion": "3"
+        ])
+
+        XCTAssertEqual(aboutVersionText(bundle: bundle), "Version 0.1.2(beta) (3)")
+    }
+
     func testSettingsTabsAreGeneralServerAdvancedAndAbout() {
         XCTAssertEqual(SettingsTab.allCases.map(\.title), ["General", "Server", "Advanced", "About"])
         XCTAssertEqual(SettingsTab.allCases.map(\.systemImage), ["slider.horizontal.3", "server.rack", "wrench.and.screwdriver", "info.circle"])
+    }
+
+    func testOAuthCompletionTransitionsAddProviderSheetToInitialProviderSettings() {
+        XCTAssertEqual(
+            DashboardSheet.afterOAuthLoginCompletion(.codex),
+            .providerSettings(.codex, isInitialSetup: true)
+        )
+    }
+
+    func testProviderSettingsSheetIdentityIncludesInitialSetupState() {
+        XCTAssertNotEqual(
+            DashboardSheet.providerSettings(.codex, isInitialSetup: true).id,
+            DashboardSheet.providerSettings(.codex, isInitialSetup: false).id
+        )
+    }
+}
+
+private final class BundleMock: Bundle, @unchecked Sendable {
+    private let storedInfo: [String: Any]
+
+    init(info: [String: Any]) {
+        self.storedInfo = info
+        super.init()
+    }
+
+    override var infoDictionary: [String: Any]? {
+        storedInfo
     }
 }
 

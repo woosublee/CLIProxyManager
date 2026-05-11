@@ -62,5 +62,6 @@ struct SettingsView: View {
         .frame(width: AppWindowMetrics.settingsWidth, height: AppWindowMetrics.settingsHeight)
         .background(.regularMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .settingsToast(message: viewModel.settingsMessage, dismiss: viewModel.clearSettingsMessage)
     }
 }

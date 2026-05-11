@@ -38,18 +38,28 @@ final class DashboardViewModelTests: XCTestCase {
 
         let cards = ProfileCard.makeDefaultCards(config: config)
 
-        XCTAssertEqual(cards.map(\.id), ["claude-local", "api-local", "codex-local"])
-        XCTAssertEqual(cards.map(\.command), ["claude-local", "api-local", "codex-local"])
-        XCTAssertEqual(cards.map(\.title), ["Claude 구독", "Claude API", "OpenAI/Codex"])
+        XCTAssertEqual(cards.map(\.id), ["claude-local", "codex-local"])
+        XCTAssertEqual(cards.map(\.command), ["claude-local", "codex-local"])
+        XCTAssertEqual(cards.map(\.title), ["Claude 구독", "OpenAI/Codex"])
         XCTAssertEqual(cards.map(\.subtitle), [
             "Claude Code 공식 로그인 사용",
-            "Keychain API key 사용",
             "CLIProxyAPI 경유"
         ])
         XCTAssertEqual(cards.map(\.status), Array(repeating: DiagnosticStatus(
             severity: .warning,
             title: "확인 필요",
             message: "상태 확인 전입니다."
-        ), count: 3))
+        ), count: 2))
+    }
+
+    func testDefaultProfileCardsExcludeClaudeAPIEvenWhenConfigured() {
+        var config = AppConfig.default
+        config.commands.ccapi = "manualapi"
+        config.ccapi = AppConfig.ClaudeAPI(model: "manual-model")
+
+        let cards = ProfileCard.makeDefaultCards(config: config)
+
+        XCTAssertFalse(cards.contains { $0.command == "manualapi" })
+        XCTAssertFalse(cards.contains { $0.title == "Claude API" })
     }
 }

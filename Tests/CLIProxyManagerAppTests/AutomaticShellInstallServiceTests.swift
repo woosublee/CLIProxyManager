@@ -28,12 +28,11 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
     }
 
 
-    func testViewModelInstallsClaudeFunctionAfterOAuthConnection() async {
+    func testViewModelInstallsClaudeFunctionAfterSettingsSave() throws {
         let installer = StubShellInstaller()
-        let authStore = StubAuthProfileStore(profiles: [])
-        authStore.nextProfiles = [
+        let authStore = StubAuthProfileStore(profiles: [
             AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
-        ]
+        ])
         let automaticInstaller = AutomaticShellInstallService(
             installer: installer,
             secretStore: FailingSecretStore(error: SecretStoreError.missingSecret(SecretKey.claudeAPIKey.rawValue)),
@@ -50,19 +49,18 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
         )
         installer.reset()
 
-        await viewModel.connectProvider(.claude)
+        try viewModel.saveClaudeOAuthSettings(functionName: "cc", nickname: "", dangerousPermissionsEnabled: false)
 
         XCTAssertEqual(installer.installedFunctionNames, ["cc"])
         XCTAssertTrue(installer.installedScript?.contains("cc() {") == true)
         XCTAssertFalse(installer.installedScript?.contains("ccodex() {") == true)
     }
 
-    func testViewModelInstallsCodexFunctionAfterOAuthConnection() async {
+    func testViewModelInstallsCodexFunctionAfterSettingsSave() throws {
         let installer = StubShellInstaller()
-        let authStore = StubAuthProfileStore(profiles: [])
-        authStore.nextProfiles = [
+        let authStore = StubAuthProfileStore(profiles: [
             AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
-        ]
+        ])
         let automaticInstaller = AutomaticShellInstallService(
             installer: installer,
             secretStore: FailingSecretStore(error: SecretStoreError.missingSecret(SecretKey.claudeAPIKey.rawValue)),
@@ -79,7 +77,7 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
         )
         installer.reset()
 
-        await viewModel.connectProvider(.codex)
+        try viewModel.saveCodexSettings(functionName: "ccodex", nickname: "", codex: AppConfig.default.ccodex, dangerousPermissionsEnabled: false)
 
         XCTAssertEqual(installer.installedFunctionNames, ["ccodex"])
         XCTAssertFalse(installer.installedScript?.contains("cc() {") == true)

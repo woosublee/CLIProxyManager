@@ -28,21 +28,16 @@ struct ProviderListView: View {
                     )
                 }
             }
-
-            if let message = viewModel.settingsMessage {
-                Text(message)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
         }
         .padding(24)
+        .settingsToast(message: viewModel.settingsMessage, dismiss: viewModel.clearSettingsMessage)
         .sheet(item: $activeProvider) { provider in
             providerSettingsSheet(provider)
         }
     }
 
     private func connect(_ provider: ProviderRowState.ID) {
-        Task { await viewModel.connectProvider(provider) }
+        viewModel.startOAuthLogin(provider)
     }
 
     private func disconnect(_ provider: ProviderRowState.ID) {

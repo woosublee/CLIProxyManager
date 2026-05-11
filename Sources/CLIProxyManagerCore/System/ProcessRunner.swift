@@ -20,6 +20,8 @@ public protocol ProcessRunning: Sendable {
 }
 
 public struct ProcessRunner: ProcessRunning {
+    public static let forceTerminationGracePeriod: TimeInterval = 0.5
+
     private let timeout: TimeInterval
 
     public init(timeout: TimeInterval = 10) {
@@ -27,13 +29,97 @@ public struct ProcessRunner: ProcessRunning {
     }
 
     public func run(_ executable: String, _ arguments: [String]) async -> ProcessResult {
-        await Task.detached(priority: .utility) {
-            runBlocking(executable, arguments, timeout: timeout)
-        }.value
+        let process = RunningProcess()
+        let task = Task.detached(priority: .utility) {
+            runBlocking(executable, arguments, timeout: timeout, runningProcess: process)
+        }
+        return await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+            process.terminate()
+        }
     }
 }
 
-private func runBlocking(_ executable: String, _ arguments: [String], timeout: TimeInterval) -> ProcessResult {
+private final class RunningProcess: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pid: pid_t?
+    private var processGroupID: pid_t?
+    private var terminationRequested = false
+    private var forceTerminationPending = false
+
+    func setPID(_ pid: pid_t) {
+        lock.lock()
+        self.pid = pid
+        processGroupID = pid
+        let shouldTerminate = terminationRequested
+        lock.unlock()
+
+        if shouldTerminate {
+            terminate(pid)
+        }
+    }
+
+    func clear() {
+        lock.lock()
+        pid = nil
+        if forceTerminationPending == false {
+            processGroupID = nil
+            terminationRequested = false
+        }
+        lock.unlock()
+    }
+
+    func terminate() {
+        lock.lock()
+        terminationRequested = true
+        let currentProcessGroupID = processGroupID ?? pid
+        lock.unlock()
+
+        if let currentProcessGroupID {
+            terminate(currentProcessGroupID)
+        }
+    }
+
+    private func terminate(_ targetProcessGroupID: pid_t) {
+        lock.lock()
+        guard forceTerminationPending == false else {
+            lock.unlock()
+            return
+        }
+        forceTerminationPending = true
+        lock.unlock()
+
+        terminateProcessGroup(targetProcessGroupID, signal: SIGTERM)
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + ProcessRunner.forceTerminationGracePeriod) { [weak self] in
+            self?.forceTerminate(targetProcessGroupID)
+        }
+    }
+
+    private func forceTerminate(_ targetProcessGroupID: pid_t) {
+        lock.lock()
+        let shouldTerminate = processGroupID == targetProcessGroupID
+        if shouldTerminate {
+            pid = nil
+            processGroupID = nil
+            terminationRequested = false
+            forceTerminationPending = false
+        }
+        lock.unlock()
+
+        if shouldTerminate {
+            terminateProcessGroup(targetProcessGroupID, signal: SIGKILL)
+        }
+    }
+}
+
+private func runBlocking(
+    _ executable: String,
+    _ arguments: [String],
+    timeout: TimeInterval,
+    runningProcess: RunningProcess
+) -> ProcessResult {
     var stdoutPipe: [Int32] = [0, 0]
     var stderrPipe: [Int32] = [0, 0]
     guard pipe(&stdoutPipe) == 0 else {
@@ -112,6 +198,8 @@ private func runBlocking(_ executable: String, _ arguments: [String], timeout: T
     guard spawnError == 0 else {
         return setupFailure(spawnError)
     }
+    runningProcess.setPID(pid)
+    defer { runningProcess.clear() }
 
     let deadline = DispatchTime.now() + timeout
     var exitCode = waitForProcess(pid, until: deadline)

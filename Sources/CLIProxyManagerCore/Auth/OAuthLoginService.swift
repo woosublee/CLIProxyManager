@@ -32,8 +32,16 @@ public enum OAuthLoginProvider: Equatable, Sendable {
     }
 }
 
-public enum OAuthLoginError: Error, Equatable {
+public enum OAuthLoginError: LocalizedError, Equatable {
     case failed(provider: OAuthLoginProvider, exitCode: Int32, message: String)
+
+    public var errorDescription: String? {
+        switch self {
+        case let .failed(provider, exitCode, message):
+            let detail = message.isEmpty ? "프로세스가 오류 메시지 없이 종료되었습니다." : message
+            return "\(provider.displayName) 로그인 실패(exit \(exitCode)): \(detail)"
+        }
+    }
 }
 
 public struct OAuthLoginService: Sendable {
@@ -58,6 +66,7 @@ public struct OAuthLoginService: Sendable {
             paths.clipProxyBinary.path,
             ["--config", paths.clipProxyConfigFile.path, provider.loginFlag]
         )
+        try Task.checkCancellation()
 
         guard result.exitCode == 0 else {
             let message = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

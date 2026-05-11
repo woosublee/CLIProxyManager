@@ -2,9 +2,43 @@ import SwiftUI
 
 struct AddProviderModal: View {
     @Environment(\.dismiss) private var dismiss
+    let activeOAuthLoginProvider: ProviderRowState.ID?
     let onPick: (ProviderRowState.ID) -> Void
+    let onCancelLogin: () -> Void
 
     var body: some View {
+        VStack(spacing: 0) {
+            if let activeOAuthLoginProvider {
+                OAuthLoginProgressView(provider: activeOAuthLoginProvider)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 16)
+            } else {
+                providerPicker
+            }
+
+            Divider()
+
+            HStack {
+                if activeOAuthLoginProvider == nil {
+                    Button("Cancel") { dismiss() }
+                        .frame(maxWidth: .infinity)
+                        .controlSize(.regular)
+                } else {
+                    Button("Cancel Login") {
+                        onCancelLogin()
+                        dismiss()
+                    }
+                    .frame(maxWidth: .infinity)
+                    .controlSize(.regular)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+        }
+        .frame(width: activeOAuthLoginProvider == nil ? 380 : 320)
+    }
+
+    private var providerPicker: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Add a provider")
@@ -21,11 +55,9 @@ struct AddProviderModal: View {
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
                 ProviderTile(kind: .claude) {
                     onPick(.claude)
-                    dismiss()
                 }
                 ProviderTile(kind: .codex) {
                     onPick(.codex)
-                    dismiss()
                 }
                 ProviderTile(kind: .gemini)
                 ProviderTile(kind: .qwen)
@@ -33,18 +65,41 @@ struct AddProviderModal: View {
             .padding(.horizontal, 16)
             .padding(.top, 6)
             .padding(.bottom, 16)
-
-            Divider()
-
-            HStack {
-                Button("Cancel") { dismiss() }
-                    .frame(maxWidth: .infinity)
-                    .controlSize(.regular)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
         }
-        .frame(width: 380)
+    }
+}
+
+private struct OAuthLoginProgressView: View {
+    let provider: ProviderRowState.ID
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ProviderAvatar(providerID: provider, size: 28)
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text("\(providerName) OAuth")
+                        .font(.system(size: 14, weight: .semibold))
+                    ProgressView()
+                        .controlSize(.small)
+                        .scaleEffect(0.72)
+                }
+
+                Text("Complete login in your browser.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var providerName: String {
+        switch provider {
+        case .claude:
+            "Claude"
+        case .codex:
+            "Codex"
+        }
     }
 }
 

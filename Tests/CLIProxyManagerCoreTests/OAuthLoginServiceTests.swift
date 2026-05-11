@@ -44,6 +44,34 @@ final class OAuthLoginServiceTests: XCTestCase {
             XCTAssertEqual(error, .failed(provider: .codex, exitCode: 2, message: "oauth failed"))
         }
     }
+
+    func testLoginCancellationTakesPrecedenceOverProcessFailure() async throws {
+        let service = OAuthLoginService(
+            paths: ManagedPaths(rootDirectory: URL(fileURLWithPath: "/tmp/managed")),
+            runtimePreparer: StubRuntimePreparer(),
+            runner: DelayedProcessRunner(result: ProcessResult(exitCode: 143, stdout: "", stderr: "terminated"))
+        )
+
+        let task = Task {
+            try await service.login(provider: .claude, port: 18_317)
+        }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        task.cancel()
+
+        do {
+            try await task.value
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {
+        } catch {
+            XCTFail("Expected CancellationError, got \(error)")
+        }
+    }
+
+    func testOAuthLoginErrorLocalizedDescriptionIncludesProviderExitCodeAndMessage() {
+        let error = OAuthLoginError.failed(provider: .codex, exitCode: 13, message: "port is already in use")
+
+        XCTAssertEqual(error.localizedDescription, "Codex OAuth 로그인 실패(exit 13): port is already in use")
+    }
 }
 
 private final class StubRuntimePreparer: ProxyRuntimePreparing, @unchecked Sendable {
@@ -75,6 +103,15 @@ private final class StubProcessRunner: ProcessRunning, @unchecked Sendable {
 
     func run(_ executable: String, _ arguments: [String]) async -> ProcessResult {
         lock.withLock { _invocations.append(Invocation(executable: executable, arguments: arguments)) }
+        return result
+    }
+}
+
+private struct DelayedProcessRunner: ProcessRunning {
+    let result: ProcessResult
+
+    func run(_ executable: String, _ arguments: [String]) async -> ProcessResult {
+        try? await Task.sleep(nanoseconds: 200_000_000)
         return result
     }
 }

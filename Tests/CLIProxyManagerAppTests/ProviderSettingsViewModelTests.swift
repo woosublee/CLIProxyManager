@@ -101,6 +101,74 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(store.savedConfigs, [])
     }
 
+    func testInitialOAuthSettingsDisableDangerousPermissionsByDefault() {
+        var config = AppConfig.default
+        config.includeDangerouslySkipPermissions = true
+
+        XCTAssertFalse(oauthSettingsDangerousPermissionDefault(config: config, isInitialSetup: true))
+    }
+
+    func testInitialOAuthSettingsUseDefaultCommandNamesAndNickname() {
+        var config = AppConfig.default
+        config.commands.cc = "customclaude"
+        config.commands.ccodex = "ccmcodex"
+        config.nicknames = AppConfig.Nicknames(cc: "old-claude", ccodex: "old-codex")
+        config.includeDangerouslySkipPermissions = true
+
+        XCTAssertEqual(oauthSettingsInitialState(config: config, provider: .claude, isInitialSetup: true), OAuthSettingsInitialState(
+            functionName: "cc",
+            nickname: "",
+            dangerousPermissionsEnabled: false
+        ))
+        XCTAssertEqual(oauthSettingsInitialState(config: config, provider: .codex, isInitialSetup: true), OAuthSettingsInitialState(
+            functionName: "ccodex",
+            nickname: "",
+            dangerousPermissionsEnabled: false
+        ))
+    }
+
+    func testInitialCodexSettingsUseDefaultModelRouting() {
+        var config = AppConfig.default
+        config.ccodex = AppConfig.Codex(
+            opus: AppConfig.CodexRole(model: "old-opus", reasoning: .high, contextWindow: .context200k),
+            sonnet: AppConfig.CodexRole(model: "old-sonnet", reasoning: .medium, contextWindow: .context400k),
+            haiku: AppConfig.CodexRole(model: "old-haiku", reasoning: .low, contextWindow: .context1m)
+        )
+
+        XCTAssertEqual(oauthSettingsInitialCodex(config: config, isInitialSetup: true), AppConfig.default.ccodex)
+    }
+
+    func testExistingOAuthSettingsUseConfiguredCommandNamesAndNickname() {
+        var config = AppConfig.default
+        config.commands.cc = "customclaude"
+        config.commands.ccodex = "ccmcodex"
+        config.nicknames = AppConfig.Nicknames(cc: "work", ccodex: "personal")
+        config.includeDangerouslySkipPermissions = true
+
+        XCTAssertEqual(oauthSettingsInitialState(config: config, provider: .claude, isInitialSetup: false), OAuthSettingsInitialState(
+            functionName: "customclaude",
+            nickname: "work",
+            dangerousPermissionsEnabled: true
+        ))
+        XCTAssertEqual(oauthSettingsInitialState(config: config, provider: .codex, isInitialSetup: false), OAuthSettingsInitialState(
+            functionName: "ccmcodex",
+            nickname: "personal",
+            dangerousPermissionsEnabled: true
+        ))
+    }
+
+    func testExistingOAuthSettingsUseCurrentDangerousPermissionValue() {
+        var config = AppConfig.default
+        config.includeDangerouslySkipPermissions = true
+
+        XCTAssertTrue(oauthSettingsDangerousPermissionDefault(config: config, isInitialSetup: false))
+    }
+
+    func testInitialSetupCommandConflictDoesNotBlockSettingsSheet() {
+        XCTAssertFalse(oauthSettingsShouldBlockInitialDisplay(isInitialSetup: true, availability: .unavailable("conflict")))
+        XCTAssertTrue(oauthSettingsShouldBlockInitialDisplay(isInitialSetup: false, availability: .unavailable("conflict")))
+    }
+
     func testCommandNameAvailabilityReportsValidNamesAsAvailable() async {
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: .default),
@@ -284,6 +352,58 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(store.savedConfigs, [])
     }
 
+    func testRemoveClaudeProviderResetsClaudeSettings() {
+        var config = AppConfig.default
+        config.commands.cc = "customclaude"
+        config.commands.ccodex = "teamcodex"
+        config.nicknames = AppConfig.Nicknames(cc: "old-claude", ccodex: "keep-codex")
+        config.includeDangerouslySkipPermissions = true
+        let store = StubConfigStore(config: config)
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        viewModel.removeProvider(.claude)
+
+        XCTAssertEqual(viewModel.config.commands.cc, AppConfig.default.commands.cc)
+        XCTAssertEqual(viewModel.config.commands.ccodex, "teamcodex")
+        XCTAssertEqual(viewModel.config.nicknames.cc, "")
+        XCTAssertEqual(viewModel.config.nicknames.ccodex, "keep-codex")
+        XCTAssertFalse(viewModel.config.includeDangerouslySkipPermissions)
+        XCTAssertEqual(store.savedConfigs.last?.commands.cc, AppConfig.default.commands.cc)
+    }
+
+    func testRemoveCodexProviderResetsCodexSettings() {
+        var config = AppConfig.default
+        config.commands.cc = "teamclaude"
+        config.commands.ccodex = "customcodex"
+        config.nicknames = AppConfig.Nicknames(cc: "keep-claude", ccodex: "old-codex")
+        config.ccodex = testCodex(model: "custom-model")
+        config.includeDangerouslySkipPermissions = true
+        let store = StubConfigStore(config: config)
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [codexProfile()]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        viewModel.removeProvider(.codex)
+
+        XCTAssertEqual(viewModel.config.commands.cc, "teamclaude")
+        XCTAssertEqual(viewModel.config.commands.ccodex, AppConfig.default.commands.ccodex)
+        XCTAssertEqual(viewModel.config.nicknames.cc, "keep-claude")
+        XCTAssertEqual(viewModel.config.nicknames.ccodex, "")
+        XCTAssertEqual(viewModel.config.ccodex, AppConfig.default.ccodex)
+        XCTAssertFalse(viewModel.config.includeDangerouslySkipPermissions)
+        XCTAssertEqual(store.savedConfigs.last?.commands.ccodex, AppConfig.default.commands.ccodex)
+    }
+
     func testRemoveProviderRewritesShellFunctionsWithoutDeletedProvider() {
         let installer = StubShellInstaller()
         let authStore = StubAuthProfileStore(profiles: [claudeProfile(), codexProfile()])
@@ -330,11 +450,11 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(installer.installedFunctionNames, [])
     }
 
-    private func testCodex() -> AppConfig.Codex {
+    private func testCodex(model: String = "gpt-5.5") -> AppConfig.Codex {
         AppConfig.Codex(
-            opus: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .xhigh, contextWindow: .auto),
-            sonnet: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .medium, contextWindow: .auto),
-            haiku: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .low, contextWindow: .auto)
+            opus: AppConfig.CodexRole(model: model, reasoning: .xhigh, contextWindow: .auto),
+            sonnet: AppConfig.CodexRole(model: model, reasoning: .medium, contextWindow: .auto),
+            haiku: AppConfig.CodexRole(model: model, reasoning: .low, contextWindow: .auto)
         )
     }
 

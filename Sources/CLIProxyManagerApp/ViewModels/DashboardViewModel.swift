@@ -67,6 +67,8 @@ final class DashboardViewModel: ObservableObject {
     @Published var serverControlState: ServerControlState = .stopped
     @Published var isServerActionInProgress = false
     @Published var isProfileLoginInProgress = false
+    @Published private(set) var activeOAuthLoginProvider: ProviderRowState.ID?
+    @Published private(set) var completedOAuthLoginProvider: ProviderRowState.ID?
     @Published private(set) var config: AppConfig
     @Published var availableCodexModels: [String] = []
 
@@ -77,7 +79,9 @@ final class DashboardViewModel: ObservableObject {
             return lowercasedModel.hasPrefix("gpt-") && !excludedKeywords.contains { lowercasedModel.contains($0) }
         } ?? availableCodexModels.first
     }
-    @Published var settingsMessage: String?
+    @Published var settingsMessage: String? {
+        didSet { scheduleSettingsMessageAutoClear() }
+    }
     @Published var optionRows: [DashboardOptionRow] = []
     @Published var providerRows: [ProviderRowState] = []
 
@@ -93,7 +97,11 @@ final class DashboardViewModel: ObservableObject {
     private let loginItemService: any LoginItemControlling
     private let appAppearanceService: any AppAppearanceApplying
     private let serverStatusRetryDelayNanoseconds: UInt64
+    private let settingsMessageAutoClearDelayNanoseconds: UInt64
     private var authProfiles: [AuthProfile] = []
+    private var oauthLoginTask: Task<Void, Never>?
+    private var oauthLoginSessionID: UUID?
+    private var settingsMessageAutoClearTask: Task<Void, Never>?
     private var lastClaudeStatus: DiagnosticStatus?
     private var lastCodexStatus: DiagnosticStatus?
 
@@ -110,7 +118,8 @@ final class DashboardViewModel: ObservableObject {
         claudeConnector: ClaudeConnector = ClaudeConnector(),
         loginItemService: any LoginItemControlling = LoginItemService(),
         appAppearanceService: any AppAppearanceApplying = AppAppearanceService(),
-        serverStatusRetryDelayNanoseconds: UInt64 = 500_000_000
+        serverStatusRetryDelayNanoseconds: UInt64 = 500_000_000,
+        settingsMessageAutoClearDelayNanoseconds: UInt64 = 3_000_000_000
     ) {
         self.configStore = configStore
         self.shellInstaller = shellInstaller
@@ -125,7 +134,8 @@ final class DashboardViewModel: ObservableObject {
         self.loginItemService = loginItemService
         self.appAppearanceService = appAppearanceService
         self.serverStatusRetryDelayNanoseconds = serverStatusRetryDelayNanoseconds
-        let initialConfig = config ?? ((try? configStore.load()) ?? .default)
+        self.settingsMessageAutoClearDelayNanoseconds = settingsMessageAutoClearDelayNanoseconds
+        let initialConfig = Self.availableConfig(config ?? ((try? configStore.load()) ?? .default))
         self.config = initialConfig
         cards = ProfileCard.makeDefaultCards(config: initialConfig)
         serverStatus = DiagnosticStatus(
@@ -159,7 +169,7 @@ final class DashboardViewModel: ObservableObject {
 
     func saveShowNotifications(_ enabled: Bool) throws {
         var updatedConfig = config
-        updatedConfig.showNotifications = enabled
+        updatedConfig.showNotifications = false
         try saveConfig(updatedConfig)
     }
 
@@ -177,7 +187,7 @@ final class DashboardViewModel: ObservableObject {
 
     func saveRoundRobinEnabled(_ enabled: Bool) throws {
         var updatedConfig = config
-        updatedConfig.roundRobinEnabled = enabled
+        updatedConfig.roundRobinEnabled = false
         try saveConfig(updatedConfig)
     }
 
@@ -266,31 +276,113 @@ final class DashboardViewModel: ObservableObject {
         rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
     }
 
-    func connectProvider(_ provider: ProviderRowState.ID) async {
-        guard isProfileLoginInProgress == false else { return }
+    func clearSettingsMessage() {
+        settingsMessageAutoClearTask?.cancel()
+        settingsMessageAutoClearTask = nil
+        settingsMessage = nil
+    }
+
+    func startOAuthLogin(_ provider: ProviderRowState.ID) {
+        guard oauthLoginTask == nil else { return }
+        let sessionID = UUID()
+        oauthLoginSessionID = sessionID
+        completedOAuthLoginProvider = nil
+        activeOAuthLoginProvider = provider
         isProfileLoginInProgress = true
-        defer { isProfileLoginInProgress = false }
+        oauthLoginTask = Task { [weak self] in
+            await self?.runOAuthLogin(provider, sessionID: sessionID)
+        }
+    }
+
+    func cancelOAuthLogin() {
+        let cancelledProvider = activeOAuthLoginProvider
+        oauthLoginTask?.cancel()
+        oauthLoginTask = nil
+        oauthLoginSessionID = nil
+        activeOAuthLoginProvider = nil
+        completedOAuthLoginProvider = nil
+        isProfileLoginInProgress = false
+
+        if let cancelledProvider {
+            settingsMessage = "\(oauthProviderName(cancelledProvider)) 로그인을 취소했습니다."
+            refreshProfiles()
+        }
+    }
+
+    func connectProvider(_ provider: ProviderRowState.ID) async {
+        guard oauthLoginTask == nil, isProfileLoginInProgress == false else { return }
+        let sessionID = UUID()
+        oauthLoginSessionID = sessionID
+        completedOAuthLoginProvider = nil
+        activeOAuthLoginProvider = provider
+        isProfileLoginInProgress = true
+        await runOAuthLogin(provider, sessionID: sessionID)
+    }
+
+    private func oauthProviderName(_ provider: ProviderRowState.ID) -> String {
+        switch provider {
+        case .claude:
+            "Claude OAuth"
+        case .codex:
+            "Codex OAuth"
+        }
+    }
+
+    private func runOAuthLogin(_ provider: ProviderRowState.ID, sessionID: UUID) async {
+        defer {
+            if oauthLoginSessionID == sessionID {
+                isProfileLoginInProgress = false
+                activeOAuthLoginProvider = nil
+                oauthLoginTask = nil
+                oauthLoginSessionID = nil
+            }
+        }
 
         let loginProvider: OAuthLoginProvider
-        let providerName: String
         switch provider {
         case .claude:
             loginProvider = .claude
-            providerName = "Claude OAuth"
         case .codex:
             loginProvider = .codex
-            providerName = "Codex OAuth"
         }
+        let providerName = oauthProviderName(provider)
 
         do {
             try await oauthLoginService.login(provider: loginProvider, port: config.port)
+            try Task.checkCancellation()
+            guard oauthLoginSessionID == sessionID else { return }
             _ = try authProfileStore.setDisabled(false, for: loginProvider.authProfileType)
             refreshProfiles()
-            try applyShellInstallForCurrentProfiles()
+            completedOAuthLoginProvider = provider
             settingsMessage = "\(providerName) 연결 정보를 업데이트했습니다."
+        } catch is CancellationError {
+            guard oauthLoginSessionID == sessionID else { return }
+            settingsMessage = "\(providerName) 로그인을 취소했습니다."
+            refreshProfiles()
         } catch {
+            guard oauthLoginSessionID == sessionID else { return }
             settingsMessage = "\(providerName) 로그인에 실패했습니다: \(error.localizedDescription)"
             refreshProfiles()
+        }
+    }
+
+    func removeInitialProvider(_ provider: ProviderRowState.ID) {
+        let profileType: AuthProfileType
+        switch provider {
+        case .claude:
+            profileType = .claude
+        case .codex:
+            profileType = .codex
+        }
+
+        do {
+            _ = try authProfileStore.delete(for: profileType)
+            refreshProfiles()
+            try resetProviderSettings(provider)
+            settingsMessage = nil
+        } catch {
+            refreshProfiles()
+            settingsMessage = nil
         }
     }
 
@@ -312,7 +404,7 @@ final class DashboardViewModel: ObservableObject {
             if deletedCount == 0 {
                 settingsMessage = "삭제할 \(providerName) auth 파일을 찾지 못했습니다."
             } else {
-                try applyShellInstallForCurrentProfiles()
+                try resetProviderSettings(provider)
                 settingsMessage = "\(providerName) 계정을 제거했습니다."
             }
         } catch {
@@ -500,7 +592,30 @@ final class DashboardViewModel: ObservableObject {
         )
     }
 
+    private static func availableConfig(_ config: AppConfig) -> AppConfig {
+        var config = config
+        config.showNotifications = false
+        config.roundRobinEnabled = false
+        return config
+    }
+
+    private func resetProviderSettings(_ provider: ProviderRowState.ID) throws {
+        var updatedConfig = config
+        switch provider {
+        case .claude:
+            updatedConfig.commands.cc = AppConfig.default.commands.cc
+            updatedConfig.nicknames.cc = ""
+        case .codex:
+            updatedConfig.commands.ccodex = AppConfig.default.commands.ccodex
+            updatedConfig.nicknames.ccodex = ""
+            updatedConfig.ccodex = AppConfig.default.ccodex
+        }
+        updatedConfig.includeDangerouslySkipPermissions = false
+        try saveConfig(updatedConfig, validateShellFunctions: true)
+    }
+
     private func saveConfig(_ updatedConfig: AppConfig, validateShellFunctions: Bool = false) throws {
+        let updatedConfig = Self.availableConfig(updatedConfig)
         if validateShellFunctions {
             let activeNames = activeFunctionNames(in: updatedConfig)
             try ShellCommandNameValidator.validate(activeNames)
@@ -688,6 +803,21 @@ final class DashboardViewModel: ObservableObject {
             default:
                 card
             }
+        }
+    }
+
+    private func scheduleSettingsMessageAutoClear() {
+        settingsMessageAutoClearTask?.cancel()
+        settingsMessageAutoClearTask = nil
+        guard settingsMessage != nil else { return }
+        let delay = settingsMessageAutoClearDelayNanoseconds
+        settingsMessageAutoClearTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: delay)
+            } catch {
+                return
+            }
+            self?.clearSettingsMessage()
         }
     }
 
