@@ -45,11 +45,14 @@ public struct ProcessRunner: ProcessRunning {
 private final class RunningProcess: @unchecked Sendable {
     private let lock = NSLock()
     private var pid: pid_t?
+    private var processGroupID: pid_t?
     private var terminationRequested = false
+    private var forceTerminationPending = false
 
     func setPID(_ pid: pid_t) {
         lock.lock()
         self.pid = pid
+        processGroupID = pid
         let shouldTerminate = terminationRequested
         lock.unlock()
 
@@ -61,34 +64,52 @@ private final class RunningProcess: @unchecked Sendable {
     func clear() {
         lock.lock()
         pid = nil
+        if forceTerminationPending == false {
+            processGroupID = nil
+            terminationRequested = false
+        }
         lock.unlock()
     }
 
     func terminate() {
         lock.lock()
         terminationRequested = true
-        let currentPID = pid
+        let currentProcessGroupID = processGroupID ?? pid
         lock.unlock()
 
-        if let currentPID {
-            terminate(currentPID)
+        if let currentProcessGroupID {
+            terminate(currentProcessGroupID)
         }
     }
 
-    private func terminate(_ targetPID: pid_t) {
-        terminateProcessGroup(targetPID, signal: SIGTERM)
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + ProcessRunner.forceTerminationGracePeriod) { [weak self] in
-            self?.forceTerminate(targetPID)
-        }
-    }
-
-    private func forceTerminate(_ targetPID: pid_t) {
+    private func terminate(_ targetProcessGroupID: pid_t) {
         lock.lock()
-        let shouldTerminate = pid == targetPID
+        guard forceTerminationPending == false else {
+            lock.unlock()
+            return
+        }
+        forceTerminationPending = true
+        lock.unlock()
+
+        terminateProcessGroup(targetProcessGroupID, signal: SIGTERM)
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + ProcessRunner.forceTerminationGracePeriod) { [weak self] in
+            self?.forceTerminate(targetProcessGroupID)
+        }
+    }
+
+    private func forceTerminate(_ targetProcessGroupID: pid_t) {
+        lock.lock()
+        let shouldTerminate = processGroupID == targetProcessGroupID
+        if shouldTerminate {
+            pid = nil
+            processGroupID = nil
+            terminationRequested = false
+            forceTerminationPending = false
+        }
         lock.unlock()
 
         if shouldTerminate {
-            terminateProcessGroup(targetPID, signal: SIGKILL)
+            terminateProcessGroup(targetProcessGroupID, signal: SIGKILL)
         }
     }
 }
