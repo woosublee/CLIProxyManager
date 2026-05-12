@@ -164,7 +164,7 @@ final class ShellProfileInstallerTests: XCTestCase {
         try installer.validateFunctionNames(["cc"])
     }
 
-    func testInstallCreatesBackupBeforeChangingZshrc() throws {
+    func testInstallCreatesBackupInManagedBackupsDirectory() throws {
         let sandbox = try makeSandbox()
         let zshrcFile = sandbox.appendingPathComponent(".zshrc")
         try "original\n".write(to: zshrcFile, atomically: true, encoding: .utf8)
@@ -173,9 +173,92 @@ final class ShellProfileInstallerTests: XCTestCase {
 
         try installer.install(functionScript: "cc() {}\n")
 
-        let backups = try backupFiles(in: sandbox)
+        let backups = try managedBackupFiles(for: paths)
         XCTAssertEqual(backups.count, 1)
-        XCTAssertEqual(try String(contentsOf: backups[0], encoding: .utf8), "original\n")
+        let backup = try XCTUnwrap(backups.first)
+        XCTAssertEqual(try String(contentsOf: backup, encoding: .utf8), "original\n")
+        XCTAssertEqual(try legacyBackupFiles(in: sandbox).count, 0)
+    }
+
+    func testInstallPrunesManagedBackupsToNewestThree() throws {
+        let sandbox = try makeSandbox()
+        let zshrcFile = sandbox.appendingPathComponent(".zshrc")
+        try "current\n".write(to: zshrcFile, atomically: true, encoding: .utf8)
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let backupDirectory = backupDirectory(for: paths)
+        try FileManager.default.createDirectory(at: backupDirectory, withIntermediateDirectories: true)
+        let oldBackups = [
+            ".zshrc.2000-01-01T00:00:00.000Z.00000000-0000-0000-0000-000000000001",
+            ".zshrc.2000-01-01T00:00:01.000Z.00000000-0000-0000-0000-000000000002",
+            ".zshrc.2000-01-01T00:00:02.000Z.00000000-0000-0000-0000-000000000003",
+            ".zshrc.2000-01-01T00:00:03.000Z.00000000-0000-0000-0000-000000000004"
+        ]
+        for backup in oldBackups {
+            try "backup \(backup)\n".write(to: backupDirectory.appendingPathComponent(backup), atomically: true, encoding: .utf8)
+        }
+        let installer = ShellProfileInstaller(paths: paths, zshrcFile: zshrcFile)
+
+        try installer.install(functionScript: "cc() {}\n")
+
+        let backups = try managedBackupFiles(for: paths)
+        let names = backups.map(\.lastPathComponent)
+        XCTAssertEqual(backups.count, 3)
+        XCTAssertFalse(names.contains(oldBackups[0]))
+        XCTAssertFalse(names.contains(oldBackups[1]))
+        XCTAssertTrue(names.contains(oldBackups[2]))
+        XCTAssertTrue(names.contains(oldBackups[3]))
+        XCTAssertEqual(backups.filter { (try? String(contentsOf: $0, encoding: .utf8)) == "current\n" }.count, 1)
+    }
+
+    func testInstallRemovesLegacyRootBackupsAfterCreatingManagedBackup() throws {
+        let sandbox = try makeSandbox()
+        let zshrcFile = sandbox.appendingPathComponent(".zshrc")
+        try "original\n".write(to: zshrcFile, atomically: true, encoding: .utf8)
+        try "old\n".write(to: sandbox.appendingPathComponent(".zshrc.cliproxy-manager.2026-05-13T08:00:00.000Z.AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"), atomically: true, encoding: .utf8)
+        try "older\n".write(to: sandbox.appendingPathComponent(".zshrc.cliproxy-manager.2026-05-13T08:00:01.000Z.FFFFFFFF-BBBB-CCCC-DDDD-EEEEEEEEEEEE"), atomically: true, encoding: .utf8)
+        let legacyDirectory = sandbox.appendingPathComponent(".zshrc.cliproxy-manager.2026-05-13T08:00:02.000Z.11111111-BBBB-CCCC-DDDD-EEEEEEEEEEEE", isDirectory: true)
+        try FileManager.default.createDirectory(at: legacyDirectory, withIntermediateDirectories: true)
+        try "manual\n".write(to: sandbox.appendingPathComponent(".zshrc.cliproxy-manager.manual"), atomically: true, encoding: .utf8)
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let installer = ShellProfileInstaller(paths: paths, zshrcFile: zshrcFile)
+
+        try installer.install(functionScript: "cc() {}\n")
+
+        XCTAssertEqual(try managedBackupFiles(for: paths).count, 1)
+        XCTAssertEqual(try legacyBackupFiles(in: sandbox).count, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: legacyDirectory.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sandbox.appendingPathComponent(".zshrc.cliproxy-manager.manual").path))
+    }
+
+    func testInstallIgnoresNonBackupFilesWhenPruningManagedBackups() throws {
+        let sandbox = try makeSandbox()
+        let zshrcFile = sandbox.appendingPathComponent(".zshrc")
+        try "current\n".write(to: zshrcFile, atomically: true, encoding: .utf8)
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let backupDirectory = backupDirectory(for: paths)
+        try FileManager.default.createDirectory(at: backupDirectory, withIntermediateDirectories: true)
+        let oldBackups = [
+            ".zshrc.2000-01-01T00:00:00.000Z.00000000-0000-0000-0000-000000000001",
+            ".zshrc.2000-01-01T00:00:01.000Z.00000000-0000-0000-0000-000000000002"
+        ]
+        for backup in oldBackups {
+            try "backup \(backup)\n".write(to: backupDirectory.appendingPathComponent(backup), atomically: true, encoding: .utf8)
+        }
+        try "manual\n".write(to: backupDirectory.appendingPathComponent(".zshrc.zzz-manual"), atomically: true, encoding: .utf8)
+        let manualDirectory = backupDirectory.appendingPathComponent(".zshrc.2099-05-13T08:00:00.000Z.AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE", isDirectory: true)
+        try FileManager.default.createDirectory(at: manualDirectory, withIntermediateDirectories: true)
+        let installer = ShellProfileInstaller(paths: paths, zshrcFile: zshrcFile)
+
+        try installer.install(functionScript: "cc() {}\n")
+
+        let backups = try managedBackupFiles(for: paths)
+        let names = backups.map(\.lastPathComponent)
+        XCTAssertEqual(backups.count, 3)
+        XCTAssertTrue(names.contains(oldBackups[0]))
+        XCTAssertTrue(names.contains(oldBackups[1]))
+        XCTAssertEqual(backups.filter { (try? String(contentsOf: $0, encoding: .utf8)) == "current\n" }.count, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: backupDirectory.appendingPathComponent(".zshrc.zzz-manual").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: manualDirectory.path))
     }
 
     func testInstallDoesNotCreateBackupWhenAlreadyInstalledAndUnchanged() throws {
@@ -186,13 +269,13 @@ final class ShellProfileInstallerTests: XCTestCase {
         let script = "cc() {\n  claude \"$@\"\n}\n"
 
         try installer.install(functionScript: script)
-        for backup in try backupFiles(in: sandbox) {
+        for backup in try managedBackupFiles(for: paths) {
             try FileManager.default.removeItem(at: backup)
         }
 
         try installer.install(functionScript: script)
 
-        XCTAssertEqual(try backupFiles(in: sandbox).count, 0)
+        XCTAssertEqual(try managedBackupFiles(for: paths).count, 0)
     }
 
     func testUninstallRemovesSourceLineButKeepsFunctionsFile() throws {
@@ -255,9 +338,33 @@ final class ShellProfileInstallerTests: XCTestCase {
         return sandbox
     }
 
-    private func backupFiles(in directory: URL) throws -> [URL] {
-        try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
-            .filter { $0.lastPathComponent.hasPrefix(".zshrc.cliproxy-manager.") }
+    private func backupDirectory(for paths: ManagedPaths) -> URL {
+        paths.rootDirectory.appendingPathComponent("backups", isDirectory: true)
+    }
+
+    private func managedBackupFiles(for paths: ManagedPaths) throws -> [URL] {
+        let directory = backupDirectory(for: paths)
+        guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
+        return try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isRegularFileKey])
+            .filter { isBackupFile($0, prefix: ".zshrc.") }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
+    }
+
+    private func legacyBackupFiles(in directory: URL) throws -> [URL] {
+        try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isRegularFileKey])
+            .filter { isBackupFile($0, prefix: ".zshrc.cliproxy-manager.") }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+    }
+
+    private func isBackupFile(_ url: URL, prefix: String) -> Bool {
+        guard url.lastPathComponent.hasPrefix(prefix),
+              (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
+            return false
+        }
+        let suffix = String(url.lastPathComponent.dropFirst(prefix.count))
+        return suffix.range(
+            of: #"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\.[0-9A-Fa-f-]{36}$"#,
+            options: .regularExpression
+        ) != nil
     }
 }

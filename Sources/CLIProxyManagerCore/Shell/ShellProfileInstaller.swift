@@ -159,9 +159,39 @@ public struct ShellProfileInstaller: @unchecked Sendable {
 
     private func backupProfileIfPresent() throws {
         guard fileManager.fileExists(atPath: zshrcFile.path) else { return }
-        let backupURL = zshrcFile.deletingLastPathComponent()
-            .appendingPathComponent(".zshrc.cliproxy-manager.\(backupStamp())")
+        try fileManager.createDirectory(at: paths.backupsDirectory, withIntermediateDirectories: true)
+        let backupURL = paths.backupsDirectory.appendingPathComponent(".zshrc.\(backupStamp())")
         try fileManager.copyItem(at: zshrcFile, to: backupURL)
+        pruneBackups()
+    }
+
+    private func pruneBackups() {
+        let backupDirectory = paths.backupsDirectory
+        let legacyDirectory = zshrcFile.deletingLastPathComponent()
+        let managedBackups = (try? fileManager.contentsOfDirectory(at: backupDirectory, includingPropertiesForKeys: nil)) ?? []
+        let sortedManagedBackups = managedBackups
+            .filter { isBackupFile($0, prefix: ".zshrc.") }
+            .sorted { $0.lastPathComponent > $1.lastPathComponent }
+        for backup in sortedManagedBackups.dropFirst(3) {
+            try? fileManager.removeItem(at: backup)
+        }
+
+        let legacyBackups = (try? fileManager.contentsOfDirectory(at: legacyDirectory, includingPropertiesForKeys: [.isRegularFileKey])) ?? []
+        for backup in legacyBackups where isBackupFile(backup, prefix: ".zshrc.cliproxy-manager.") {
+            try? fileManager.removeItem(at: backup)
+        }
+    }
+
+    private func isBackupFile(_ url: URL, prefix: String) -> Bool {
+        guard url.lastPathComponent.hasPrefix(prefix),
+              (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
+            return false
+        }
+        let suffix = String(url.lastPathComponent.dropFirst(prefix.count))
+        return suffix.range(
+            of: #"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\.[0-9A-Fa-f-]{36}$"#,
+            options: .regularExpression
+        ) != nil
     }
 
     private func backupStamp() -> String {

@@ -19,6 +19,10 @@ public struct ManagedPaths: Equatable, Sendable {
         rootDirectory.appendingPathComponent("logs")
     }
 
+    public var backupsDirectory: URL {
+        rootDirectory.appendingPathComponent("backups", isDirectory: true)
+    }
+
     public var clipProxyDirectory: URL {
         rootDirectory.appendingPathComponent("cliproxyapi")
     }
