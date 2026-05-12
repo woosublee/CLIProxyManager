@@ -3,10 +3,17 @@ import SwiftUI
 
 // MARK: - Shared sheet chrome
 
+enum ProviderSettingsSheetMetrics {
+    static let defaultMinHeight: CGFloat = 360
+    static let defaultMaxHeight: CGFloat = 720
+    static let codexHeight: CGFloat = 700
+}
+
 private struct AccountSheetChrome<Content: View, Footer: View>: View {
     let providerID: ProviderRowState.ID
     let title: String
     let width: CGFloat
+    var minHeight: CGFloat = ProviderSettingsSheetMetrics.defaultMinHeight
     let onClose: () -> Void
     @ViewBuilder var content: () -> Content
     @ViewBuilder var footer: () -> Footer
@@ -28,7 +35,7 @@ private struct AccountSheetChrome<Content: View, Footer: View>: View {
                 .background(.thinMaterial)
         }
         .frame(width: width)
-        .frame(minHeight: 360, maxHeight: 720)
+        .frame(minHeight: minHeight, maxHeight: ProviderSettingsSheetMetrics.defaultMaxHeight)
     }
 
     private var header: some View {
@@ -505,6 +512,7 @@ struct CodexProviderSettingsSheet: View {
     let connectionDetail: String
     let isConnected: Bool
     let availableModels: [String]
+    let modelLoadingState: CodexModelLoadingState
     let refreshModels: () -> Void
     let onDisconnect: () -> Void
     let checkCommandName: (String) async -> CommandNameAvailability
@@ -519,6 +527,7 @@ struct CodexProviderSettingsSheet: View {
         connectionDetail: String,
         isConnected: Bool,
         availableModels: [String],
+        modelLoadingState: CodexModelLoadingState,
         refreshModels: @escaping () -> Void,
         onDisconnect: @escaping () -> Void,
         checkCommandName: @escaping (String) async -> CommandNameAvailability,
@@ -538,6 +547,7 @@ struct CodexProviderSettingsSheet: View {
         self.connectionDetail = connectionDetail
         self.isConnected = isConnected
         self.availableModels = availableModels
+        self.modelLoadingState = modelLoadingState
         self.refreshModels = refreshModels
         self.onDisconnect = onDisconnect
         self.checkCommandName = checkCommandName
@@ -554,6 +564,7 @@ struct CodexProviderSettingsSheet: View {
             providerID: .codex,
             title: "Account Settings",
             width: 600,
+            minHeight: ProviderSettingsSheetMetrics.codexHeight,
             onClose: {
                 onCancel()
                 dismiss()
@@ -592,10 +603,11 @@ struct CodexProviderSettingsSheet: View {
                         .font(.system(size: 11))
                     }
                     .buttonStyle(.borderless)
+                    .disabled(modelLoadingState.isLoading)
                 }
-                Text("Map each Claude model tier to a GPT model, reasoning, and context window.")
+                Text(modelLoadingState.message ?? "Map each Claude model tier to a GPT model, reasoning, and context window.")
                     .font(.system(size: 11.5))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(modelLoadingState.isError ? BrandPalette.statusError : .secondary)
 
                 GroupCard {
                     routingHeader

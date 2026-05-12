@@ -7,8 +7,8 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
         let snapshot = MenuBarStatusSnapshot(
             serverStatus: DiagnosticStatus(
                 severity: .ready,
-                title: "CLIProxyAPI 실행 중",
-                message: "포트 18317에서 모델 목록을 불러올 수 있습니다."
+                title: "CLIProxyAPI Running",
+                message: "Models are available on port 18317."
             ),
             providers: [
                 ProviderRowState(
@@ -16,7 +16,7 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
                     name: "Claude OAuth",
                     nickname: "",
                     functionName: "ccm",
-                    connectionTitle: "연결됨",
+                    connectionTitle: "Connected",
                     connectionDetail: "claude@example.com",
                     isConnected: true
                 ),
@@ -25,15 +25,15 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
                     name: "Codex OAuth",
                     nickname: "",
                     functionName: "ccmcodex",
-                    connectionTitle: "연결됨",
+                    connectionTitle: "Connected",
                     connectionDetail: "codex@example.com",
                     isConnected: true
                 )
             ]
         )
 
-        XCTAssertEqual(snapshot.serverTitle, "CLIProxyAPI 실행 중")
-        XCTAssertEqual(snapshot.serverDetail, "포트 18317에서 모델 목록을 불러올 수 있습니다.")
+        XCTAssertEqual(snapshot.serverTitle, "CLIProxyAPI Running")
+        XCTAssertEqual(snapshot.serverDetail, "Models are available on port 18317.")
         XCTAssertTrue(snapshot.isServerRunning)
         XCTAssertEqual(snapshot.serverActionTitle, "Stop Server")
         XCTAssertEqual(snapshot.endpointTitle, "localhost:18317")
@@ -46,8 +46,8 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
         let snapshot = MenuBarStatusSnapshot(
             serverStatus: DiagnosticStatus(
                 severity: .warning,
-                title: "확인 필요",
-                message: "서버 상태 확인 전입니다."
+                title: "Needs check",
+                message: "Server status has not been checked yet."
             ),
             providers: [
                 ProviderRowState(
@@ -55,8 +55,8 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
                     name: "Claude",
                     nickname: "",
                     functionName: "ccm",
-                    connectionTitle: "확인 필요",
-                    connectionDetail: "Claude Code OAuth 상태를 확인하세요.",
+                    connectionTitle: "Needs check",
+                    connectionDetail: "Check the Claude Code OAuth status.",
                     isConnected: false
                 )
             ]
@@ -73,8 +73,8 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
         let snapshot = MenuBarStatusSnapshot(
             serverStatus: DiagnosticStatus(
                 severity: .ready,
-                title: "CLIProxyAPI 실행 중",
-                message: "포트 18317에서 모델 목록을 불러올 수 있습니다."
+                title: "CLIProxyAPI Running",
+                message: "Models are available on port 18317."
             ),
             providers: [
                 ProviderRowState(
@@ -82,8 +82,8 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
                     name: "Claude OAuth",
                     nickname: "",
                     functionName: "ccm",
-                    connectionTitle: "인증 실패",
-                    connectionDetail: "토큰이 만료되었습니다.",
+                    connectionTitle: "Authentication failed",
+                    connectionDetail: "The token has expired.",
                     isConnected: false,
                     isErrored: true
                 ),
@@ -92,8 +92,8 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
                     name: "Codex OAuth",
                     nickname: "",
                     functionName: "ccmcodex",
-                    connectionTitle: "연결 필요",
-                    connectionDetail: "Codex OAuth profile을 연결하세요.",
+                    connectionTitle: "Needs connection",
+                    connectionDetail: "Connect the Codex OAuth profile.",
                     isConnected: false
                 )
             ]

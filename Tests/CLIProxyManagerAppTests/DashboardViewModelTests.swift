@@ -21,13 +21,13 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         )
         let serverStatus = DiagnosticStatus(
             severity: .ready,
-            title: "CLIProxyAPI 실행 중",
-            message: "포트 9444에서 모델 목록을 불러올 수 있습니다."
+            title: "CLIProxyAPI Running",
+            message: "Models are available on port 9444."
         )
         let claudeStatus = DiagnosticStatus(
             severity: .ready,
-            title: "Claude Code 연결됨",
-            message: "로그인되어 있습니다."
+            title: "Claude Code Connected",
+            message: "Logged in"
         )
         let viewModel = DashboardViewModel(
             config: config,
@@ -35,7 +35,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             proxyService: StubProxyServiceStarter(),
             claudeConnector: ClaudeConnector(runner: StubProcessRunner(results: [
                 ProcessResult(exitCode: 0, stdout: "/usr/local/bin/claude\n", stderr: ""),
-                ProcessResult(exitCode: 0, stdout: "로그인되어 있습니다.\n", stderr: ""),
+                ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: ""),
                 ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: "")
             ]))
         )
@@ -69,7 +69,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         viewModel.addProvider()
 
-        XCTAssertEqual(viewModel.settingsMessage, "Claude API profile 추가는 이번 단계의 기본 목록에서 숨겨져 있습니다.")
+        XCTAssertEqual(viewModel.settingsMessage, "Claude API profiles are hidden from the default account list in this version.")
     }
 
     func testSettingsMessageCanBeClearedByToastTimer() {
@@ -171,9 +171,9 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             claudeConnector: connectedClaudeConnector()
         )
 
-        XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.connectionTitle, "연결됨")
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.connectionTitle, "Connected")
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.connectionDetail, "claude@example.com")
-        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.connectionTitle, "연결됨")
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.connectionTitle, "Connected")
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.connectionDetail, "codex@example.com")
     }
 
@@ -271,7 +271,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertNil(viewModel.completedOAuthLoginProvider)
         XCTAssertFalse(viewModel.isProfileLoginInProgress)
         XCTAssertEqual(authStore.disabledUpdates, [])
-        XCTAssertEqual(viewModel.settingsMessage, "Codex OAuth 로그인을 취소했습니다.")
+        XCTAssertEqual(viewModel.settingsMessage, "Codex OAuth login was cancelled.")
     }
 
     func testDirectConnectProviderDoesNotReenterActiveOAuthLoginForSameProvider() async throws {
@@ -370,9 +370,9 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         XCTAssertEqual(authStore.disabledUpdates.map(\.type), [.codex])
         XCTAssertEqual(authStore.disabledUpdates.map(\.disabled), [true])
-        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.connectionTitle, "연결 필요")
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.connectionTitle, "Needs connection")
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.isConnected, false)
-        XCTAssertEqual(viewModel.settingsMessage, "Codex OAuth 연결을 비활성화했습니다. auth 파일은 삭제하지 않았습니다.")
+        XCTAssertEqual(viewModel.settingsMessage, "Codex OAuth connection was disabled. The auth file was not deleted.")
     }
 
     func testSavePortPersistsConfigAndRefreshesOptionRows() throws {
@@ -452,6 +452,105 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertTrue(installer.installedScript?.contains("cc() {") == true)
         XCTAssertFalse(installer.installedScript?.contains("ccodex() {") == true)
         XCTAssertFalse(installer.installedScript?.contains("ccapi() {") == true)
+    }
+
+    func testRefreshCodexModelsStartsServerAndFetchesModels() async {
+        let modelClient = StubProxyModelClient(models: ["gpt-5.5", "gpt-5.6"])
+        let proxyService = StubProxyServiceStarter()
+        let viewModel = DashboardViewModel(
+            modelClient: modelClient,
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            serverStatusRetryDelayNanoseconds: 0
+        )
+
+        await viewModel.refreshCodexModels()
+
+        XCTAssertEqual(proxyService.ports, [18_317])
+        XCTAssertEqual(modelClient.ports, [18_317])
+        XCTAssertEqual(viewModel.availableCodexModels, ["gpt-5.5", "gpt-5.6"])
+        XCTAssertEqual(viewModel.codexModelLoadingState, .idle)
+    }
+
+    func testRefreshCodexModelsShowsInlineStatusWhileStartingServer() async {
+        let modelClient = StubProxyModelClient(models: ["gpt-5.5"])
+        let proxyService = StubProxyServiceStarter(startDelayNanoseconds: 50_000_000)
+        let viewModel = DashboardViewModel(
+            modelClient: modelClient,
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            serverStatusRetryDelayNanoseconds: 0
+        )
+
+        let task = Task { await viewModel.refreshCodexModels() }
+        await Task.yield()
+
+        XCTAssertEqual(viewModel.codexModelLoadingState, .startingServer)
+
+        await task.value
+    }
+
+    func testRefreshCodexModelsMarksServerActionInProgressWhileStarting() async {
+        let modelClient = StubProxyModelClient(models: ["gpt-5.5"])
+        let proxyService = StubProxyServiceStarter(startDelayNanoseconds: 50_000_000)
+        let viewModel = DashboardViewModel(
+            modelClient: modelClient,
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            serverStatusRetryDelayNanoseconds: 0
+        )
+
+        let task = Task { await viewModel.refreshCodexModels() }
+        await Task.yield()
+
+        XCTAssertTrue(viewModel.isServerActionInProgress)
+
+        await task.value
+        XCTAssertFalse(viewModel.isServerActionInProgress)
+    }
+
+    func testRefreshCodexModelsIgnoresConcurrentRefreshRequests() async {
+        let modelClient = StubProxyModelClient(models: ["gpt-5.5"])
+        let proxyService = StubProxyServiceStarter(startDelayNanoseconds: 50_000_000)
+        let viewModel = DashboardViewModel(
+            modelClient: modelClient,
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            serverStatusRetryDelayNanoseconds: 0
+        )
+
+        let firstRefresh = Task { await viewModel.refreshCodexModels() }
+        await Task.yield()
+        await viewModel.refreshCodexModels()
+        await firstRefresh.value
+
+        XCTAssertEqual(proxyService.ports, [18_317])
+        XCTAssertEqual(modelClient.ports, [18_317])
+    }
+
+    func testRefreshCodexModelsDoesNotStartServerDuringLifecycleAction() async {
+        let modelClient = StubProxyModelClient(models: ["gpt-5.5"])
+        let proxyService = StubProxyServiceStarter(startDelayNanoseconds: 50_000_000)
+        let viewModel = DashboardViewModel(
+            modelClient: modelClient,
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            serverStatusRetryDelayNanoseconds: 0
+        )
+
+        let startTask = Task { await viewModel.startServer() }
+        await Task.yield()
+        await viewModel.refreshCodexModels()
+        await startTask.value
+
+        XCTAssertEqual(proxyService.ports, [18_317])
+        XCTAssertEqual(modelClient.ports, [])
+        XCTAssertEqual(viewModel.codexModelLoadingState, .idle)
     }
 
     func testLoadCodexModelsFetchesBaseModelsFromCurrentPort() async {
@@ -547,7 +646,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             proxyService: proxyService,
             claudeConnector: ClaudeConnector(runner: StubProcessRunner(results: [
                 ProcessResult(exitCode: 0, stdout: "/usr/local/bin/claude\n", stderr: ""),
-                ProcessResult(exitCode: 0, stdout: "로그인되어 있습니다.\n", stderr: ""),
+                ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: ""),
                 ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: "")
             ]))
         )
@@ -572,7 +671,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             proxyService: proxyService,
             claudeConnector: ClaudeConnector(runner: StubProcessRunner(results: [
                 ProcessResult(exitCode: 0, stdout: "/usr/local/bin/claude\n", stderr: ""),
-                ProcessResult(exitCode: 0, stdout: "로그인되어 있습니다.\n", stderr: ""),
+                ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: ""),
                 ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: "")
             ])),
             serverStatusRetryDelayNanoseconds: 0
@@ -595,7 +694,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             proxyService: proxyService,
             claudeConnector: ClaudeConnector(runner: StubProcessRunner(results: [
                 ProcessResult(exitCode: 0, stdout: "/usr/local/bin/claude\n", stderr: ""),
-                ProcessResult(exitCode: 0, stdout: "로그인되어 있습니다.\n", stderr: ""),
+                ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: ""),
                 ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: "")
             ]))
         )
@@ -616,7 +715,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             proxyService: proxyService,
             claudeConnector: ClaudeConnector(runner: StubProcessRunner(results: [
                 ProcessResult(exitCode: 0, stdout: "/usr/local/bin/claude\n", stderr: ""),
-                ProcessResult(exitCode: 0, stdout: "로그인되어 있습니다.\n", stderr: ""),
+                ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: ""),
                 ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: "")
             ]))
         )
@@ -641,7 +740,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             proxyService: proxyService,
             claudeConnector: ClaudeConnector(runner: StubProcessRunner(results: [
                 ProcessResult(exitCode: 0, stdout: "/usr/local/bin/claude\n", stderr: ""),
-                ProcessResult(exitCode: 0, stdout: "로그인되어 있습니다.\n", stderr: ""),
+                ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: ""),
                 ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: "")
             ])),
             serverStatusRetryDelayNanoseconds: 0
@@ -669,7 +768,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         XCTAssertEqual(proxyService.ports, [config.port])
         XCTAssertEqual(viewModel.serverStatus.severity, .error)
-        XCTAssertEqual(viewModel.serverStatus.title, "CLIProxyAPI 시작 실패")
+        XCTAssertEqual(viewModel.serverStatus.title, "Failed to start CLIProxyAPI")
         XCTAssertEqual(viewModel.cards.first { $0.command == config.commands.ccodex }?.status.severity, .error)
         XCTAssertFalse(viewModel.isServerActionInProgress)
     }
@@ -683,7 +782,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             proxyService: proxyService,
             claudeConnector: ClaudeConnector(runner: StubProcessRunner(results: [
                 ProcessResult(exitCode: 0, stdout: "/usr/local/bin/claude\n", stderr: ""),
-                ProcessResult(exitCode: 0, stdout: "로그인되어 있습니다.\n", stderr: ""),
+                ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: ""),
                 ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: "")
             ]))
         )
@@ -698,7 +797,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     private func connectedClaudeConnector() -> ClaudeConnector {
         ClaudeConnector(runner: StubProcessRunner(results: Array(repeating: [
             ProcessResult(exitCode: 0, stdout: "/usr/local/bin/claude\n", stderr: ""),
-            ProcessResult(exitCode: 0, stdout: "로그인되어 있습니다.\n", stderr: ""),
+            ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: ""),
             ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: "")
         ], count: 4).flatMap { $0 }))
     }

@@ -26,7 +26,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
 
         viewModel.addProvider()
 
-        XCTAssertEqual(viewModel.settingsMessage, "Claude API profile 추가는 이번 단계의 기본 목록에서 숨겨져 있습니다.")
+        XCTAssertEqual(viewModel.settingsMessage, "Claude API profiles are hidden from the default account list in this version.")
     }
 
     func testSaveClaudeFunctionNamePersistsAndRebuildsRows() throws {
@@ -469,7 +469,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
     private func connectedClaudeConnector() -> ClaudeConnector {
         ClaudeConnector(runner: StubProcessRunner(results: Array(repeating: [
             ProcessResult(exitCode: 0, stdout: "/usr/local/bin/claude\n", stderr: ""),
-            ProcessResult(exitCode: 0, stdout: "로그인되어 있습니다.\n", stderr: ""),
+            ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: ""),
             ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: "")
         ], count: 4).flatMap { $0 }))
     }

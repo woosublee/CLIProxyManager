@@ -14,7 +14,7 @@ struct GeneralSettingsView: View {
                     )
                 }
                 SettingsRow(label: "Language", description: "Language switching is a design placeholder.", isEnabled: false) {
-                    SettingsSegmentedControl(options: ["English", "한국어"], selected: "English")
+                    SettingsSegmentedControl(options: ["English", "Korean"], selected: "English")
                 }
             }
 
@@ -175,8 +175,8 @@ struct AdvancedSettingsView: View {
 }
 
 func aboutVersionText(bundle: Bundle = .main) -> String {
-    let version = bundle.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.2-beta.1"
-    let build = bundle.infoDictionary?["CFBundleVersion"] as? String ?? "3"
+    let version = bundle.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.2-beta.2"
+    let build = bundle.infoDictionary?["CFBundleVersion"] as? String ?? "4"
     return "Version \(version) (\(build))"
 }
 

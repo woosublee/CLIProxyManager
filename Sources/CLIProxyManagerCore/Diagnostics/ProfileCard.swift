@@ -20,21 +20,21 @@ public struct ProfileCard: Equatable, Identifiable, Sendable {
     public static func makeDefaultCards(config: AppConfig) -> [ProfileCard] {
         let pendingStatus = DiagnosticStatus(
             severity: .warning,
-            title: "확인 필요",
-            message: "상태 확인 전입니다."
+            title: "Needs check",
+            message: "Status has not been checked yet."
         )
 
         return [
             ProfileCard(
                 command: config.commands.cc,
-                title: "Claude 구독",
-                subtitle: "Claude Code 공식 로그인 사용",
+                title: "Claude Subscription",
+                subtitle: "Uses the official Claude Code login",
                 status: pendingStatus
             ),
             ProfileCard(
                 command: config.commands.ccodex,
                 title: "OpenAI/Codex",
-                subtitle: "CLIProxyAPI 경유",
+                subtitle: "Routed through CLIProxyAPI",
                 status: pendingStatus
             )
         ]

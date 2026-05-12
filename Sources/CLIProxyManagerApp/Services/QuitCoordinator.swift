@@ -12,8 +12,8 @@ protocol QuitConfirmationPresenting: Sendable {
 struct NSAlertQuitConfirmationPresenter: QuitConfirmationPresenting {
     @MainActor func confirmQuit() -> Bool {
         let alert = NSAlert()
-        alert.messageText = "CLIProxyManager를 종료할까요?"
-        alert.informativeText = "앱이 시작한 CLIProxyAPI 서버도 함께 종료됩니다."
+        alert.messageText = "Quit CLIProxyManager?"
+        alert.informativeText = "The CLIProxyAPI server started by the app will also be stopped."
         alert.addButton(withTitle: "Stop Server and Quit")
         alert.addButton(withTitle: "Cancel")
         NSApplication.shared.activate(ignoringOtherApps: true)
@@ -71,7 +71,7 @@ final class QuitCoordinator: ObservableObject {
             try await proxyService.stop()
             appTerminator.terminate()
         } catch {
-            quitErrorMessage = "CLIProxyAPI 서버 종료에 실패했습니다. 앱 종료를 중단했습니다."
+            quitErrorMessage = "Failed to stop the CLIProxyAPI server. Quit was cancelled."
         }
     }
 }

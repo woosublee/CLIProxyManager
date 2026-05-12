@@ -70,7 +70,7 @@ final class OAuthLoginServiceTests: XCTestCase {
     func testOAuthLoginErrorLocalizedDescriptionIncludesProviderExitCodeAndMessage() {
         let error = OAuthLoginError.failed(provider: .codex, exitCode: 13, message: "port is already in use")
 
-        XCTAssertEqual(error.localizedDescription, "Codex OAuth 로그인 실패(exit 13): port is already in use")
+        XCTAssertEqual(error.localizedDescription, "Codex OAuth login failed(exit 13): port is already in use")
     }
 }
 

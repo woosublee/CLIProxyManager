@@ -38,8 +38,8 @@ public enum OAuthLoginError: LocalizedError, Equatable {
     public var errorDescription: String? {
         switch self {
         case let .failed(provider, exitCode, message):
-            let detail = message.isEmpty ? "프로세스가 오류 메시지 없이 종료되었습니다." : message
-            return "\(provider.displayName) 로그인 실패(exit \(exitCode)): \(detail)"
+            let detail = message.isEmpty ? "The process exited without an error message." : message
+            return "\(provider.displayName) login failed(exit \(exitCode)): \(detail)"
         }
     }
 }

@@ -8,7 +8,7 @@ final class DashboardAccountSnapshotTests: XCTestCase {
             name: "Claude OAuth",
             nickname: "",
             functionName: "ccm",
-            connectionTitle: "연결됨",
+            connectionTitle: "Connected",
             connectionDetail: "claude@example.com",
             isConnected: true
         )
@@ -30,8 +30,8 @@ final class DashboardAccountSnapshotTests: XCTestCase {
             name: "Codex OAuth",
             nickname: "",
             functionName: "ccmcodex",
-            connectionTitle: "연결 필요",
-            connectionDetail: "번들 CLIProxyAPI의 Codex OAuth profile을 연결하세요.",
+            connectionTitle: "Needs connection",
+            connectionDetail: "Connect the bundled CLIProxyAPI Codex OAuth profile.",
             isConnected: false
         )
 
@@ -51,7 +51,7 @@ final class DashboardAccountSnapshotTests: XCTestCase {
             name: "Claude OAuth",
             nickname: "  \n  ",
             functionName: "ccm",
-            connectionTitle: "연결됨",
+            connectionTitle: "Connected",
             connectionDetail: "claude@example.com",
             isConnected: true
         )
@@ -65,7 +65,7 @@ final class DashboardAccountSnapshotTests: XCTestCase {
             name: "Claude OAuth",
             nickname: "  Work  \n",
             functionName: "ccm",
-            connectionTitle: "연결됨",
+            connectionTitle: "Connected",
             connectionDetail: "claude@example.com",
             isConnected: true
         )
