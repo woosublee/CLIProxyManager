@@ -7,6 +7,7 @@ enum ProviderSettingsSheetMetrics {
     static let defaultMinHeight: CGFloat = 360
     static let defaultMaxHeight: CGFloat = 720
     static let codexHeight: CGFloat = 700
+    static let footerActionButtonControlSize = ControlSize.regular
 }
 
 private struct AccountSheetChrome<Content: View, Footer: View>: View {
@@ -260,11 +261,11 @@ private struct SheetFooter: View {
             Spacer()
             Button("Cancel", action: onCancel)
                 .buttonStyle(.bordered)
-                .controlSize(.small)
+                .controlSize(ProviderSettingsSheetMetrics.footerActionButtonControlSize)
             Button("Save changes", action: onSave)
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
-                .controlSize(.small)
+                .controlSize(ProviderSettingsSheetMetrics.footerActionButtonControlSize)
                 .disabled(saveDisabled)
         }
     }
