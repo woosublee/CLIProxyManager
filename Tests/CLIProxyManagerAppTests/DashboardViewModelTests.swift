@@ -492,6 +492,26 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         await task.value
     }
 
+    func testRefreshCodexModelsMarksServerActionInProgressWhileStarting() async {
+        let modelClient = StubProxyModelClient(models: ["gpt-5.5"])
+        let proxyService = StubProxyServiceStarter(startDelayNanoseconds: 50_000_000)
+        let viewModel = DashboardViewModel(
+            modelClient: modelClient,
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            serverStatusRetryDelayNanoseconds: 0
+        )
+
+        let task = Task { await viewModel.refreshCodexModels() }
+        await Task.yield()
+
+        XCTAssertTrue(viewModel.isServerActionInProgress)
+
+        await task.value
+        XCTAssertFalse(viewModel.isServerActionInProgress)
+    }
+
     func testRefreshCodexModelsIgnoresConcurrentRefreshRequests() async {
         let modelClient = StubProxyModelClient(models: ["gpt-5.5"])
         let proxyService = StubProxyServiceStarter(startDelayNanoseconds: 50_000_000)

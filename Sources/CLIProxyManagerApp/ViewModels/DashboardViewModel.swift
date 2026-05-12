@@ -615,12 +615,16 @@ final class DashboardViewModel: ObservableObject {
         }
 
         codexModelLoadingState = .startingServer
+        isServerActionInProgress = true
+        defer { isServerActionInProgress = false }
+
         do {
             try await proxyService.start(port: config.port)
             await refreshUntilServerIsReady()
+            serverControlState = serverStatus.severity == .ready ? .running : .stopped
             await loadCodexModels()
         } catch {
-            handleCodexModelLoadingFailure()
+            handleCodexModelLoadingFailure(error)
         }
     }
 
@@ -630,13 +634,14 @@ final class DashboardViewModel: ObservableObject {
             availableCodexModels = try await modelClient.baseModels(port: config.port)
             codexModelLoadingState = .idle
         } catch {
-            handleCodexModelLoadingFailure()
+            handleCodexModelLoadingFailure(error)
         }
     }
 
-    private func handleCodexModelLoadingFailure() {
+    private func handleCodexModelLoadingFailure(_ error: Error? = nil) {
         availableCodexModels = []
-        codexModelLoadingState = .failed("Codex is connected, but the app could not load models through the local proxy server. Start the server and refresh, or enter a model manually.")
+        let fallbackMessage = "Codex is connected, but the app could not load models through the local proxy server. Start the server and refresh, or enter a model manually."
+        codexModelLoadingState = .failed(error?.localizedDescription ?? fallbackMessage)
     }
 
     private func normalizeCommandName(_ name: String) -> String {

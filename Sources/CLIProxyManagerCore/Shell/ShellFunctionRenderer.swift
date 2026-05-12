@@ -150,7 +150,7 @@ public struct ShellFunctionRenderer: Sendable {
             \(config.commands.ccapi)() {
               local anthropic_auth_token
               if ! anthropic_auth_token="$( \(helperCommand) secret get claude-api-key )"; then
-                echo "Cannot read the Claude API key. Save the API key in CLIProxy Manager."
+                echo "Cannot read the Claude API key. Save the API key in CLIProxyAPI Manager."
                 return 1
               fi
 

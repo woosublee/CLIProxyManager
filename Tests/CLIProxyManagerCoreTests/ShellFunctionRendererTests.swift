@@ -55,6 +55,17 @@ final class ShellFunctionRendererTests: XCTestCase {
         XCTAssertEqual(script.components(separatedBy: "claude \"$@\"").count - 1, 3)
     }
 
+    func testClaudeAPISecretErrorUsesConsistentProductName() throws {
+        let script = try ShellFunctionRenderer(
+            config: .default,
+            helperCommand: "/usr/local/bin/cliproxy-manager",
+            includeClaudeAPI: true
+        ).render()
+
+        XCTAssertTrue(script.contains("Save the API key in CLIProxyAPI Manager."))
+        XCTAssertFalse(script.contains("Save the API key in CLIProxy Manager."))
+    }
+
     func testClaudeOAuthFunctionUsesBundledProxyAndClaudeModelDefaults() throws {
         let script = try ShellFunctionRenderer(
             config: .default,
