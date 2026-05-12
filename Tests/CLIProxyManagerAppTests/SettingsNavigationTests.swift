@@ -6,11 +6,11 @@ import CLIProxyManagerCore
 final class SettingsNavigationTests: XCTestCase {
     func testAboutVersionTextUsesBundleVersion() {
         let bundle = BundleMock(info: [
-            "CFBundleShortVersionString": "0.1.2-beta.1",
-            "CFBundleVersion": "3"
+            "CFBundleShortVersionString": "0.1.2-beta.2",
+            "CFBundleVersion": "4"
         ])
 
-        XCTAssertEqual(aboutVersionText(bundle: bundle), "Version 0.1.2-beta.1 (3)")
+        XCTAssertEqual(aboutVersionText(bundle: bundle), "Version 0.1.2-beta.2 (4)")
     }
 
     func testSettingsTabsAreGeneralServerAdvancedAndAbout() {
@@ -31,6 +31,10 @@ final class SettingsNavigationTests: XCTestCase {
             DashboardSheet.providerSettings(.codex, isInitialSetup: false).id
         )
     }
+
+    func testCodexProviderSettingsUsesTallerSheetHeight() {
+        XCTAssertEqual(ProviderSettingsSheetMetrics.codexHeight, 700)
+    }
 }
 
 private final class BundleMock: Bundle, @unchecked Sendable {
@@ -50,8 +54,8 @@ final class GeneralServerControlSnapshotTests: XCTestCase {
     func testStoppedServerShowsStartAction() {
         let snapshot = GeneralServerControlSnapshot(status: DiagnosticStatus(
             severity: .warning,
-            title: "확인 필요",
-            message: "서버 상태 확인 전입니다."
+            title: "Needs check",
+            message: "Server status has not been checked yet."
         ))
 
         XCTAssertEqual(snapshot.title, "CLIProxyAPI Server")
@@ -62,8 +66,8 @@ final class GeneralServerControlSnapshotTests: XCTestCase {
     func testRunningServerShowsStopAction() {
         let snapshot = GeneralServerControlSnapshot(status: DiagnosticStatus(
             severity: .ready,
-            title: "CLIProxyAPI 실행 중",
-            message: "포트 18317에서 모델 목록을 불러올 수 있습니다."
+            title: "CLIProxyAPI Running",
+            message: "Models are available on port 18317."
         ))
 
         XCTAssertEqual(snapshot.actionTitle, "Stop Server")

@@ -105,13 +105,13 @@ final class AppAppearanceServiceTests: XCTestCase {
         try viewModel.saveMenuBarIconVisible(false)
 
         XCTAssertEqual(store.savedConfigs, [])
-        XCTAssertEqual(viewModel.settingsMessage, "Dock 아이콘과 메뉴바 아이콘 중 하나는 켜져 있어야 합니다.")
+        XCTAssertEqual(viewModel.settingsMessage, "Keep either the Dock icon or menu bar icon enabled.")
     }
 
     private func connectedClaudeConnector() -> ClaudeConnector {
         ClaudeConnector(runner: StubProcessRunner(results: Array(repeating: [
             ProcessResult(exitCode: 0, stdout: "/usr/local/bin/claude\n", stderr: ""),
-            ProcessResult(exitCode: 0, stdout: "로그인되어 있습니다.\n", stderr: ""),
+            ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: ""),
             ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: "")
         ], count: 4).flatMap { $0 }))
     }

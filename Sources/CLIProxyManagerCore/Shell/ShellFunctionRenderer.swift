@@ -111,7 +111,7 @@ public struct ShellFunctionRenderer: Sendable {
             script += """
             \(config.commands.cc)() {
               if ! curl -sf -H 'Authorization: Bearer sk-dummy' "http://127.0.0.1:\(port)/v1/models" >/dev/null; then
-                echo "CLIProxyAPI Manager가 실행 중이 아니거나 Claude OAuth profile이 연결되지 않았습니다. 앱을 열어 상태를 확인해 주세요."
+                echo "CLIProxyAPI Manager is not running or the Claude OAuth profile is not connected. Open the app to check the status."
                 return 1
               fi
 
@@ -130,7 +130,7 @@ public struct ShellFunctionRenderer: Sendable {
             script += """
             \(config.commands.ccodex)() {
               if ! curl -sf -H 'Authorization: Bearer sk-dummy' "http://127.0.0.1:\(port)/v1/models" >/dev/null; then
-                echo "CLIProxyAPI Manager가 실행 중이 아니거나 인증 설정이 맞지 않습니다. 앱을 열어 상태를 확인해 주세요."
+                echo "CLIProxyAPI Manager is not running or authentication settings are invalid. Open the app to check the status."
                 return 1
               fi
 
@@ -150,7 +150,7 @@ public struct ShellFunctionRenderer: Sendable {
             \(config.commands.ccapi)() {
               local anthropic_auth_token
               if ! anthropic_auth_token="$( \(helperCommand) secret get claude-api-key )"; then
-                echo "Claude API key를 읽을 수 없습니다. CLIProxy Manager에서 API key를 저장해 주세요."
+                echo "Cannot read the Claude API key. Save the API key in CLIProxy Manager."
                 return 1
               fi
 

@@ -247,7 +247,7 @@ final class ShellFunctionRendererTests: XCTestCase {
 
         XCTAssertTrue(script.contains("local anthropic_auth_token"))
         XCTAssertTrue(script.contains("if ! anthropic_auth_token=\"$( '/usr/local/bin/cliproxy-manager' secret get claude-api-key )\"; then"))
-        XCTAssertTrue(script.contains("Claude API key를 읽을 수 없습니다."))
+        XCTAssertTrue(script.contains("Cannot read the Claude API key."))
         XCTAssertTrue(script.contains("return 1"))
         XCTAssertTrue(script.contains(#"ANTHROPIC_AUTH_TOKEN="$anthropic_auth_token" \"#))
     }

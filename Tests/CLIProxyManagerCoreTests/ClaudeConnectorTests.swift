@@ -13,7 +13,7 @@ final class ClaudeConnectorTests: XCTestCase {
         let status = await connector.status()
 
         XCTAssertEqual(status.severity, .ready)
-        XCTAssertEqual(status.title, "Claude Code 연결됨")
+        XCTAssertEqual(status.title, "Claude Code Connected")
     }
 
     func testStatusChecksClaudeCommandsInOrder() async throws {
@@ -42,7 +42,7 @@ final class ClaudeConnectorTests: XCTestCase {
         let status = await connector.status()
 
         XCTAssertEqual(status.severity, .error)
-        XCTAssertEqual(status.title, "Claude Code 미설치")
+        XCTAssertEqual(status.title, "Claude Code Not Installed")
     }
 
     func testWhichTimeoutReportsTimeoutError() async throws {
@@ -54,7 +54,7 @@ final class ClaudeConnectorTests: XCTestCase {
         let status = await connector.status()
 
         XCTAssertEqual(status.severity, .error)
-        XCTAssertEqual(status.title, "Claude Code 확인 시간 초과")
+        XCTAssertEqual(status.title, "Claude Code Check Timed Out")
         XCTAssertEqual(status.message, "Process timed out after 10.0 seconds")
     }
 
@@ -69,7 +69,7 @@ final class ClaudeConnectorTests: XCTestCase {
         let status = await connector.status()
 
         XCTAssertEqual(status.severity, .warning)
-        XCTAssertEqual(status.title, "Claude 로그인 필요")
+        XCTAssertEqual(status.title, "Claude Login Required")
     }
 
     func testVersionFailureWithEmptyOutputUsesDefaultMessage() async throws {
@@ -82,8 +82,8 @@ final class ClaudeConnectorTests: XCTestCase {
         let status = await connector.status()
 
         XCTAssertEqual(status.severity, .warning)
-        XCTAssertEqual(status.title, "Claude Code 확인 실패")
-        XCTAssertEqual(status.message, "Claude Code 버전을 확인하지 못했습니다.")
+        XCTAssertEqual(status.title, "Claude Code Check Failed")
+        XCTAssertEqual(status.message, "Could not determine the Claude Code version.")
     }
 
     func testAuthTimeoutReportsTimeoutWarning() async throws {
@@ -97,7 +97,7 @@ final class ClaudeConnectorTests: XCTestCase {
         let status = await connector.status()
 
         XCTAssertEqual(status.severity, .warning)
-        XCTAssertEqual(status.title, "Claude 로그인 상태 확인 시간 초과")
+        XCTAssertEqual(status.title, "Claude Login Check Timed Out")
         XCTAssertEqual(status.message, "Process timed out after 10.0 seconds")
     }
 

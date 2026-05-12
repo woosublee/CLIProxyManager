@@ -42,7 +42,7 @@ struct PortSettingsSheet: View {
                 .font(.title2.bold())
             TextField("18317", text: $portText)
                 .textFieldStyle(.roundedBorder)
-            Text("1024부터 65535 사이의 빈 포트를 사용하세요. 기존 8317과 분리하려면 18317을 권장합니다.")
+            Text("Use an available port between 1024 and 65535. Use 18317 to keep it separate from the legacy 8317 port.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
             actionButtons {
@@ -59,10 +59,10 @@ struct PortSettingsSheet: View {
 
     private func actionButtons(saveAction: @escaping () throws -> Void) -> some View {
         HStack {
-            Button("기본값") { portText = "18317" }
+            Button("Default") { portText = "18317" }
             Spacer()
-            Button("취소") { dismiss() }
-            Button("저장") {
+            Button("Cancel") { dismiss() }
+            Button("Save") {
                 do {
                     try saveAction()
                     dismiss()
@@ -100,7 +100,7 @@ struct ShellFunctionsSettingsSheet: View {
                 .textFieldStyle(.roundedBorder)
             TextField("Codex proxy", text: $ccodex)
                 .textFieldStyle(.roundedBorder)
-            Text("zsh function으로 안전한 이름만 사용할 수 있습니다. 기존 alias와 충돌하면 설치가 중단됩니다.")
+            Text("Use only names that are safe for zsh functions. Installation stops if a name conflicts with an existing alias.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
             footer {
@@ -115,8 +115,8 @@ struct ShellFunctionsSettingsSheet: View {
     private func footer(saveAction: @escaping () throws -> Void) -> some View {
         HStack {
             Spacer()
-            Button("취소") { dismiss() }
-            Button("저장") {
+            Button("Cancel") { dismiss() }
+            Button("Save") {
                 do {
                     try saveAction()
                     dismiss()
@@ -161,7 +161,7 @@ struct ModelsSettingsSheet: View {
                 Text("Models")
                     .font(.title2.bold())
                 Spacer()
-                Button("모델 목록 새로고침", action: refreshModels)
+                Button("Refresh model list", action: refreshModels)
             }
 
             TextField("Claude API model", text: $claudeModel)
@@ -171,14 +171,14 @@ struct ModelsSettingsSheet: View {
             roleEditor(title: "Sonnet role", role: $sonnet)
             roleEditor(title: "Haiku role", role: $haiku)
 
-            Text("1M context는 요청값만 전달합니다. 실제 지원 여부는 Codex 계정, 모델, OAuth 세션, CLIProxyAPI 지원 여부에 따라 달라집니다.")
+            Text("1M context passes the requested value only. Actual support depends on the Codex account, model, OAuth session, and CLIProxyAPI support.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
             HStack {
                 Spacer()
-                Button("취소") { dismiss() }
-                Button("저장") {
+                Button("Cancel") { dismiss() }
+                Button("Save") {
                     do {
                         try save(
                             AppConfig.ClaudeAPI(model: claudeModel),
@@ -247,15 +247,15 @@ struct PermissionsSettingsSheet: View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Permissions")
                 .font(.title2.bold())
-            Toggle("--dangerously-skip-permissions 사용", isOn: $isEnabled)
+            Toggle("Use --dangerously-skip-permissions", isOn: $isEnabled)
             if isEnabled {
-                Text("이 옵션은 Claude Code의 권한 확인을 건너뛰므로 신뢰하는 로컬 작업에만 사용하세요.")
+                Text("This option skips Claude Code permission prompts. Use it only for trusted local work.")
                     .foregroundStyle(.orange)
             }
             HStack {
                 Spacer()
-                Button("취소") { dismiss() }
-                Button("저장") {
+                Button("Cancel") { dismiss() }
+                Button("Save") {
                     do {
                         try save(isEnabled)
                         dismiss()
@@ -282,12 +282,12 @@ struct ShellInstallSheet: View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Shell Install")
                 .font(.title2.bold())
-            Text("설치될 함수: \(commandsSummary)")
-            Text("~/.cliproxy-manager/functions.zsh를 생성하고, ~/.zshrc에는 CLIProxyAPI Manager managed block만 추가하거나 갱신합니다.")
+            Text("Functions to install: \(commandsSummary)")
+            Text("Creates ~/.cliproxy-manager/functions.zsh and only adds or updates the CLIProxyAPI Manager managed block in ~/.zshrc.")
                 .foregroundStyle(.secondary)
             HStack {
                 Spacer()
-                Button("취소") { dismiss() }
+                Button("Cancel") { dismiss() }
                 Button("Install / Update") {
                     do {
                         try install()

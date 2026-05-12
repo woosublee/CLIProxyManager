@@ -213,7 +213,8 @@ struct DashboardView: View {
                 connectionDetail: row?.connectionDetail ?? "",
                 isConnected: row?.isConnected ?? false,
                 availableModels: viewModel.availableCodexModels,
-                refreshModels: { Task { await viewModel.loadCodexModels() } },
+                modelLoadingState: viewModel.codexModelLoadingState,
+                refreshModels: { Task { await viewModel.refreshCodexModels() } },
                 onDisconnect: {
                     viewModel.removeProvider(.codex)
                     activeSheet = nil

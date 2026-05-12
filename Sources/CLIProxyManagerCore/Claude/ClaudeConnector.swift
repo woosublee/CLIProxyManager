@@ -13,14 +13,14 @@ public struct ClaudeConnector: Sendable {
             if which.timedOut {
                 return DiagnosticStatus(
                     severity: .error,
-                    title: "Claude Code 확인 시간 초과",
+                    title: "Claude Code Check Timed Out",
                     message: timeoutMessage(from: which)
                 )
             }
             return DiagnosticStatus(
                 severity: .error,
-                title: "Claude Code 미설치",
-                message: "Claude Code CLI를 설치한 뒤 다시 확인하세요."
+                title: "Claude Code Not Installed",
+                message: "Install the Claude Code CLI, then check again."
             )
         }
 
@@ -28,7 +28,7 @@ public struct ClaudeConnector: Sendable {
         guard version.exitCode == 0 else {
             return DiagnosticStatus(
                 severity: .warning,
-                title: "Claude Code 확인 실패",
+                title: "Claude Code Check Failed",
                 message: versionFailureMessage(from: version)
             )
         }
@@ -38,20 +38,20 @@ public struct ClaudeConnector: Sendable {
             if auth.timedOut {
                 return DiagnosticStatus(
                     severity: .warning,
-                    title: "Claude 로그인 상태 확인 시간 초과",
+                    title: "Claude Login Check Timed Out",
                     message: timeoutMessage(from: auth)
                 )
             }
             return DiagnosticStatus(
                 severity: .warning,
-                title: "Claude 로그인 필요",
-                message: "앱에서 로그인 버튼을 눌러 claude auth login을 실행하세요."
+                title: "Claude Login Required",
+                message: "Click the login button in the app to run claude auth login."
             )
         }
 
         return DiagnosticStatus(
             severity: .ready,
-            title: "Claude Code 연결됨",
+            title: "Claude Code Connected",
             message: version.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         )
     }
@@ -75,7 +75,7 @@ public struct ClaudeConnector: Sendable {
             return stdout
         }
 
-        return "Claude Code 버전을 확인하지 못했습니다."
+        return "Could not determine the Claude Code version."
     }
 
     private func timeoutMessage(from result: ProcessResult) -> String {
@@ -84,6 +84,6 @@ public struct ClaudeConnector: Sendable {
             return stderr
         }
 
-        return "명령 실행 시간이 초과되었습니다."
+        return "The command timed out."
     }
 }

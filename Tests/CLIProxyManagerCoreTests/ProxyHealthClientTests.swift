@@ -14,8 +14,8 @@ final class ProxyHealthClientTests: XCTestCase {
             status,
             DiagnosticStatus(
                 severity: .ready,
-                title: "CLIProxyAPI 실행 중",
-                message: "포트 8317에서 모델 목록을 불러올 수 있습니다."
+                title: "CLIProxyAPI Running",
+                message: "Models are available on port 8317."
             )
         )
     }
@@ -41,7 +41,7 @@ final class ProxyHealthClientTests: XCTestCase {
             status,
             DiagnosticStatus(
                 severity: .warning,
-                title: "CLIProxyAPI 중지됨",
+                title: "CLIProxyAPI Stopped",
                 message: ""
             )
         )
@@ -57,8 +57,8 @@ final class ProxyHealthClientTests: XCTestCase {
             status,
             DiagnosticStatus(
                 severity: .warning,
-                title: "CLIProxyAPI 인증 설정 확인 필요",
-                message: "서버는 응답했지만 sk-dummy local API key로 모델 목록을 불러오지 못했습니다."
+                title: "CLIProxyAPI Authentication Needs Attention",
+                message: "The server responded, but models could not be loaded with the sk-dummy local API key."
             )
         )
     }
@@ -73,8 +73,8 @@ final class ProxyHealthClientTests: XCTestCase {
             status,
             DiagnosticStatus(
                 severity: .warning,
-                title: "CLIProxyAPI 응답 오류",
-                message: "서버가 응답했지만 모델 목록을 불러오지 못했습니다. HTTP 500"
+                title: "CLIProxyAPI Response Error",
+                message: "The server responded, but models could not be loaded. HTTP 500"
             )
         )
     }
@@ -88,8 +88,8 @@ final class ProxyHealthClientTests: XCTestCase {
             status,
             DiagnosticStatus(
                 severity: .error,
-                title: "CLIProxyAPI 응답 시간 초과",
-                message: "서버가 시간 내에 응답하지 않았습니다."
+                title: "CLIProxyAPI Response Timed Out",
+                message: "The server did not respond in time."
             )
         )
     }
@@ -105,8 +105,8 @@ final class ProxyHealthClientTests: XCTestCase {
             status,
             DiagnosticStatus(
                 severity: .error,
-                title: "CLIProxyAPI 포트 설정 오류",
-                message: "포트는 1부터 65535 사이여야 합니다."
+                title: "CLIProxyAPI Port Configuration Error",
+                message: "Port must be between 1 and 65535."
             )
         )
     }

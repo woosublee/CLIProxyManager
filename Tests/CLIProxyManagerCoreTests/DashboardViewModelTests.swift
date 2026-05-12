@@ -5,11 +5,11 @@ final class DashboardViewModelTests: XCTestCase {
     func testProfileCardUpdatingStatusPreservesIdentityAndLabels() {
         let original = ProfileCard(
             command: "cc",
-            title: "Claude 구독",
-            subtitle: "Claude Code 공식 로그인 사용",
-            status: DiagnosticStatus(severity: .warning, title: "확인 필요", message: "상태 확인 전입니다.")
+            title: "Claude Subscription",
+            subtitle: "Uses the official Claude Code login",
+            status: DiagnosticStatus(severity: .warning, title: "Needs check", message: "Status has not been checked yet.")
         )
-        let ready = DiagnosticStatus(severity: .ready, title: "준비됨", message: "사용할 수 있습니다.")
+        let ready = DiagnosticStatus(severity: .ready, title: "Ready", message: "Available.")
 
         let updated = original.updatingStatus(ready)
 
@@ -40,15 +40,15 @@ final class DashboardViewModelTests: XCTestCase {
 
         XCTAssertEqual(cards.map(\.id), ["claude-local", "codex-local"])
         XCTAssertEqual(cards.map(\.command), ["claude-local", "codex-local"])
-        XCTAssertEqual(cards.map(\.title), ["Claude 구독", "OpenAI/Codex"])
+        XCTAssertEqual(cards.map(\.title), ["Claude Subscription", "OpenAI/Codex"])
         XCTAssertEqual(cards.map(\.subtitle), [
-            "Claude Code 공식 로그인 사용",
-            "CLIProxyAPI 경유"
+            "Uses the official Claude Code login",
+            "Routed through CLIProxyAPI"
         ])
         XCTAssertEqual(cards.map(\.status), Array(repeating: DiagnosticStatus(
             severity: .warning,
-            title: "확인 필요",
-            message: "상태 확인 전입니다."
+            title: "Needs check",
+            message: "Status has not been checked yet."
         ), count: 2))
     }
 

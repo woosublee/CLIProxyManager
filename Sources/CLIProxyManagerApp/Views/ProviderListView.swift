@@ -72,7 +72,8 @@ struct ProviderListView: View {
                 connectionDetail: row?.connectionDetail ?? "",
                 isConnected: row?.isConnected ?? false,
                 availableModels: viewModel.availableCodexModels,
-                refreshModels: { Task { await viewModel.loadCodexModels() } },
+                modelLoadingState: viewModel.codexModelLoadingState,
+                refreshModels: { Task { await viewModel.refreshCodexModels() } },
                 onDisconnect: { viewModel.disconnectProvider(.codex) },
                 checkCommandName: { functionName in
                     await viewModel.commandNameAvailability(provider: .codex, functionName: functionName)

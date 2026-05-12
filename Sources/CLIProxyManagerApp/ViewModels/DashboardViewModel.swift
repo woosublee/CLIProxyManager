@@ -60,6 +60,40 @@ enum CommandNameAvailability: Equatable, Sendable {
     case unavailable(String)
 }
 
+enum CodexModelLoadingState: Equatable, Sendable {
+    case idle
+    case startingServer
+    case loadingModels
+    case failed(String)
+
+    var message: String? {
+        switch self {
+        case .idle:
+            nil
+        case .startingServer:
+            "Starting the local proxy server to load Codex models."
+        case .loadingModels:
+            "Loading Codex models."
+        case .failed(let message):
+            message
+        }
+    }
+
+    var isError: Bool {
+        if case .failed = self { return true }
+        return false
+    }
+
+    var isLoading: Bool {
+        switch self {
+        case .startingServer, .loadingModels:
+            true
+        case .idle, .failed:
+            false
+        }
+    }
+}
+
 @MainActor
 final class DashboardViewModel: ObservableObject {
     @Published var cards: [ProfileCard]
@@ -71,6 +105,7 @@ final class DashboardViewModel: ObservableObject {
     @Published private(set) var completedOAuthLoginProvider: ProviderRowState.ID?
     @Published private(set) var config: AppConfig
     @Published var availableCodexModels: [String] = []
+    @Published private(set) var codexModelLoadingState: CodexModelLoadingState = .idle
 
     var latestBaseCodexModel: String? {
         let excludedKeywords = ["mini", "preview", "codex", "spark", "review"]
@@ -140,8 +175,8 @@ final class DashboardViewModel: ObservableObject {
         cards = ProfileCard.makeDefaultCards(config: initialConfig)
         serverStatus = DiagnosticStatus(
             severity: .warning,
-            title: "확인 필요",
-            message: "서버 상태 확인 전입니다."
+            title: "Needs check",
+            message: "Server status has not been checked yet."
         )
         self.authProfiles = (try? authProfileStore.profiles()) ?? []
         rebuildOptionRows()
@@ -239,7 +274,7 @@ final class DashboardViewModel: ObservableObject {
 
     func startServer() async {
         await performServerAction(
-            title: "CLIProxyAPI 시작 실패",
+            title: "Failed to start CLIProxyAPI",
             transitionState: .starting,
             waitForReady: true
         ) {
@@ -248,14 +283,14 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func stopServer() async {
-        await performServerAction(title: "CLIProxyAPI 중지 실패", transitionState: .stopping) {
+        await performServerAction(title: "Failed to stop CLIProxyAPI", transitionState: .stopping) {
             try await proxyService.stop()
         }
     }
 
     func restartServer() async {
         await performServerAction(
-            title: "CLIProxyAPI 재시작 실패",
+            title: "Failed to restart CLIProxyAPI",
             transitionState: .starting,
             waitForReady: true
         ) {
@@ -304,7 +339,7 @@ final class DashboardViewModel: ObservableObject {
         isProfileLoginInProgress = false
 
         if let cancelledProvider {
-            settingsMessage = "\(oauthProviderName(cancelledProvider)) 로그인을 취소했습니다."
+            settingsMessage = "\(oauthProviderName(cancelledProvider)) login was cancelled."
             refreshProfiles()
         }
     }
@@ -354,14 +389,14 @@ final class DashboardViewModel: ObservableObject {
             _ = try authProfileStore.setDisabled(false, for: loginProvider.authProfileType)
             refreshProfiles()
             completedOAuthLoginProvider = provider
-            settingsMessage = "\(providerName) 연결 정보를 업데이트했습니다."
+            settingsMessage = "\(providerName) connection was updated."
         } catch is CancellationError {
             guard oauthLoginSessionID == sessionID else { return }
-            settingsMessage = "\(providerName) 로그인을 취소했습니다."
+            settingsMessage = "\(providerName) login was cancelled."
             refreshProfiles()
         } catch {
             guard oauthLoginSessionID == sessionID else { return }
-            settingsMessage = "\(providerName) 로그인에 실패했습니다: \(error.localizedDescription)"
+            settingsMessage = "\(providerName) login failed: \(error.localizedDescription)"
             refreshProfiles()
         }
     }
@@ -402,14 +437,14 @@ final class DashboardViewModel: ObservableObject {
             let deletedCount = try authProfileStore.delete(for: profileType)
             refreshProfiles()
             if deletedCount == 0 {
-                settingsMessage = "삭제할 \(providerName) auth 파일을 찾지 못했습니다."
+                settingsMessage = "\(providerName) auth file was not found."
             } else {
                 try resetProviderSettings(provider)
-                settingsMessage = "\(providerName) 계정을 제거했습니다."
+                settingsMessage = "\(providerName) account was removed."
             }
         } catch {
             refreshProfiles()
-            settingsMessage = "\(providerName) 계정 제거에 실패했습니다: \(error.localizedDescription)"
+            settingsMessage = "\(providerName) account removal failed: \(error.localizedDescription)"
         }
     }
 
@@ -429,18 +464,18 @@ final class DashboardViewModel: ObservableObject {
             let disabledCount = try authProfileStore.setDisabled(true, for: profileType)
             refreshProfiles()
             if disabledCount == 0 {
-                settingsMessage = "비활성화할 \(providerName) auth 파일을 찾지 못했습니다."
+                settingsMessage = "\(providerName) auth file was not found."
             } else {
-                settingsMessage = "\(providerName) 연결을 비활성화했습니다. auth 파일은 삭제하지 않았습니다."
+                settingsMessage = "\(providerName) connection was disabled. The auth file was not deleted."
             }
         } catch {
             refreshProfiles()
-            settingsMessage = "\(providerName) 연결 비활성화에 실패했습니다: \(error.localizedDescription)"
+            settingsMessage = "\(providerName) connection disable failed: \(error.localizedDescription)"
         }
     }
 
     func addProvider() {
-        settingsMessage = "Claude API profile 추가는 이번 단계의 기본 목록에서 숨겨져 있습니다."
+        settingsMessage = "Claude API profiles are hidden from the default account list in this version."
     }
 
     func commandNameAvailability(provider: ProviderRowState.ID, functionName: String) async -> CommandNameAvailability {
@@ -535,7 +570,7 @@ final class DashboardViewModel: ObservableObject {
 
     func saveDockIconVisible(_ isVisible: Bool) throws {
         guard isVisible || config.showMenuBarIcon else {
-            settingsMessage = "Dock 아이콘과 메뉴바 아이콘 중 하나는 켜져 있어야 합니다."
+            settingsMessage = "Keep either the Dock icon or menu bar icon enabled."
             return
         }
         var updatedConfig = config
@@ -546,7 +581,7 @@ final class DashboardViewModel: ObservableObject {
 
     func saveMenuBarIconVisible(_ isVisible: Bool) throws {
         guard isVisible || config.showDockIcon else {
-            settingsMessage = "Dock 아이콘과 메뉴바 아이콘 중 하나는 켜져 있어야 합니다."
+            settingsMessage = "Keep either the Dock icon or menu bar icon enabled."
             return
         }
         var updatedConfig = config
@@ -556,7 +591,7 @@ final class DashboardViewModel: ObservableObject {
 
     func installShellFunctions(helperCommand: String = "/usr/local/bin/cliproxy-manager") throws {
         try automaticShellInstallService.apply(config: config, helperCommand: helperCommand, enabledFunctions: enabledShellFunctions())
-        settingsMessage = "설치가 완료되었습니다. 새 터미널을 열거나 source ~/.zshrc를 실행하세요."
+        settingsMessage = "Installation complete. Open a new terminal or run source ~/.zshrc."
         rebuildOptionRows()
     }
 
@@ -571,13 +606,37 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
+    func refreshCodexModels() async {
+        guard !codexModelLoadingState.isLoading, !isServerActionInProgress else { return }
+
+        if serverControlState.isRunning {
+            await loadCodexModels()
+            return
+        }
+
+        codexModelLoadingState = .startingServer
+        do {
+            try await proxyService.start(port: config.port)
+            await refreshUntilServerIsReady()
+            await loadCodexModels()
+        } catch {
+            handleCodexModelLoadingFailure()
+        }
+    }
+
     func loadCodexModels() async {
+        codexModelLoadingState = .loadingModels
         do {
             availableCodexModels = try await modelClient.baseModels(port: config.port)
+            codexModelLoadingState = .idle
         } catch {
-            availableCodexModels = []
-            settingsMessage = "모델 목록을 불러오지 못했습니다. 직접 입력할 수 있습니다."
+            handleCodexModelLoadingFailure()
         }
+    }
+
+    private func handleCodexModelLoadingFailure() {
+        availableCodexModels = []
+        codexModelLoadingState = .failed("Codex is connected, but the app could not load models through the local proxy server. Start the server and refresh, or enter a model manually.")
     }
 
     private func normalizeCommandName(_ name: String) -> String {
@@ -633,7 +692,7 @@ final class DashboardViewModel: ObservableObject {
         do {
             try applyShellInstallForCurrentProfiles()
         } catch {
-            settingsMessage = "shell functions 자동 설치에 실패했습니다: \(error.localizedDescription)"
+            settingsMessage = "Automatic shell function installation failed: \(error.localizedDescription)"
         }
     }
 
@@ -673,10 +732,10 @@ final class DashboardViewModel: ObservableObject {
                     name: "Claude OAuth",
                     nickname: config.nicknames.cc,
                     functionName: config.commands.cc,
-                    connectionTitle: claudeEnabled == nil ? "연결 필요" : "연결됨",
+                    connectionTitle: claudeEnabled == nil ? "Needs connection" : "Connected",
                     connectionDetail: profileDetail(
                         profile: claudeEnabled ?? claudeAny,
-                        fallback: claudeStatus?.message ?? "번들 CLIProxyAPI의 Claude OAuth profile을 연결하세요."
+                        fallback: claudeStatus?.message ?? "Connect the bundled CLIProxyAPI Claude OAuth profile."
                     ),
                     isConnected: claudeEnabled != nil,
                     isErrored: claudeAny?.expired != nil || claudeStatus?.severity == .error
@@ -690,10 +749,10 @@ final class DashboardViewModel: ObservableObject {
                     name: "Codex OAuth",
                     nickname: config.nicknames.ccodex,
                     functionName: config.commands.ccodex,
-                    connectionTitle: codexEnabled == nil ? "연결 필요" : "연결됨",
+                    connectionTitle: codexEnabled == nil ? "Needs connection" : "Connected",
                     connectionDetail: profileDetail(
                         profile: codexEnabled ?? codexAny,
-                        fallback: codexStatus?.message ?? "번들 CLIProxyAPI의 Codex OAuth profile을 연결하세요."
+                        fallback: codexStatus?.message ?? "Connect the bundled CLIProxyAPI Codex OAuth profile."
                     ),
                     isConnected: codexEnabled != nil,
                     isErrored: codexAny?.expired != nil || codexStatus?.severity == .error
