@@ -103,6 +103,7 @@ final class DashboardViewModel: ObservableObject {
     @Published var isProfileLoginInProgress = false
     @Published private(set) var activeOAuthLoginProvider: ProviderRowState.ID?
     @Published private(set) var completedOAuthLoginProvider: ProviderRowState.ID?
+    @Published private(set) var completedOAuthLoginIsInitialSetup = true
     @Published private(set) var config: AppConfig
     @Published var availableCodexModels: [String] = []
     @Published private(set) var codexModelLoadingState: CodexModelLoadingState = .idle
@@ -322,10 +323,12 @@ final class DashboardViewModel: ObservableObject {
         let sessionID = UUID()
         oauthLoginSessionID = sessionID
         completedOAuthLoginProvider = nil
+        completedOAuthLoginIsInitialSetup = true
         activeOAuthLoginProvider = provider
         isProfileLoginInProgress = true
+        let isInitialSetup = isInitialOAuthSetup(for: provider)
         oauthLoginTask = Task { [weak self] in
-            await self?.runOAuthLogin(provider, sessionID: sessionID)
+            await self?.runOAuthLogin(provider, sessionID: sessionID, isInitialSetup: isInitialSetup)
         }
     }
 
@@ -336,6 +339,7 @@ final class DashboardViewModel: ObservableObject {
         oauthLoginSessionID = nil
         activeOAuthLoginProvider = nil
         completedOAuthLoginProvider = nil
+        completedOAuthLoginIsInitialSetup = true
         isProfileLoginInProgress = false
 
         if let cancelledProvider {
@@ -349,9 +353,10 @@ final class DashboardViewModel: ObservableObject {
         let sessionID = UUID()
         oauthLoginSessionID = sessionID
         completedOAuthLoginProvider = nil
+        completedOAuthLoginIsInitialSetup = true
         activeOAuthLoginProvider = provider
         isProfileLoginInProgress = true
-        await runOAuthLogin(provider, sessionID: sessionID)
+        await runOAuthLogin(provider, sessionID: sessionID, isInitialSetup: isInitialOAuthSetup(for: provider))
     }
 
     private func oauthProviderName(_ provider: ProviderRowState.ID) -> String {
@@ -363,7 +368,12 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
-    private func runOAuthLogin(_ provider: ProviderRowState.ID, sessionID: UUID) async {
+    private func isInitialOAuthSetup(for provider: ProviderRowState.ID) -> Bool {
+        let profileType: AuthProfileType = provider == .claude ? .claude : .codex
+        return !authProfiles.contains { $0.type == profileType }
+    }
+
+    private func runOAuthLogin(_ provider: ProviderRowState.ID, sessionID: UUID, isInitialSetup: Bool) async {
         defer {
             if oauthLoginSessionID == sessionID {
                 isProfileLoginInProgress = false
@@ -389,6 +399,7 @@ final class DashboardViewModel: ObservableObject {
             _ = try authProfileStore.setDisabled(false, for: loginProvider.authProfileType)
             refreshProfiles()
             completedOAuthLoginProvider = provider
+            completedOAuthLoginIsInitialSetup = isInitialSetup
             settingsMessage = "\(providerName) connection was updated."
         } catch is CancellationError {
             guard oauthLoginSessionID == sessionID else { return }
@@ -743,7 +754,7 @@ final class DashboardViewModel: ObservableObject {
                         fallback: claudeStatus?.message ?? "Connect the bundled CLIProxyAPI Claude OAuth profile."
                     ),
                     isConnected: claudeEnabled != nil,
-                    isErrored: claudeAny?.expired != nil || claudeStatus?.severity == .error
+                    isErrored: isExpired(claudeAny) || claudeStatus?.severity == .error
                 )
             )
         }
@@ -760,7 +771,7 @@ final class DashboardViewModel: ObservableObject {
                         fallback: codexStatus?.message ?? "Connect the bundled CLIProxyAPI Codex OAuth profile."
                     ),
                     isConnected: codexEnabled != nil,
-                    isErrored: codexAny?.expired != nil || codexStatus?.severity == .error
+                    isErrored: isExpired(codexAny) || codexStatus?.severity == .error
                 )
             )
         }
@@ -893,5 +904,13 @@ final class DashboardViewModel: ObservableObject {
             return accountID
         }
         return fallback
+    }
+
+    private func isExpired(_ profile: AuthProfile?) -> Bool {
+        guard let expired = profile?.expired,
+              let expiryDate = ISO8601DateFormatter().date(from: expired) else {
+            return false
+        }
+        return expiryDate <= Date()
     }
 }

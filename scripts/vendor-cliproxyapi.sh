@@ -122,7 +122,7 @@ vendor_release() {
   local asset="CLIProxyAPI_${version}_darwin_aarch64.tar.gz"
   local tmpdir
   tmpdir="$(mktemp -d "/tmp/cliproxyapi-${version}.XXXXXX")"
-  trap 'rm -rf "$tmpdir"' EXIT
+  trap "rm -rf $(printf '%q' \"$tmpdir\")" EXIT
 
   gh release download "$tag" --repo "$UPSTREAM_REPOSITORY" --dir "$tmpdir" --pattern "$asset" --pattern checksums.txt
   (cd "$tmpdir" && shasum -a 256 -c --ignore-missing checksums.txt && tar -xzf "$asset")

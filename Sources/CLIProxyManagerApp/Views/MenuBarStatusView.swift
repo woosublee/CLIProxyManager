@@ -9,6 +9,7 @@ struct MenuBarStatusView: View {
     private var snapshot: MenuBarStatusSnapshot {
         MenuBarStatusSnapshot(
             serverStatus: viewModel.serverStatus,
+            serverControlState: viewModel.serverControlState,
             providers: viewModel.providerRows,
             port: viewModel.config.port
         )
@@ -77,21 +78,15 @@ struct MenuBarStatusView: View {
     }
 
     private var ledState: StatusLED.State {
-        switch viewModel.serverControlState {
-        case .running, .starting: return .running
-        case .stopped, .stopping: return .stopped
+        switch snapshot.indicatorState {
+        case .running: return .running
+        case .stopped: return .stopped
         case .error: return .error
         }
     }
 
     private var statusLabel: String {
-        switch viewModel.serverControlState {
-        case .stopped:  return "Stopped"
-        case .starting: return "Starting"
-        case .running:  return "Running"
-        case .stopping: return "Stopping"
-        case .error:    return "Error"
-        }
+        snapshot.statusLabel
     }
 
     @ViewBuilder

@@ -48,6 +48,34 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.cards.first { $0.command == "codex-local" }?.status, serverStatus)
     }
 
+    func testReadyServerRefreshClearsServerDerivedCodexProviderError() async {
+        let httpClient = SequencedHTTPClient(results: [
+            .failure(HTTPClientError.timedOut),
+            .success(Data("{}".utf8))
+        ])
+        let viewModel = DashboardViewModel(
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyHealthClient: ProxyHealthClient(httpClient: httpClient, timeout: 0.1),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        await viewModel.refresh()
+
+        XCTAssertEqual(viewModel.serverStatus.severity, .error)
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.isErrored, true)
+        XCTAssertEqual(MenuBarStatusSnapshot(serverStatus: viewModel.serverStatus, providers: viewModel.providerRows).erroredCount, 1)
+
+        await viewModel.refresh()
+
+        XCTAssertEqual(viewModel.serverStatus.severity, .ready)
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.isErrored, false)
+        XCTAssertEqual(MenuBarStatusSnapshot(serverStatus: viewModel.serverStatus, providers: viewModel.providerRows).erroredCount, 0)
+    }
+
     func testDefaultProviderRowsHideProfilesUntilAuthExists() {
         let viewModel = DashboardViewModel(
             authProfileStore: StubAuthProfileStore(profiles: []),
@@ -177,6 +205,36 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.connectionDetail, "codex@example.com")
     }
 
+    func testFutureExpiryDoesNotMarkProviderRowAsErrored() {
+        let viewModel = DashboardViewModel(
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: "2099-05-14T01:45:44+09:00", disabled: false),
+                AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: "2099-05-22T23:45:34+09:00", disabled: false)
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.isErrored, false)
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.isErrored, false)
+        XCTAssertEqual(MenuBarStatusSnapshot(serverStatus: viewModel.serverStatus, providers: viewModel.providerRows).erroredCount, 0)
+    }
+
+    func testPastExpiryMarksProviderRowAsErrored() {
+        let viewModel = DashboardViewModel(
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: "2000-05-14T01:45:44+09:00", disabled: false)
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.isErrored, true)
+        XCTAssertEqual(MenuBarStatusSnapshot(serverStatus: viewModel.serverStatus, providers: viewModel.providerRows).erroredCount, 1)
+    }
+
     func testConnectProviderStartsBundledOAuthLoginAndRefreshesProfiles() async {
         let authStore = StubAuthProfileStore(profiles: [])
         let oauth = StubOAuthLoginService()
@@ -199,6 +257,27 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertFalse(viewModel.isProfileLoginInProgress)
         XCTAssertNil(viewModel.activeOAuthLoginProvider)
         XCTAssertEqual(viewModel.completedOAuthLoginProvider, .codex)
+        XCTAssertTrue(viewModel.completedOAuthLoginIsInitialSetup)
+    }
+
+    func testReconnectDisabledProviderCompletesAsExistingSetup() async {
+        let authStore = StubAuthProfileStore(profiles: [
+            AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: nil, disabled: true)
+        ])
+        authStore.nextProfiles = [
+            AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: nil, disabled: false)
+        ]
+        let viewModel = DashboardViewModel(
+            authProfileStore: authStore,
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        await viewModel.connectProvider(.codex)
+
+        XCTAssertEqual(viewModel.completedOAuthLoginProvider, .codex)
+        XCTAssertFalse(viewModel.completedOAuthLoginIsInitialSetup)
     }
 
     func testConnectProviderDoesNotInstallShellFunctionsBeforeInitialSettingsAreSaved() async {
