@@ -12,8 +12,9 @@ last_status=0
 for attempt in 1 2 3; do
   if hdiutil verify "$dmg_path"; then
     exit 0
+  else
+    last_status=$?
   fi
-  last_status=$?
   if [[ $attempt -lt 3 ]]; then
     sleep 2
   fi

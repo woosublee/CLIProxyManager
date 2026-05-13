@@ -28,6 +28,29 @@ final class ReleaseWorkflowTests: XCTestCase {
         XCTAssertTrue(workflow.contains("gh release upload \"$RELEASE_TAG\" \"$DMG_PATH\" --clobber"))
     }
 
+    func testVerifyDMGScriptReturnsFailureStatusAfterRetries() throws {
+        let sandbox = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VerifyDMGTests")
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let fakeBin = sandbox.appendingPathComponent("bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: fakeBin, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: sandbox) }
+        let fakeHdiutil = fakeBin.appendingPathComponent("hdiutil")
+        try "#!/usr/bin/env bash\nexit 42\n".write(to: fakeHdiutil, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeHdiutil.path)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["bash", repositoryRoot().appendingPathComponent("scripts/verify-dmg.sh").path, "fake.dmg"]
+        var environment = ProcessInfo.processInfo.environment
+        environment["PATH"] = fakeBin.path + ":" + (environment["PATH"] ?? "")
+        process.environment = environment
+        try process.run()
+        process.waitUntilExit()
+
+        XCTAssertEqual(process.terminationStatus, 42)
+    }
+
     private func repositoryRoot() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
