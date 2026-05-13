@@ -14,8 +14,8 @@ enum DashboardSheet: Identifiable, Equatable {
         }
     }
 
-    static func afterOAuthLoginCompletion(_ provider: ProviderRowState.ID) -> DashboardSheet {
-        .providerSettings(provider, isInitialSetup: true)
+    static func afterOAuthLoginCompletion(_ provider: ProviderRowState.ID, isInitialSetup: Bool) -> DashboardSheet {
+        .providerSettings(provider, isInitialSetup: isInitialSetup)
     }
 }
 
@@ -111,7 +111,10 @@ struct DashboardView: View {
             }
             .onChange(of: viewModel.activeOAuthLoginProvider) { provider in
                 guard provider == nil, let connectedProvider = viewModel.completedOAuthLoginProvider else { return }
-                activeSheet = DashboardSheet.afterOAuthLoginCompletion(connectedProvider)
+                activeSheet = DashboardSheet.afterOAuthLoginCompletion(
+                    connectedProvider,
+                    isInitialSetup: viewModel.completedOAuthLoginIsInitialSetup
+                )
             }
             .onDisappear {
                 if viewModel.activeOAuthLoginProvider != nil {

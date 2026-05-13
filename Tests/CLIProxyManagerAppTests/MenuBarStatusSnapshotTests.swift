@@ -101,4 +101,48 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
 
         XCTAssertEqual(snapshot.erroredCount, 1)
     }
+
+    func testReadyServerStatusWinsOverStaleControlError() {
+        let snapshot = MenuBarStatusSnapshot(
+            serverStatus: DiagnosticStatus(
+                severity: .ready,
+                title: "CLIProxyAPI Running",
+                message: "Models are available on port 18317."
+            ),
+            serverControlState: .error("Previous failure"),
+            providers: []
+        )
+
+        XCTAssertEqual(snapshot.statusLabel, "Running")
+        XCTAssertEqual(snapshot.indicatorState, .running)
+        XCTAssertTrue(snapshot.isServerRunning)
+        XCTAssertEqual(snapshot.serverActionTitle, "Stop Server")
+        XCTAssertEqual(snapshot.endpointTitle, "localhost:18317")
+    }
+
+    func testTransitionControlStateWinsOverServerStatus() {
+        let starting = MenuBarStatusSnapshot(
+            serverStatus: DiagnosticStatus(
+                severity: .warning,
+                title: "CLIProxyAPI Stopped",
+                message: "The server is not responding on the configured port."
+            ),
+            serverControlState: .starting,
+            providers: []
+        )
+        let stopping = MenuBarStatusSnapshot(
+            serverStatus: DiagnosticStatus(
+                severity: .ready,
+                title: "CLIProxyAPI Running",
+                message: "Models are available on port 18317."
+            ),
+            serverControlState: .stopping,
+            providers: []
+        )
+
+        XCTAssertEqual(starting.statusLabel, "Starting")
+        XCTAssertEqual(starting.indicatorState, .running)
+        XCTAssertEqual(stopping.statusLabel, "Stopping")
+        XCTAssertEqual(stopping.indicatorState, .stopped)
+    }
 }

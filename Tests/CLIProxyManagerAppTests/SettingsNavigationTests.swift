@@ -6,11 +6,11 @@ import CLIProxyManagerCore
 final class SettingsNavigationTests: XCTestCase {
     func testAboutVersionTextUsesBundleVersion() {
         let bundle = BundleMock(info: [
-            "CFBundleShortVersionString": "0.1.2-beta.2",
-            "CFBundleVersion": "4"
+            "CFBundleShortVersionString": "0.1.2-beta.3",
+            "CFBundleVersion": "5"
         ])
 
-        XCTAssertEqual(aboutVersionText(bundle: bundle), "Version 0.1.2-beta.2 (4)")
+        XCTAssertEqual(aboutVersionText(bundle: bundle), "Version 0.1.2-beta.3 (5)")
     }
 
     func testSettingsTabsAreGeneralServerAdvancedAndAbout() {
@@ -20,8 +20,15 @@ final class SettingsNavigationTests: XCTestCase {
 
     func testOAuthCompletionTransitionsAddProviderSheetToInitialProviderSettings() {
         XCTAssertEqual(
-            DashboardSheet.afterOAuthLoginCompletion(.codex),
+            DashboardSheet.afterOAuthLoginCompletion(.codex, isInitialSetup: true),
             .providerSettings(.codex, isInitialSetup: true)
+        )
+    }
+
+    func testOAuthCompletionTransitionsReconnectedProviderToExistingSettings() {
+        XCTAssertEqual(
+            DashboardSheet.afterOAuthLoginCompletion(.codex, isInitialSetup: false),
+            .providerSettings(.codex, isInitialSetup: false)
         )
     }
 
