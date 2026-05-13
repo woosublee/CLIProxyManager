@@ -176,7 +176,7 @@ dmg: release-sign
 verify-dmg: dmg
 	@set -e; \
 	test -f "$(DMG_PATH)" || { echo "Missing DMG: $(DMG_PATH)"; exit 1; }; \
-	hdiutil verify "$(DMG_PATH)"; \
+	scripts/verify-dmg.sh "$(DMG_PATH)"; \
 	MOUNT_DIR=$$(mktemp -d "/tmp/$(APP_NAME).dmg.XXXXXX"); \
 	cleanup() { hdiutil detach "$$MOUNT_DIR" >/dev/null 2>&1 || hdiutil detach -force "$$MOUNT_DIR" >/dev/null 2>&1 || true; rm -rf "$$MOUNT_DIR"; }; \
 	trap cleanup EXIT; \
