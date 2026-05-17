@@ -269,6 +269,45 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.accountDetailHidden, false)
     }
 
+    func testToggleAccountDetailVisibilityDoesNotInstallShellFunctions() {
+        let installer = StubShellInstaller()
+        let viewModel = DashboardViewModel(
+            shellInstaller: installer,
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+        let installCountBeforeToggle = installer.installCount
+        let installedBeforeToggle = installer.installedFunctionNames
+
+        viewModel.toggleAccountDetailVisibility(.claude)
+
+        XCTAssertEqual(installer.installCount, installCountBeforeToggle)
+        XCTAssertEqual(installer.installedFunctionNames, installedBeforeToggle)
+    }
+
+    func testToggleAccountDetailVisibilityPreservesServerDerivedCodexErrorState() async {
+        let viewModel = DashboardViewModel(
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: nil, disabled: false)
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .failure(HTTPClientError.timedOut)), timeout: 0.1),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        await viewModel.refresh()
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.isErrored, true)
+
+        viewModel.toggleAccountDetailVisibility(.codex)
+
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.isErrored, true)
+    }
+
     func testToggleAccountDetailVisibilityShowsSettingsMessageWhenSaveFails() {
         var config = AppConfig.default
         config.accountPrivacy = AppConfig.AccountPrivacy(claudeHidden: true, codexHidden: true)
@@ -1044,6 +1083,7 @@ private final class StubShellInstaller: ShellFunctionInstalling, @unchecked Send
     private let validationError: Error?
     private(set) var installedScript: String?
     private(set) var installedFunctionNames: [String] = []
+    private(set) var installCount = 0
     private(set) var validatedFunctionNames: [[String]] = []
     var installed = false
 
@@ -1054,6 +1094,7 @@ private final class StubShellInstaller: ShellFunctionInstalling, @unchecked Send
     func install(functionScript: String, functionNames: [String]) throws {
         installedScript = functionScript
         installedFunctionNames = functionNames
+        installCount += 1
         installed = true
     }
 

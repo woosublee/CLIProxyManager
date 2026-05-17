@@ -490,16 +490,16 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func toggleAccountDetailVisibility(_ provider: ProviderRowState.ID) {
-        var updatedConfig = config
+        var accountPrivacy = config.accountPrivacy
         switch provider {
         case .claude:
-            updatedConfig.accountPrivacy.claudeHidden.toggle()
+            accountPrivacy.claudeHidden.toggle()
         case .codex:
-            updatedConfig.accountPrivacy.codexHidden.toggle()
+            accountPrivacy.codexHidden.toggle()
         }
 
         do {
-            try saveConfig(updatedConfig)
+            try saveAccountPrivacy(accountPrivacy)
         } catch {
             settingsMessage = "Account privacy update failed: \(error.localizedDescription)"
         }
@@ -720,6 +720,17 @@ final class DashboardViewModel: ObservableObject {
         cards = ProfileCard.makeDefaultCards(config: updatedConfig)
         rebuildOptionRows()
         rebuildProviderRows(claudeStatus: nil, codexStatus: nil)
+    }
+
+    private func saveAccountPrivacy(_ accountPrivacy: AppConfig.AccountPrivacy) throws {
+        var updatedConfig = config
+        updatedConfig.accountPrivacy = accountPrivacy
+        let availableConfig = Self.availableConfig(updatedConfig)
+        try configStore.save(availableConfig)
+        config = availableConfig
+        cards = ProfileCard.makeDefaultCards(config: availableConfig)
+        rebuildOptionRows()
+        rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
     }
 
     private func applyInitialShellInstall() {
