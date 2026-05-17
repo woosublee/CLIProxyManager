@@ -308,6 +308,25 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.isErrored, true)
     }
 
+    func testToggleAccountDetailVisibilityPreservesDashboardCardStatuses() async {
+        let viewModel = DashboardViewModel(
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: nil, disabled: false)
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .failure(HTTPClientError.timedOut)), timeout: 0.1),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        await viewModel.refresh()
+        let statusBeforeToggle = viewModel.cards.first { $0.command == viewModel.config.commands.ccodex }?.status
+
+        viewModel.toggleAccountDetailVisibility(.codex)
+
+        XCTAssertEqual(viewModel.cards.first { $0.command == viewModel.config.commands.ccodex }?.status, statusBeforeToggle)
+    }
+
     func testToggleAccountDetailVisibilityShowsSettingsMessageWhenSaveFails() {
         var config = AppConfig.default
         config.accountPrivacy = AppConfig.AccountPrivacy(claudeHidden: true, codexHidden: true)

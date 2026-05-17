@@ -472,7 +472,7 @@ private struct ProviderAccountCardView: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(account.isAccountDetailHidden ? "Account detail hidden" : "Account detail visible")
+                .accessibilityLabel(account.accountPrivacyToggleAccessibilityLabel)
             }
         }
     }

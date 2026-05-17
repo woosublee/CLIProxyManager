@@ -728,7 +728,24 @@ final class DashboardViewModel: ObservableObject {
         let availableConfig = Self.availableConfig(updatedConfig)
         try configStore.save(availableConfig)
         config = availableConfig
-        cards = ProfileCard.makeDefaultCards(config: availableConfig)
+        cards = ProfileCard.makeDefaultCards(config: availableConfig).map { card in
+            switch card.command {
+            case availableConfig.commands.cc:
+                if let lastClaudeStatus {
+                    card.updatingStatus(lastClaudeStatus)
+                } else {
+                    card
+                }
+            case availableConfig.commands.ccodex:
+                if let lastCodexStatus {
+                    card.updatingStatus(lastCodexStatus)
+                } else {
+                    card
+                }
+            default:
+                card
+            }
+        }
         rebuildOptionRows()
         rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
     }

@@ -15,6 +15,10 @@ struct DashboardAccountSnapshot: Equatable, Identifiable {
     let isAccountDetailHidden: Bool
     let showsAccountPrivacyToggle: Bool
 
+    var accountPrivacyToggleAccessibilityLabel: String {
+        isAccountDetailHidden ? "Show account detail" : "Hide account detail"
+    }
+
     init(provider: ProviderRowState) {
         id = provider.id
         title = provider.displayTitle
