@@ -446,6 +446,13 @@ private struct ProviderAccountCardView: View {
         }
     }
 
+    private var accountDetailAccessibilityLabel: String {
+        if account.isAccountDetailHidden && account.showsAccountPrivacyToggle {
+            return "Account detail hidden"
+        }
+        return account.status == .connected ? account.detail : "Disconnected"
+    }
+
     private var accountDetailRow: some View {
         HStack(spacing: 6) {
             StatusLED(state: account.status == .connected ? .running : .stopped, size: 6, pulse: false)
@@ -455,6 +462,7 @@ private struct ProviderAccountCardView: View {
                 .lineLimit(1)
                 .blur(radius: account.isAccountDetailHidden && account.showsAccountPrivacyToggle ? 4 : 0)
                 .animation(.easeInOut(duration: 0.16), value: account.isAccountDetailHidden)
+                .accessibilityLabel(accountDetailAccessibilityLabel)
 
             if account.showsAccountPrivacyToggle {
                 Button(action: toggleAccountDetailVisibility) {
