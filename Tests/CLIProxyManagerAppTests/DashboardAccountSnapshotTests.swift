@@ -63,6 +63,24 @@ final class DashboardAccountSnapshotTests: XCTestCase {
         XCTAssertTrue(snapshot.showsAccountPrivacyToggle)
     }
 
+    func testConnectedProviderPreservesVisiblePrivacyState() {
+        let row = ProviderRowState(
+            id: .claude,
+            name: "Claude OAuth",
+            nickname: "",
+            functionName: "ccm",
+            connectionTitle: "Connected",
+            connectionDetail: "claude@example.com",
+            isConnected: true,
+            accountDetailHidden: false
+        )
+
+        let snapshot = DashboardAccountSnapshot(provider: row)
+
+        XCTAssertFalse(snapshot.isAccountDetailHidden)
+        XCTAssertTrue(snapshot.showsAccountPrivacyToggle)
+    }
+
     func testDisconnectedProviderDoesNotShowPrivacyToggle() {
         let row = ProviderRowState(
             id: .codex,
