@@ -100,6 +100,16 @@ public struct AppConfig: Codable, Equatable, Sendable {
             self.claudeHidden = claudeHidden
             self.codexHidden = codexHidden
         }
+
+        private enum CodingKeys: String, CodingKey {
+            case claudeHidden, codexHidden
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            self.claudeHidden = try c.decodeIfPresent(Bool.self, forKey: .claudeHidden) ?? true
+            self.codexHidden = try c.decodeIfPresent(Bool.self, forKey: .codexHidden) ?? true
+        }
     }
 
     public var port: Int

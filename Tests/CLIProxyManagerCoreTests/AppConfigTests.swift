@@ -52,6 +52,56 @@ final class AppConfigTests: XCTestCase {
         XCTAssertTrue(config.accountPrivacy.codexHidden)
     }
 
+    func testDecodedConfigDefaultsMissingCodexPrivacyFieldToHidden() throws {
+        let data = Data(#"""
+        {
+          "port": 18317,
+          "commands": { "cc": "cc", "ccapi": "ccapi", "ccodex": "ccodex" },
+          "ccapi": { "model": "claude-opus-4-7" },
+          "ccodex": {
+            "opus": { "model": "gpt-5.5", "reasoning": "xhigh", "contextWindow": "auto" },
+            "sonnet": { "model": "gpt-5.5", "reasoning": "medium", "contextWindow": "auto" },
+            "haiku": { "model": "gpt-5.5", "reasoning": "low", "contextWindow": "auto" }
+          },
+          "includeDangerouslySkipPermissions": false,
+          "startAtLogin": false,
+          "showDockIcon": true,
+          "showMenuBarIcon": true,
+          "accountPrivacy": { "claudeHidden": false }
+        }
+        """#.utf8)
+
+        let config = try JSONDecoder().decode(AppConfig.self, from: data)
+
+        XCTAssertFalse(config.accountPrivacy.claudeHidden)
+        XCTAssertTrue(config.accountPrivacy.codexHidden)
+    }
+
+    func testDecodedConfigDefaultsMissingClaudePrivacyFieldToHidden() throws {
+        let data = Data(#"""
+        {
+          "port": 18317,
+          "commands": { "cc": "cc", "ccapi": "ccapi", "ccodex": "ccodex" },
+          "ccapi": { "model": "claude-opus-4-7" },
+          "ccodex": {
+            "opus": { "model": "gpt-5.5", "reasoning": "xhigh", "contextWindow": "auto" },
+            "sonnet": { "model": "gpt-5.5", "reasoning": "medium", "contextWindow": "auto" },
+            "haiku": { "model": "gpt-5.5", "reasoning": "low", "contextWindow": "auto" }
+          },
+          "includeDangerouslySkipPermissions": false,
+          "startAtLogin": false,
+          "showDockIcon": true,
+          "showMenuBarIcon": true,
+          "accountPrivacy": { "codexHidden": false }
+        }
+        """#.utf8)
+
+        let config = try JSONDecoder().decode(AppConfig.self, from: data)
+
+        XCTAssertTrue(config.accountPrivacy.claudeHidden)
+        XCTAssertFalse(config.accountPrivacy.codexHidden)
+    }
+
     func testDecodedConfigPreservesAccountPrivacy() throws {
         let data = Data(#"""
         {
