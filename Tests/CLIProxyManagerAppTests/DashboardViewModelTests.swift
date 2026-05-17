@@ -205,6 +205,152 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.connectionDetail, "codex@example.com")
     }
 
+    func testProviderRowsReflectConfiguredAccountPrivacy() {
+        var config = AppConfig.default
+        config.accountPrivacy = AppConfig.AccountPrivacy(claudeHidden: false, codexHidden: true)
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false),
+                AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: nil, disabled: false)
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.accountDetailHidden, false)
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.accountDetailHidden, true)
+    }
+
+    func testToggleClaudeAccountDetailVisibilityPersistsOnlyClaudePrivacy() {
+        var config = AppConfig.default
+        config.accountPrivacy = AppConfig.AccountPrivacy(claudeHidden: true, codexHidden: false)
+        let store = StubConfigStore(config: config)
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false),
+                AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: nil, disabled: false)
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        viewModel.toggleAccountDetailVisibility(.claude)
+
+        XCTAssertEqual(store.savedConfigs.last?.accountPrivacy, AppConfig.AccountPrivacy(claudeHidden: false, codexHidden: false))
+        XCTAssertEqual(viewModel.config.accountPrivacy, AppConfig.AccountPrivacy(claudeHidden: false, codexHidden: false))
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.accountDetailHidden, false)
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.accountDetailHidden, false)
+    }
+
+    func testToggleCodexAccountDetailVisibilityPersistsOnlyCodexPrivacy() {
+        var config = AppConfig.default
+        config.accountPrivacy = AppConfig.AccountPrivacy(claudeHidden: false, codexHidden: true)
+        let store = StubConfigStore(config: config)
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false),
+                AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: nil, disabled: false)
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        viewModel.toggleAccountDetailVisibility(.codex)
+
+        XCTAssertEqual(store.savedConfigs.last?.accountPrivacy, AppConfig.AccountPrivacy(claudeHidden: false, codexHidden: false))
+        XCTAssertEqual(viewModel.config.accountPrivacy, AppConfig.AccountPrivacy(claudeHidden: false, codexHidden: false))
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.accountDetailHidden, false)
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.accountDetailHidden, false)
+    }
+
+    func testToggleAccountDetailVisibilityDoesNotInstallShellFunctions() {
+        let installer = StubShellInstaller()
+        let viewModel = DashboardViewModel(
+            shellInstaller: installer,
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+        let installCountBeforeToggle = installer.installCount
+        let installedBeforeToggle = installer.installedFunctionNames
+
+        viewModel.toggleAccountDetailVisibility(.claude)
+
+        XCTAssertEqual(installer.installCount, installCountBeforeToggle)
+        XCTAssertEqual(installer.installedFunctionNames, installedBeforeToggle)
+    }
+
+    func testToggleAccountDetailVisibilityPreservesServerDerivedCodexErrorState() async {
+        let viewModel = DashboardViewModel(
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: nil, disabled: false)
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .failure(HTTPClientError.timedOut)), timeout: 0.1),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        await viewModel.refresh()
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.isErrored, true)
+
+        viewModel.toggleAccountDetailVisibility(.codex)
+
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.isErrored, true)
+    }
+
+    func testToggleAccountDetailVisibilityPreservesDashboardCardStatuses() async {
+        let viewModel = DashboardViewModel(
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: nil, disabled: false)
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .failure(HTTPClientError.timedOut)), timeout: 0.1),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        await viewModel.refresh()
+        let statusBeforeToggle = viewModel.cards.first { $0.command == viewModel.config.commands.ccodex }?.status
+
+        viewModel.toggleAccountDetailVisibility(.codex)
+
+        XCTAssertEqual(viewModel.cards.first { $0.command == viewModel.config.commands.ccodex }?.status, statusBeforeToggle)
+    }
+
+    func testToggleAccountDetailVisibilityShowsSettingsMessageWhenSaveFails() {
+        var config = AppConfig.default
+        config.accountPrivacy = AppConfig.AccountPrivacy(claudeHidden: true, codexHidden: true)
+        let store = StubConfigStore(
+            config: config,
+            saveError: NSError(domain: "AccountPrivacy", code: 1, userInfo: [NSLocalizedDescriptionKey: "Save failed"])
+        )
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        viewModel.toggleAccountDetailVisibility(.claude)
+
+        XCTAssertEqual(store.savedConfigs, [])
+        XCTAssertEqual(viewModel.config.accountPrivacy, AppConfig.AccountPrivacy(claudeHidden: true, codexHidden: true))
+        XCTAssertEqual(viewModel.settingsMessage, "Account privacy update failed: Save failed")
+    }
+
     func testFutureExpiryDoesNotMarkProviderRowAsErrored() {
         let viewModel = DashboardViewModel(
             authProfileStore: StubAuthProfileStore(profiles: [
@@ -416,6 +562,52 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         XCTAssertEqual(authStore.deleteInvocations, [.claude])
         XCTAssertNil(viewModel.settingsMessage)
+    }
+
+    func testRemoveProviderResetsOnlyRemovedClaudeAccountPrivacy() {
+        var config = AppConfig.default
+        config.accountPrivacy = AppConfig.AccountPrivacy(claudeHidden: false, codexHidden: false)
+        let store = StubConfigStore(config: config)
+        let authStore = StubAuthProfileStore(profiles: [
+            AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false),
+            AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: nil, disabled: false)
+        ])
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: authStore,
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        viewModel.removeProvider(.claude)
+
+        XCTAssertEqual(store.savedConfigs.last?.accountPrivacy, AppConfig.AccountPrivacy(claudeHidden: true, codexHidden: false))
+        XCTAssertEqual(viewModel.config.accountPrivacy, AppConfig.AccountPrivacy(claudeHidden: true, codexHidden: false))
+    }
+
+    func testRemoveProviderResetsOnlyRemovedCodexAccountPrivacy() {
+        var config = AppConfig.default
+        config.accountPrivacy = AppConfig.AccountPrivacy(claudeHidden: false, codexHidden: false)
+        let store = StubConfigStore(config: config)
+        let authStore = StubAuthProfileStore(profiles: [
+            AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false),
+            AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: nil, disabled: false)
+        ])
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: authStore,
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        viewModel.removeProvider(.codex)
+
+        XCTAssertEqual(store.savedConfigs.last?.accountPrivacy, AppConfig.AccountPrivacy(claudeHidden: false, codexHidden: true))
+        XCTAssertEqual(viewModel.config.accountPrivacy, AppConfig.AccountPrivacy(claudeHidden: false, codexHidden: true))
     }
 
     func testExpiredProviderRowIsErrored() {
@@ -910,6 +1102,7 @@ private final class StubShellInstaller: ShellFunctionInstalling, @unchecked Send
     private let validationError: Error?
     private(set) var installedScript: String?
     private(set) var installedFunctionNames: [String] = []
+    private(set) var installCount = 0
     private(set) var validatedFunctionNames: [[String]] = []
     var installed = false
 
@@ -920,6 +1113,7 @@ private final class StubShellInstaller: ShellFunctionInstalling, @unchecked Send
     func install(functionScript: String, functionNames: [String]) throws {
         installedScript = functionScript
         installedFunctionNames = functionNames
+        installCount += 1
         installed = true
     }
 

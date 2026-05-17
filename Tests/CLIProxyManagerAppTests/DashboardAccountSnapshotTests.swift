@@ -45,6 +45,94 @@ final class DashboardAccountSnapshotTests: XCTestCase {
         XCTAssertFalse(snapshot.showsMoreMenu)
     }
 
+    func testConnectedProviderShowsPrivacyToggleAndHiddenState() {
+        let row = ProviderRowState(
+            id: .claude,
+            name: "Claude OAuth",
+            nickname: "",
+            functionName: "ccm",
+            connectionTitle: "Connected",
+            connectionDetail: "claude@example.com",
+            isConnected: true,
+            accountDetailHidden: true
+        )
+
+        let snapshot = DashboardAccountSnapshot(provider: row)
+
+        XCTAssertTrue(snapshot.isAccountDetailHidden)
+        XCTAssertTrue(snapshot.showsAccountPrivacyToggle)
+    }
+
+    func testHiddenProviderPrivacyToggleAccessibilityLabelShowsAction() {
+        let row = ProviderRowState(
+            id: .claude,
+            name: "Claude OAuth",
+            nickname: "",
+            functionName: "ccm",
+            connectionTitle: "Connected",
+            connectionDetail: "claude@example.com",
+            isConnected: true,
+            accountDetailHidden: true
+        )
+
+        let snapshot = DashboardAccountSnapshot(provider: row)
+
+        XCTAssertEqual(snapshot.accountPrivacyToggleAccessibilityLabel, "Show account detail")
+    }
+
+    func testVisibleProviderPrivacyToggleAccessibilityLabelShowsAction() {
+        let row = ProviderRowState(
+            id: .claude,
+            name: "Claude OAuth",
+            nickname: "",
+            functionName: "ccm",
+            connectionTitle: "Connected",
+            connectionDetail: "claude@example.com",
+            isConnected: true,
+            accountDetailHidden: false
+        )
+
+        let snapshot = DashboardAccountSnapshot(provider: row)
+
+        XCTAssertEqual(snapshot.accountPrivacyToggleAccessibilityLabel, "Hide account detail")
+    }
+
+    func testConnectedProviderPreservesVisiblePrivacyState() {
+        let row = ProviderRowState(
+            id: .claude,
+            name: "Claude OAuth",
+            nickname: "",
+            functionName: "ccm",
+            connectionTitle: "Connected",
+            connectionDetail: "claude@example.com",
+            isConnected: true,
+            accountDetailHidden: false
+        )
+
+        let snapshot = DashboardAccountSnapshot(provider: row)
+
+        XCTAssertFalse(snapshot.isAccountDetailHidden)
+        XCTAssertTrue(snapshot.showsAccountPrivacyToggle)
+    }
+
+    func testDisconnectedProviderDoesNotShowPrivacyToggle() {
+        let row = ProviderRowState(
+            id: .codex,
+            name: "Codex OAuth",
+            nickname: "",
+            functionName: "ccmcodex",
+            connectionTitle: "Needs connection",
+            connectionDetail: "Connect the bundled CLIProxyAPI Codex OAuth profile.",
+            isConnected: false,
+            accountDetailHidden: true
+        )
+
+        let snapshot = DashboardAccountSnapshot(provider: row)
+
+        XCTAssertTrue(snapshot.isAccountDetailHidden)
+        XCTAssertFalse(snapshot.showsAccountPrivacyToggle)
+    }
+
     func testWhitespaceOnlyNicknameFallsBackToProviderName() {
         let row = ProviderRowState(
             id: .claude,

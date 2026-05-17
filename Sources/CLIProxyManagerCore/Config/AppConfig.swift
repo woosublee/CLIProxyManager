@@ -92,6 +92,26 @@ public struct AppConfig: Codable, Equatable, Sendable {
         }
     }
 
+    public struct AccountPrivacy: Codable, Equatable, Sendable {
+        public var claudeHidden: Bool
+        public var codexHidden: Bool
+
+        public init(claudeHidden: Bool = true, codexHidden: Bool = true) {
+            self.claudeHidden = claudeHidden
+            self.codexHidden = codexHidden
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case claudeHidden, codexHidden
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            self.claudeHidden = try c.decodeIfPresent(Bool.self, forKey: .claudeHidden) ?? true
+            self.codexHidden = try c.decodeIfPresent(Bool.self, forKey: .codexHidden) ?? true
+        }
+    }
+
     public var port: Int
     public var commands: Commands
     public var ccapi: ClaudeAPI
@@ -103,6 +123,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var showNotifications: Bool
     public var appearance: AppearanceMode
     public var nicknames: Nicknames
+    public var accountPrivacy: AccountPrivacy
     public var bindAddress: String
     public var autostartServer: Bool
     public var roundRobinEnabled: Bool
@@ -120,6 +141,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         showNotifications: Bool = false,
         appearance: AppearanceMode = .system,
         nicknames: Nicknames = Nicknames(),
+        accountPrivacy: AccountPrivacy = AccountPrivacy(),
         bindAddress: String = "127.0.0.1",
         autostartServer: Bool = false,
         roundRobinEnabled: Bool = false,
@@ -136,6 +158,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         self.showNotifications = showNotifications
         self.appearance = appearance
         self.nicknames = nicknames
+        self.accountPrivacy = accountPrivacy
         self.bindAddress = bindAddress
         self.autostartServer = autostartServer
         self.roundRobinEnabled = roundRobinEnabled
@@ -149,6 +172,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         case showNotifications
         case appearance
         case nicknames
+        case accountPrivacy
         case bindAddress, autostartServer, roundRobinEnabled
         case logLevel
     }
@@ -166,6 +190,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         self.showNotifications = false
         self.appearance = try c.decodeIfPresent(AppearanceMode.self, forKey: .appearance) ?? .system
         self.nicknames = try c.decodeIfPresent(Nicknames.self, forKey: .nicknames) ?? Nicknames()
+        self.accountPrivacy = try c.decodeIfPresent(AccountPrivacy.self, forKey: .accountPrivacy) ?? AccountPrivacy()
         self.bindAddress = try c.decodeIfPresent(String.self, forKey: .bindAddress) ?? "127.0.0.1"
         self.autostartServer = try c.decodeIfPresent(Bool.self, forKey: .autostartServer) ?? false
         self.roundRobinEnabled = false

@@ -489,6 +489,22 @@ final class DashboardViewModel: ObservableObject {
         settingsMessage = "Claude API profiles are hidden from the default account list in this version."
     }
 
+    func toggleAccountDetailVisibility(_ provider: ProviderRowState.ID) {
+        var accountPrivacy = config.accountPrivacy
+        switch provider {
+        case .claude:
+            accountPrivacy.claudeHidden.toggle()
+        case .codex:
+            accountPrivacy.codexHidden.toggle()
+        }
+
+        do {
+            try saveAccountPrivacy(accountPrivacy)
+        } catch {
+            settingsMessage = "Account privacy update failed: \(error.localizedDescription)"
+        }
+    }
+
     func commandNameAvailability(provider: ProviderRowState.ID, functionName: String) async -> CommandNameAvailability {
         let normalizedName = normalizeCommandName(functionName)
         do {
@@ -680,10 +696,12 @@ final class DashboardViewModel: ObservableObject {
         case .claude:
             updatedConfig.commands.cc = AppConfig.default.commands.cc
             updatedConfig.nicknames.cc = ""
+            updatedConfig.accountPrivacy.claudeHidden = true
         case .codex:
             updatedConfig.commands.ccodex = AppConfig.default.commands.ccodex
             updatedConfig.nicknames.ccodex = ""
             updatedConfig.ccodex = AppConfig.default.ccodex
+            updatedConfig.accountPrivacy.codexHidden = true
         }
         updatedConfig.includeDangerouslySkipPermissions = false
         try saveConfig(updatedConfig, validateShellFunctions: true)
@@ -702,6 +720,34 @@ final class DashboardViewModel: ObservableObject {
         cards = ProfileCard.makeDefaultCards(config: updatedConfig)
         rebuildOptionRows()
         rebuildProviderRows(claudeStatus: nil, codexStatus: nil)
+    }
+
+    private func saveAccountPrivacy(_ accountPrivacy: AppConfig.AccountPrivacy) throws {
+        var updatedConfig = config
+        updatedConfig.accountPrivacy = accountPrivacy
+        let availableConfig = Self.availableConfig(updatedConfig)
+        try configStore.save(availableConfig)
+        config = availableConfig
+        cards = ProfileCard.makeDefaultCards(config: availableConfig).map { card in
+            switch card.command {
+            case availableConfig.commands.cc:
+                if let lastClaudeStatus {
+                    card.updatingStatus(lastClaudeStatus)
+                } else {
+                    card
+                }
+            case availableConfig.commands.ccodex:
+                if let lastCodexStatus {
+                    card.updatingStatus(lastCodexStatus)
+                } else {
+                    card
+                }
+            default:
+                card
+            }
+        }
+        rebuildOptionRows()
+        rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
     }
 
     private func applyInitialShellInstall() {
@@ -754,7 +800,8 @@ final class DashboardViewModel: ObservableObject {
                         fallback: claudeStatus?.message ?? "Connect the bundled CLIProxyAPI Claude OAuth profile."
                     ),
                     isConnected: claudeEnabled != nil,
-                    isErrored: isExpired(claudeAny) || claudeStatus?.severity == .error
+                    isErrored: isExpired(claudeAny) || claudeStatus?.severity == .error,
+                    accountDetailHidden: config.accountPrivacy.claudeHidden
                 )
             )
         }
@@ -771,7 +818,8 @@ final class DashboardViewModel: ObservableObject {
                         fallback: codexStatus?.message ?? "Connect the bundled CLIProxyAPI Codex OAuth profile."
                     ),
                     isConnected: codexEnabled != nil,
-                    isErrored: isExpired(codexAny) || codexStatus?.severity == .error
+                    isErrored: isExpired(codexAny) || codexStatus?.severity == .error,
+                    accountDetailHidden: config.accountPrivacy.codexHidden
                 )
             )
         }

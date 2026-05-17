@@ -12,6 +12,7 @@ struct ProviderRowState: Identifiable, Equatable {
     let connectionDetail: String
     let isConnected: Bool
     let isErrored: Bool
+    let accountDetailHidden: Bool
 
     init(
         id: ID,
@@ -21,7 +22,8 @@ struct ProviderRowState: Identifiable, Equatable {
         connectionTitle: String,
         connectionDetail: String,
         isConnected: Bool,
-        isErrored: Bool = false
+        isErrored: Bool = false,
+        accountDetailHidden: Bool = true
     ) {
         self.id = id
         self.name = name
@@ -31,6 +33,7 @@ struct ProviderRowState: Identifiable, Equatable {
         self.connectionDetail = connectionDetail
         self.isConnected = isConnected
         self.isErrored = isErrored
+        self.accountDetailHidden = accountDetailHidden
     }
 
     var displayTitle: String {
