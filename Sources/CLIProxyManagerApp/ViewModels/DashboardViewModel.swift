@@ -696,10 +696,12 @@ final class DashboardViewModel: ObservableObject {
         case .claude:
             updatedConfig.commands.cc = AppConfig.default.commands.cc
             updatedConfig.nicknames.cc = ""
+            updatedConfig.accountPrivacy.claudeHidden = true
         case .codex:
             updatedConfig.commands.ccodex = AppConfig.default.commands.ccodex
             updatedConfig.nicknames.ccodex = ""
             updatedConfig.ccodex = AppConfig.default.ccodex
+            updatedConfig.accountPrivacy.codexHidden = true
         }
         updatedConfig.includeDangerouslySkipPermissions = false
         try saveConfig(updatedConfig, validateShellFunctions: true)
