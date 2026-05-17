@@ -65,6 +65,7 @@ struct DashboardView: View {
                                 viewModel.startOAuthLogin(account.id)
                             },
                             settings: { activeSheet = .providerSettings(account.id, isInitialSetup: false) },
+                            toggleAccountDetailVisibility: { viewModel.toggleAccountDetailVisibility(account.id) },
                             disconnect: { viewModel.disconnectProvider(account.id) },
                             remove: { viewModel.removeProvider(account.id) }
                         )
@@ -400,6 +401,7 @@ private struct ProviderAccountCardView: View {
     let account: DashboardAccountSnapshot
     let connect: () -> Void
     let settings: () -> Void
+    let toggleAccountDetailVisibility: () -> Void
     let disconnect: () -> Void
     let remove: () -> Void
     @State private var hovering: Bool = false
@@ -416,14 +418,8 @@ private struct ProviderAccountCardView: View {
 
                 SlugPill(slug: account.commandName)
 
-                HStack(spacing: 6) {
-                    StatusLED(state: account.status == .connected ? .running : .stopped, size: 6, pulse: false)
-                    Text(account.status == .connected ? account.detail : "Disconnected")
-                        .font(.system(size: 11))
-                        .foregroundStyle(account.status == .connected ? .secondary : .tertiary)
-                        .lineLimit(1)
-                }
-                .padding(.top, 2)
+                accountDetailRow
+                    .padding(.top, 2)
             }
 
             Spacer(minLength: 4)
@@ -447,6 +443,29 @@ private struct ProviderAccountCardView: View {
             Button("Remove", role: .destructive) { remove() }
         } message: {
             Text("The auth profile will be deleted from CLIProxyAPI. You can reconnect at any time via Add provider.")
+        }
+    }
+
+    private var accountDetailRow: some View {
+        HStack(spacing: 6) {
+            StatusLED(state: account.status == .connected ? .running : .stopped, size: 6, pulse: false)
+            Text(account.status == .connected ? account.detail : "Disconnected")
+                .font(.system(size: 11))
+                .foregroundStyle(account.status == .connected ? .secondary : .tertiary)
+                .lineLimit(1)
+                .blur(radius: account.isAccountDetailHidden && account.showsAccountPrivacyToggle ? 4 : 0)
+                .animation(.easeInOut(duration: 0.16), value: account.isAccountDetailHidden)
+
+            if account.showsAccountPrivacyToggle {
+                Button(action: toggleAccountDetailVisibility) {
+                    Image(systemName: account.isAccountDetailHidden ? "eye.slash" : "eye")
+                        .font(.system(size: 11, weight: .medium))
+                        .frame(width: 18, height: 18)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(account.isAccountDetailHidden ? "Account detail hidden" : "Account detail visible")
+            }
         }
     }
 
