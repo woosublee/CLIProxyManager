@@ -489,6 +489,22 @@ final class DashboardViewModel: ObservableObject {
         settingsMessage = "Claude API profiles are hidden from the default account list in this version."
     }
 
+    func toggleAccountDetailVisibility(_ provider: ProviderRowState.ID) {
+        var updatedConfig = config
+        switch provider {
+        case .claude:
+            updatedConfig.accountPrivacy.claudeHidden.toggle()
+        case .codex:
+            updatedConfig.accountPrivacy.codexHidden.toggle()
+        }
+
+        do {
+            try saveConfig(updatedConfig)
+        } catch {
+            settingsMessage = "Account privacy update failed: \(error.localizedDescription)"
+        }
+    }
+
     func commandNameAvailability(provider: ProviderRowState.ID, functionName: String) async -> CommandNameAvailability {
         let normalizedName = normalizeCommandName(functionName)
         do {
@@ -754,7 +770,8 @@ final class DashboardViewModel: ObservableObject {
                         fallback: claudeStatus?.message ?? "Connect the bundled CLIProxyAPI Claude OAuth profile."
                     ),
                     isConnected: claudeEnabled != nil,
-                    isErrored: isExpired(claudeAny) || claudeStatus?.severity == .error
+                    isErrored: isExpired(claudeAny) || claudeStatus?.severity == .error,
+                    accountDetailHidden: config.accountPrivacy.claudeHidden
                 )
             )
         }
@@ -771,7 +788,8 @@ final class DashboardViewModel: ObservableObject {
                         fallback: codexStatus?.message ?? "Connect the bundled CLIProxyAPI Codex OAuth profile."
                     ),
                     isConnected: codexEnabled != nil,
-                    isErrored: isExpired(codexAny) || codexStatus?.severity == .error
+                    isErrored: isExpired(codexAny) || codexStatus?.severity == .error,
+                    accountDetailHidden: config.accountPrivacy.codexHidden
                 )
             )
         }
