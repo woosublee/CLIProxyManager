@@ -73,12 +73,16 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     }
 
     func testPersistentServerHealthErrorCountsAsCodexProviderError() async {
+        let httpClient = SequencedHTTPClient(results: [
+            .failure(HTTPClientError.timedOut),
+            .failure(HTTPClientError.timedOut)
+        ])
         let viewModel = DashboardViewModel(
             authProfileStore: StubAuthProfileStore(profiles: [
                 AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
             ]),
             oauthLoginService: StubOAuthLoginService(),
-            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .failure(HTTPClientError.timedOut)), timeout: 0.1),
+            proxyHealthClient: ProxyHealthClient(httpClient: httpClient, timeout: 0.1),
             proxyService: StubProxyServiceStarter(),
             claudeConnector: connectedClaudeConnector(),
             serverStatusRetryDelayNanoseconds: 0
@@ -86,6 +90,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         await viewModel.refresh()
 
+        XCTAssertEqual(httpClient.requestCount, 2)
         XCTAssertEqual(viewModel.serverStatus.severity, .error)
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.isErrored, true)
         XCTAssertEqual(MenuBarStatusSnapshot(serverStatus: viewModel.serverStatus, providers: viewModel.providerRows).erroredCount, 1)

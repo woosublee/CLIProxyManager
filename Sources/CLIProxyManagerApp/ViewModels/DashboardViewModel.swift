@@ -891,8 +891,7 @@ final class DashboardViewModel: ObservableObject {
         guard firstStatus.severity == .error else { return firstStatus }
 
         try? await Task.sleep(nanoseconds: serverStatusRetryDelayNanoseconds)
-        let secondStatus = await proxyHealthClient.status(port: config.port)
-        return secondStatus.severity == .error ? firstStatus : secondStatus
+        return await proxyHealthClient.status(port: config.port)
     }
 
     private func refreshUntilServerIsReady() async {
