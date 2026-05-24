@@ -518,7 +518,7 @@ final class DashboardViewModel: ObservableObject {
             }
             let activeNames = activeFunctionNames(in: updatedConfig)
             try ShellCommandNameValidator.validate(activeNames)
-            try shellInstaller.validateFunctionNames(activeNames)
+            try shellInstaller.validateFunctionNames([normalizedName])
             return .available
         } catch {
             return .unavailable(error.localizedDescription)
@@ -536,7 +536,11 @@ final class DashboardViewModel: ObservableObject {
         updatedConfig.commands.cc = normalizeCommandName(functionName)
         updatedConfig.nicknames.cc = nickname
         updatedConfig.includeDangerouslySkipPermissions = dangerousPermissionsEnabled
-        try saveConfig(updatedConfig, validateShellFunctions: true)
+        try saveConfig(
+            updatedConfig,
+            validateShellFunctions: true,
+            shellProfileValidationNames: [updatedConfig.commands.cc]
+        )
     }
 
     func saveClaudeAPISettings(functionName: String, model: String) throws {
@@ -550,7 +554,11 @@ final class DashboardViewModel: ObservableObject {
         var updatedConfig = config
         updatedConfig.commands.ccodex = normalizeCommandName(functionName)
         updatedConfig.ccodex = codex
-        try saveConfig(updatedConfig, validateShellFunctions: true)
+        try saveConfig(
+            updatedConfig,
+            validateShellFunctions: true,
+            shellProfileValidationNames: [updatedConfig.commands.ccodex]
+        )
     }
 
     func saveCodexSettings(functionName: String, nickname: String, codex: AppConfig.Codex, dangerousPermissionsEnabled: Bool) throws {
@@ -559,7 +567,11 @@ final class DashboardViewModel: ObservableObject {
         updatedConfig.nicknames.ccodex = nickname
         updatedConfig.ccodex = codex
         updatedConfig.includeDangerouslySkipPermissions = dangerousPermissionsEnabled
-        try saveConfig(updatedConfig, validateShellFunctions: true)
+        try saveConfig(
+            updatedConfig,
+            validateShellFunctions: true,
+            shellProfileValidationNames: [updatedConfig.commands.ccodex]
+        )
     }
 
     func savePort(_ port: Int) throws {
@@ -707,12 +719,16 @@ final class DashboardViewModel: ObservableObject {
         try saveConfig(updatedConfig, validateShellFunctions: true)
     }
 
-    private func saveConfig(_ updatedConfig: AppConfig, validateShellFunctions: Bool = false) throws {
+    private func saveConfig(
+        _ updatedConfig: AppConfig,
+        validateShellFunctions: Bool = false,
+        shellProfileValidationNames: [String]? = nil
+    ) throws {
         let updatedConfig = Self.availableConfig(updatedConfig)
         if validateShellFunctions {
             let activeNames = activeFunctionNames(in: updatedConfig)
             try ShellCommandNameValidator.validate(activeNames)
-            try shellInstaller.validateFunctionNames(activeNames)
+            try shellInstaller.validateFunctionNames(shellProfileValidationNames ?? activeNames)
         }
         try automaticShellInstallService.apply(config: updatedConfig, enabledFunctions: enabledShellFunctions())
         try configStore.save(updatedConfig)
@@ -761,7 +777,6 @@ final class DashboardViewModel: ObservableObject {
     private func applyShellInstallForCurrentProfiles() throws {
         let activeNames = activeFunctionNames(in: config)
         try ShellCommandNameValidator.validate(activeNames)
-        try shellInstaller.validateFunctionNames(activeNames)
         try automaticShellInstallService.apply(config: config, enabledFunctions: enabledShellFunctions())
     }
 
