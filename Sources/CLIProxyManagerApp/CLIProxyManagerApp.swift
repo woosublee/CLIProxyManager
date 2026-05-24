@@ -19,7 +19,7 @@ struct CLIProxyManagerApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("CLIProxyManager", id: "main") {
+        Window("CLIProxyManager", id: "main") {
             DashboardView(
                 viewModel: viewModel,
                 openSettings: { appWindowController.openSettings() },
@@ -29,7 +29,7 @@ struct CLIProxyManagerApp: App {
         .windowStyle(.titleBar)
         .windowResizability(.contentSize)
 
-        WindowGroup("Settings", id: "settings") {
+        Window("Settings", id: "settings") {
             SettingsView(viewModel: viewModel)
         }
         .windowStyle(.titleBar)

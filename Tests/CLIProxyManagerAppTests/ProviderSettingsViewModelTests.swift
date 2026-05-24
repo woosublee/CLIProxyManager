@@ -108,7 +108,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertFalse(oauthSettingsDangerousPermissionDefault(config: config, isInitialSetup: true))
     }
 
-    func testInitialOAuthSettingsUseDefaultCommandNamesAndNickname() {
+    func testInitialOAuthSettingsLeaveCommandNamesEmptyAndNicknameBlank() {
         var config = AppConfig.default
         config.commands.cc = "customclaude"
         config.commands.ccodex = "ccmcodex"
@@ -116,15 +116,17 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         config.includeDangerouslySkipPermissions = true
 
         XCTAssertEqual(oauthSettingsInitialState(config: config, provider: .claude, isInitialSetup: true), OAuthSettingsInitialState(
-            functionName: "cc",
+            functionName: "",
             nickname: "",
             dangerousPermissionsEnabled: false
         ))
         XCTAssertEqual(oauthSettingsInitialState(config: config, provider: .codex, isInitialSetup: true), OAuthSettingsInitialState(
-            functionName: "ccodex",
+            functionName: "",
             nickname: "",
             dangerousPermissionsEnabled: false
         ))
+        XCTAssertEqual(oauthSettingsRecommendedFunctionName(provider: .claude), "cc")
+        XCTAssertEqual(oauthSettingsRecommendedFunctionName(provider: .codex), "ccodex")
     }
 
     func testInitialCodexSettingsUseDefaultModelRouting() {

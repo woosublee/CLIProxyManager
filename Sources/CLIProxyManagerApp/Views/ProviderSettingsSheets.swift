@@ -188,6 +188,14 @@ private enum CommandNameCheckState: Equatable {
 private struct CommandNameField: View {
     @Binding var value: String
     let checkState: CommandNameCheckState
+    var recommendedName: String? = nil
+
+    private var placeholder: String {
+        if let recommendedName {
+            return "function_name (recommended: \(recommendedName))"
+        }
+        return "function_name"
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -202,11 +210,12 @@ private struct CommandNameField: View {
                         .frame(width: 0.5),
                     alignment: .trailing
                 )
-            TextField("function_name", text: $value)
+            TextField(placeholder, text: $value)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12, design: .monospaced))
                 .padding(.horizontal, 9)
             checkIndicator
+                .opacity(value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0 : 1)
                 .padding(.trailing, 8)
         }
         .frame(height: 28)
@@ -316,14 +325,18 @@ struct OAuthSettingsInitialState: Equatable {
     let dangerousPermissionsEnabled: Bool
 }
 
+func oauthSettingsRecommendedFunctionName(provider: ProviderRowState.ID) -> String {
+    switch provider {
+    case .claude:
+        return AppConfig.default.commands.cc
+    case .codex:
+        return AppConfig.default.commands.ccodex
+    }
+}
+
 func oauthSettingsInitialState(config: AppConfig, provider: ProviderRowState.ID, isInitialSetup: Bool) -> OAuthSettingsInitialState {
     if isInitialSetup {
-        switch provider {
-        case .claude:
-            return OAuthSettingsInitialState(functionName: AppConfig.default.commands.cc, nickname: "", dangerousPermissionsEnabled: false)
-        case .codex:
-            return OAuthSettingsInitialState(functionName: AppConfig.default.commands.ccodex, nickname: "", dangerousPermissionsEnabled: false)
-        }
+        return OAuthSettingsInitialState(functionName: "", nickname: "", dangerousPermissionsEnabled: false)
     }
 
     switch provider {
@@ -422,7 +435,11 @@ struct ClaudeOAuthProviderSettingsSheet: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 GroupTitle(text: "Command name")
-                CommandNameField(value: $functionName, checkState: commandNameCheckState)
+                CommandNameField(
+                    value: $functionName,
+                    checkState: commandNameCheckState,
+                    recommendedName: isInitialSetup ? oauthSettingsRecommendedFunctionName(provider: .claude) : nil
+                )
                 commandNameHelpText(
                     prefix: "The terminal command that launches Claude Code with this account.",
                     checkState: commandNameCheckState
@@ -482,6 +499,7 @@ struct ClaudeOAuthProviderSettingsSheet: View {
 
     private func updateCommandNameAvailability() async {
         commandNameCheckState = .checking
+        guard !functionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         do {
             try await Task.sleep(nanoseconds: 300_000_000)
         } catch {
@@ -583,7 +601,11 @@ struct CodexProviderSettingsSheet: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 GroupTitle(text: "Command name")
-                CommandNameField(value: $functionName, checkState: commandNameCheckState)
+                CommandNameField(
+                    value: $functionName,
+                    checkState: commandNameCheckState,
+                    recommendedName: isInitialSetup ? oauthSettingsRecommendedFunctionName(provider: .codex) : nil
+                )
                 commandNameHelpText(
                     prefix: "The terminal command launches Claude Code routed through Codex.",
                     checkState: commandNameCheckState
@@ -687,6 +709,7 @@ struct CodexProviderSettingsSheet: View {
 
     private func updateCommandNameAvailability() async {
         commandNameCheckState = .checking
+        guard !functionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         do {
             try await Task.sleep(nanoseconds: 300_000_000)
         } catch {

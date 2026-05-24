@@ -262,7 +262,7 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func refresh() async {
-        let updatedServerStatus = await proxyHealthClient.status(port: config.port)
+        let updatedServerStatus = await stableServerStatus()
         let claudeStatus = await claudeConnector.status()
         updateStatuses(serverStatus: updatedServerStatus, claudeStatus: claudeStatus)
     }
@@ -815,7 +815,7 @@ final class DashboardViewModel: ObservableObject {
                         fallback: claudeStatus?.message ?? "Connect the bundled CLIProxyAPI Claude OAuth profile."
                     ),
                     isConnected: claudeEnabled != nil,
-                    isErrored: isExpired(claudeAny) || claudeStatus?.severity == .error,
+                    isErrored: claudeEnabled != nil && (isExpired(claudeEnabled) || claudeStatus?.severity == .error),
                     accountDetailHidden: config.accountPrivacy.claudeHidden
                 )
             )
@@ -833,7 +833,7 @@ final class DashboardViewModel: ObservableObject {
                         fallback: codexStatus?.message ?? "Connect the bundled CLIProxyAPI Codex OAuth profile."
                     ),
                     isConnected: codexEnabled != nil,
-                    isErrored: isExpired(codexAny) || codexStatus?.severity == .error,
+                    isErrored: codexEnabled != nil && (isExpired(codexEnabled) || codexStatus?.severity == .error),
                     accountDetailHidden: config.accountPrivacy.codexHidden
                 )
             )
@@ -884,6 +884,15 @@ final class DashboardViewModel: ObservableObject {
             )
             serverControlState = .error(message)
         }
+    }
+
+    private func stableServerStatus() async -> DiagnosticStatus {
+        let firstStatus = await proxyHealthClient.status(port: config.port)
+        guard firstStatus.severity == .error else { return firstStatus }
+
+        try? await Task.sleep(nanoseconds: serverStatusRetryDelayNanoseconds)
+        let secondStatus = await proxyHealthClient.status(port: config.port)
+        return secondStatus.severity == .error ? firstStatus : secondStatus
     }
 
     private func refreshUntilServerIsReady() async {
