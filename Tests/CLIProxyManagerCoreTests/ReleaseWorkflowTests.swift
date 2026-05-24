@@ -21,7 +21,7 @@ final class ReleaseWorkflowTests: XCTestCase {
         XCTAssertTrue(workflow.contains("echo \"RELEASE_TAG=$RELEASE_TAG\" >> \"$GITHUB_ENV\""))
         XCTAssertTrue(workflow.contains("ref: ${{ steps.release-tag.outputs.release_tag }}"))
         XCTAssertTrue(workflow.contains("VERSION=${RELEASE_TAG#v}"))
-        XCTAssertTrue(workflow.contains("BUILD_NUMBER=${{ github.run_number }}"))
+        XCTAssertTrue(workflow.contains("BUILD_NUMBER=$(plutil -extract CFBundleVersion raw Info.plist)"))
         XCTAssertTrue(workflow.contains("make CODESIGN_IDENTITY=- VERSION=\"$VERSION\" BUILD_NUMBER=\"$BUILD_NUMBER\" verify-dmg"))
         XCTAssertTrue(workflow.contains("gh release view \"$RELEASE_TAG\""))
         XCTAssertTrue(workflow.contains("gh release create \"$RELEASE_TAG\" --verify-tag"))

@@ -775,7 +775,10 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         )
 
         let task = Task { await viewModel.refreshCodexModels() }
-        await Task.yield()
+        for _ in 0..<20 {
+            if viewModel.isServerActionInProgress { break }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
 
         XCTAssertTrue(viewModel.isServerActionInProgress)
 
