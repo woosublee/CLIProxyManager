@@ -48,7 +48,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.cards.first { $0.command == "codex-local" }?.status, serverStatus)
     }
 
-    func testReadyServerRefreshClearsServerDerivedCodexProviderError() async {
+    func testTransientServerHealthErrorIsRetriedBeforeUpdatingMenuStatus() async {
         let httpClient = SequencedHTTPClient(results: [
             .failure(HTTPClientError.timedOut),
             .success(Data("{}".utf8))
@@ -60,7 +60,28 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: httpClient, timeout: 0.1),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            serverStatusRetryDelayNanoseconds: 0
+        )
+
+        await viewModel.refresh()
+
+        XCTAssertEqual(httpClient.requestCount, 2)
+        XCTAssertEqual(viewModel.serverStatus.severity, .ready)
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.isErrored, false)
+        XCTAssertEqual(MenuBarStatusSnapshot(serverStatus: viewModel.serverStatus, providers: viewModel.providerRows).erroredCount, 0)
+    }
+
+    func testPersistentServerHealthErrorCountsAsCodexProviderError() async {
+        let viewModel = DashboardViewModel(
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .failure(HTTPClientError.timedOut)), timeout: 0.1),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector(),
+            serverStatusRetryDelayNanoseconds: 0
         )
 
         await viewModel.refresh()
@@ -68,12 +89,6 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.serverStatus.severity, .error)
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.isErrored, true)
         XCTAssertEqual(MenuBarStatusSnapshot(serverStatus: viewModel.serverStatus, providers: viewModel.providerRows).erroredCount, 1)
-
-        await viewModel.refresh()
-
-        XCTAssertEqual(viewModel.serverStatus.severity, .ready)
-        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.isErrored, false)
-        XCTAssertEqual(MenuBarStatusSnapshot(serverStatus: viewModel.serverStatus, providers: viewModel.providerRows).erroredCount, 0)
     }
 
     func testDefaultProviderRowsHideProfilesUntilAuthExists() {
@@ -289,7 +304,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(installer.installedFunctionNames, installedBeforeToggle)
     }
 
-    func testToggleAccountDetailVisibilityPreservesServerDerivedCodexErrorState() async {
+    func testToggleAccountDetailVisibilityPreservesCodexProviderErrorState() async {
         let viewModel = DashboardViewModel(
             authProfileStore: StubAuthProfileStore(profiles: [
                 AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: nil, disabled: false)
@@ -297,7 +312,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .failure(HTTPClientError.timedOut)), timeout: 0.1),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            serverStatusRetryDelayNanoseconds: 0
         )
 
         await viewModel.refresh()
@@ -623,6 +639,20 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.isErrored, true)
     }
 
+    func testDisabledExpiredProviderRowIsNotErrored() {
+        let viewModel = DashboardViewModel(
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: "2026-05-09T11:24:01+09:00", disabled: true)
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.isErrored, false)
+        XCTAssertEqual(MenuBarStatusSnapshot(serverStatus: viewModel.serverStatus, providers: viewModel.providerRows).erroredCount, 0)
+    }
+
     func testDisconnectProviderDisablesAuthProfileAndRefreshesRows() {
         let authStore = StubAuthProfileStore(profiles: [
             AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: nil, disabled: false)
@@ -738,8 +768,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         await viewModel.refreshCodexModels()
 
-        XCTAssertEqual(proxyService.ports, [18_317])
-        XCTAssertEqual(modelClient.ports, [18_317])
+        XCTAssertEqual(proxyService.ports, [viewModel.config.port])
+        XCTAssertEqual(modelClient.ports, [viewModel.config.port])
         XCTAssertEqual(viewModel.availableCodexModels, ["gpt-5.5", "gpt-5.6"])
         XCTAssertEqual(viewModel.codexModelLoadingState, .idle)
     }
@@ -802,8 +832,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         await viewModel.refreshCodexModels()
         await firstRefresh.value
 
-        XCTAssertEqual(proxyService.ports, [18_317])
-        XCTAssertEqual(modelClient.ports, [18_317])
+        XCTAssertEqual(proxyService.ports, [viewModel.config.port])
+        XCTAssertEqual(modelClient.ports, [viewModel.config.port])
     }
 
     func testRefreshCodexModelsDoesNotStartServerDuringLifecycleAction() async {
@@ -822,7 +852,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         await viewModel.refreshCodexModels()
         await startTask.value
 
-        XCTAssertEqual(proxyService.ports, [18_317])
+        XCTAssertEqual(proxyService.ports, [viewModel.config.port])
         XCTAssertEqual(modelClient.ports, [])
         XCTAssertEqual(viewModel.codexModelLoadingState, .idle)
     }
@@ -837,7 +867,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         await viewModel.loadCodexModels()
 
-        XCTAssertEqual(modelClient.ports, [18_317])
+        XCTAssertEqual(modelClient.ports, [viewModel.config.port])
         XCTAssertEqual(viewModel.availableCodexModels, ["gpt-5.5", "gpt-5.6"])
     }
 
@@ -866,7 +896,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         await viewModel.setServerEnabled(true)
         await viewModel.setServerEnabled(false)
 
-        XCTAssertEqual(proxyService.ports, [18_317])
+        XCTAssertEqual(proxyService.ports, [viewModel.config.port])
         XCTAssertEqual(proxyService.stopCount, 1)
     }
 

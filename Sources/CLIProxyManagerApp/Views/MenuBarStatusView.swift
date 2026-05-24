@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct MenuBarStatusView: View {
+    @Environment(\.dismiss) private var dismiss
     @ObservedObject var viewModel: DashboardViewModel
     let openMain: () -> Void
     let openSettings: () -> Void
@@ -29,6 +30,7 @@ struct MenuBarStatusView: View {
                 label: snapshot.isServerRunning ? "Stop server" : "Start server",
                 disabled: viewModel.isServerActionInProgress
             ) {
+                dismiss()
                 Task {
                     if snapshot.isServerRunning {
                         await viewModel.stopServer()
@@ -40,15 +42,22 @@ struct MenuBarStatusView: View {
 
             menuSeparator
 
-            MenuItemRow(icon: "macwindow", label: "Open CLIProxyManager", action: openMain)
-            MenuItemRow(icon: "gearshape", label: "Preferences…", shortcut: "⌘,", action: openSettings)
+            MenuItemRow(icon: "macwindow", label: "Open CLIProxyManager", action: dismissing(openMain))
+            MenuItemRow(icon: "gearshape", label: "Preferences…", shortcut: "⌘,", action: dismissing(openSettings))
 
             menuSeparator
 
-            MenuItemRow(icon: nil, label: "Quit CLIProxyManager", shortcut: "⌘Q", action: quit)
+            MenuItemRow(icon: nil, label: "Quit CLIProxyManager", shortcut: "⌘Q", action: dismissing(quit))
         }
         .padding(.vertical, 5)
         .frame(width: AppWindowMetrics.menuBarWidth)
+    }
+
+    private func dismissing(_ action: @escaping () -> Void) -> () -> Void {
+        {
+            dismiss()
+            action()
+        }
     }
 
     // MARK: - Status header
