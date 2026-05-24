@@ -97,7 +97,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             XCTAssertEqual(error as? ShellProfileInstallerError, .functionNameConflicts(["cc"]))
         }
 
-        XCTAssertEqual(installer.validatedFunctionNames, [["cc"], ["cc"]])
+        XCTAssertEqual(installer.validatedFunctionNames, [["cc"]])
         XCTAssertEqual(store.savedConfigs, [])
     }
 
@@ -209,8 +209,25 @@ final class ProviderSettingsViewModelTests: XCTestCase {
 
         let availability = await viewModel.commandNameAvailability(provider: .claude, functionName: "myclaude")
 
-        XCTAssertEqual(installer.validatedFunctionNames, [["cc"], ["myclaude"]])
+        XCTAssertEqual(installer.validatedFunctionNames, [["myclaude"]])
         XCTAssertEqual(availability, .unavailable("Cannot install shell functions: `myclaude` is already defined as an alias or function in ~/.zshrc. Pick a different command name in account settings, or remove the existing definition from your shell profile."))
+    }
+
+    func testCommandNameAvailabilityIgnoresOtherProviderZshrcConflicts() async {
+        let installer = StubShellInstaller(conflictingFunctionNames: ["cc"])
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: installer,
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile(), codexProfile()]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+        installer.reset()
+
+        let availability = await viewModel.commandNameAvailability(provider: .codex, functionName: "ccd123")
+
+        XCTAssertEqual(installer.validatedFunctionNames, [["ccd123"]])
+        XCTAssertEqual(availability, .available)
     }
 
     func testCommandNameAvailabilityReportsDuplicateActiveProviderNames() async {
@@ -296,6 +313,43 @@ final class ProviderSettingsViewModelTests: XCTestCase {
 
         XCTAssertEqual(store.savedConfigs.last?.commands.ccodex, "mycodex")
         XCTAssertEqual(viewModel.config.commands.ccodex, "mycodex")
+    }
+
+    func testSaveCodexSettingsIgnoresClaudeZshrcConflict() throws {
+        let store = StubConfigStore(config: .default)
+        let installer = StubShellInstaller(conflictingFunctionNames: ["cc"])
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: installer,
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile(), codexProfile()]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+        installer.reset()
+
+        try viewModel.saveCodexSettings(functionName: "ccd123", nickname: "", codex: testCodex(), dangerousPermissionsEnabled: false)
+
+        XCTAssertEqual(installer.validatedFunctionNames, [["ccd123"]])
+        XCTAssertEqual(store.savedConfigs.last?.commands.ccodex, "ccd123")
+        XCTAssertTrue(installer.installedScript?.contains("ccd123() {") == true)
+    }
+
+    func testInitialShellInstallKeepsCodexFunctionWhenClaudeNameConflictsInZshrc() {
+        var config = AppConfig.default
+        config.commands.ccodex = "ccd123"
+        let installer = StubShellInstaller(conflictingFunctionNames: ["cc"])
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: installer,
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile(), codexProfile()]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        XCTAssertEqual(installer.validatedFunctionNames, [])
+        XCTAssertEqual(installer.installedFunctionNames, ["cc", "ccd123"])
+        XCTAssertTrue(installer.installedScript?.contains("ccd123() {") == true)
+        XCTAssertFalse(viewModel.settingsMessage?.contains("Cannot install shell functions") == true)
     }
 
     func testSaveClaudeOAuthSettingsPersistsFunctionNameAndPermission() throws {
@@ -499,12 +553,14 @@ private final class StubConfigStore: AppConfigStoring, @unchecked Sendable {
 
 private final class StubShellInstaller: ShellFunctionInstalling, @unchecked Sendable {
     private let validationError: Error?
+    private let conflictingFunctionNames: Set<String>
     private(set) var installedScript: String?
     private(set) var installedFunctionNames: [String] = []
     private(set) var validatedFunctionNames: [[String]] = []
 
-    init(validationError: Error? = nil) {
+    init(validationError: Error? = nil, conflictingFunctionNames: Set<String> = []) {
         self.validationError = validationError
+        self.conflictingFunctionNames = conflictingFunctionNames
     }
 
     func install(functionScript: String, functionNames: [String]) throws {
@@ -516,6 +572,8 @@ private final class StubShellInstaller: ShellFunctionInstalling, @unchecked Send
 
     func validateFunctionNames(_ names: [String]) throws {
         validatedFunctionNames.append(names)
+        let conflicts = names.filter { conflictingFunctionNames.contains($0) }
+        if !conflicts.isEmpty { throw ShellProfileInstallerError.functionNameConflicts(conflicts) }
         if let validationError { throw validationError }
     }
 
