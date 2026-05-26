@@ -1,5 +1,9 @@
 # CLIProxyManager
 
+<p align="center">
+  <img src="docs/assets/readme-main-window.png" alt="CLIProxyManager main window" width="600">
+</p>
+
 CLIProxyManager is a macOS menu bar app for managing a local CLIProxyAPI server and the shell functions you use to launch Claude Code with different account and model backends.
 
 It is designed for users who want one place to:
