@@ -737,7 +737,7 @@ final class DashboardViewModel: ObservableObject {
                     .map(normalizeCommandName)
                     .filter { !$0.isEmpty }
                 try ShellCommandNameValidator.validate(validationNames)
-                if validationNames.isEmpty == false {
+                if !validationNames.isEmpty {
                     try shellInstaller.validateFunctionNames(validationNames)
                 }
             } else {
