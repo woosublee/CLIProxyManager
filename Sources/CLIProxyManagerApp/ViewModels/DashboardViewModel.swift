@@ -547,7 +547,11 @@ final class DashboardViewModel: ObservableObject {
         var updatedConfig = config
         updatedConfig.commands.ccapi = normalizeCommandName(functionName)
         updatedConfig.ccapi = AppConfig.ClaudeAPI(model: model)
-        try saveConfig(updatedConfig, validateShellFunctions: true)
+        try saveConfig(
+            updatedConfig,
+            validateShellFunctions: true,
+            shellProfileValidationNames: [updatedConfig.commands.ccapi]
+        )
     }
 
     func saveCodexSettings(functionName: String, codex: AppConfig.Codex) throws {
@@ -728,7 +732,17 @@ final class DashboardViewModel: ObservableObject {
         if validateShellFunctions {
             let activeNames = activeFunctionNames(in: updatedConfig)
             try ShellCommandNameValidator.validate(activeNames)
-            try shellInstaller.validateFunctionNames(shellProfileValidationNames ?? activeNames)
+            if let shellProfileValidationNames {
+                let validationNames = shellProfileValidationNames
+                    .map(normalizeCommandName)
+                    .filter { !$0.isEmpty }
+                try ShellCommandNameValidator.validate(validationNames)
+                if !validationNames.isEmpty {
+                    try shellInstaller.validateFunctionNames(validationNames)
+                }
+            } else {
+                try shellInstaller.validateFunctionNames(activeNames)
+            }
         }
         try automaticShellInstallService.apply(config: updatedConfig, enabledFunctions: enabledShellFunctions())
         try configStore.save(updatedConfig)
@@ -745,14 +759,14 @@ final class DashboardViewModel: ObservableObject {
         try configStore.save(availableConfig)
         config = availableConfig
         cards = ProfileCard.makeDefaultCards(config: availableConfig).map { card in
-            switch card.command {
-            case availableConfig.commands.cc:
+            switch card.id {
+            case ProfileCard.claudeID:
                 if let lastClaudeStatus {
                     card.updatingStatus(lastClaudeStatus)
                 } else {
                     card
                 }
-            case availableConfig.commands.ccodex:
+            case ProfileCard.codexID:
                 if let lastCodexStatus {
                     card.updatingStatus(lastCodexStatus)
                 } else {
@@ -790,8 +804,10 @@ final class DashboardViewModel: ObservableObject {
 
     private func activeFunctionNames(in config: AppConfig) -> [String] {
         var names: [String] = []
-        if authProfiles.contains(where: { $0.type == .claude && !$0.disabled }) { names.append(config.commands.cc) }
-        if authProfiles.contains(where: { $0.type == .codex && !$0.disabled }) { names.append(config.commands.ccodex) }
+        let claudeCommand = normalizeCommandName(config.commands.cc)
+        let codexCommand = normalizeCommandName(config.commands.ccodex)
+        if authProfiles.contains(where: { $0.type == .claude && !$0.disabled }), !claudeCommand.isEmpty { names.append(claudeCommand) }
+        if authProfiles.contains(where: { $0.type == .codex && !$0.disabled }), !codexCommand.isEmpty { names.append(codexCommand) }
         return names
     }
 
@@ -937,14 +953,14 @@ final class DashboardViewModel: ObservableObject {
         refreshProfiles()
 
         cards = cards.map { card in
-            switch card.command {
-            case config.commands.cc:
+            switch card.id {
+            case ProfileCard.claudeID:
                 if let claudeStatus {
                     card.updatingStatus(claudeStatus)
                 } else {
                     card
                 }
-            case config.commands.ccodex:
+            case ProfileCard.codexID:
                 card.updatingStatus(updatedServerStatus)
             default:
                 card

@@ -61,7 +61,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         }
 
         XCTAssertEqual(store.savedConfigs, [])
-        XCTAssertEqual(viewModel.config.commands.cc, "cc")
+        XCTAssertEqual(viewModel.config.commands.cc, "")
     }
 
     func testSaveClaudeOAuthSettingsRejectsInvalidShellName() throws {
@@ -79,7 +79,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         }
 
         XCTAssertEqual(store.savedConfigs, [])
-        XCTAssertEqual(viewModel.config.commands.cc, "cc")
+        XCTAssertEqual(viewModel.config.commands.cc, "")
     }
 
     func testSaveClaudeOAuthSettingsValidatesActiveFunctionNameBeforePersisting() throws {
@@ -125,8 +125,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             nickname: "",
             dangerousPermissionsEnabled: false
         ))
-        XCTAssertEqual(oauthSettingsRecommendedFunctionName(provider: .claude), "cc")
-        XCTAssertEqual(oauthSettingsRecommendedFunctionName(provider: .codex), "ccodex")
+        XCTAssertEqual(oauthSettingsRecommendedFunctionName(provider: .claude), "")
+        XCTAssertEqual(oauthSettingsRecommendedFunctionName(provider: .codex), "")
     }
 
     func testInitialCodexSettingsUseDefaultModelRouting() {
@@ -301,6 +301,68 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(store.savedConfigs.last?.commands.ccodex, "bad;rm")
     }
 
+    func testSaveClaudeAPISettingsValidatesEditedCommandNameOnly() throws {
+        var config = AppConfig.default
+        config.commands.cc = "bad;rm"
+        config.commands.ccodex = "also;bad"
+        let store = StubConfigStore(config: config)
+        let installer = StubShellInstaller(conflictingFunctionNames: ["ccapi"])
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: installer,
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+        installer.reset()
+
+        XCTAssertThrowsError(try viewModel.saveClaudeAPISettings(functionName: "ccapi", model: "claude-opus-4-8")) { error in
+            XCTAssertEqual(error as? ShellProfileInstallerError, .functionNameConflicts(["ccapi"]))
+        }
+
+        XCTAssertEqual(installer.validatedFunctionNames, [["ccapi"]])
+        XCTAssertEqual(store.savedConfigs, [])
+    }
+
+    func testSaveClaudeAPISettingsPersistsExplicitCommandNameAndModel() throws {
+        let store = StubConfigStore(config: .default)
+        let installer = StubShellInstaller()
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: installer,
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+        installer.reset()
+
+        try viewModel.saveClaudeAPISettings(functionName: " myapi ", model: "claude-sonnet-4-6")
+
+        XCTAssertEqual(store.savedConfigs.last?.commands.ccapi, "myapi")
+        XCTAssertEqual(store.savedConfigs.last?.ccapi.model, "claude-sonnet-4-6")
+    }
+
+    func testSaveClaudeAPISettingsAllowsBlankCommandNameToDisableFunction() throws {
+        var config = AppConfig.default
+        config.commands.ccapi = "oldapi"
+        let store = StubConfigStore(config: config)
+        let installer = StubShellInstaller()
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: installer,
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+        installer.reset()
+
+        try viewModel.saveClaudeAPISettings(functionName: "   ", model: "claude-opus-4-8")
+
+        XCTAssertEqual(store.savedConfigs.last?.commands.ccapi, "")
+        XCTAssertEqual(store.savedConfigs.last?.ccapi.model, "claude-opus-4-8")
+        XCTAssertEqual(installer.validatedFunctionNames, [])
+    }
+
     func testSaveCodexSettingsNormalizesCommandNameBeforePersisting() throws {
         let store = StubConfigStore(config: .default)
         let viewModel = DashboardViewModel(
@@ -338,6 +400,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
 
     func testInitialShellInstallKeepsCodexFunctionWhenClaudeNameConflictsInZshrc() {
         var config = AppConfig.default
+        config.commands.cc = "cc"
         config.commands.ccodex = "ccd123"
         let installer = StubShellInstaller(conflictingFunctionNames: ["cc"])
         let viewModel = DashboardViewModel(
@@ -404,7 +467,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertThrowsError(try viewModel.saveCodexSettings(functionName: "mycodex", nickname: "", codex: codex, dangerousPermissionsEnabled: true))
 
         XCTAssertEqual(viewModel.config, .default)
-        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.functionName, "ccodex")
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.functionName, "")
         XCTAssertEqual(store.savedConfigs, [])
     }
 
@@ -463,8 +526,11 @@ final class ProviderSettingsViewModelTests: XCTestCase {
     func testRemoveProviderRewritesShellFunctionsWithoutDeletedProvider() {
         let installer = StubShellInstaller()
         let authStore = StubAuthProfileStore(profiles: [claudeProfile(), codexProfile()])
+        var config = AppConfig.default
+        config.commands.cc = "cc"
+        config.commands.ccodex = "ccodex"
         _ = DashboardViewModel(
-            configStore: StubConfigStore(config: .default),
+            configStore: StubConfigStore(config: config),
             shellInstaller: installer,
             authProfileStore: authStore,
             proxyService: StubProxyService(),
@@ -473,7 +539,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         installer.reset()
 
         let viewModel = DashboardViewModel(
-            configStore: StubConfigStore(config: .default),
+            configStore: StubConfigStore(config: config),
             shellInstaller: installer,
             authProfileStore: authStore,
             proxyService: StubProxyService(),

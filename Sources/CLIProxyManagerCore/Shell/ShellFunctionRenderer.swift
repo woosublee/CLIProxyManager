@@ -107,7 +107,7 @@ public struct ShellFunctionRenderer: Sendable {
 
         """
 
-        if enabledFunctions.claudeOAuth {
+        if enabledFunctions.claudeOAuth, hasCommandName(config.commands.cc) {
             script += """
             \(config.commands.cc)() {
               if ! curl -sf -H 'Authorization: Bearer sk-dummy' "http://127.0.0.1:\(port)/v1/models" >/dev/null; then
@@ -126,7 +126,7 @@ public struct ShellFunctionRenderer: Sendable {
             """
         }
 
-        if enabledFunctions.codex {
+        if enabledFunctions.codex, hasCommandName(config.commands.ccodex) {
             script += """
             \(config.commands.ccodex)() {
               if ! curl -sf -H 'Authorization: Bearer sk-dummy' "http://127.0.0.1:\(port)/v1/models" >/dev/null; then
@@ -145,7 +145,7 @@ public struct ShellFunctionRenderer: Sendable {
             """
         }
 
-        if enabledFunctions.claudeAPI {
+        if enabledFunctions.claudeAPI, hasCommandName(config.commands.ccapi) {
             script += """
             \(config.commands.ccapi)() {
               local anthropic_auth_token
@@ -167,10 +167,14 @@ public struct ShellFunctionRenderer: Sendable {
 
     private func functionNamesToRender() -> [String] {
         var names: [String] = []
-        if enabledFunctions.claudeOAuth { names.append(config.commands.cc) }
-        if enabledFunctions.codex { names.append(config.commands.ccodex) }
-        if enabledFunctions.claudeAPI { names.append(config.commands.ccapi) }
+        if enabledFunctions.claudeOAuth, hasCommandName(config.commands.cc) { names.append(config.commands.cc) }
+        if enabledFunctions.codex, hasCommandName(config.commands.ccodex) { names.append(config.commands.ccodex) }
+        if enabledFunctions.claudeAPI, hasCommandName(config.commands.ccapi) { names.append(config.commands.ccapi) }
         return names
+    }
+
+    private func hasCommandName(_ commandName: String) -> Bool {
+        !commandName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func validate(functionName: String) throws {

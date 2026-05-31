@@ -199,8 +199,8 @@ public struct AppConfig: Codable, Equatable, Sendable {
 
     public static let `default` = AppConfig(
         port: 18_317,
-        commands: Commands(cc: "cc", ccapi: "ccapi", ccodex: "ccodex"),
-        ccapi: ClaudeAPI(model: "claude-opus-4-7"),
+        commands: Commands(cc: "", ccapi: "", ccodex: ""),
+        ccapi: ClaudeAPI(model: "claude-opus-4-8"),
         ccodex: Codex(
             opus: CodexRole(model: "gpt-5.5", reasoning: .xhigh, contextWindow: .auto),
             sonnet: CodexRole(model: "gpt-5.5", reasoning: .medium, contextWindow: .auto),

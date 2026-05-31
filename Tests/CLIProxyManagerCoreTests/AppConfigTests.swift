@@ -6,10 +6,10 @@ final class AppConfigTests: XCTestCase {
         let config = AppConfig.default
 
         XCTAssertEqual(config.port, 18_317)
-        XCTAssertEqual(config.commands.cc, "cc")
-        XCTAssertEqual(config.commands.ccapi, "ccapi")
-        XCTAssertEqual(config.commands.ccodex, "ccodex")
-        XCTAssertEqual(config.ccapi.model, "claude-opus-4-7")
+        XCTAssertEqual(config.commands.cc, "")
+        XCTAssertEqual(config.commands.ccapi, "")
+        XCTAssertEqual(config.commands.ccodex, "")
+        XCTAssertEqual(config.ccapi.model, "claude-opus-4-8")
         XCTAssertEqual(config.ccodex.opus, AppConfig.CodexRole(model: "gpt-5.5", reasoning: .xhigh, contextWindow: .auto))
         XCTAssertEqual(config.ccodex.sonnet, AppConfig.CodexRole(model: "gpt-5.5", reasoning: .medium, contextWindow: .auto))
         XCTAssertEqual(config.ccodex.haiku, AppConfig.CodexRole(model: "gpt-5.5", reasoning: .low, contextWindow: .auto))
@@ -19,6 +19,32 @@ final class AppConfigTests: XCTestCase {
         XCTAssertTrue(config.showMenuBarIcon)
         XCTAssertFalse(config.showNotifications)
         XCTAssertFalse(config.roundRobinEnabled)
+    }
+
+    func testDecodedConfigPreservesSavedCommandNamesAndClaudeAPIModel() throws {
+        let data = Data(#"""
+        {
+          "port": 18317,
+          "commands": { "cc": "savedcc", "ccapi": "savedapi", "ccodex": "savedcodex" },
+          "ccapi": { "model": "claude-opus-4-7" },
+          "ccodex": {
+            "opus": { "model": "gpt-5.5", "reasoning": "xhigh", "contextWindow": "auto" },
+            "sonnet": { "model": "gpt-5.5", "reasoning": "medium", "contextWindow": "auto" },
+            "haiku": { "model": "gpt-5.5", "reasoning": "low", "contextWindow": "auto" }
+          },
+          "includeDangerouslySkipPermissions": false,
+          "startAtLogin": false,
+          "showDockIcon": true,
+          "showMenuBarIcon": true
+        }
+        """#.utf8)
+
+        let config = try JSONDecoder().decode(AppConfig.self, from: data)
+
+        XCTAssertEqual(config.commands.cc, "savedcc")
+        XCTAssertEqual(config.commands.ccapi, "savedapi")
+        XCTAssertEqual(config.commands.ccodex, "savedcodex")
+        XCTAssertEqual(config.ccapi.model, "claude-opus-4-7")
     }
 
     func testDefaultAccountPrivacyHidesProviderDetails() {

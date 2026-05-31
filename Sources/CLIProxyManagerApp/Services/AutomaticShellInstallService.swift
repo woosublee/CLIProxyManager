@@ -25,19 +25,23 @@ struct AutomaticShellInstallService: Sendable {
     }
 
     func apply(config: AppConfig, helperCommand: String? = nil, enabledFunctions: EnabledFunctions = .allOAuth) throws {
-        let includeClaudeAPI = try enabledFunctions.claudeAPI && hasClaudeAPIKey()
+        let includeClaudeOAuth = enabledFunctions.claudeOAuth && !config.commands.cc.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let includeCodex = enabledFunctions.codex && !config.commands.ccodex.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let includeClaudeAPI = try enabledFunctions.claudeAPI
+            && !config.commands.ccapi.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && hasClaudeAPIKey()
         let script = try ShellFunctionRenderer(
             config: config,
             helperCommand: helperCommand ?? defaultHelperCommand,
             enabledFunctions: ShellFunctionRenderer.EnabledFunctions(
-                claudeOAuth: enabledFunctions.claudeOAuth,
-                codex: enabledFunctions.codex,
+                claudeOAuth: includeClaudeOAuth,
+                codex: includeCodex,
                 claudeAPI: includeClaudeAPI
             )
         ).render()
         var functionNames: [String] = []
-        if enabledFunctions.claudeOAuth { functionNames.append(config.commands.cc) }
-        if enabledFunctions.codex { functionNames.append(config.commands.ccodex) }
+        if includeClaudeOAuth { functionNames.append(config.commands.cc) }
+        if includeCodex { functionNames.append(config.commands.ccodex) }
         if includeClaudeAPI { functionNames.append(config.commands.ccapi) }
         try installer.install(functionScript: script, functionNames: functionNames)
     }
