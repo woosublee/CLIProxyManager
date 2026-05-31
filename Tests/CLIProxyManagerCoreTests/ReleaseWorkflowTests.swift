@@ -33,12 +33,25 @@ final class ReleaseWorkflowTests: XCTestCase {
 
         XCTAssertTrue(workflow.contains("on:"))
         XCTAssertTrue(workflow.contains("workflow_dispatch:"))
-        XCTAssertTrue(workflow.contains("tags:"))
-        XCTAssertTrue(workflow.contains("'v*'"))
+        XCTAssertFalse(
+            workflow.contains("push:"),
+            "Release workflow should be a manual fallback, not a tag-push release path."
+        )
+        XCTAssertFalse(
+            workflow.contains("tags:"),
+            "Release workflow should not include automatic tag push triggers."
+        )
+        XCTAssertFalse(
+            workflow.contains("'v*'"),
+            "Release workflow should not subscribe to v* tag pushes."
+        )
         XCTAssertTrue(workflow.contains("contents: write"))
         XCTAssertTrue(workflow.contains("DISPATCH_TAG: ${{ inputs.tag }}"))
         XCTAssertTrue(workflow.contains("RELEASE_TAG=\"$DISPATCH_TAG\""))
-        XCTAssertTrue(workflow.contains("RELEASE_TAG=\"$GITHUB_REF_NAME\""))
+        XCTAssertFalse(
+            workflow.contains("RELEASE_TAG=\"$GITHUB_REF_NAME\""),
+            "Release workflow should use only the workflow_dispatch tag input."
+        )
         XCTAssertTrue(workflow.contains("[[ \"$RELEASE_TAG\" == v* ]]"))
         XCTAssertTrue(workflow.contains("id: release-tag"))
         XCTAssertTrue(workflow.contains("echo \"release_tag=$RELEASE_TAG\" >> \"$GITHUB_OUTPUT\""))
@@ -50,7 +63,10 @@ final class ReleaseWorkflowTests: XCTestCase {
         XCTAssertTrue(workflow.contains("echo \"APPCAST_PATH=$APPCAST_PATH\" >> \"$GITHUB_ENV\""))
         XCTAssertTrue(workflow.contains("make CODESIGN_IDENTITY=- VERSION=\"$VERSION\" BUILD_NUMBER=\"$BUILD_NUMBER\" verify-dmg"))
         XCTAssertTrue(workflow.contains("SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}"))
-        XCTAssertTrue(workflow.contains("test -n \"$SPARKLE_PRIVATE_KEY\""))
+        XCTAssertFalse(
+            workflow.contains("test -n \"$SPARKLE_PRIVATE_KEY\""),
+            "CI secret should be a fallback for the appcast script, not a separate workflow precondition."
+        )
         XCTAssertTrue(workflow.contains("scripts/generate-sparkle-appcast.sh"))
         XCTAssertTrue(workflow.contains("gh release view \"$RELEASE_TAG\""))
         XCTAssertTrue(workflow.contains("gh release create \"$RELEASE_TAG\" --verify-tag"))

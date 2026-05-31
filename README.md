@@ -272,7 +272,7 @@ security add-generic-password \
   -w "$(cat build/sparkle_private_key.txt)"
 ```
 
-Local release tooling reads that Keychain item automatically when `SPARKLE_PRIVATE_KEY` is unset. CI cannot access the local Keychain, so save the same private key value in the GitHub secret `SPARKLE_PRIVATE_KEY` before cutting a release. Do not commit `build/sparkle_private_key.txt`.
+Local release tooling reads that canonical Keychain item automatically when `SPARKLE_PRIVATE_KEY` is unset. This local Keychain path is the default release path. Do not commit `build/sparkle_private_key.txt`.
 
 Create and push the release tag from the commit you want to ship:
 
@@ -281,10 +281,18 @@ git tag v1.2.3
 git push origin v1.2.3
 ```
 
-The release workflow runs tests, builds the ad-hoc signed DMG, generates `appcast.xml`, and uploads both release assets:
+Then cut the release locally:
+
+```zsh
+scripts/release-local.sh v1.2.3
+```
+
+The local release script validates the `v*` tag, reads `CFBundleVersion` from `Info.plist`, builds and verifies the ad-hoc signed DMG, generates `build/appcast.xml` using the Keychain private key, and uploads both release assets with the authenticated `gh` CLI:
 
 - `CLIProxyManager-<version>.dmg`
 - `appcast.xml`
+
+The GitHub Actions release workflow is a manual fallback for cases where a local release is not practical. Run it with `workflow_dispatch` and an existing tag. Because CI cannot access the local Keychain, save the same private key value in the GitHub secret `SPARKLE_PRIVATE_KEY` before using that fallback. Tag pushes do not automatically run the release workflow.
 
 Sparkle updates the app bundle, but it does not automatically overwrite the `/usr/local/bin/cliproxy-manager` helper. If a release changes the helper, reinstall it from CLIProxyManager after updating.
 

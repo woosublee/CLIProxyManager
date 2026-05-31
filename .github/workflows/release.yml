@@ -1,9 +1,6 @@
 name: Release DMG
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       tag:
@@ -25,11 +22,7 @@ jobs:
         env:
           DISPATCH_TAG: ${{ inputs.tag }}
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            RELEASE_TAG="$DISPATCH_TAG"
-          else
-            RELEASE_TAG="$GITHUB_REF_NAME"
-          fi
+          RELEASE_TAG="$DISPATCH_TAG"
           [[ "$RELEASE_TAG" == v* ]]
           echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
           echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
@@ -59,9 +52,7 @@ jobs:
       - name: Generate Sparkle appcast
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
-        run: |
-          test -n "$SPARKLE_PRIVATE_KEY"
-          scripts/generate-sparkle-appcast.sh
+        run: scripts/generate-sparkle-appcast.sh
 
       - name: Upload DMG and appcast to GitHub Release
         env:
