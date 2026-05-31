@@ -46,8 +46,10 @@ final class UpdaterConfigurationTests: XCTestCase {
 
         XCTAssertEqual(entitlements["com.apple.security.cs.disable-library-validation"] as? Bool, true)
         XCTAssertTrue(
-            readme.contains("disable-library-validation") && readme.contains("ad-hoc signed"),
-            "README should explain why disable-library-validation remains enabled for the current ad-hoc Sparkle release path."
+            readme.contains("disable-library-validation")
+                && readme.contains("non-Developer-ID Sparkle distribution path")
+                && readme.contains("cliproxymanager"),
+            "README should explain why disable-library-validation remains enabled for the current non-Developer-ID Sparkle distribution path."
         )
     }
 
