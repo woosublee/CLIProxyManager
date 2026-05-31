@@ -4,6 +4,7 @@ final class ReleaseWorkflowTests: XCTestCase {
     func testReleaseWorkflowBuildsAndUploadsAdHocDMGForTags() throws {
         let workflow = try String(contentsOf: repositoryRoot().appendingPathComponent(".github/workflows/release.yml"), encoding: .utf8)
         let makefile = try String(contentsOf: repositoryRoot().appendingPathComponent("Makefile"), encoding: .utf8)
+        let releaseLocal = try String(contentsOf: repositoryRoot().appendingPathComponent("scripts/release-local.sh"), encoding: .utf8)
 
         XCTAssertTrue(
             makefile.contains("LOCAL_CODESIGN_IDENTITY ?= cliproxymanager"),
@@ -42,6 +43,30 @@ final class ReleaseWorkflowTests: XCTestCase {
             makefile.contains("xargs -0"),
             "Sparkle codesigning must not pipe find output through xargs."
         )
+        XCTAssertTrue(
+            releaseLocal.contains("CODESIGN_IDENTITY=\"cliproxymanager\""),
+            "Local releases should name the required signing identity explicitly."
+        )
+        XCTAssertTrue(
+            releaseLocal.contains("security find-identity -v -p codesigning"),
+            "Local releases should fail before building if the cliproxymanager identity is missing."
+        )
+        XCTAssertTrue(
+            releaseLocal.contains("make VERSION=\"$VERSION\" BUILD_NUMBER=\"$BUILD_NUMBER\" verify-dmg"),
+            "Local releases should use Makefile signing defaults instead of forcing ad-hoc signing."
+        )
+        XCTAssertFalse(
+            releaseLocal.contains("make CODESIGN_IDENTITY=- VERSION=\"$VERSION\" BUILD_NUMBER=\"$BUILD_NUMBER\" verify-dmg"),
+            "The canonical local release path must not force ad-hoc signing."
+        )
+        XCTAssertTrue(
+            releaseLocal.contains("Non-notarized DMG signed with the local cliproxymanager code signing identity and Sparkle appcast."),
+            "Local release notes should describe the cliproxymanager-signed artifact."
+        )
+        XCTAssertFalse(
+            releaseLocal.contains("Ad-hoc signed, non-notarized DMG with Sparkle appcast."),
+            "Local release notes should no longer describe canonical releases as ad-hoc signed."
+        )
 
         XCTAssertTrue(workflow.contains("on:"))
         XCTAssertTrue(workflow.contains("workflow_dispatch:"))
@@ -73,7 +98,10 @@ final class ReleaseWorkflowTests: XCTestCase {
         XCTAssertTrue(workflow.contains("BUILD_NUMBER=$(plutil -extract CFBundleVersion raw Info.plist)"))
         XCTAssertTrue(workflow.contains("APPCAST_PATH=\"build/appcast.xml\""))
         XCTAssertTrue(workflow.contains("echo \"APPCAST_PATH=$APPCAST_PATH\" >> \"$GITHUB_ENV\""))
-        XCTAssertTrue(workflow.contains("make CODESIGN_IDENTITY=- VERSION=\"$VERSION\" BUILD_NUMBER=\"$BUILD_NUMBER\" verify-dmg"))
+        XCTAssertTrue(
+            workflow.contains("make CODESIGN_IDENTITY=- VERSION=\"$VERSION\" BUILD_NUMBER=\"$BUILD_NUMBER\" verify-dmg"),
+            "The manual CI fallback may continue to use explicit ad-hoc signing until certificate import is designed."
+        )
         XCTAssertTrue(workflow.contains("SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}"))
         XCTAssertFalse(
             workflow.contains("test -n \"$SPARKLE_PRIVATE_KEY\""),
