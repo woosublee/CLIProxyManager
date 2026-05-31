@@ -5,6 +5,18 @@ final class ReleaseWorkflowTests: XCTestCase {
         let workflow = try String(contentsOf: repositoryRoot().appendingPathComponent(".github/workflows/release.yml"), encoding: .utf8)
         let makefile = try String(contentsOf: repositoryRoot().appendingPathComponent("Makefile"), encoding: .utf8)
 
+        XCTAssertTrue(
+            makefile.contains("LOCAL_CODESIGN_IDENTITY ?= cliproxymanager"),
+            "Development and local release builds should default to the shared cliproxymanager signing identity."
+        )
+        XCTAssertTrue(
+            makefile.contains("RELEASE_CODESIGN_IDENTITY ?= $(LOCAL_CODESIGN_IDENTITY)"),
+            "Release signing should use the same default identity unless explicitly overridden."
+        )
+        XCTAssertTrue(
+            makefile.contains("CODESIGN_IDENTITY ?= $(LOCAL_CODESIGN_IDENTITY)"),
+            "Generic signing should inherit the local default identity."
+        )
         XCTAssertTrue(makefile.contains("scripts/verify-dmg.sh \"$(DMG_PATH)\""))
         XCTAssertTrue(makefile.contains("test -d \"$$VERIFY_APP/Contents/Frameworks/Sparkle.framework\""))
         XCTAssertTrue(makefile.contains("test -x \"$$VERIFY_APP/Contents/Frameworks/Sparkle.framework/Autoupdate\""))
