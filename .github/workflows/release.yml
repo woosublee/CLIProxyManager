@@ -1,9 +1,6 @@
 name: Release DMG
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       tag:
@@ -25,11 +22,7 @@ jobs:
         env:
           DISPATCH_TAG: ${{ inputs.tag }}
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            RELEASE_TAG="$DISPATCH_TAG"
-          else
-            RELEASE_TAG="$GITHUB_REF_NAME"
-          fi
+          RELEASE_TAG="$DISPATCH_TAG"
           [[ "$RELEASE_TAG" == v* ]]
           echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
           echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
@@ -44,9 +37,11 @@ jobs:
           VERSION=${RELEASE_TAG#v}
           BUILD_NUMBER=$(plutil -extract CFBundleVersion raw Info.plist)
           DMG_PATH="build/CLIProxyManager-${VERSION}.dmg"
+          APPCAST_PATH="build/appcast.xml"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "BUILD_NUMBER=$BUILD_NUMBER" >> "$GITHUB_ENV"
           echo "DMG_PATH=$DMG_PATH" >> "$GITHUB_ENV"
+          echo "APPCAST_PATH=$APPCAST_PATH" >> "$GITHUB_ENV"
 
       - name: Test
         run: swift test
@@ -54,10 +49,15 @@ jobs:
       - name: Build and verify ad-hoc signed DMG
         run: make CODESIGN_IDENTITY=- VERSION="$VERSION" BUILD_NUMBER="$BUILD_NUMBER" verify-dmg
 
-      - name: Upload DMG to GitHub Release
+      - name: Generate Sparkle appcast
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: scripts/generate-sparkle-appcast.sh
+
+      - name: Upload DMG and appcast to GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
-            gh release create "$RELEASE_TAG" --verify-tag --title "CLIProxyManager $VERSION" --notes "Ad-hoc signed, non-notarized DMG."
-          gh release upload "$RELEASE_TAG" "$DMG_PATH" --clobber
+            gh release create "$RELEASE_TAG" --verify-tag --title "CLIProxyManager $VERSION" --notes "Ad-hoc signed, non-notarized DMG with Sparkle appcast."
+          gh release upload "$RELEASE_TAG" "$DMG_PATH" "$APPCAST_PATH" --clobber

@@ -9,6 +9,9 @@ let package = Package(
         .executable(name: "cliproxy-manager", targets: ["CLIProxyManagerCLI"]),
         .library(name: "CLIProxyManagerCore", targets: ["CLIProxyManagerCore"])
     ],
+    dependencies: [
+        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.2")
+    ],
     targets: [
         .target(
             name: "CLIProxyManagerCore",
@@ -21,7 +24,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "CLIProxyManagerApp",
-            dependencies: ["CLIProxyManagerCore"],
+            dependencies: [
+                "CLIProxyManagerCore",
+                .product(name: "Sparkle", package: "Sparkle")
+            ],
             path: "Sources/CLIProxyManagerApp",
             resources: [
                 .copy("Resources/cliproxyapi"),

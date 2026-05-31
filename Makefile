@@ -4,8 +4,8 @@ VERSION ?= 0.1.2
 BUILD_NUMBER ?= 6
 BUILD_DIR ?= build
 CONFIGURATION ?= release
-LOCAL_CODESIGN_IDENTITY ?= CLIProxyManager Local Release
-RELEASE_CODESIGN_IDENTITY ?= -
+LOCAL_CODESIGN_IDENTITY ?= cliproxymanager
+RELEASE_CODESIGN_IDENTITY ?= $(LOCAL_CODESIGN_IDENTITY)
 CODESIGN_IDENTITY ?= $(LOCAL_CODESIGN_IDENTITY)
 ICON_NAME ?= CLIProxyManager
 ICON_FILE ?= $(ICON_NAME).icns
@@ -18,11 +18,14 @@ CONTENTS_DIR := $(APP_BUNDLE)/Contents
 MACOS_DIR := $(CONTENTS_DIR)/MacOS
 RESOURCES_DIR := $(CONTENTS_DIR)/Resources
 HELPERS_DIR := $(CONTENTS_DIR)/Helpers
+FRAMEWORKS_DIR := $(CONTENTS_DIR)/Frameworks
 SWIFT_BUILD_DIR = $(shell swift build -c $(CONFIGURATION) --show-bin-path)
 APP_EXECUTABLE = $(SWIFT_BUILD_DIR)/$(APP_NAME)
 HELPER_EXECUTABLE = $(SWIFT_BUILD_DIR)/cliproxy-manager
 BUNDLED_HELPER := $(HELPERS_DIR)/cliproxy-manager
 BUNDLED_ICON := $(RESOURCES_DIR)/$(ICON_FILE)
+BUNDLED_SPARKLE_FRAMEWORK := $(FRAMEWORKS_DIR)/Sparkle.framework
+SPARKLE_FRAMEWORK = $(shell find .build/artifacts -path '*/Sparkle.framework' -type d -print -quit)
 INFO_PLIST := Info.plist
 ENTITLEMENTS := CLIProxyManager.entitlements
 
@@ -39,10 +42,15 @@ bundle: swift-build $(INFO_PLIST) $(ENTITLEMENTS) $(ICON_FILE)
 	test -x "$(HELPER_EXECUTABLE)" || { echo "Missing executable: $(HELPER_EXECUTABLE)"; exit 1; }
 	test -f "$(ICON_FILE)" || { echo "Missing icon: $(ICON_FILE)"; exit 1; }
 	rm -rf "$(APP_BUNDLE)"
-	mkdir -p "$(MACOS_DIR)" "$(RESOURCES_DIR)" "$(HELPERS_DIR)"
+	mkdir -p "$(MACOS_DIR)" "$(RESOURCES_DIR)" "$(HELPERS_DIR)" "$(FRAMEWORKS_DIR)"
+	test -d "$(SPARKLE_FRAMEWORK)" || { echo "Missing Sparkle.framework artifact. Run swift package resolve first."; exit 1; }
 	ditto --norsrc --noextattr "$(APP_EXECUTABLE)" "$(MACOS_DIR)/$(APP_NAME)"
+	if ! otool -l "$(MACOS_DIR)/$(APP_NAME)" | grep -F "@executable_path/../Frameworks" >/dev/null; then \
+		install_name_tool -add_rpath "@executable_path/../Frameworks" "$(MACOS_DIR)/$(APP_NAME)"; \
+	fi
 	ditto --norsrc --noextattr "$(HELPER_EXECUTABLE)" "$(BUNDLED_HELPER)"
 	ditto --norsrc --noextattr "$(ICON_FILE)" "$(BUNDLED_ICON)"
+	ditto --norsrc --noextattr "$(SPARKLE_FRAMEWORK)" "$(BUNDLED_SPARKLE_FRAMEWORK)"
 	cp "$(INFO_PLIST)" "$(CONTENTS_DIR)/Info.plist"
 	plutil -replace CFBundleName -string "$(APP_NAME)" "$(CONTENTS_DIR)/Info.plist"
 	plutil -replace CFBundleDisplayName -string "$(APP_NAME)" "$(CONTENTS_DIR)/Info.plist"
@@ -57,8 +65,9 @@ bundle: swift-build $(INFO_PLIST) $(ENTITLEMENTS) $(ICON_FILE)
 		fi; \
 	done
 	chmod -R u+w "$(APP_BUNDLE)"
-	chmod +x "$(MACOS_DIR)/$(APP_NAME)" "$(BUNDLED_HELPER)"
+	chmod +x "$(MACOS_DIR)/$(APP_NAME)" "$(BUNDLED_HELPER)" "$(BUNDLED_SPARKLE_FRAMEWORK)/Autoupdate"
 	xattr -r -c "$(APP_BUNDLE)"
+	xattr -d com.apple.FinderInfo "$(APP_BUNDLE)" 2>/dev/null || true
 	@echo "Bundled $(APP_BUNDLE)"
 
 sign: bundle
@@ -68,6 +77,16 @@ sign: bundle
 	trap cleanup EXIT; \
 	STAGED_APP="$$STAGING_DIR/$(APP_NAME).app"; \
 	ditto --norsrc --noextattr "$(APP_BUNDLE)" "$$STAGED_APP"; \
+	if [ -d "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/Versions/Current/XPCServices" ]; then \
+		find -L "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/Versions/Current/XPCServices" -maxdepth 1 -name '*.xpc' -type d -exec codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" {} \; ; \
+	fi; \
+	if [ -d "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/Versions/Current/Updater.app" ]; then \
+		codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/Versions/Current/Updater.app"; \
+	fi; \
+	if [ -x "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/Versions/Current/Autoupdate" ]; then \
+		codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/Versions/Current/Autoupdate"; \
+	fi; \
+	codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" "$$STAGED_APP/Contents/Frameworks/Sparkle.framework"; \
 	codesign --force --sign "$(CODESIGN_IDENTITY)" "$$STAGED_APP/Contents/Helpers/cliproxy-manager" || { \
 		status=$$?; \
 		echo "helper codesign failed. Override the signing identity with: make CODESIGN_IDENTITY=\"Your Signing Identity\""; \
@@ -100,6 +119,9 @@ verify: sign
 	test -f "$$VERIFY_APP/Contents/Resources/$(ICON_FILE)" || { echo "Missing bundled icon: $$VERIFY_APP/Contents/Resources/$(ICON_FILE)"; exit 1; }; \
 	plutil -extract CFBundleIconFile raw "$$VERIFY_APP/Contents/Info.plist" | grep -Fx "$(ICON_NAME)" >/dev/null || { echo "Missing CFBundleIconFile: $(ICON_NAME)"; exit 1; }; \
 	test -x "$$VERIFY_APP/Contents/Helpers/cliproxy-manager" || { echo "Missing bundled helper: $$VERIFY_APP/Contents/Helpers/cliproxy-manager"; exit 1; }; \
+	test -d "$$VERIFY_APP/Contents/Frameworks/Sparkle.framework" || { echo "Missing Sparkle.framework"; exit 1; }; \
+	test -x "$$VERIFY_APP/Contents/Frameworks/Sparkle.framework/Autoupdate" || { echo "Missing Sparkle Autoupdate"; exit 1; }; \
+	test -d "$$VERIFY_APP/Contents/Frameworks/Sparkle.framework/Updater.app" || { echo "Missing Sparkle Updater.app"; exit 1; }; \
 	test ! -e "$$VERIFY_APP/Contents/Resources/cliproxy-manager" || { echo "Helper must not be bundled in Contents/Resources"; exit 1; }; \
 	echo "codesign verification passed"
 

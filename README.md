@@ -21,9 +21,22 @@ It is designed for users who want one place to:
 - A Claude account, Codex/OpenAI OAuth account, or Claude API key depending on which shell function you want to use.
 - zsh if you want the app to manage shell functions automatically.
 
-## Releases
+## Releases and automatic updates
 
-Release artifacts are distributed as ad-hoc signed, non-notarized DMGs on GitHub Releases.
+Canonical local release artifacts are signed with the local `cliproxymanager` code signing identity and distributed as non-notarized DMGs on GitHub Releases. CLIProxyManager uses Sparkle 2 for automatic updates with this feed URL:
+
+```text
+https://github.com/woosublee/CLIProxyManager/releases/latest/download/appcast.xml
+```
+
+Each GitHub Release that should be available through automatic updates must include both:
+
+- `CLIProxyManager-<version>.dmg`
+- `appcast.xml`
+
+Sparkle's EdDSA signature is separate from Apple Developer ID signing. The current automatic-update path can work without Apple Developer ID signing or notarization, but users may still see macOS Gatekeeper or quarantine warnings because the DMG is non-notarized and not signed with an Apple Developer ID certificate.
+
+The app currently keeps the hardened-runtime `disable-library-validation` entitlement enabled for this non-Developer-ID Sparkle distribution path. Local release builds re-sign the bundled Sparkle framework and helper executables with the local `cliproxymanager` identity, and without this entitlement macOS can reject the app at launch because the re-signed Sparkle code is not loaded under a matching Developer ID Team ID. Revisit this when Developer ID signing and notarization are introduced.
 
 ## Quick start
 
@@ -224,6 +237,72 @@ swift test --filter LicenseResourceTests/testCLIProxyAPIBinaryResourceIsBundled
 ```
 
 Commit the updated binary and manifest together.
+
+## Cutting an automatic-update release
+
+Automatic-update releases require a Sparkle EdDSA signing key. Keep the local private key in the macOS Keychain using the same naming convention as the other apps:
+
+```text
+service: https://sparkle-project.org
+account: com.woosublee.CLIProxyManager.sparkle.ed25519
+label: Private key for signing Sparkle updates
+```
+
+The committed public key lives in `Info.plist` as `SUPublicEDKey`. The private key must not be committed.
+
+To create or export the key pair, download the Sparkle 2.9.2 tarball and run `generate_keys`:
+
+```zsh
+mkdir -p build
+curl -L -o build/Sparkle-2.9.2.tar.xz https://github.com/sparkle-project/Sparkle/releases/download/2.9.2/Sparkle-2.9.2.tar.xz
+tar -xf build/Sparkle-2.9.2.tar.xz -C build
+build/Sparkle-2.9.2/bin/generate_keys -x build/sparkle_private_key.txt
+```
+
+If `generate_keys -x` creates a Keychain item whose account is the export file path, copy the same private key value into the canonical item instead of generating a new key:
+
+```zsh
+security add-generic-password \
+  -U \
+  -s "https://sparkle-project.org" \
+  -a "com.woosublee.CLIProxyManager.sparkle.ed25519" \
+  -l "Private key for signing Sparkle updates" \
+  -D "private key" \
+  -j "Public key (SUPublicEDKey value) for this key is:\n\n$(plutil -extract SUPublicEDKey raw Info.plist)" \
+  -w "$(cat build/sparkle_private_key.txt)"
+```
+
+Local release tooling reads that canonical Keychain item automatically when `SPARKLE_PRIVATE_KEY` is unset. This local Keychain path is the default release path. Do not commit `build/sparkle_private_key.txt`.
+
+Local releases also require a code signing identity named `cliproxymanager` in the local Keychain. Confirm it before cutting a release:
+
+```zsh
+security find-identity -v -p codesigning | grep '"cliproxymanager"'
+```
+
+The release script does not create code signing certificates automatically. Development and canonical local release builds both use this same `cliproxymanager` identity by default.
+
+Create and push the release tag from the commit you want to ship:
+
+```zsh
+git tag v1.2.3
+git push origin v1.2.3
+```
+
+Then cut the release locally:
+
+```zsh
+scripts/release-local.sh v1.2.3
+```
+
+The local release script validates the `v*` tag, requires the local `cliproxymanager` code signing identity, reads `CFBundleVersion` from `Info.plist`, builds and verifies the signed DMG, generates `build/appcast.xml` using the Keychain Sparkle private key, and uploads both release assets with the authenticated `gh` CLI:
+
+- `CLIProxyManager-<version>.dmg`
+- `appcast.xml`
+
+The GitHub Actions release workflow is a manual fallback for cases where a local release is not practical. Run it with `workflow_dispatch` and an existing tag. Because CI cannot access the local Keychain, save the same Sparkle private key value in the GitHub secret `SPARKLE_PRIVATE_KEY` before using that fallback. The fallback workflow may continue to use explicit ad-hoc macOS code signing until a future certificate-import flow is added. Tag pushes do not automatically run the release workflow.
+
+Sparkle updates the app bundle, but it does not automatically overwrite the `/usr/local/bin/cliproxy-manager` helper. If a release changes the helper, reinstall it from CLIProxyManager after updating.
 
 ## Provider terms
 

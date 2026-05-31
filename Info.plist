@@ -22,5 +22,11 @@
     <string>CLIProxyManager</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
+    <key>SUFeedURL</key>
+    <string>https://github.com/woosublee/CLIProxyManager/releases/latest/download/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>Ir+K5lWRSEABP64BOVzbm16oFa7GduspY6lNsM2aV2k=</string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
 </dict>
 </plist>
