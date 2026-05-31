@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import Sparkle
 
@@ -10,6 +11,7 @@ struct UpdateSettingsCopy {
 @MainActor
 final class UpdaterService: ObservableObject {
     private let updaterController: SPUStandardUpdaterController
+    private var updaterObservationCancellables: Set<AnyCancellable> = []
 
     init() {
         self.updaterController = SPUStandardUpdaterController(
@@ -17,6 +19,8 @@ final class UpdaterService: ObservableObject {
             updaterDelegate: nil,
             userDriverDelegate: nil
         )
+
+        bridgeUpdaterChangesToSwiftUI()
     }
 
     var automaticallyChecksForUpdates: Bool {
@@ -33,5 +37,21 @@ final class UpdaterService: ObservableObject {
 
     func checkForUpdates() {
         updaterController.checkForUpdates(nil)
+    }
+
+    private func bridgeUpdaterChangesToSwiftUI() {
+        updaterController.updater.publisher(for: \.canCheckForUpdates)
+            .dropFirst()
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &updaterObservationCancellables)
+
+        updaterController.updater.publisher(for: \.automaticallyChecksForUpdates)
+            .dropFirst()
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &updaterObservationCancellables)
     }
 }

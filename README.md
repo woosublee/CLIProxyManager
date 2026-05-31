@@ -36,6 +36,8 @@ Each GitHub Release that should be available through automatic updates must incl
 
 Sparkle's EdDSA signature is separate from Apple Developer ID signing. The initial automatic-update path can work without Apple Developer ID signing or notarization, but users may still see macOS Gatekeeper or quarantine warnings because the DMG is ad-hoc signed and non-notarized.
 
+The app currently keeps the hardened-runtime `disable-library-validation` entitlement enabled for this ad-hoc signed Sparkle distribution path. Local release builds re-sign the bundled Sparkle framework and helper executables with an ad-hoc identity, and without this entitlement macOS can reject the app at launch because the re-signed Sparkle code is not loaded under a matching Developer ID Team ID. Revisit this when Developer ID signing and notarization are introduced.
+
 ## Quick start
 
 1. Open CLIProxyManager.

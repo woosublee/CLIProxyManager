@@ -68,15 +68,20 @@ find_sign_update() {
 }
 
 xml_escape() {
-  python3 -c 'import html, sys; print(html.escape(sys.stdin.read(), quote=True), end="")'
+  sed \
+    -e 's/&/\&amp;/g' \
+    -e 's/"/\&quot;/g' \
+    -e "s/'/\&apos;/g" \
+    -e 's/</\&lt;/g' \
+    -e 's/>/\&gt;/g'
 }
 
 SIGN_UPDATE="$(find_sign_update)"
 signature_output="$(sparkle_private_key | "$SIGN_UPDATE" "$DMG_PATH" --ed-key-file -)"
-ed_signature="$(python3 -c 'import re, sys; m = re.search(r"sparkle:edSignature=\"([^\"]+)\"", sys.stdin.read()); print(m.group(1) if m else "")' <<<"$signature_output")"
+ed_signature="$(printf '%s\n' "$signature_output" | sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p' | sed -n '1p')"
 [[ -n "$ed_signature" ]] || fail "Unable to parse sparkle:edSignature from sign_update output"
 
-length="$(stat -f%z "$DMG_PATH")"
+length="$(wc -c < "$DMG_PATH" | tr -d '[:space:]')"
 pub_date="$(date -u '+%a, %d %b %Y %H:%M:%S +0000')"
 dmg_name="$(basename "$DMG_PATH")"
 dmg_url="https://github.com/${REPOSITORY}/releases/download/${RELEASE_TAG}/${dmg_name}"

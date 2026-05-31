@@ -16,7 +16,7 @@ final class UpdaterConfigurationTests: XCTestCase {
         let infoPlist = try loadInfoPlist()
         let publicKey = try XCTUnwrap(infoPlist["SUPublicEDKey"] as? String)
 
-        XCTAssertGreaterThanOrEqual(publicKey.count, 40)
+        XCTAssertEqual(publicKey.count, 44, "SUPublicEDKey must be the exact 44-character base64 EdDSA public key Sparkle expects.")
         XCTAssertFalse(publicKey.localizedCaseInsensitiveContains("placeholder"))
         XCTAssertFalse(publicKey.localizedCaseInsensitiveContains("replace"))
     }
@@ -42,8 +42,33 @@ final class UpdaterConfigurationTests: XCTestCase {
 
     func testEntitlementsAllowBundledSparkleFrameworkToLoadUnderHardenedRuntime() throws {
         let entitlements = try loadPlist(named: "CLIProxyManager.entitlements")
+        let readme = try String(contentsOf: repositoryRoot().appendingPathComponent("README.md"), encoding: .utf8)
 
         XCTAssertEqual(entitlements["com.apple.security.cs.disable-library-validation"] as? Bool, true)
+        XCTAssertTrue(
+            readme.contains("disable-library-validation") && readme.contains("ad-hoc signed"),
+            "README should explain why disable-library-validation remains enabled for the current ad-hoc Sparkle release path."
+        )
+    }
+
+    func testUpdaterServiceBridgesSparkleUpdaterKVOChangesToSwiftUI() throws {
+        let source = try String(
+            contentsOf: repositoryRoot().appendingPathComponent("Sources/CLIProxyManagerApp/Services/UpdaterService.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(
+            source.contains("updaterController.updater.publisher(for: \\.canCheckForUpdates)"),
+            "UpdaterService must bridge SPUUpdater canCheckForUpdates KVO changes into objectWillChange."
+        )
+        XCTAssertTrue(
+            source.contains("updaterController.updater.publisher(for: \\.automaticallyChecksForUpdates)"),
+            "UpdaterService must bridge SPUUpdater automaticallyChecksForUpdates KVO changes into objectWillChange."
+        )
+        XCTAssertTrue(
+            source.contains("sink { [weak self] _ in") && source.contains("self?.objectWillChange.send()"),
+            "UpdaterService must notify SwiftUI when Sparkle updater KVO publishers emit."
+        )
     }
 
     func testUpdateSettingsCopyMatchesExpectedStrings() {

@@ -77,14 +77,14 @@ sign: bundle
 	trap cleanup EXIT; \
 	STAGED_APP="$$STAGING_DIR/$(APP_NAME).app"; \
 	ditto --norsrc --noextattr "$(APP_BUNDLE)" "$$STAGED_APP"; \
-	if [ -d "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/XPCServices" ]; then \
-		find -L "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/XPCServices" -maxdepth 1 -name '*.xpc' -type d -print0 | xargs -0 -I {} codesign --force --sign "$(CODESIGN_IDENTITY)" "{}"; \
+	if [ -d "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/Versions/Current/XPCServices" ]; then \
+		find -L "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/Versions/Current/XPCServices" -maxdepth 1 -name '*.xpc' -type d -exec codesign --force --sign "$(CODESIGN_IDENTITY)" {} \; ; \
 	fi; \
-	if [ -d "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/Updater.app" ]; then \
-		codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/Updater.app"; \
+	if [ -d "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/Versions/Current/Updater.app" ]; then \
+		codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/Versions/Current/Updater.app"; \
 	fi; \
-	if [ -x "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/Autoupdate" ]; then \
-		codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/Autoupdate"; \
+	if [ -x "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/Versions/Current/Autoupdate" ]; then \
+		codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/Versions/Current/Autoupdate"; \
 	fi; \
 	codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" "$$STAGED_APP/Contents/Frameworks/Sparkle.framework"; \
 	codesign --force --sign "$(CODESIGN_IDENTITY)" "$$STAGED_APP/Contents/Helpers/cliproxy-manager" || { \

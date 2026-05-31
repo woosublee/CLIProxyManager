@@ -10,6 +10,26 @@ final class ReleaseWorkflowTests: XCTestCase {
         XCTAssertTrue(makefile.contains("test -x \"$$VERIFY_APP/Contents/Frameworks/Sparkle.framework/Autoupdate\""))
         XCTAssertTrue(makefile.contains("test -d \"$$VERIFY_APP/Contents/Frameworks/Sparkle.framework/Updater.app\""))
         XCTAssertTrue(makefile.contains("install_name_tool -add_rpath \"@executable_path/../Frameworks\""))
+        XCTAssertTrue(
+            makefile.contains("Sparkle.framework/Versions/Current/XPCServices"),
+            "Sparkle XPC services should be signed through the canonical Versions/Current path."
+        )
+        XCTAssertTrue(
+            makefile.contains("Sparkle.framework/Versions/Current/Updater.app"),
+            "Sparkle Updater.app should be signed through the canonical Versions/Current path."
+        )
+        XCTAssertTrue(
+            makefile.contains("Sparkle.framework/Versions/Current/Autoupdate"),
+            "Sparkle Autoupdate should be signed through the canonical Versions/Current path."
+        )
+        XCTAssertTrue(
+            makefile.contains("-exec codesign --force --sign \"$(CODESIGN_IDENTITY)\" {} \\;"),
+            "Sparkle XPC services should be signed with find -exec instead of find|xargs."
+        )
+        XCTAssertFalse(
+            makefile.contains("xargs -0"),
+            "Sparkle codesigning must not pipe find output through xargs."
+        )
 
         XCTAssertTrue(workflow.contains("on:"))
         XCTAssertTrue(workflow.contains("workflow_dispatch:"))

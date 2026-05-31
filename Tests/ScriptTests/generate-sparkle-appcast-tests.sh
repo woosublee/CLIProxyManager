@@ -5,6 +5,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 SCRIPT="$REPO_ROOT/scripts/generate-sparkle-appcast.sh"
 
+if grep -Eq '(^|[^[:alnum:]_])(python|python3)([^[:alnum:]_]|$)' "$SCRIPT"; then
+  echo "FAIL: generate-sparkle-appcast.sh must not require Python" >&2
+  exit 1
+fi
+
+if grep -q 'stat -f%z' "$SCRIPT"; then
+  echo "FAIL: generate-sparkle-appcast.sh must use wc -c instead of BSD-only stat -f%z" >&2
+  exit 1
+fi
+
 fail() {
   echo "FAIL: $*" >&2
   exit 1
