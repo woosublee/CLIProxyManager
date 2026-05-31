@@ -38,7 +38,7 @@ final class DashboardViewModelTests: XCTestCase {
 
         let cards = ProfileCard.makeDefaultCards(config: config)
 
-        XCTAssertEqual(cards.map(\.id), ["claude-local", "codex-local"])
+        XCTAssertEqual(cards.map(\.id), [ProfileCard.claudeID, ProfileCard.codexID])
         XCTAssertEqual(cards.map(\.command), ["claude-local", "codex-local"])
         XCTAssertEqual(cards.map(\.title), ["Claude Subscription", "OpenAI/Codex"])
         XCTAssertEqual(cards.map(\.subtitle), [
@@ -50,6 +50,14 @@ final class DashboardViewModelTests: XCTestCase {
             title: "Needs check",
             message: "Status has not been checked yet."
         ), count: 2))
+    }
+
+    func testDefaultProfileCardsUseStableIDsWhenCommandNamesAreBlank() {
+        let cards = ProfileCard.makeDefaultCards(config: .default)
+
+        XCTAssertEqual(cards.map(\.id), [ProfileCard.claudeID, ProfileCard.codexID])
+        XCTAssertEqual(Set(cards.map(\.id)).count, 2)
+        XCTAssertEqual(cards.map(\.command), ["", ""])
     }
 
     func testDefaultProfileCardsExcludeClaudeAPIEvenWhenConfigured() {

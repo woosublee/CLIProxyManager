@@ -2,14 +2,14 @@ import XCTest
 @testable import CLIProxyManagerCore
 
 final class AppConfigStoreTests: XCTestCase {
-    func testDefaultConfigUsesAppManagedPortAndFunctionNames() {
+    func testDefaultConfigUsesAppManagedPortAndLeavesOAuthCommandNamesUnconfigured() {
         let config = AppConfig.default
 
         XCTAssertEqual(config.port, 18_317)
-        XCTAssertEqual(config.commands.cc, "cc")
-        XCTAssertEqual(config.commands.ccapi, "ccapi")
-        XCTAssertEqual(config.commands.ccodex, "ccodex")
-        XCTAssertEqual(config.ccapi.model, "claude-opus-4-7")
+        XCTAssertEqual(config.commands.cc, "")
+        XCTAssertEqual(config.commands.ccapi, "")
+        XCTAssertEqual(config.commands.ccodex, "")
+        XCTAssertEqual(config.ccapi.model, "claude-opus-4-8")
         XCTAssertEqual(config.ccodex.opus, AppConfig.CodexRole(model: "gpt-5.5", reasoning: .xhigh, contextWindow: .auto))
         XCTAssertEqual(config.ccodex.sonnet, AppConfig.CodexRole(model: "gpt-5.5", reasoning: .medium, contextWindow: .auto))
         XCTAssertEqual(config.ccodex.haiku, AppConfig.CodexRole(model: "gpt-5.5", reasoning: .low, contextWindow: .auto))

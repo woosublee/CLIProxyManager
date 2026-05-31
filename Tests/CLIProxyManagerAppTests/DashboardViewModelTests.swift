@@ -31,6 +31,10 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         )
         let viewModel = DashboardViewModel(
             config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
             proxyService: StubProxyServiceStarter(),
             claudeConnector: ClaudeConnector(runner: StubProcessRunner(results: [
@@ -48,12 +52,48 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.cards.first { $0.command == "codex-local" }?.status, serverStatus)
     }
 
+    func testRefreshUpdatesBlankCommandCardsByStableIdentity() async {
+        let config = AppConfig.default
+        let serverStatus = DiagnosticStatus(
+            severity: .ready,
+            title: "CLIProxyAPI Running",
+            message: "Models are available on port \(config.port)."
+        )
+        let claudeStatus = DiagnosticStatus(
+            severity: .ready,
+            title: "Claude Code Connected",
+            message: "Logged in"
+        )
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: ClaudeConnector(runner: StubProcessRunner(results: [
+                ProcessResult(exitCode: 0, stdout: "/usr/local/bin/claude\n", stderr: ""),
+                ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: ""),
+                ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: "")
+            ]))
+        )
+
+        await viewModel.refresh()
+
+        XCTAssertEqual(viewModel.cards.first { $0.id == ProfileCard.claudeID }?.status, claudeStatus)
+        XCTAssertEqual(viewModel.cards.first { $0.id == ProfileCard.codexID }?.status, serverStatus)
+        XCTAssertEqual(viewModel.cards.map(\.command), ["", ""])
+    }
+
     func testTransientServerHealthErrorIsRetriedBeforeUpdatingMenuStatus() async {
         let httpClient = SequencedHTTPClient(results: [
             .failure(HTTPClientError.timedOut),
             .success(Data("{}".utf8))
         ])
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: [
                 AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
             ]),
@@ -78,6 +118,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             .failure(HTTPClientError.timedOut)
         ])
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: [
                 AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
             ]),
@@ -98,6 +140,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testDefaultProviderRowsHideProfilesUntilAuthExists() {
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
@@ -109,6 +153,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testAddProviderExplainsClaudeAPIIsHiddenFromDefaultProfiles() {
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
@@ -122,6 +168,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testSettingsMessageCanBeClearedByToastTimer() {
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
@@ -136,6 +184,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testSettingsMessageAutoClearsAfterDelay() async throws {
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
@@ -157,6 +207,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let store = StubConfigStore(config: config)
         let viewModel = DashboardViewModel(
             configStore: store,
+            shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
@@ -181,6 +232,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         config.includeDangerouslySkipPermissions = true
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
@@ -196,6 +248,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         config.commands.ccodex = "ccmcodex"
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: [
                 AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
             ]),
@@ -213,6 +266,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: nil, disabled: false)
         ]
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: profiles),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
@@ -230,6 +285,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         config.accountPrivacy = AppConfig.AccountPrivacy(claudeHidden: false, codexHidden: true)
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: [
                 AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false),
                 AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: nil, disabled: false)
@@ -249,6 +305,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let store = StubConfigStore(config: config)
         let viewModel = DashboardViewModel(
             configStore: store,
+            shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: [
                 AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false),
                 AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: nil, disabled: false)
@@ -272,6 +329,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let store = StubConfigStore(config: config)
         let viewModel = DashboardViewModel(
             configStore: store,
+            shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: [
                 AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false),
                 AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: nil, disabled: false)
@@ -292,6 +350,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     func testToggleAccountDetailVisibilityDoesNotInstallShellFunctions() {
         let installer = StubShellInstaller()
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
             shellInstaller: installer,
             authProfileStore: StubAuthProfileStore(profiles: [
                 AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
@@ -311,6 +370,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testToggleAccountDetailVisibilityPreservesCodexProviderErrorState() async {
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: [
                 AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: nil, disabled: false)
             ]),
@@ -331,6 +392,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testToggleAccountDetailVisibilityPreservesDashboardCardStatuses() async {
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: [
                 AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: nil, disabled: false)
             ]),
@@ -341,11 +404,11 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         )
 
         await viewModel.refresh()
-        let statusBeforeToggle = viewModel.cards.first { $0.command == viewModel.config.commands.ccodex }?.status
+        let statusBeforeToggle = viewModel.cards.first { $0.id == ProfileCard.codexID }?.status
 
         viewModel.toggleAccountDetailVisibility(.codex)
 
-        XCTAssertEqual(viewModel.cards.first { $0.command == viewModel.config.commands.ccodex }?.status, statusBeforeToggle)
+        XCTAssertEqual(viewModel.cards.first { $0.id == ProfileCard.codexID }?.status, statusBeforeToggle)
     }
 
     func testToggleAccountDetailVisibilityShowsSettingsMessageWhenSaveFails() {
@@ -357,6 +420,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         )
         let viewModel = DashboardViewModel(
             configStore: store,
+            shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: [
                 AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
             ]),
@@ -374,6 +438,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testFutureExpiryDoesNotMarkProviderRowAsErrored() {
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: [
                 AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: "2099-05-14T01:45:44+09:00", disabled: false),
                 AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: "2099-05-22T23:45:34+09:00", disabled: false)
@@ -390,6 +456,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testPastExpiryMarksProviderRowAsErrored() {
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: [
                 AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: "2000-05-14T01:45:44+09:00", disabled: false)
             ]),
@@ -406,6 +474,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let authStore = StubAuthProfileStore(profiles: [])
         let oauth = StubOAuthLoginService()
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
             authProfileStore: authStore,
             oauthLoginService: oauth,
             proxyService: StubProxyServiceStarter(),
@@ -435,6 +505,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: nil, disabled: false)
         ]
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
@@ -451,6 +523,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let installer = StubShellInstaller(validationError: ShellProfileInstallerError.functionNameConflicts(["cc"]))
         let authStore = StubAuthProfileStore(profiles: [])
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
             shellInstaller: installer,
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
@@ -474,6 +547,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     func testStartOAuthLoginTracksProviderUntilCompletion() async throws {
         let oauth = SuspendedOAuthLoginService()
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: oauth,
             proxyService: StubProxyServiceStarter(),
@@ -501,6 +576,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         ]
         let oauth = SuspendedOAuthLoginService()
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
             authProfileStore: authStore,
             oauthLoginService: oauth,
             proxyService: StubProxyServiceStarter(),
@@ -523,6 +600,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     func testDirectConnectProviderDoesNotReenterActiveOAuthLoginForSameProvider() async throws {
         let oauth = SuspendedOAuthLoginService()
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: oauth,
             proxyService: StubProxyServiceStarter(),
@@ -545,6 +624,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     func testCancelledOAuthSessionCannotClearNewRetryState() async throws {
         let oauth = DeferredCancellationOAuthLoginService()
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: oauth,
             proxyService: StubProxyServiceStarter(),
@@ -573,6 +654,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
         ])
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
@@ -633,6 +716,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testExpiredProviderRowIsErrored() {
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: [
                 AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: "2026-05-09T11:24:01+09:00", disabled: false)
             ]),
@@ -646,6 +731,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testDisabledExpiredProviderRowIsNotErrored() {
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: [
                 AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: "2026-05-09T11:24:01+09:00", disabled: true)
             ]),
@@ -666,6 +753,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: nil, disabled: true)
         ]
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
@@ -686,6 +775,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let viewModel = DashboardViewModel(
             configStore: store,
             shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
             claudeConnector: connectedClaudeConnector()
         )
@@ -701,6 +792,9 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let store = StubConfigStore(config: .default, saveError: NSError(domain: "test", code: 1))
         let viewModel = DashboardViewModel(
             configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
             claudeConnector: connectedClaudeConnector()
         )
@@ -714,6 +808,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testInstallShellFunctionsRendersAndInstallsCurrentConfig() throws {
         var config = AppConfig.default
+        config.commands.cc = "cc"
         config.commands.ccodex = "customcodex"
         let store = StubConfigStore(config: config)
         let installer = StubShellInstaller()
@@ -724,6 +819,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
                 AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false),
                 AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
             ]),
+            oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
             claudeConnector: connectedClaudeConnector()
         )
@@ -735,6 +831,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     }
 
     func testInstallShellFunctionsInstallsActiveProvidersOnly() throws {
+        var config = AppConfig.default
+        config.commands.cc = "cc"
         let installer = StubShellInstaller()
         let automaticInstaller = AutomaticShellInstallService(
             installer: installer,
@@ -742,11 +840,12 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             helperCommand: "/usr/local/bin/cliproxy-manager"
         )
         let viewModel = DashboardViewModel(
-            configStore: StubConfigStore(config: .default),
+            configStore: StubConfigStore(config: config),
             shellInstaller: installer,
             authProfileStore: StubAuthProfileStore(profiles: [
                 AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
             ]),
+            oauthLoginService: StubOAuthLoginService(),
             automaticShellInstallService: automaticInstaller,
             proxyService: StubProxyServiceStarter(),
             claudeConnector: connectedClaudeConnector()
@@ -760,11 +859,38 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertFalse(installer.installedScript?.contains("ccapi() {") == true)
     }
 
+    func testInstallShellFunctionsSkipsConnectedProvidersWithBlankCommandNames() throws {
+        let installer = StubShellInstaller()
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: installer,
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false),
+                AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+        installer.reset()
+
+        try viewModel.installShellFunctions(helperCommand: "/usr/local/bin/cliproxy-manager")
+
+        XCTAssertEqual(installer.installedFunctionNames, [])
+        XCTAssertFalse(installer.installedScript?.contains("cc() {") == true)
+        XCTAssertFalse(installer.installedScript?.contains("ccodex() {") == true)
+        XCTAssertFalse(installer.installedScript?.contains("ccapi() {") == true)
+    }
+
     func testRefreshCodexModelsStartsServerAndFetchesModels() async {
         let modelClient = StubProxyModelClient(models: ["gpt-5.5", "gpt-5.6"])
         let proxyService = StubProxyServiceStarter()
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
             modelClient: modelClient,
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
             claudeConnector: connectedClaudeConnector(),
@@ -783,7 +909,11 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let modelClient = StubProxyModelClient(models: ["gpt-5.5"])
         let proxyService = StubProxyServiceStarter(startDelayNanoseconds: 50_000_000)
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
             modelClient: modelClient,
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
             claudeConnector: connectedClaudeConnector(),
@@ -802,7 +932,11 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let modelClient = StubProxyModelClient(models: ["gpt-5.5"])
         let proxyService = StubProxyServiceStarter(startDelayNanoseconds: 50_000_000)
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
             modelClient: modelClient,
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
             claudeConnector: connectedClaudeConnector(),
@@ -825,7 +959,11 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let modelClient = StubProxyModelClient(models: ["gpt-5.5"])
         let proxyService = StubProxyServiceStarter(startDelayNanoseconds: 50_000_000)
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
             modelClient: modelClient,
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
             claudeConnector: connectedClaudeConnector(),
@@ -845,7 +983,11 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let modelClient = StubProxyModelClient(models: ["gpt-5.5"])
         let proxyService = StubProxyServiceStarter(startDelayNanoseconds: 50_000_000)
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
             modelClient: modelClient,
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
             claudeConnector: connectedClaudeConnector(),
@@ -865,7 +1007,11 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     func testLoadCodexModelsFetchesBaseModelsFromCurrentPort() async {
         let modelClient = StubProxyModelClient(models: ["gpt-5.5", "gpt-5.6"])
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
             modelClient: modelClient,
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
             claudeConnector: connectedClaudeConnector()
         )
@@ -879,7 +1025,11 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     func testLatestBaseCodexModelPrefersMainGptModelWithSuffix() async {
         let modelClient = StubProxyModelClient(models: ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo"])
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
             modelClient: modelClient,
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
             claudeConnector: connectedClaudeConnector()
         )
@@ -892,6 +1042,10 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     func testSetServerEnabledStartsAndStopsServer() async {
         let proxyService = StubProxyServiceStarter()
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
             claudeConnector: connectedClaudeConnector(),
@@ -908,6 +1062,10 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     func testServerToggleEntersStartingStateImmediately() async {
         let proxyService = StubProxyServiceStarter(startDelayNanoseconds: 50_000_000)
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
             claudeConnector: connectedClaudeConnector(),
@@ -930,6 +1088,10 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             .failure(URLError(.cannotConnectToHost))
         ])
         let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: httpClient, timeout: 0.1),
             proxyService: proxyService,
             claudeConnector: connectedClaudeConnector(),
@@ -947,10 +1109,15 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     }
 
     func testStartServerUsesInjectedProxyServiceAndRefreshesStatus() async {
-        let config = AppConfig.default
+        var config = AppConfig.default
+        config.commands.ccodex = "ccodex"
         let proxyService = StubProxyServiceStarter()
         let viewModel = DashboardViewModel(
             config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
             proxyService: proxyService,
             claudeConnector: ClaudeConnector(runner: StubProcessRunner(results: [
@@ -968,7 +1135,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     }
 
     func testStartServerRetriesStatusUntilServerBecomesReady() async {
-        let config = AppConfig.default
+        var config = AppConfig.default
+        config.commands.ccodex = "ccodex"
         let proxyService = StubProxyServiceStarter()
         let httpClient = SequencedHTTPClient(results: [
             .failure(URLError(.cannotConnectToHost)),
@@ -976,6 +1144,10 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         ])
         let viewModel = DashboardViewModel(
             config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: httpClient),
             proxyService: proxyService,
             claudeConnector: ClaudeConnector(runner: StubProcessRunner(results: [
@@ -995,10 +1167,15 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     }
 
     func testStopServerUsesInjectedProxyServiceAndRefreshesStatus() async {
-        let config = AppConfig.default
+        var config = AppConfig.default
+        config.commands.ccodex = "ccodex"
         let proxyService = StubProxyServiceStarter()
         let viewModel = DashboardViewModel(
             config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
             proxyService: proxyService,
             claudeConnector: ClaudeConnector(runner: StubProcessRunner(results: [
@@ -1016,10 +1193,15 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     }
 
     func testRestartServerUsesInjectedProxyServiceAndRefreshesStatus() async {
-        let config = AppConfig.default
+        var config = AppConfig.default
+        config.commands.ccodex = "ccodex"
         let proxyService = StubProxyServiceStarter()
         let viewModel = DashboardViewModel(
             config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
             proxyService: proxyService,
             claudeConnector: ClaudeConnector(runner: StubProcessRunner(results: [
@@ -1037,7 +1219,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     }
 
     func testRestartServerRetriesStatusUntilServerBecomesReady() async {
-        let config = AppConfig.default
+        var config = AppConfig.default
+        config.commands.ccodex = "ccodex"
         let proxyService = StubProxyServiceStarter()
         let httpClient = SequencedHTTPClient(results: [
             .failure(URLError(.cannotConnectToHost)),
@@ -1045,6 +1228,10 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         ])
         let viewModel = DashboardViewModel(
             config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: httpClient),
             proxyService: proxyService,
             claudeConnector: ClaudeConnector(runner: StubProcessRunner(results: [
@@ -1064,10 +1251,15 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     }
 
     func testStartServerFailureUpdatesServerAndCodexCardStatus() async {
-        let config = AppConfig.default
+        var config = AppConfig.default
+        config.commands.ccodex = "ccodex"
         let proxyService = StubProxyServiceStarter(error: ProxyServiceError.missingBinary("test"))
         let viewModel = DashboardViewModel(
             config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
             proxyService: proxyService,
             claudeConnector: ClaudeConnector(runner: StubProcessRunner(results: []))
@@ -1087,6 +1279,10 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let proxyService = StubProxyServiceStarter()
         let viewModel = DashboardViewModel(
             config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
             proxyService: proxyService,
             claudeConnector: ClaudeConnector(runner: StubProcessRunner(results: [
@@ -1162,6 +1358,14 @@ private final class StubShellInstaller: ShellFunctionInstalling, @unchecked Send
     func validateFunctionNames(_ names: [String]) throws {
         validatedFunctionNames.append(names)
         if let validationError { throw validationError }
+    }
+
+    func reset() {
+        installedScript = nil
+        installedFunctionNames = []
+        installCount = 0
+        installed = false
+        validatedFunctionNames = []
     }
 }
 

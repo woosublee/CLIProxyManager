@@ -86,6 +86,7 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
 
     func testApplyRendersAndInstallsCurrentConfigWithoutClaudeAPIWhenSecretIsMissing() throws {
         var config = AppConfig.default
+        config.commands.cc = "cc"
         config.commands.ccodex = "codexcustom"
         let installer = StubShellInstaller()
         let service = AutomaticShellInstallService(
@@ -110,13 +111,39 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
             helperCommand: "/usr/local/bin/cliproxy-manager"
         )
 
+        var config = AppConfig.default
+        config.commands.cc = "cc"
+        config.commands.ccapi = "ccapi"
+        config.commands.ccodex = "ccodex"
+
         try service.apply(
-            config: .default,
+            config: config,
             enabledFunctions: AutomaticShellInstallService.EnabledFunctions(claudeOAuth: true, codex: true, claudeAPI: true)
         )
 
         XCTAssertEqual(installer.installedFunctionNames, ["cc", "ccodex", "ccapi"])
         XCTAssertTrue(installer.installedScript?.contains("ccapi() {") == true)
+    }
+
+    func testApplySkipsClaudeAPIWhenCommandNameIsBlankEvenIfSecretExists() throws {
+        let installer = StubShellInstaller()
+        let service = AutomaticShellInstallService(
+            installer: installer,
+            secretStore: InMemorySecretStore(values: [.claudeAPIKey: "sk-test"]),
+            helperCommand: "/usr/local/bin/cliproxy-manager"
+        )
+
+        var config = AppConfig.default
+        config.commands.cc = "cc"
+        config.commands.ccodex = "ccodex"
+
+        try service.apply(
+            config: config,
+            enabledFunctions: AutomaticShellInstallService.EnabledFunctions(claudeOAuth: true, codex: true, claudeAPI: true)
+        )
+
+        XCTAssertEqual(installer.installedFunctionNames, ["cc", "ccodex"])
+        XCTAssertFalse(installer.installedScript?.contains("ccapi() {") == true)
     }
 
     func testApplyOmitsClaudeAPIOnlyWhenSecretIsMissing() throws {
@@ -127,7 +154,11 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
             helperCommand: "/usr/local/bin/cliproxy-manager"
         )
 
-        try service.apply(config: .default)
+        var config = AppConfig.default
+        config.commands.cc = "cc"
+        config.commands.ccodex = "ccodex"
+
+        try service.apply(config: config)
 
         XCTAssertEqual(installer.installedFunctionNames, ["cc", "ccodex"])
         XCTAssertFalse(installer.installedScript?.contains("ccapi() {") == true)
@@ -140,8 +171,11 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
             helperCommand: "/usr/local/bin/cliproxy-manager"
         )
 
+        var config = AppConfig.default
+        config.commands.ccapi = "ccapi"
+
         XCTAssertThrowsError(try service.apply(
-            config: .default,
+            config: config,
             enabledFunctions: AutomaticShellInstallService.EnabledFunctions(claudeOAuth: true, codex: true, claudeAPI: true)
         )) { error in
             XCTAssertEqual(error as? SecretStoreError, .readFailed(SecretKey.claudeAPIKey.rawValue))
