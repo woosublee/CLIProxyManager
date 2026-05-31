@@ -21,9 +21,20 @@ It is designed for users who want one place to:
 - A Claude account, Codex/OpenAI OAuth account, or Claude API key depending on which shell function you want to use.
 - zsh if you want the app to manage shell functions automatically.
 
-## Releases
+## Releases and automatic updates
 
-Release artifacts are distributed as ad-hoc signed, non-notarized DMGs on GitHub Releases.
+Release artifacts are distributed as ad-hoc signed, non-notarized DMGs on GitHub Releases. CLIProxyManager uses Sparkle 2 for automatic updates with this feed URL:
+
+```text
+https://github.com/woosublee/CLIProxyManager/releases/latest/download/appcast.xml
+```
+
+Each GitHub Release that should be available through automatic updates must include both:
+
+- `CLIProxyManager-<version>.dmg`
+- `appcast.xml`
+
+Sparkle's EdDSA signature is separate from Apple Developer ID signing. The initial automatic-update path can work without Apple Developer ID signing or notarization, but users may still see macOS Gatekeeper or quarantine warnings because the DMG is ad-hoc signed and non-notarized.
 
 ## Quick start
 
@@ -224,6 +235,35 @@ swift test --filter LicenseResourceTests/testCLIProxyAPIBinaryResourceIsBundled
 ```
 
 Commit the updated binary and manifest together.
+
+## Cutting an automatic-update release
+
+Automatic-update releases require a Sparkle EdDSA signing key. Store the private key in the GitHub secret `SPARKLE_PRIVATE_KEY` before cutting a release.
+
+To create the key pair, download the Sparkle 2.9.2 tarball and run `generate_keys` with an output file:
+
+```zsh
+mkdir -p build
+curl -L -o build/Sparkle-2.9.2.tar.xz https://github.com/sparkle-project/Sparkle/releases/download/2.9.2/Sparkle-2.9.2.tar.xz
+tar -xf build/Sparkle-2.9.2.tar.xz -C build
+build/Sparkle-2.9.2/bin/generate_keys -x build/sparkle_private_key.txt
+```
+
+Commit only the generated `SUPublicEDKey` value in the app's `Info.plist`. Save the private key value in the `SPARKLE_PRIVATE_KEY` GitHub secret. Do not commit `build/sparkle_private_key.txt`.
+
+Create and push the release tag from the commit you want to ship:
+
+```zsh
+git tag v1.2.3
+git push origin v1.2.3
+```
+
+The release workflow runs tests, builds the ad-hoc signed DMG, generates `appcast.xml`, and uploads both release assets:
+
+- `CLIProxyManager-<version>.dmg`
+- `appcast.xml`
+
+Sparkle updates the app bundle, but it does not automatically overwrite the `/usr/local/bin/cliproxy-manager` helper. If a release changes the helper, reinstall it from CLIProxyManager after updating.
 
 ## Provider terms
 

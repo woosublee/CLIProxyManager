@@ -5,6 +5,7 @@ struct CLIProxyManagerApp: App {
     @Environment(\.openWindow) private var openWindow
     @StateObject private var viewModel: DashboardViewModel
     @StateObject private var quitCoordinator: QuitCoordinator
+    @StateObject private var updaterService = UpdaterService()
 
     init() {
         let viewModel = DashboardViewModel()
@@ -30,7 +31,7 @@ struct CLIProxyManagerApp: App {
         .windowResizability(.contentSize)
 
         Window("Settings", id: "settings") {
-            SettingsView(viewModel: viewModel)
+            SettingsView(viewModel: viewModel, updaterService: updaterService)
         }
         .windowStyle(.titleBar)
         .defaultSize(width: AppWindowMetrics.settingsWidth, height: AppWindowMetrics.settingsHeight)

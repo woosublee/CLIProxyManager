@@ -181,6 +181,7 @@ func aboutVersionText(bundle: Bundle = .main) -> String {
 }
 
 struct AboutSettingsView: View {
+    @ObservedObject var updaterService: UpdaterService
     @State private var showLicenses: Bool = false
 
     var body: some View {
@@ -203,14 +204,19 @@ struct AboutSettingsView: View {
             .padding(.vertical, 24)
 
             SettingsGroup(title: "Updates") {
-                SettingsRow(label: "Check for updates", description: "Automatically check for new versions on launch.", isEnabled: false) {
-                    Toggle("", isOn: .constant(false))
-                        .labelsHidden()
-                        .toggleStyle(SettingsToggleStyle())
+                SettingsRow(label: UpdateSettingsCopy.automaticChecksLabel, description: UpdateSettingsCopy.automaticChecksDescription) {
+                    Toggle("", isOn: Binding(
+                        get: { updaterService.automaticallyChecksForUpdates },
+                        set: { updaterService.automaticallyChecksForUpdates = $0 }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(SettingsToggleStyle())
                 }
-                SettingsRow(label: "Check now", description: "Updater integration is a design placeholder.", isEnabled: false) {
-                    Button("Check now") {}
-                        .controlSize(.small)
+                SettingsRow(label: UpdateSettingsCopy.checkNowButtonTitle, description: "Check GitHub releases for a newer CLIProxyManager version.", isEnabled: updaterService.canCheckForUpdates) {
+                    Button(UpdateSettingsCopy.checkNowButtonTitle) {
+                        updaterService.checkForUpdates()
+                    }
+                    .controlSize(.small)
                 }
             }
 

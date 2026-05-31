@@ -6,6 +6,10 @@ final class ReleaseWorkflowTests: XCTestCase {
         let makefile = try String(contentsOf: repositoryRoot().appendingPathComponent("Makefile"), encoding: .utf8)
 
         XCTAssertTrue(makefile.contains("scripts/verify-dmg.sh \"$(DMG_PATH)\""))
+        XCTAssertTrue(makefile.contains("test -d \"$$VERIFY_APP/Contents/Frameworks/Sparkle.framework\""))
+        XCTAssertTrue(makefile.contains("test -x \"$$VERIFY_APP/Contents/Frameworks/Sparkle.framework/Autoupdate\""))
+        XCTAssertTrue(makefile.contains("test -d \"$$VERIFY_APP/Contents/Frameworks/Sparkle.framework/Updater.app\""))
+        XCTAssertTrue(makefile.contains("install_name_tool -add_rpath \"@executable_path/../Frameworks\""))
 
         XCTAssertTrue(workflow.contains("on:"))
         XCTAssertTrue(workflow.contains("workflow_dispatch:"))
@@ -22,10 +26,15 @@ final class ReleaseWorkflowTests: XCTestCase {
         XCTAssertTrue(workflow.contains("ref: ${{ steps.release-tag.outputs.release_tag }}"))
         XCTAssertTrue(workflow.contains("VERSION=${RELEASE_TAG#v}"))
         XCTAssertTrue(workflow.contains("BUILD_NUMBER=$(plutil -extract CFBundleVersion raw Info.plist)"))
+        XCTAssertTrue(workflow.contains("APPCAST_PATH=\"build/appcast.xml\""))
+        XCTAssertTrue(workflow.contains("echo \"APPCAST_PATH=$APPCAST_PATH\" >> \"$GITHUB_ENV\""))
         XCTAssertTrue(workflow.contains("make CODESIGN_IDENTITY=- VERSION=\"$VERSION\" BUILD_NUMBER=\"$BUILD_NUMBER\" verify-dmg"))
+        XCTAssertTrue(workflow.contains("SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}"))
+        XCTAssertTrue(workflow.contains("test -n \"$SPARKLE_PRIVATE_KEY\""))
+        XCTAssertTrue(workflow.contains("scripts/generate-sparkle-appcast.sh"))
         XCTAssertTrue(workflow.contains("gh release view \"$RELEASE_TAG\""))
         XCTAssertTrue(workflow.contains("gh release create \"$RELEASE_TAG\" --verify-tag"))
-        XCTAssertTrue(workflow.contains("gh release upload \"$RELEASE_TAG\" \"$DMG_PATH\" --clobber"))
+        XCTAssertTrue(workflow.contains("gh release upload \"$RELEASE_TAG\" \"$DMG_PATH\" \"$APPCAST_PATH\" --clobber"))
     }
 
     func testVerifyDMGScriptReturnsFailureStatusAfterRetries() throws {

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var viewModel: DashboardViewModel
+    @ObservedObject var updaterService: UpdaterService
     @State private var selection: SettingsTab = .general
 
     var body: some View {
@@ -55,7 +56,7 @@ struct SettingsView: View {
                 case .advanced:
                     AdvancedSettingsView(viewModel: viewModel)
                 case .about:
-                    AboutSettingsView()
+                    AboutSettingsView(updaterService: updaterService)
                 }
             }
         }
