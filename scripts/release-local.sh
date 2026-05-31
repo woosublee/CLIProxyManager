@@ -30,6 +30,9 @@ if ! security find-identity -v -p codesigning | grep -F "\"${CODESIGN_IDENTITY}\
   fail "${CODESIGN_IDENTITY} code signing identity is required. Confirm it exists with: security find-identity -v -p codesigning. This script does not create Keychain certificates automatically."
 fi
 
+REPOSITORY="${REPOSITORY:-$(gh repo view --json nameWithOwner --jq .nameWithOwner)}"
+export REPOSITORY
+
 make VERSION="$VERSION" BUILD_NUMBER="$BUILD_NUMBER" verify-dmg
 scripts/generate-sparkle-appcast.sh
 

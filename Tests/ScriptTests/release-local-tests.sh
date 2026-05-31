@@ -68,19 +68,21 @@ mkdir -p "$repo/scripts"
 cat > "$repo/scripts/generate-sparkle-appcast.sh" <<'FAKE_APPCAST'
 #!/usr/bin/env bash
 set -euo pipefail
-printf 'appcast RELEASE_TAG=%s VERSION=%s BUILD_NUMBER=%s DMG_PATH=%s APPCAST_PATH=%s SPARKLE_PRIVATE_KEY=%s\n' \
+printf 'appcast RELEASE_TAG=%s VERSION=%s BUILD_NUMBER=%s DMG_PATH=%s APPCAST_PATH=%s REPOSITORY=%s SPARKLE_PRIVATE_KEY=%s\n' \
   "${RELEASE_TAG:-}" \
   "${VERSION:-}" \
   "${BUILD_NUMBER:-}" \
   "${DMG_PATH:-}" \
   "${APPCAST_PATH:-}" \
+  "${REPOSITORY:-}" \
   "${SPARKLE_PRIVATE_KEY:-}" >> "$RELEASE_LOCAL_TEST_LOG"
 [[ "${RELEASE_TAG:-}" == "v1.2.3" ]] || exit 30
 [[ "${VERSION:-}" == "1.2.3" ]] || exit 31
 [[ "${BUILD_NUMBER:-}" == "42" ]] || exit 32
 [[ "${DMG_PATH:-}" == "build/CLIProxyManager-1.2.3.dmg" ]] || exit 33
 [[ "${APPCAST_PATH:-}" == "build/appcast.xml" ]] || exit 34
-[[ -z "${SPARKLE_PRIVATE_KEY:-}" ]] || exit 35
+[[ "${REPOSITORY:-}" == "example/CLIProxyManager" ]] || exit 35
+[[ -z "${SPARKLE_PRIVATE_KEY:-}" ]] || exit 36
 printf '<rss />' > "$APPCAST_PATH"
 FAKE_APPCAST
 chmod +x "$repo/scripts/generate-sparkle-appcast.sh"
@@ -90,6 +92,9 @@ cat > "$fake_bin/gh" <<'FAKE_GH'
 set -euo pipefail
 printf 'gh %s\n' "$*" >> "$RELEASE_LOCAL_TEST_LOG"
 case "$*" in
+  'repo view --json nameWithOwner --jq .nameWithOwner')
+    printf 'example/CLIProxyManager\n'
+    ;;
   'release view v1.2.3')
     exit 1
     ;;
@@ -117,8 +122,9 @@ chmod +x "$fake_bin/gh"
 expected="$sandbox/expected.log"
 printf '%s\n' \
   'security find-identity -v -p codesigning' \
+  'gh repo view --json nameWithOwner --jq .nameWithOwner' \
   'make VERSION=1.2.3 BUILD_NUMBER=42 verify-dmg' \
-  'appcast RELEASE_TAG=v1.2.3 VERSION=1.2.3 BUILD_NUMBER=42 DMG_PATH=build/CLIProxyManager-1.2.3.dmg APPCAST_PATH=build/appcast.xml SPARKLE_PRIVATE_KEY=' \
+  'appcast RELEASE_TAG=v1.2.3 VERSION=1.2.3 BUILD_NUMBER=42 DMG_PATH=build/CLIProxyManager-1.2.3.dmg APPCAST_PATH=build/appcast.xml REPOSITORY=example/CLIProxyManager SPARKLE_PRIVATE_KEY=' \
   'gh release view v1.2.3' \
   'gh release create v1.2.3 --verify-tag --title CLIProxyManager 1.2.3 --notes Non-notarized DMG signed with the local cliproxymanager code signing identity and Sparkle appcast.' \
   'gh release upload v1.2.3 build/CLIProxyManager-1.2.3.dmg build/appcast.xml --clobber' \
