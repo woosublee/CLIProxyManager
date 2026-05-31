@@ -238,9 +238,17 @@ Commit the updated binary and manifest together.
 
 ## Cutting an automatic-update release
 
-Automatic-update releases require a Sparkle EdDSA signing key. Store the private key in the GitHub secret `SPARKLE_PRIVATE_KEY` before cutting a release.
+Automatic-update releases require a Sparkle EdDSA signing key. Keep the local private key in the macOS Keychain using the same naming convention as the other apps:
 
-To create the key pair, download the Sparkle 2.9.2 tarball and run `generate_keys` with an output file:
+```text
+service: https://sparkle-project.org
+account: com.woosublee.CLIProxyManager.sparkle.ed25519
+label: Private key for signing Sparkle updates
+```
+
+The committed public key lives in `Info.plist` as `SUPublicEDKey`. The private key must not be committed.
+
+To create or export the key pair, download the Sparkle 2.9.2 tarball and run `generate_keys`:
 
 ```zsh
 mkdir -p build
@@ -249,7 +257,20 @@ tar -xf build/Sparkle-2.9.2.tar.xz -C build
 build/Sparkle-2.9.2/bin/generate_keys -x build/sparkle_private_key.txt
 ```
 
-Commit only the generated `SUPublicEDKey` value in the app's `Info.plist`. Save the private key value in the `SPARKLE_PRIVATE_KEY` GitHub secret. Do not commit `build/sparkle_private_key.txt`.
+If `generate_keys -x` creates a Keychain item whose account is the export file path, copy the same private key value into the canonical item instead of generating a new key:
+
+```zsh
+security add-generic-password \
+  -U \
+  -s "https://sparkle-project.org" \
+  -a "com.woosublee.CLIProxyManager.sparkle.ed25519" \
+  -l "Private key for signing Sparkle updates" \
+  -D "private key" \
+  -j "Public key (SUPublicEDKey value) for this key is:\n\n$(plutil -extract SUPublicEDKey raw Info.plist)" \
+  -w "$(cat build/sparkle_private_key.txt)"
+```
+
+Local release tooling reads that Keychain item automatically when `SPARKLE_PRIVATE_KEY` is unset. CI cannot access the local Keychain, so save the same private key value in the GitHub secret `SPARKLE_PRIVATE_KEY` before cutting a release. Do not commit `build/sparkle_private_key.txt`.
 
 Create and push the release tag from the commit you want to ship:
 

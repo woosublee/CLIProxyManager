@@ -8,6 +8,8 @@ REPOSITORY="${REPOSITORY:-woosublee/CLIProxyManager}"
 APP_NAME="${APP_NAME:-CLIProxyManager}"
 APPCAST_PATH="${APPCAST_PATH:-build/appcast.xml}"
 SPARKLE_VERSION="${SPARKLE_VERSION:-2.9.2}"
+SPARKLE_KEYCHAIN_SERVICE="${SPARKLE_KEYCHAIN_SERVICE:-https://sparkle-project.org}"
+SPARKLE_KEYCHAIN_ACCOUNT="${SPARKLE_KEYCHAIN_ACCOUNT:-com.woosublee.CLIProxyManager.sparkle.ed25519}"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -19,7 +21,18 @@ require_env() {
   [[ -n "${!name:-}" ]] || fail "$name is required"
 }
 
-require_env SPARKLE_PRIVATE_KEY
+sparkle_private_key() {
+  if [[ -n "${SPARKLE_PRIVATE_KEY:-}" ]]; then
+    printf '%s' "$SPARKLE_PRIVATE_KEY"
+    return
+  fi
+
+  security find-generic-password \
+    -s "$SPARKLE_KEYCHAIN_SERVICE" \
+    -a "$SPARKLE_KEYCHAIN_ACCOUNT" \
+    -w 2>/dev/null || fail "SPARKLE_PRIVATE_KEY is required or Keychain item is missing: service=$SPARKLE_KEYCHAIN_SERVICE account=$SPARKLE_KEYCHAIN_ACCOUNT"
+}
+
 require_env RELEASE_TAG
 require_env VERSION
 require_env BUILD_NUMBER
@@ -59,7 +72,7 @@ xml_escape() {
 }
 
 SIGN_UPDATE="$(find_sign_update)"
-signature_output="$(printf '%s' "$SPARKLE_PRIVATE_KEY" | "$SIGN_UPDATE" "$DMG_PATH" --ed-key-file -)"
+signature_output="$(sparkle_private_key | "$SIGN_UPDATE" "$DMG_PATH" --ed-key-file -)"
 ed_signature="$(python3 -c 'import re, sys; m = re.search(r"sparkle:edSignature=\"([^\"]+)\"", sys.stdin.read()); print(m.group(1) if m else "")' <<<"$signature_output")"
 [[ -n "$ed_signature" ]] || fail "Unable to parse sparkle:edSignature from sign_update output"
 
