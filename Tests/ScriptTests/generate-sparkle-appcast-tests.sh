@@ -15,6 +15,11 @@ if grep -q 'stat -f%z' "$SCRIPT"; then
   exit 1
 fi
 
+if grep -q -- '-perm +111' "$SCRIPT"; then
+  echo "FAIL: generate-sparkle-appcast.sh must not use GNU-only find -perm +111" >&2
+  exit 1
+fi
+
 fail() {
   echo "FAIL: $*" >&2
   exit 1

@@ -42,6 +42,7 @@ final class UpdaterService: ObservableObject {
     private func bridgeUpdaterChangesToSwiftUI() {
         updaterController.updater.publisher(for: \.canCheckForUpdates)
             .dropFirst()
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.objectWillChange.send()
             }
@@ -49,6 +50,7 @@ final class UpdaterService: ObservableObject {
 
         updaterController.updater.publisher(for: \.automaticallyChecksForUpdates)
             .dropFirst()
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.objectWillChange.send()
             }

@@ -78,7 +78,7 @@ sign: bundle
 	STAGED_APP="$$STAGING_DIR/$(APP_NAME).app"; \
 	ditto --norsrc --noextattr "$(APP_BUNDLE)" "$$STAGED_APP"; \
 	if [ -d "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/Versions/Current/XPCServices" ]; then \
-		find -L "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/Versions/Current/XPCServices" -maxdepth 1 -name '*.xpc' -type d -exec codesign --force --sign "$(CODESIGN_IDENTITY)" {} \; ; \
+		find -L "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/Versions/Current/XPCServices" -maxdepth 1 -name '*.xpc' -type d -exec codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" {} \; ; \
 	fi; \
 	if [ -d "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/Versions/Current/Updater.app" ]; then \
 		codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/Versions/Current/Updater.app"; \

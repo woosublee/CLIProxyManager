@@ -36,8 +36,8 @@ final class ReleaseWorkflowTests: XCTestCase {
             "Sparkle Autoupdate should be signed through the canonical Versions/Current path."
         )
         XCTAssertTrue(
-            makefile.contains("-exec codesign --force --sign \"$(CODESIGN_IDENTITY)\" {} \\;"),
-            "Sparkle XPC services should be signed with find -exec instead of find|xargs."
+            makefile.contains("-exec codesign --force --options runtime --sign \"$(CODESIGN_IDENTITY)\" {} \\;"),
+            "Sparkle XPC services should be signed with hardened runtime and find -exec instead of find|xargs."
         )
         XCTAssertFalse(
             makefile.contains("xargs -0"),

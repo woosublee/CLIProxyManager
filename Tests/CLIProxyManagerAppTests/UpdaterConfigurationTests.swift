@@ -68,6 +68,10 @@ final class UpdaterConfigurationTests: XCTestCase {
             "UpdaterService must bridge SPUUpdater automaticallyChecksForUpdates KVO changes into objectWillChange."
         )
         XCTAssertTrue(
+            source.contains(".receive(on: DispatchQueue.main)"),
+            "UpdaterService must deliver Sparkle KVO changes on the main queue before notifying SwiftUI."
+        )
+        XCTAssertTrue(
             source.contains("sink { [weak self] _ in") && source.contains("self?.objectWillChange.send()"),
             "UpdaterService must notify SwiftUI when Sparkle updater KVO publishers emit."
         )

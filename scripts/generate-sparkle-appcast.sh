@@ -57,12 +57,12 @@ find_sign_update() {
       -o "$archive"
   fi
 
-  if ! find "$tools_dir" -type f -name sign_update -perm +111 -print -quit 2>/dev/null | grep -q .; then
+  if ! find "$tools_dir" -type f -name sign_update -exec test -x {} \; -print -quit 2>/dev/null | grep -q .; then
     tar -xJf "$archive" -C "$tools_dir"
   fi
 
   local sign_update
-  sign_update="$(find "$tools_dir" -type f -name sign_update -perm +111 -print -quit)"
+  sign_update="$(find "$tools_dir" -type f -name sign_update -exec test -x {} \; -print -quit)"
   [[ -n "$sign_update" ]] || fail "sign_update not found under $tools_dir"
   printf '%s\n' "$sign_update"
 }
