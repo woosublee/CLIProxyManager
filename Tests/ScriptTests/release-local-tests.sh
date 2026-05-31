@@ -34,11 +34,28 @@ printf '42\n'
 FAKE_PLUTIL
 chmod +x "$fake_bin/plutil"
 
+cat > "$fake_bin/security" <<'FAKE_SECURITY'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'security %s\n' "$*" >> "$RELEASE_LOCAL_TEST_LOG"
+case "$*" in
+  'find-identity -v -p codesigning')
+    printf '  1) A39E5510B609DE50287781AFDBAE19C4F91783C7 "cliproxymanager"\n'
+    printf '     1 valid identities found\n'
+    ;;
+  *)
+    echo "unexpected security args: $*" >&2
+    exit 50
+    ;;
+esac
+FAKE_SECURITY
+chmod +x "$fake_bin/security"
+
 cat > "$fake_bin/make" <<'FAKE_MAKE'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'make %s\n' "$*" >> "$RELEASE_LOCAL_TEST_LOG"
-[[ "$*" == 'CODESIGN_IDENTITY=- VERSION=1.2.3 BUILD_NUMBER=42 verify-dmg' ]] || {
+[[ "$*" == 'VERSION=1.2.3 BUILD_NUMBER=42 verify-dmg' ]] || {
   echo "unexpected make args: $*" >&2
   exit 20
 }
@@ -76,7 +93,7 @@ case "$*" in
   'release view v1.2.3')
     exit 1
     ;;
-  'release create v1.2.3 --verify-tag --title CLIProxyManager 1.2.3 --notes Ad-hoc signed, non-notarized DMG with Sparkle appcast.')
+  'release create v1.2.3 --verify-tag --title CLIProxyManager 1.2.3 --notes Non-notarized DMG signed with the local cliproxymanager code signing identity and Sparkle appcast.')
     exit 0
     ;;
   'release upload v1.2.3 build/CLIProxyManager-1.2.3.dmg build/appcast.xml --clobber')
@@ -99,10 +116,11 @@ chmod +x "$fake_bin/gh"
 
 expected="$sandbox/expected.log"
 printf '%s\n' \
-  'make CODESIGN_IDENTITY=- VERSION=1.2.3 BUILD_NUMBER=42 verify-dmg' \
+  'security find-identity -v -p codesigning' \
+  'make VERSION=1.2.3 BUILD_NUMBER=42 verify-dmg' \
   'appcast RELEASE_TAG=v1.2.3 VERSION=1.2.3 BUILD_NUMBER=42 DMG_PATH=build/CLIProxyManager-1.2.3.dmg APPCAST_PATH=build/appcast.xml SPARKLE_PRIVATE_KEY=' \
   'gh release view v1.2.3' \
-  'gh release create v1.2.3 --verify-tag --title CLIProxyManager 1.2.3 --notes Ad-hoc signed, non-notarized DMG with Sparkle appcast.' \
+  'gh release create v1.2.3 --verify-tag --title CLIProxyManager 1.2.3 --notes Non-notarized DMG signed with the local cliproxymanager code signing identity and Sparkle appcast.' \
   'gh release upload v1.2.3 build/CLIProxyManager-1.2.3.dmg build/appcast.xml --clobber' \
   > "$expected"
 
@@ -118,3 +136,33 @@ if (
 fi
 
 grep -q 'RELEASE_TAG must start with v' /tmp/release-local-invalid.err || fail "invalid tag should explain v-prefix requirement"
+
+cat > "$fake_bin/security" <<'FAKE_SECURITY_MISSING'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'security %s\n' "$*" >> "$RELEASE_LOCAL_TEST_LOG"
+case "$*" in
+  'find-identity -v -p codesigning')
+    printf '     0 valid identities found\n'
+    ;;
+  *)
+    echo "unexpected security args: $*" >&2
+    exit 50
+    ;;
+esac
+FAKE_SECURITY_MISSING
+chmod +x "$fake_bin/security"
+
+if (
+  cd "$repo"
+  PATH="$fake_bin:$PATH" \
+  RELEASE_LOCAL_TEST_LOG="$sandbox/missing-identity.log" \
+  "$SCRIPT" v1.2.3
+) >/tmp/release-local-missing-identity.out 2>/tmp/release-local-missing-identity.err; then
+  fail "release-local.sh should reject releases without the cliproxymanager signing identity"
+fi
+
+grep -q 'cliproxymanager code signing identity is required' /tmp/release-local-missing-identity.err || \
+  fail "missing identity should explain the cliproxymanager requirement"
+grep -q 'security find-identity -v -p codesigning' /tmp/release-local-missing-identity.err || \
+  fail "missing identity should show the verification command"
