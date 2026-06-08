@@ -45,8 +45,8 @@ final class UpdaterConfigurationTests: XCTestCase {
         let readme = try String(contentsOf: repositoryRoot().appendingPathComponent("README.md"), encoding: .utf8)
         let infoPlist = try loadInfoPlist()
 
-        XCTAssertTrue(
-            package.contains("platforms: [.macOS(\"15.0\")]"),
+        XCTAssertNotNil(
+            package.range(of: #"platforms:\s*\[[^\]]*\.macOS\("15\.0"\)"#, options: .regularExpression),
             "Package.swift must declare macOS 15 because the bundled CLIProxyAPI binary requires macOS 15."
         )
         XCTAssertEqual(
