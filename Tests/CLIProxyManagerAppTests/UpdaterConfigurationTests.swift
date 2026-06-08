@@ -40,6 +40,26 @@ final class UpdaterConfigurationTests: XCTestCase {
         )
     }
 
+    func testMinimumMacOSVersionMatchesBundledCLIProxyAPIRequirement() throws {
+        let package = try String(contentsOf: repositoryRoot().appendingPathComponent("Package.swift"), encoding: .utf8)
+        let readme = try String(contentsOf: repositoryRoot().appendingPathComponent("README.md"), encoding: .utf8)
+        let infoPlist = try loadInfoPlist()
+
+        XCTAssertTrue(
+            package.contains("platforms: [.macOS(\"15.0\")]"),
+            "Package.swift must declare macOS 15 because the bundled CLIProxyAPI binary requires macOS 15."
+        )
+        XCTAssertEqual(
+            infoPlist["LSMinimumSystemVersion"] as? String,
+            "15.0",
+            "Info.plist must prevent launching on macOS versions below the bundled CLIProxyAPI binary requirement."
+        )
+        XCTAssertTrue(
+            readme.contains("macOS 15 or later"),
+            "README requirements must match the bundled CLIProxyAPI binary requirement."
+        )
+    }
+
     func testEntitlementsAllowBundledSparkleFrameworkToLoadUnderHardenedRuntime() throws {
         let entitlements = try loadPlist(named: "CLIProxyManager.entitlements")
         let readme = try String(contentsOf: repositoryRoot().appendingPathComponent("README.md"), encoding: .utf8)

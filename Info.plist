@@ -21,7 +21,7 @@
     <key>CFBundleExecutable</key>
     <string>CLIProxyManager</string>
     <key>LSMinimumSystemVersion</key>
-    <string>13.0</string>
+    <string>15.0</string>
     <key>SUFeedURL</key>
     <string>https://github.com/woosublee/CLIProxyManager/releases/latest/download/appcast.xml</string>
     <key>SUPublicEDKey</key>
