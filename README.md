@@ -16,7 +16,7 @@ It is designed for users who want one place to:
 
 ## Requirements
 
-- macOS 13 or later.
+- macOS 15 or later.
 - Claude Code installed and available on your machine.
 - A Claude account, Codex/OpenAI OAuth account, or Claude API key depending on which shell function you want to use.
 - zsh if you want the app to manage shell functions automatically.
