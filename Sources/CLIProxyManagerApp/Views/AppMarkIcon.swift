@@ -3,25 +3,39 @@ import AppKit
 #endif
 import SwiftUI
 
+private let appMarkPoints: [(CGFloat, CGFloat)] = [
+    (28, 44), (38, 44), (46, 66), (56, 22), (64, 44), (74, 44)
+]
+
+private let appMarkViewportBounds = CGRect(x: 0, y: 0, width: 100, height: 100)
+private let appMarkMenuBarBounds = CGRect(x: 22, y: 15, width: 58, height: 58)
+
+private func appMarkPath(in rect: CGRect, fitting sourceBounds: CGRect) -> Path {
+    let scale = min(rect.width / sourceBounds.width, rect.height / sourceBounds.height)
+    let dx = rect.midX - sourceBounds.midX * scale
+    let dy = rect.midY - sourceBounds.midY * scale
+    var path = Path()
+    for (index, point) in appMarkPoints.enumerated() {
+        let cgPoint = CGPoint(x: dx + point.0 * scale, y: dy + point.1 * scale)
+        if index == 0 {
+            path.move(to: cgPoint)
+        } else {
+            path.addLine(to: cgPoint)
+        }
+    }
+    return path
+}
+
 /// The waveform path from the design's AppMark icon, drawn on a 100×100 viewport.
 struct AppMarkPath: Shape {
     func path(in rect: CGRect) -> Path {
-        let s = min(rect.width, rect.height) / 100
-        let dx = (rect.width - 100 * s) / 2
-        let dy = (rect.height - 100 * s) / 2
-        var p = Path()
-        let pts: [(CGFloat, CGFloat)] = [
-            (28, 44), (38, 44), (46, 66), (56, 22), (64, 44), (74, 44)
-        ]
-        for (i, pt) in pts.enumerated() {
-            let cgPoint = CGPoint(x: dx + pt.0 * s, y: dy + pt.1 * s)
-            if i == 0 {
-                p.move(to: cgPoint)
-            } else {
-                p.addLine(to: cgPoint)
-            }
-        }
-        return p
+        appMarkPath(in: rect, fitting: appMarkViewportBounds)
+    }
+}
+
+struct AppMarkMenuBarPath: Shape {
+    func path(in rect: CGRect) -> Path {
+        appMarkPath(in: rect, fitting: appMarkMenuBarBounds)
     }
 }
 
@@ -81,13 +95,15 @@ enum AppMarkRenderer {
 
     /// Renders a monochrome template version of the waveform for the menu bar.
     static func menuBarTemplate(size: CGFloat = 18) -> NSImage? {
-        let view = AppMarkPath()
-            .stroke(Color.black, style: StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round))
+        let inset: CGFloat = 2
+        let view = AppMarkMenuBarPath()
+            .stroke(Color.black, style: StrokeStyle(lineWidth: 1.55, lineCap: .round, lineJoin: .round))
+            .frame(width: size - inset * 2, height: size - inset * 2)
             .frame(width: size, height: size)
-            .padding(1)
         let renderer = ImageRenderer(content: view)
         renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
         guard let image = renderer.nsImage else { return nil }
+        image.size = NSSize(width: size, height: size)
         image.isTemplate = true
         return image
     }
