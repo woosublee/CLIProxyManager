@@ -11,6 +11,7 @@ private let appMarkViewportBounds = CGRect(x: 0, y: 0, width: 100, height: 100)
 private let appMarkMenuBarBounds = CGRect(x: 22, y: 15, width: 58, height: 58)
 
 private func appMarkPath(in rect: CGRect, fitting sourceBounds: CGRect) -> Path {
+    guard sourceBounds.width > 0, sourceBounds.height > 0 else { return Path() }
     let scale = min(rect.width / sourceBounds.width, rect.height / sourceBounds.height)
     let dx = rect.midX - sourceBounds.midX * scale
     let dy = rect.midY - sourceBounds.midY * scale
@@ -98,7 +99,7 @@ enum AppMarkRenderer {
         let inset: CGFloat = 2
         let view = AppMarkMenuBarPath()
             .stroke(Color.black, style: StrokeStyle(lineWidth: 1.55, lineCap: .round, lineJoin: .round))
-            .frame(width: size - inset * 2, height: size - inset * 2)
+            .frame(width: max(0, size - inset * 2), height: max(0, size - inset * 2))
             .frame(width: size, height: size)
         let renderer = ImageRenderer(content: view)
         renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
