@@ -262,7 +262,8 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func refresh() async {
-        let updatedServerStatus = await stableServerStatus()
+        let rawServerStatus = await stableServerStatus()
+        let updatedServerStatus = passiveRefreshPresentationStatus(from: rawServerStatus)
         let claudeStatus = await claudeConnector.status()
         updateStatuses(serverStatus: updatedServerStatus, claudeStatus: claudeStatus)
     }
@@ -831,7 +832,7 @@ final class DashboardViewModel: ObservableObject {
                         fallback: claudeStatus?.message ?? "Connect the bundled CLIProxyAPI Claude OAuth profile."
                     ),
                     isConnected: claudeEnabled != nil,
-                    isErrored: claudeEnabled != nil && (isExpired(claudeEnabled) || claudeStatus?.severity == .error),
+                    isErrored: isProviderErrored(id: .claude, enabledProfile: claudeEnabled, diagnosticStatus: claudeStatus),
                     accountDetailHidden: config.accountPrivacy.claudeHidden
                 )
             )
@@ -849,7 +850,7 @@ final class DashboardViewModel: ObservableObject {
                         fallback: codexStatus?.message ?? "Connect the bundled CLIProxyAPI Codex OAuth profile."
                     ),
                     isConnected: codexEnabled != nil,
-                    isErrored: codexEnabled != nil && (isExpired(codexEnabled) || codexStatus?.severity == .error),
+                    isErrored: isProviderErrored(id: .codex, enabledProfile: codexEnabled, diagnosticStatus: codexStatus),
                     accountDetailHidden: config.accountPrivacy.codexHidden
                 )
             )
@@ -910,6 +911,66 @@ final class DashboardViewModel: ObservableObject {
         return await proxyHealthClient.status(port: config.port)
     }
 
+    private func passiveRefreshPresentationStatus(from status: DiagnosticStatus) -> DiagnosticStatus {
+        guard isHealthTimeout(status) else { return status }
+
+        return DiagnosticStatus(
+            severity: .warning,
+            title: status.title,
+            message: status.message
+        )
+    }
+
+    private func codexProviderStatus(from serverStatus: DiagnosticStatus) -> DiagnosticStatus {
+        guard serverStatus.severity == .error,
+              !isCriticalServerStatusForProvider(serverStatus) else {
+            return serverStatus
+        }
+
+        return DiagnosticStatus(
+            severity: .warning,
+            title: serverStatus.title,
+            message: serverStatus.message
+        )
+    }
+
+    private func isProviderErrored(
+        id: ProviderRowState.ID,
+        enabledProfile: AuthProfile?,
+        diagnosticStatus: DiagnosticStatus?
+    ) -> Bool {
+        guard let enabledProfile else { return false }
+        if isExpired(enabledProfile) { return true }
+
+        guard let diagnosticStatus,
+              diagnosticStatus.severity == .error else {
+            return false
+        }
+
+        switch id {
+        case .claude:
+            return false
+        case .codex:
+            return isCriticalServerStatusForProvider(diagnosticStatus)
+        }
+    }
+
+    private func isCriticalServerStatusForProvider(_ status: DiagnosticStatus) -> Bool {
+        switch status.title {
+        case "CLIProxyAPI Port Configuration Error",
+             "Failed to start CLIProxyAPI",
+             "Failed to stop CLIProxyAPI",
+             "Failed to restart CLIProxyAPI":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func isHealthTimeout(_ status: DiagnosticStatus) -> Bool {
+        status.severity == .error && status.title == "CLIProxyAPI Response Timed Out"
+    }
+
     private func refreshUntilServerIsReady() async {
         let claudeStatus = await claudeConnector.status()
         // Up to ~12 seconds: child process launch latency + CFNetwork loopback warm-up
@@ -946,7 +1007,7 @@ final class DashboardViewModel: ObservableObject {
                 serverControlState = .error(updatedServerStatus.message)
             }
         }
-        lastCodexStatus = updatedServerStatus
+        lastCodexStatus = codexProviderStatus(from: updatedServerStatus)
         if let claudeStatus {
             lastClaudeStatus = claudeStatus
         }

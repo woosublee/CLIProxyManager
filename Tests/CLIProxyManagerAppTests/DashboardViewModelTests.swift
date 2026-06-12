@@ -112,7 +112,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(MenuBarStatusSnapshot(serverStatus: viewModel.serverStatus, providers: viewModel.providerRows).erroredCount, 0)
     }
 
-    func testPersistentServerHealthErrorCountsAsCodexProviderError() async {
+    func testPersistentPassiveServerHealthTimeoutDoesNotCountAsCodexProviderError() async {
         let httpClient = SequencedHTTPClient(results: [
             .failure(HTTPClientError.timedOut),
             .failure(HTTPClientError.timedOut)
@@ -132,10 +132,40 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         await viewModel.refresh()
 
+        let snapshot = MenuBarStatusSnapshot(serverStatus: viewModel.serverStatus, providers: viewModel.providerRows)
         XCTAssertEqual(httpClient.requestCount, 2)
+        XCTAssertEqual(viewModel.serverStatus.severity, .warning)
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.isErrored, false)
+        XCTAssertEqual(snapshot.erroredCount, 0)
+        XCTAssertEqual(snapshot.statusLabel, "Stopped")
+        XCTAssertEqual(snapshot.indicatorState, .stopped)
+    }
+
+    func testInvalidPortStillShowsMenuBarErrorAndCodexProviderError() async {
+        var config = AppConfig.default
+        config.port = 0
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector(),
+            serverStatusRetryDelayNanoseconds: 0
+        )
+
+        await viewModel.refresh()
+
+        let snapshot = MenuBarStatusSnapshot(serverStatus: viewModel.serverStatus, providers: viewModel.providerRows)
         XCTAssertEqual(viewModel.serverStatus.severity, .error)
+        XCTAssertEqual(viewModel.serverStatus.title, "CLIProxyAPI Port Configuration Error")
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.isErrored, true)
-        XCTAssertEqual(MenuBarStatusSnapshot(serverStatus: viewModel.serverStatus, providers: viewModel.providerRows).erroredCount, 1)
+        XCTAssertEqual(snapshot.statusLabel, "Error")
+        XCTAssertEqual(snapshot.indicatorState, .error)
+        XCTAssertEqual(snapshot.erroredCount, 1)
     }
 
     func testDefaultProviderRowsHideProfilesUntilAuthExists() {
@@ -369,14 +399,16 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     }
 
     func testToggleAccountDetailVisibilityPreservesCodexProviderErrorState() async {
+        var config = AppConfig.default
+        config.port = 0
         let viewModel = DashboardViewModel(
-            configStore: StubConfigStore(config: .default),
+            config: config,
+            configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: [
                 AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: nil, disabled: false)
             ]),
             oauthLoginService: StubOAuthLoginService(),
-            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .failure(HTTPClientError.timedOut)), timeout: 0.1),
             proxyService: StubProxyServiceStarter(),
             claudeConnector: connectedClaudeConnector(),
             serverStatusRetryDelayNanoseconds: 0
@@ -468,6 +500,32 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.isErrored, true)
         XCTAssertEqual(MenuBarStatusSnapshot(serverStatus: viewModel.serverStatus, providers: viewModel.providerRows).erroredCount, 1)
+    }
+
+    func testClaudeCLIMissingDoesNotCountAsOAuthProviderError() async {
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: ClaudeConnector(runner: StubProcessRunner(results: [
+                ProcessResult(exitCode: 1, stdout: "", stderr: "")
+            ])),
+            serverStatusRetryDelayNanoseconds: 0
+        )
+
+        await viewModel.refresh()
+
+        let claudeRow = viewModel.providerRows.first { $0.id == .claude }
+        let snapshot = MenuBarStatusSnapshot(serverStatus: viewModel.serverStatus, providers: viewModel.providerRows)
+        XCTAssertEqual(viewModel.serverStatus.severity, .ready)
+        XCTAssertEqual(claudeRow?.isConnected, true)
+        XCTAssertEqual(claudeRow?.isErrored, false)
+        XCTAssertEqual(snapshot.erroredCount, 0)
     }
 
     func testConnectProviderStartsBundledOAuthLoginAndRefreshesProfiles() async {
@@ -1258,7 +1316,9 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             config: config,
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
-            authProfileStore: StubAuthProfileStore(profiles: []),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
+            ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
             proxyService: proxyService,
@@ -1267,9 +1327,14 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         await viewModel.startServer()
 
+        let snapshot = MenuBarStatusSnapshot(serverStatus: viewModel.serverStatus, providers: viewModel.providerRows)
         XCTAssertEqual(proxyService.ports, [config.port])
         XCTAssertEqual(viewModel.serverStatus.severity, .error)
         XCTAssertEqual(viewModel.serverStatus.title, "Failed to start CLIProxyAPI")
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.isErrored, true)
+        XCTAssertEqual(snapshot.statusLabel, "Error")
+        XCTAssertEqual(snapshot.indicatorState, .error)
+        XCTAssertEqual(snapshot.erroredCount, 1)
         XCTAssertEqual(viewModel.cards.first { $0.command == config.commands.ccodex }?.status.severity, .error)
         XCTAssertFalse(viewModel.isServerActionInProgress)
     }
