@@ -54,8 +54,9 @@ public struct ProxyModelClient: Sendable {
     }
 
     private func isCodexModel(_ model: ModelsResponse.Model) -> Bool {
-        if model.ownedBy?.lowercased() == "openai" {
-            return true
+        if let ownedBy = model.ownedBy?.trimmingCharacters(in: .whitespacesAndNewlines),
+           ownedBy.isEmpty == false {
+            return ownedBy.caseInsensitiveCompare("openai") == .orderedSame
         }
 
         let id = model.id.lowercased()
