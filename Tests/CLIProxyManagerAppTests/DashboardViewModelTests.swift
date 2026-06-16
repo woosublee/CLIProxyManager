@@ -959,6 +959,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         XCTAssertEqual(proxyService.ports, [viewModel.config.port])
         XCTAssertEqual(modelClient.ports, [viewModel.config.port])
+        XCTAssertEqual(modelClient.baseModelsCallCount, 0)
+        XCTAssertEqual(modelClient.codexBaseModelsCallCount, 1)
         XCTAssertEqual(viewModel.availableCodexModels, ["gpt-5.5", "gpt-5.6"])
         XCTAssertEqual(viewModel.codexModelLoadingState, .idle)
     }
@@ -1438,9 +1440,19 @@ private final class StubProxyModelClient: ProxyModelListing, @unchecked Sendable
     private let models: [String]
     private let lock = NSLock()
     private var _ports: [Int] = []
+    private var _baseModelsCallCount = 0
+    private var _codexBaseModelsCallCount = 0
 
     var ports: [Int] {
         lock.withLock { _ports }
+    }
+
+    var baseModelsCallCount: Int {
+        lock.withLock { _baseModelsCallCount }
+    }
+
+    var codexBaseModelsCallCount: Int {
+        lock.withLock { _codexBaseModelsCallCount }
     }
 
     init(models: [String]) {
@@ -1448,7 +1460,18 @@ private final class StubProxyModelClient: ProxyModelListing, @unchecked Sendable
     }
 
     func baseModels(port: Int) async throws -> [String] {
-        lock.withLock { _ports.append(port) }
+        lock.withLock {
+            _ports.append(port)
+            _baseModelsCallCount += 1
+        }
+        return models
+    }
+
+    func codexBaseModels(port: Int) async throws -> [String] {
+        lock.withLock {
+            _ports.append(port)
+            _codexBaseModelsCallCount += 1
+        }
         return models
     }
 }

@@ -24,6 +24,68 @@ final class ProxyModelClientTests: XCTestCase {
         XCTAssertEqual(models, ["gpt-5.5", "gpt-5.6"])
     }
 
+    func testCodexBaseModelsFiltersMergedProviderModelList() async throws {
+        let data = Data(
+            #"""
+            {
+              "data": [
+                {"id":"claude-sonnet-4-6","owned_by":"anthropic","created":300},
+                {"id":"gpt-5.5(xhigh)","owned_by":"openai","created":500},
+                {"id":"gemini-2.5-pro","owned_by":"google","created":400},
+                {"id":"codex-auto-review","created":200},
+                {"id":"gpt-5.5(medium)","owned_by":"openai","created":100}
+              ]
+            }
+            """#.utf8
+        )
+        let httpClient = StubHTTPClient(result: .success(data))
+        let client = ProxyModelClient(httpClient: httpClient)
+
+        let models = try await client.codexBaseModels(port: 18_317)
+
+        XCTAssertEqual(models, ["gpt-5.5", "codex-auto-review"])
+    }
+
+    func testCodexBaseModelsTrustsExplicitOwnerBeforePrefixFallback() async throws {
+        let data = Data(
+            #"""
+            {
+              "data": [
+                {"id":"gpt-fake","owned_by":"anthropic","created":500},
+                {"id":"o3-fake","owned_by":"google","created":400},
+                {"id":"gpt-image-2","owned_by":"openai","created":300},
+                {"id":"codex-auto-review","created":200}
+              ]
+            }
+            """#.utf8
+        )
+        let httpClient = StubHTTPClient(result: .success(data))
+        let client = ProxyModelClient(httpClient: httpClient)
+
+        let models = try await client.codexBaseModels(port: 18_317)
+
+        XCTAssertEqual(models, ["gpt-image-2", "codex-auto-review"])
+    }
+
+    func testModelsKeepsMergedProviderModelList() async throws {
+        let data = Data(
+            #"""
+            {
+              "data": [
+                {"id":"claude-sonnet-4-6","owned_by":"anthropic","created":300},
+                {"id":"gpt-5.5","owned_by":"openai","created":500}
+              ]
+            }
+            """#.utf8
+        )
+        let httpClient = StubHTTPClient(result: .success(data))
+        let client = ProxyModelClient(httpClient: httpClient)
+
+        let models = try await client.models(port: 18_317)
+
+        XCTAssertEqual(models, ["gpt-5.5", "claude-sonnet-4-6"])
+    }
+
     func testModelsRejectsInvalidPortBeforeRequestingModels() async throws {
         let httpClient = StubHTTPClient(result: .success(Data(#"{"data":[]}"#.utf8)))
         let client = ProxyModelClient(httpClient: httpClient)

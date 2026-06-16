@@ -30,6 +30,7 @@ extension ShellProfileInstaller: ShellFunctionInstalling {}
 
 protocol ProxyModelListing: Sendable {
     func baseModels(port: Int) async throws -> [String]
+    func codexBaseModels(port: Int) async throws -> [String]
 }
 
 extension ProxyModelClient: ProxyModelListing {}
@@ -675,7 +676,7 @@ final class DashboardViewModel: ObservableObject {
     func loadCodexModels() async {
         codexModelLoadingState = .loadingModels
         do {
-            availableCodexModels = try await modelClient.baseModels(port: config.port)
+            availableCodexModels = try await modelClient.codexBaseModels(port: config.port)
             codexModelLoadingState = .idle
         } catch {
             handleCodexModelLoadingFailure(error)
