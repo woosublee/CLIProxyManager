@@ -5,7 +5,7 @@ BUILD_NUMBER ?= 10
 BUILD_DIR ?= build
 CONFIGURATION ?= release
 LOCAL_CODESIGN_IDENTITY ?= cliproxymanager
-RELEASE_CODESIGN_IDENTITY ?= $(LOCAL_CODESIGN_IDENTITY)
+RELEASE_CODESIGN_IDENTITY ?= $(CODESIGN_IDENTITY)
 CODESIGN_IDENTITY ?= $(LOCAL_CODESIGN_IDENTITY)
 ICON_NAME ?= CLIProxyManager
 ICON_FILE ?= $(ICON_NAME).icns
@@ -29,9 +29,18 @@ SPARKLE_FRAMEWORK = $(shell find .build/artifacts -path '*/Sparkle.framework' -t
 INFO_PLIST := Info.plist
 ENTITLEMENTS := CLIProxyManager.entitlements
 
-.PHONY: all swift-build bundle sign release-sign verify install-helper install run install-and-run dmg verify-dmg clean distclean
+.PHONY: all print-app-version print-build-number print-build-tag swift-build bundle sign release-sign verify install-helper install run install-and-run dmg verify-dmg sign-dmg clean distclean
 
 all: sign
+
+print-app-version:
+	@printf '%s\n' "$(VERSION)"
+
+print-build-number:
+	@printf '%s\n' "$(BUILD_NUMBER)"
+
+print-build-tag:
+	@printf 'v%s\n' "$(VERSION)"
 
 swift-build:
 	swift build -c $(CONFIGURATION) --product $(APP_NAME)
@@ -87,7 +96,7 @@ sign: bundle
 		codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/Versions/Current/Autoupdate"; \
 	fi; \
 	codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" "$$STAGED_APP/Contents/Frameworks/Sparkle.framework"; \
-	codesign --force --sign "$(CODESIGN_IDENTITY)" "$$STAGED_APP/Contents/Helpers/cliproxy-manager" || { \
+	codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" "$$STAGED_APP/Contents/Helpers/cliproxy-manager" || { \
 		status=$$?; \
 		echo "helper codesign failed. Override the signing identity with: make CODESIGN_IDENTITY=\"Your Signing Identity\""; \
 		exit $$status; \
@@ -208,6 +217,12 @@ verify-dmg: dmg
 	test "$$(readlink "$$MOUNT_DIR/Applications")" = "/Applications" || { echo "Applications symlink points to wrong target"; exit 1; }; \
 	codesign --verify --deep --strict --verbose=2 "$$MOUNT_DIR/$(APP_NAME).app"; \
 	echo "DMG verification passed"
+
+sign-dmg:
+	@set -e; \
+		test -f "$(DMG_PATH)" || { echo "Missing DMG: $(DMG_PATH)"; exit 1; }; \
+		codesign --force --sign "$(CODESIGN_IDENTITY)" "$(DMG_PATH)"; \
+		echo "Signed $(DMG_PATH)"
 
 clean:
 	rm -rf "$(BUILD_DIR)"

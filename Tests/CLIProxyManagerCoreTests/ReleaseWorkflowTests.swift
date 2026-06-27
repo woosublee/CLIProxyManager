@@ -1,7 +1,7 @@
 import XCTest
 
 final class ReleaseWorkflowTests: XCTestCase {
-    func testReleaseWorkflowBuildsAndUploadsAdHocDMGForTags() throws {
+    func testReleaseWorkflowBuildsAndUploadsSelfSignedDMG() throws {
         let workflow = try String(contentsOf: repositoryRoot().appendingPathComponent(".github/workflows/release.yml"), encoding: .utf8)
         let makefile = try String(contentsOf: repositoryRoot().appendingPathComponent("Makefile"), encoding: .utf8)
         let releaseLocal = try String(contentsOf: repositoryRoot().appendingPathComponent("scripts/release-local.sh"), encoding: .utf8)
@@ -11,14 +11,20 @@ final class ReleaseWorkflowTests: XCTestCase {
             "Development and local release builds should default to the shared cliproxymanager signing identity."
         )
         XCTAssertTrue(
-            makefile.contains("RELEASE_CODESIGN_IDENTITY ?= $(LOCAL_CODESIGN_IDENTITY)"),
-            "Release signing should use the same default identity unless explicitly overridden."
+            makefile.contains("RELEASE_CODESIGN_IDENTITY ?= $(CODESIGN_IDENTITY)"),
+            "Release signing should follow the effective signing identity so CI overrides are honored."
         )
         XCTAssertTrue(
             makefile.contains("CODESIGN_IDENTITY ?= $(LOCAL_CODESIGN_IDENTITY)"),
             "Generic signing should inherit the local default identity."
         )
+        XCTAssertTrue(makefile.contains("print-app-version:"))
+        XCTAssertTrue(makefile.contains("print-build-number:"))
+        XCTAssertTrue(makefile.contains("print-build-tag:"))
+        XCTAssertTrue(makefile.contains("printf 'v%s\\n' \"$(VERSION)\""))
         XCTAssertTrue(makefile.contains("scripts/verify-dmg.sh \"$(DMG_PATH)\""))
+        XCTAssertTrue(makefile.contains("sign-dmg:"))
+        XCTAssertTrue(makefile.contains("codesign --force --sign \"$(CODESIGN_IDENTITY)\" \"$(DMG_PATH)\""))
         XCTAssertTrue(makefile.contains("test -d \"$$VERIFY_APP/Contents/Frameworks/Sparkle.framework\""))
         XCTAssertTrue(makefile.contains("test -x \"$$VERIFY_APP/Contents/Frameworks/Sparkle.framework/Autoupdate\""))
         XCTAssertTrue(makefile.contains("test -d \"$$VERIFY_APP/Contents/Frameworks/Sparkle.framework/Updater.app\""))
@@ -39,78 +45,113 @@ final class ReleaseWorkflowTests: XCTestCase {
             makefile.contains("-exec codesign --force --options runtime --sign \"$(CODESIGN_IDENTITY)\" {} \\;"),
             "Sparkle XPC services should be signed with hardened runtime and find -exec instead of find|xargs."
         )
+        XCTAssertTrue(
+            makefile.contains("codesign --force --options runtime --sign \"$(CODESIGN_IDENTITY)\" \"$$STAGED_APP/Contents/Helpers/cliproxy-manager\""),
+            "The bundled helper should be signed with hardened runtime for release consistency."
+        )
         XCTAssertFalse(
             makefile.contains("xargs -0"),
             "Sparkle codesigning must not pipe find output through xargs."
         )
+
         XCTAssertTrue(
             releaseLocal.contains("CODESIGN_IDENTITY=\"cliproxymanager\""),
-            "Local releases should name the required signing identity explicitly."
+            "Local fallback releases should name the required signing identity explicitly."
         )
         XCTAssertTrue(
             releaseLocal.contains("security find-identity -v -p codesigning"),
-            "Local releases should fail before building if the cliproxymanager identity is missing."
+            "Local fallback releases should fail before building if the cliproxymanager identity is missing."
         )
         XCTAssertTrue(
             releaseLocal.contains("make VERSION=\"$VERSION\" BUILD_NUMBER=\"$BUILD_NUMBER\" verify-dmg"),
-            "Local releases should use Makefile signing defaults instead of forcing ad-hoc signing."
+            "Local fallback releases should use Makefile signing defaults instead of forcing ad-hoc signing."
         )
         XCTAssertFalse(
             releaseLocal.contains("make CODESIGN_IDENTITY=- VERSION=\"$VERSION\" BUILD_NUMBER=\"$BUILD_NUMBER\" verify-dmg"),
-            "The canonical local release path must not force ad-hoc signing."
+            "The local fallback release path must not force ad-hoc signing."
         )
         XCTAssertTrue(
-            releaseLocal.contains("Non-notarized DMG signed with the local cliproxymanager code signing identity and Sparkle appcast."),
-            "Local release notes should describe the cliproxymanager-signed artifact."
+            releaseLocal.contains("Manual fallback release: self-signed, non-notarized DMG signed with the local cliproxymanager code signing identity and Sparkle appcast."),
+            "Local release notes should describe the fallback self-signed artifact."
+        )
+        XCTAssertTrue(
+            releaseLocal.contains("ALLOW_LOCAL_RELEASE_CLOBBER"),
+            "Local fallback releases should require an explicit opt-in before clobbering release assets."
+        )
+        XCTAssertTrue(
+            releaseLocal.contains("gh release upload \"$RELEASE_TAG\" \"$DMG_PATH\" \"$APPCAST_PATH\"\n"),
+            "Local fallback releases should upload without --clobber by default."
+        )
+        XCTAssertTrue(
+            releaseLocal.contains("gh release upload \"$RELEASE_TAG\" \"$DMG_PATH\" \"$APPCAST_PATH\" --clobber"),
+            "Local fallback releases may still clobber when explicitly requested."
         )
         XCTAssertFalse(
             releaseLocal.contains("Ad-hoc signed, non-notarized DMG with Sparkle appcast."),
-            "Local release notes should no longer describe canonical releases as ad-hoc signed."
+            "Local release notes should no longer describe releases as ad-hoc signed."
         )
 
-        XCTAssertTrue(workflow.contains("on:"))
+        XCTAssertTrue(workflow.contains("name: Self-signed Release"))
         XCTAssertTrue(workflow.contains("workflow_dispatch:"))
         XCTAssertFalse(
             workflow.contains("push:"),
-            "Release workflow should be a manual fallback, not a tag-push release path."
+            "Release workflow should be manually dispatched, not a tag-push release path."
         )
         XCTAssertFalse(
             workflow.contains("tags:"),
             "Release workflow should not include automatic tag push triggers."
         )
-        XCTAssertFalse(
-            workflow.contains("'v*'"),
-            "Release workflow should not subscribe to v* tag pushes."
-        )
         XCTAssertTrue(workflow.contains("contents: write"))
-        XCTAssertTrue(workflow.contains("DISPATCH_TAG: ${{ inputs.tag }}"))
-        XCTAssertTrue(workflow.contains("RELEASE_TAG=\"$DISPATCH_TAG\""))
+        XCTAssertTrue(workflow.contains("fetch-depth: 0"))
+        XCTAssertTrue(workflow.contains("INPUT_TAG: ${{ inputs.tag }}"))
+        XCTAssertTrue(workflow.contains("TAG=\"$INPUT_TAG\""))
+        XCTAssertTrue(workflow.contains("APP_VERSION=\"$(make -s print-app-version)\""))
+        XCTAssertTrue(workflow.contains("BUILD_NUMBER=\"$(make -s print-build-number)\""))
+        XCTAssertTrue(workflow.contains("BUILD_TAG=\"$(make -s print-build-tag)\""))
+        XCTAssertTrue(workflow.contains("if ! [[ \"$TAG\" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]"))
+        XCTAssertTrue(workflow.contains("[ \"$TAG\" != \"$BUILD_TAG\" ]"))
+        XCTAssertTrue(workflow.contains("[ \"$VERSION\" != \"$APP_VERSION\" ]"))
+        XCTAssertTrue(workflow.contains("[[ \"$BUILD_NUMBER\" =~ ^[1-9][0-9]*$ ]]"))
+        XCTAssertTrue(workflow.contains("git ls-remote --exit-code --tags origin \"refs/tags/$TAG\""))
         XCTAssertFalse(
-            workflow.contains("RELEASE_TAG=\"$GITHUB_REF_NAME\""),
-            "Release workflow should use only the workflow_dispatch tag input."
+            workflow.contains("ref: ${{ steps.release-tag.outputs.release_tag }}"),
+            "The self-signed CI release should build the current workflow commit, not checkout a pre-existing tag."
         )
-        XCTAssertTrue(workflow.contains("[[ \"$RELEASE_TAG\" == v* ]]"))
-        XCTAssertTrue(workflow.contains("id: release-tag"))
-        XCTAssertTrue(workflow.contains("echo \"release_tag=$RELEASE_TAG\" >> \"$GITHUB_OUTPUT\""))
-        XCTAssertTrue(workflow.contains("echo \"RELEASE_TAG=$RELEASE_TAG\" >> \"$GITHUB_ENV\""))
-        XCTAssertTrue(workflow.contains("ref: ${{ steps.release-tag.outputs.release_tag }}"))
-        XCTAssertTrue(workflow.contains("VERSION=${RELEASE_TAG#v}"))
-        XCTAssertTrue(workflow.contains("BUILD_NUMBER=$(plutil -extract CFBundleVersion raw Info.plist)"))
-        XCTAssertTrue(workflow.contains("APPCAST_PATH=\"build/appcast.xml\""))
-        XCTAssertTrue(workflow.contains("echo \"APPCAST_PATH=$APPCAST_PATH\" >> \"$GITHUB_ENV\""))
-        XCTAssertTrue(
-            workflow.contains("make CODESIGN_IDENTITY=- VERSION=\"$VERSION\" BUILD_NUMBER=\"$BUILD_NUMBER\" verify-dmg"),
-            "The manual CI fallback may continue to use explicit ad-hoc signing until certificate import is designed."
-        )
+
+        XCTAssertTrue(workflow.contains("swift test"))
+        XCTAssertTrue(workflow.contains("CLIPROXYMANAGER_CERTIFICATE_BASE64"))
+        XCTAssertTrue(workflow.contains("CLIPROXYMANAGER_CERTIFICATE_PASSWORD"))
         XCTAssertTrue(workflow.contains("SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}"))
+        XCTAssertTrue(workflow.contains("security create-keychain"))
+        XCTAssertTrue(workflow.contains("security import \"$CERTIFICATE_PATH\""))
+        XCTAssertTrue(workflow.contains("security set-key-partition-list -S apple-tool:,apple:,codesign:"))
+        XCTAssertTrue(workflow.contains("security list-keychains -d user -s \"$KEYCHAIN_PATH\""))
+        XCTAssertTrue(workflow.contains("security default-keychain -s \"$KEYCHAIN_PATH\""))
+        XCTAssertTrue(workflow.contains("security find-identity -p codesigning \"$KEYCHAIN_PATH\" || true"))
+        XCTAssertTrue(workflow.contains("CODESIGN_IDENTITY=cliproxymanager"))
         XCTAssertFalse(
-            workflow.contains("test -n \"$SPARKLE_PRIVATE_KEY\""),
-            "CI secret should be a fallback for the appcast script, not a separate workflow precondition."
+            workflow.contains("CODESIGN_IDENTITY=-"),
+            "The official self-signed CI release should import the cliproxymanager certificate instead of using ad-hoc signing."
         )
+        XCTAssertTrue(workflow.contains("make CODESIGN_IDENTITY=\"$CODESIGN_IDENTITY\" VERSION=\"${{ steps.version.outputs.version }}\" BUILD_NUMBER=\"${{ steps.version.outputs.build_number }}\" verify-dmg"))
+        XCTAssertTrue(workflow.contains("make CODESIGN_IDENTITY=\"$CODESIGN_IDENTITY\" VERSION=\"${{ steps.version.outputs.version }}\" BUILD_NUMBER=\"${{ steps.version.outputs.build_number }}\" sign-dmg"))
+        XCTAssertFalse(workflow.contains("notarytool"))
+        XCTAssertFalse(workflow.contains("stapler"))
+        XCTAssertTrue(workflow.contains("REPOSITORY: ${{ github.repository }}"))
         XCTAssertTrue(workflow.contains("scripts/generate-sparkle-appcast.sh"))
-        XCTAssertTrue(workflow.contains("gh release view \"$RELEASE_TAG\""))
-        XCTAssertTrue(workflow.contains("gh release create \"$RELEASE_TAG\" --verify-tag"))
-        XCTAssertTrue(workflow.contains("gh release upload \"$RELEASE_TAG\" \"$DMG_PATH\" \"$APPCAST_PATH\" --clobber"))
+        XCTAssertTrue(workflow.contains("git tag \"${{ steps.version.outputs.tag }}\" \"$GITHUB_SHA\""))
+        XCTAssertTrue(workflow.contains("git push origin \"refs/tags/${{ steps.version.outputs.tag }}\""))
+        XCTAssertTrue(workflow.contains("softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b"))
+        XCTAssertTrue(workflow.contains("make_latest: true"))
+        XCTAssertTrue(workflow.contains("${{ steps.version.outputs.dmg_path }}"))
+        XCTAssertTrue(workflow.contains("${{ steps.version.outputs.appcast_path }}"))
+        XCTAssertTrue(workflow.contains("Self-signed, non-notarized DMG with Sparkle appcast."))
+        XCTAssertTrue(workflow.contains("Cleanup signing artifacts"))
+        XCTAssertTrue(workflow.contains("security delete-keychain \"$KPATH\""))
+
+        assert("- name: Sign DMG", appearsBefore: "- name: Generate Sparkle appcast", in: workflow)
+        assert("- name: Generate Sparkle appcast", appearsBefore: "- name: Create tag", in: workflow)
+        assert("- name: Create tag", appearsBefore: "- name: Create Release", in: workflow)
     }
 
     func testVerifyDMGScriptReturnsFailureStatusAfterRetries() throws {
@@ -134,6 +175,18 @@ final class ReleaseWorkflowTests: XCTestCase {
         process.waitUntilExit()
 
         XCTAssertEqual(process.terminationStatus, 42)
+    }
+
+    private func assert(_ firstNeedle: String, appearsBefore secondNeedle: String, in haystack: String) {
+        guard let firstRange = haystack.range(of: firstNeedle) else {
+            XCTFail("Missing expected string: \(firstNeedle)")
+            return
+        }
+        guard let secondRange = haystack.range(of: secondNeedle) else {
+            XCTFail("Missing expected string: \(secondNeedle)")
+            return
+        }
+        XCTAssertLessThan(firstRange.lowerBound, secondRange.lowerBound)
     }
 
     private func repositoryRoot() -> URL {
