@@ -16,8 +16,7 @@ sandbox="$(mktemp -d /tmp/release-local-test.XXXXXX)"
 trap 'rm -rf "$sandbox"' EXIT
 
 repo="$sandbox/repo"
-cp -R "$REPO_ROOT" "$repo"
-rm -rf "$repo/.git" "$repo/.build" "$repo/build"
+mkdir -p "$repo"
 
 fake_bin="$sandbox/bin"
 mkdir -p "$fake_bin"
@@ -98,10 +97,10 @@ case "$*" in
   'release view v1.2.3')
     exit 1
     ;;
-  'release create v1.2.3 --verify-tag --title CLIProxyManager 1.2.3 --notes Non-notarized DMG signed with the local cliproxymanager code signing identity and Sparkle appcast.')
+  'release create v1.2.3 --verify-tag --title CLIProxyManager 1.2.3 --notes Manual fallback release: self-signed, non-notarized DMG signed with the local cliproxymanager code signing identity and Sparkle appcast.')
     exit 0
     ;;
-  'release upload v1.2.3 build/CLIProxyManager-1.2.3.dmg build/appcast.xml --clobber')
+  'release upload v1.2.3 build/CLIProxyManager-1.2.3.dmg build/appcast.xml')
     exit 0
     ;;
   *)
@@ -126,8 +125,8 @@ printf '%s\n' \
   'make VERSION=1.2.3 BUILD_NUMBER=42 verify-dmg' \
   'appcast RELEASE_TAG=v1.2.3 VERSION=1.2.3 BUILD_NUMBER=42 DMG_PATH=build/CLIProxyManager-1.2.3.dmg APPCAST_PATH=build/appcast.xml REPOSITORY=example/CLIProxyManager SPARKLE_PRIVATE_KEY=' \
   'gh release view v1.2.3' \
-  'gh release create v1.2.3 --verify-tag --title CLIProxyManager 1.2.3 --notes Non-notarized DMG signed with the local cliproxymanager code signing identity and Sparkle appcast.' \
-  'gh release upload v1.2.3 build/CLIProxyManager-1.2.3.dmg build/appcast.xml --clobber' \
+  'gh release create v1.2.3 --verify-tag --title CLIProxyManager 1.2.3 --notes Manual fallback release: self-signed, non-notarized DMG signed with the local cliproxymanager code signing identity and Sparkle appcast.' \
+  'gh release upload v1.2.3 build/CLIProxyManager-1.2.3.dmg build/appcast.xml' \
   > "$expected"
 
 diff -u "$expected" "$log" || fail "release-local.sh should call make, appcast generation, and gh upload in order"

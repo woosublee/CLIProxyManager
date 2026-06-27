@@ -18,7 +18,7 @@ BUILD_NUMBER="$(plutil -extract CFBundleVersion raw Info.plist)"
 APPCAST_PATH="build/appcast.xml"
 DMG_PATH="build/CLIProxyManager-${VERSION}.dmg"
 CODESIGN_IDENTITY="cliproxymanager"
-RELEASE_NOTES="Non-notarized DMG signed with the local cliproxymanager code signing identity and Sparkle appcast."
+RELEASE_NOTES="Manual fallback release: self-signed, non-notarized DMG signed with the local cliproxymanager code signing identity and Sparkle appcast."
 
 export RELEASE_TAG
 export VERSION
@@ -38,4 +38,9 @@ scripts/generate-sparkle-appcast.sh
 
 gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
   gh release create "$RELEASE_TAG" --verify-tag --title "CLIProxyManager $VERSION" --notes "$RELEASE_NOTES"
-gh release upload "$RELEASE_TAG" "$DMG_PATH" "$APPCAST_PATH" --clobber
+
+if [[ "${ALLOW_LOCAL_RELEASE_CLOBBER:-}" == "1" ]]; then
+  gh release upload "$RELEASE_TAG" "$DMG_PATH" "$APPCAST_PATH" --clobber
+else
+  gh release upload "$RELEASE_TAG" "$DMG_PATH" "$APPCAST_PATH"
+fi

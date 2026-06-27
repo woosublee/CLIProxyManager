@@ -1,10 +1,16 @@
-name: Release DMG
+name: Self-signed Release
+
+# Builds the official auto-update release entirely in CI, signed with the
+# self-signed "cliproxymanager" certificate (the same identity used for local
+# releases). This removes the dependency on a specific release Mac while keeping
+# today's self-signed Sparkle update path. New users may still see a first-launch
+# Gatekeeper warning because this build is not Developer ID signed or notarized.
 
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing tag to upload the DMG to, for example v0.1.2
+        description: "Release tag, for example v0.1.0"
         required: true
         type: string
 
@@ -12,52 +18,157 @@ permissions:
   contents: write
 
 jobs:
-  release-dmg:
-    name: Build and upload DMG
-    runs-on: macos-14
+  build-and-release:
+    name: Build and publish self-signed release
+    runs-on: macos-latest
 
     steps:
-      - name: Resolve release tag
-        id: release-tag
-        env:
-          DISPATCH_TAG: ${{ inputs.tag }}
-        run: |
-          RELEASE_TAG="$DISPATCH_TAG"
-          [[ "$RELEASE_TAG" == v* ]]
-          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
-          echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
-
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.release-tag.outputs.release_tag }}
+          fetch-depth: 0
 
-      - name: Resolve release metadata
+      - name: Resolve release version
+        id: version
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
-          VERSION=${RELEASE_TAG#v}
-          BUILD_NUMBER=$(plutil -extract CFBundleVersion raw Info.plist)
+          TAG="$INPUT_TAG"
+          APP_VERSION="$(make -s print-app-version)"
+          BUILD_NUMBER="$(make -s print-build-number)"
+          BUILD_TAG="$(make -s print-build-tag)"
+          VERSION="${TAG#v}"
           DMG_PATH="build/CLIProxyManager-${VERSION}.dmg"
           APPCAST_PATH="build/appcast.xml"
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          echo "BUILD_NUMBER=$BUILD_NUMBER" >> "$GITHUB_ENV"
-          echo "DMG_PATH=$DMG_PATH" >> "$GITHUB_ENV"
-          echo "APPCAST_PATH=$APPCAST_PATH" >> "$GITHUB_ENV"
+
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tags must use semantic versioning, for example v0.1.0." >&2
+            exit 1
+          fi
+
+          if [ "$TAG" != "$BUILD_TAG" ]; then
+            echo "Workflow tag $TAG must match BUILD_TAG $BUILD_TAG from Makefile." >&2
+            exit 1
+          fi
+
+          if [ "$VERSION" != "$APP_VERSION" ]; then
+            echo "Workflow version $VERSION must match APP_VERSION $APP_VERSION from Makefile." >&2
+            exit 1
+          fi
+
+          if ! [[ "$BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Build number must be a positive integer." >&2
+            exit 1
+          fi
+
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "Release tag $TAG already exists on origin. Choose a new release tag." >&2
+            exit 1
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build_number=$BUILD_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "dmg_path=$DMG_PATH" >> "$GITHUB_OUTPUT"
+          echo "appcast_path=$APPCAST_PATH" >> "$GITHUB_OUTPUT"
 
       - name: Test
         run: swift test
 
-      - name: Build and verify ad-hoc signed DMG
-        run: make CODESIGN_IDENTITY=- VERSION="$VERSION" BUILD_NUMBER="$BUILD_NUMBER" verify-dmg
+      # Required GitHub secrets:
+      #   CLIPROXYMANAGER_CERTIFICATE_BASE64 — base64-encoded .p12 of the self-signed "cliproxymanager" certificate (with private key)
+      #   CLIPROXYMANAGER_CERTIFICATE_PASSWORD — password for the .p12
+      #   SPARKLE_PRIVATE_KEY — Sparkle EdDSA private key for appcast signing
+      - name: Import CLIProxyManager signing certificate
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.CLIPROXYMANAGER_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.CLIPROXYMANAGER_CERTIFICATE_PASSWORD }}
+        run: |
+          CERTIFICATE_PATH="$RUNNER_TEMP/cliproxymanager_certificate.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 20)"
+
+          if [ -z "$CERTIFICATE_BASE64" ]; then
+            echo "CLIPROXYMANAGER_CERTIFICATE_BASE64 secret is required." >&2
+            exit 1
+          fi
+
+          if [ -z "$CERTIFICATE_PASSWORD" ]; then
+            echo "CLIPROXYMANAGER_CERTIFICATE_PASSWORD secret is required." >&2
+            exit 1
+          fi
+
+          echo "$CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          security import "$CERTIFICATE_PATH" \
+            -P "$CERTIFICATE_PASSWORD" \
+            -A \
+            -t cert \
+            -f pkcs12 \
+            -k "$KEYCHAIN_PATH"
+          rm -f "$CERTIFICATE_PATH"
+
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+          security default-keychain -s "$KEYCHAIN_PATH"
+
+          # The cliproxymanager certificate is self-signed, so without trust
+          # settings it may not appear in `find-identity -v` in this throwaway
+          # keychain. codesign can still sign by common name, so pin the identity.
+          echo "Codesigning identities present in keychain:"
+          security find-identity -p codesigning "$KEYCHAIN_PATH" || true
+          echo "CODESIGN_IDENTITY=cliproxymanager" >> "$GITHUB_ENV"
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+
+      - name: Build and verify self-signed DMG
+        run: make CODESIGN_IDENTITY="$CODESIGN_IDENTITY" VERSION="${{ steps.version.outputs.version }}" BUILD_NUMBER="${{ steps.version.outputs.build_number }}" verify-dmg
+
+      - name: Sign DMG
+        run: make CODESIGN_IDENTITY="$CODESIGN_IDENTITY" VERSION="${{ steps.version.outputs.version }}" BUILD_NUMBER="${{ steps.version.outputs.build_number }}" sign-dmg
 
       - name: Generate Sparkle appcast
         env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD_NUMBER: ${{ steps.version.outputs.build_number }}
+          DMG_PATH: ${{ steps.version.outputs.dmg_path }}
+          APPCAST_PATH: ${{ steps.version.outputs.appcast_path }}
+          REPOSITORY: ${{ github.repository }}
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: scripts/generate-sparkle-appcast.sh
 
-      - name: Upload DMG and appcast to GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Create tag
         run: |
-          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
-            gh release create "$RELEASE_TAG" --verify-tag --title "CLIProxyManager $VERSION" --notes "Ad-hoc signed, non-notarized DMG with Sparkle appcast."
-          gh release upload "$RELEASE_TAG" "$DMG_PATH" "$APPCAST_PATH" --clobber
+          git tag "${{ steps.version.outputs.tag }}" "$GITHUB_SHA"
+          git push origin "refs/tags/${{ steps.version.outputs.tag }}"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2.5.0
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: CLIProxyManager ${{ steps.version.outputs.version }}
+          body: |
+            Self-signed, non-notarized DMG with Sparkle appcast.
+
+            macOS may show a first-launch security warning because this build is signed with CLIProxyManager's own certificate rather than notarized. If that happens, open System Settings > Privacy & Security and choose Open Anyway.
+          generate_release_notes: true
+          make_latest: true
+          files: |
+            ${{ steps.version.outputs.dmg_path }}
+            ${{ steps.version.outputs.appcast_path }}
+
+      - name: Cleanup signing artifacts
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/cliproxymanager_certificate.p12"
+          KPATH="${KEYCHAIN_PATH:-$RUNNER_TEMP/signing.keychain-db}"
+          if [ -f "$KPATH" ]; then
+            security delete-keychain "$KPATH"
+          fi
