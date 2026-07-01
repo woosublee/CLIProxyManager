@@ -56,11 +56,12 @@ public struct CLIProxyAPIArchiveVerifier: Sendable {
         try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binaryURL.path)
 
         let version = await runner.run(binaryURL.path, ["--version"])
-        guard version.exitCode == 0 else {
+        let versionOutput = version.stdout + "\n" + version.stderr
+        guard let metadata = Self.parseVersionLine(versionOutput) else {
+            if version.exitCode == 0 {
+                throw CLIProxyAPIArchiveVerifierError.versionMetadataMissing(version.stdout)
+            }
             throw CLIProxyAPIArchiveVerifierError.versionCommandFailed(version.stderr)
-        }
-        guard let metadata = Self.parseVersionLine(version.stdout + "\n" + version.stderr) else {
-            throw CLIProxyAPIArchiveVerifierError.versionMetadataMissing(version.stdout)
         }
         guard metadata.version == release.version.description else {
             throw CLIProxyAPIArchiveVerifierError.versionMismatch(expected: release.version.description, actual: metadata.version)

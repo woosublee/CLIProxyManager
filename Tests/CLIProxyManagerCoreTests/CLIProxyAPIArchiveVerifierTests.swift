@@ -40,6 +40,30 @@ final class CLIProxyAPIArchiveVerifierTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: result.binaryURL.path))
     }
 
+    func testAcceptsVersionMetadataWhenVersionCommandExitsNonZero() async throws {
+        let archiveData = Data("archive".utf8)
+        let release = release(assetSha256: archiveData.sha256HexDigest())
+        let runner = StubVerifierRunner(results: [
+            ProcessResult(exitCode: 0, stdout: "", stderr: ""),
+            ProcessResult(exitCode: 2, stdout: "CLIProxyAPI Version: 7.2.42, Commit: abcdef12, BuiltAt: 2026-07-01T00:00:00Z\n", stderr: "flag provided but not defined: -version\n")
+        ])
+        let verifier = CLIProxyAPIArchiveVerifier(
+            runner: runner,
+            extractedBinaryLocator: { tempDirectory in
+                let binary = tempDirectory.appendingPathComponent("cli-proxy-api")
+                try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+                try Data("#!/bin/sh\n".utf8).write(to: binary)
+                return binary
+            }
+        )
+
+        let result = try await verifier.verify(archiveData: archiveData, release: release)
+
+        XCTAssertEqual(result.manifest.version, "7.2.42")
+        XCTAssertEqual(result.manifest.commit, "abcdef12")
+        XCTAssertEqual(result.manifest.builtAt, "2026-07-01T00:00:00Z")
+    }
+
     func testRejectsVersionOutputThatDoesNotMatchReleaseTag() async {
         let archiveData = Data("archive".utf8)
         let release = release(assetSha256: archiveData.sha256HexDigest())
