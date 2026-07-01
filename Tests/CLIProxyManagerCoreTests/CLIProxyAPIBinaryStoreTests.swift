@@ -96,6 +96,40 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: paths.clipProxyBinary.path))
     }
 
+    func testApplyPendingRestoresActiveBinaryWhenManifestWriteFails() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let activeBinary = paths.clipProxyBinary
+        let pendingBinary = sandbox.appendingPathComponent("download/cliproxyapi")
+        try writeExecutable("#!/bin/sh\necho active\n", to: activeBinary)
+        try writeManifest(version: "7.2.41", sourceKind: .userUpdated, binarySha: sha256(activeBinary), size: fileSize(activeBinary), to: paths.activeClipProxyManifest)
+        try writeExecutable("#!/bin/sh\necho pending\n", to: pendingBinary)
+        let pendingManifest = try manifest(version: "7.2.42", sourceKind: .userUpdated, binarySha: sha256(pendingBinary), size: fileSize(pendingBinary))
+        let store = CLIProxyAPIBinaryStore(paths: paths)
+        try store.savePending(binaryURL: pendingBinary, manifest: pendingManifest)
+        try FileManager.default.removeItem(at: paths.activeClipProxyManifest)
+        try FileManager.default.createDirectory(at: paths.activeClipProxyManifest, withIntermediateDirectories: true)
+
+        XCTAssertThrowsError(try store.applyPending())
+
+        XCTAssertEqual(try String(contentsOf: paths.clipProxyBinary, encoding: .utf8), "#!/bin/sh\necho active\n")
+    }
+
+    func testApplyPendingRemovesNewActiveBinaryWhenManifestWriteFailsWithoutBackup() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let pendingBinary = sandbox.appendingPathComponent("download/cliproxyapi")
+        try writeExecutable("#!/bin/sh\necho pending\n", to: pendingBinary)
+        let pendingManifest = try manifest(version: "7.2.42", sourceKind: .userUpdated, binarySha: sha256(pendingBinary), size: fileSize(pendingBinary))
+        let store = CLIProxyAPIBinaryStore(paths: paths)
+        try store.savePending(binaryURL: pendingBinary, manifest: pendingManifest)
+        try FileManager.default.createDirectory(at: paths.activeClipProxyManifest, withIntermediateDirectories: true)
+
+        XCTAssertThrowsError(try store.applyPending())
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.clipProxyBinary.path))
+    }
+
     private func makeSandbox() throws -> URL {
         let sandbox = FileManager.default.temporaryDirectory
             .appendingPathComponent("CLIProxyManagerBinaryStoreTests")

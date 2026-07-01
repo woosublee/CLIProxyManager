@@ -72,7 +72,8 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
             try? fileManager.removeItem(at: paths.pendingClipProxyDirectory)
             try? fileManager.removeItem(at: backup)
         } catch {
-            if fileManager.fileExists(atPath: backup.path), !fileManager.fileExists(atPath: paths.clipProxyBinary.path) {
+            try? fileManager.removeItem(at: paths.clipProxyBinary)
+            if fileManager.fileExists(atPath: backup.path) {
                 try? fileManager.moveItem(at: backup, to: paths.clipProxyBinary)
             }
             throw error
