@@ -21,10 +21,13 @@ enum DashboardSheet: Identifiable, Equatable {
 
 struct DashboardView: View {
     @ObservedObject var viewModel: DashboardViewModel
+    @ObservedObject var cliProxyAPIUpdateService: CLIProxyAPIUpdateService
     let openSettings: () -> Void
     let quit: () -> Void
     @State private var activeSheet: DashboardSheet?
     @State private var copiedEndpoint: Bool = false
+    @State private var showCLIProxyAPIUpdatePrompt = false
+    @State private var showCLIProxyAPIApplyPrompt = false
 
     private var preferredHeight: CGFloat {
         min(
@@ -88,11 +91,55 @@ struct DashboardView: View {
         .task {
             await viewModel.refresh()
             await viewModel.performAutostartIfEnabled()
+            await cliProxyAPIUpdateService.checkAutomaticallyOnLaunch()
+        }
+        .onChange(of: cliProxyAPIUpdateService.availableUpdate?.tagName) { _, tag in
+            showCLIProxyAPIUpdatePrompt = tag != nil
+        }
+        .onChange(of: cliProxyAPIUpdateService.pendingUpdate?.version) { _, version in
+            if version != nil {
+                showCLIProxyAPIApplyPrompt = true
+            }
         }
         .frame(width: AppWindowMetrics.mainWidth, height: preferredHeight)
         .background(.regularMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .settingsToast(message: viewModel.settingsMessage, dismiss: viewModel.clearSettingsMessage)
+        .confirmationDialog(
+            cliProxyAPIUpdateService.availableUpdate.map { "CLIProxyAPI \($0.version.description) is available" } ?? "CLIProxyAPI update available",
+            isPresented: $showCLIProxyAPIUpdatePrompt,
+            titleVisibility: .visible
+        ) {
+            Button("Update") {
+                Task { await cliProxyAPIUpdateService.downloadAvailableUpdate() }
+            }
+            Button("Later", role: .cancel) {
+                cliProxyAPIUpdateService.deferAvailableUpdate()
+            }
+        }
+        .confirmationDialog(
+            cliProxyAPIUpdateService.pendingUpdate.map { "Apply CLIProxyAPI \($0.version) now?" } ?? "Apply CLIProxyAPI update now?",
+            isPresented: $showCLIProxyAPIApplyPrompt,
+            titleVisibility: .visible
+        ) {
+            Button(viewModel.serverControlState.isRunning ? "Apply now and restart server" : "Apply now") {
+                Task {
+                    do {
+                        try cliProxyAPIUpdateService.applyPendingNow()
+                        if viewModel.serverControlState.isRunning {
+                            await viewModel.restartServer()
+                        }
+                        viewModel.settingsMessage = "CLIProxyAPI update applied."
+                    } catch {
+                        viewModel.settingsMessage = "CLIProxyAPI update failed: \(error.localizedDescription)"
+                    }
+                }
+            }
+            Button("Apply on next server start") {
+                viewModel.settingsMessage = "CLIProxyAPI update will be applied on next server start."
+            }
+            Button("Cancel", role: .cancel) {}
+        }
         .sheet(item: $activeSheet) { sheet in
             Group {
                 switch sheet {
@@ -110,7 +157,7 @@ struct DashboardView: View {
                     providerSettingsSheet(provider, isInitialSetup: isInitialSetup)
                 }
             }
-            .onChange(of: viewModel.activeOAuthLoginProvider) { provider in
+            .onChange(of: viewModel.activeOAuthLoginProvider) { _, provider in
                 guard provider == nil, let connectedProvider = viewModel.completedOAuthLoginProvider else { return }
                 activeSheet = DashboardSheet.afterOAuthLoginCompletion(
                     connectedProvider,

@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var viewModel: DashboardViewModel
     @ObservedObject var updaterService: UpdaterService
+    @ObservedObject var cliProxyAPIUpdateService: CLIProxyAPIUpdateService
     @State private var selection: SettingsTab = .general
 
     var body: some View {
@@ -52,7 +53,7 @@ struct SettingsView: View {
                 case .general:
                     GeneralSettingsView(viewModel: viewModel)
                 case .server:
-                    ServerSettingsView(viewModel: viewModel)
+                    ServerSettingsView(viewModel: viewModel, cliProxyAPIUpdateService: cliProxyAPIUpdateService)
                 case .advanced:
                     AdvancedSettingsView(viewModel: viewModel)
                 case .about:

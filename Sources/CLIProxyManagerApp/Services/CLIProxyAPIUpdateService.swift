@@ -58,6 +58,7 @@ final class CLIProxyAPIUpdateService: ObservableObject {
     @Published var state: CLIProxyAPIUpdateServiceState = .idle
     @Published var availableUpdate: CLIProxyAPIRelease?
     @Published var pendingUpdate: CLIProxyAPIBinaryManifest?
+    @Published var currentVersionText: String = "Unknown"
     @Published var isChecking = false
     @Published var isUpdating = false
     @Published var lastErrorMessage: String?
@@ -88,6 +89,7 @@ final class CLIProxyAPIUpdateService: ObservableObject {
         self.fileManager = fileManager
         self.encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         self.pendingUpdate = try? self.store.pendingManifest()
+        self.currentVersionText = (try? self.store.currentVersion()?.description) ?? "Unknown"
     }
 
     func checkAutomaticallyOnLaunch() async {
@@ -120,6 +122,7 @@ final class CLIProxyAPIUpdateService: ObservableObject {
             let result = try await downloader.downloadAndVerify(release)
             try store.savePending(binaryURL: result.binaryURL, manifest: result.manifest)
             pendingUpdate = result.manifest
+            currentVersionText = (try? store.currentVersion()?.description) ?? currentVersionText
             var updateState = loadState()
             updateState.pendingVersion = result.manifest.version
             saveState(updateState)
@@ -131,6 +134,7 @@ final class CLIProxyAPIUpdateService: ObservableObject {
 
     func applyPendingNow() throws {
         try store.applyPending()
+        currentVersionText = (try? store.currentVersion()?.description) ?? currentVersionText
         pendingUpdate = nil
         var updateState = loadState()
         updateState.pendingVersion = nil
@@ -150,6 +154,7 @@ final class CLIProxyAPIUpdateService: ObservableObject {
             updateState.lastAvailableVersion = release.version.description
             saveState(updateState)
             let current = try store.currentVersion()
+            currentVersionText = current?.description ?? "Unknown"
             if let current, release.version <= current {
                 availableUpdate = nil
                 state = .upToDate

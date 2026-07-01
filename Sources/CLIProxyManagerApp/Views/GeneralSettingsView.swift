@@ -49,6 +49,8 @@ struct GeneralSettingsView: View {
 
 struct ServerSettingsView: View {
     @ObservedObject var viewModel: DashboardViewModel
+    @ObservedObject var cliProxyAPIUpdateService: CLIProxyAPIUpdateService
+    @State private var showApplyPrompt = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -90,6 +92,36 @@ struct ServerSettingsView: View {
                     .labelsHidden()
                     .toggleStyle(SettingsToggleStyle())
                 }
+                SettingsRow(
+                    label: "CLIProxyAPI binary",
+                    description: cliproxyAPIUpdateDescription(
+                        currentVersion: cliProxyAPIUpdateService.currentVersionText,
+                        state: cliProxyAPIUpdateService.state,
+                        availableUpdate: cliProxyAPIUpdateService.availableUpdate,
+                        pendingUpdate: cliProxyAPIUpdateService.pendingUpdate
+                    ),
+                    isEnabled: !cliProxyAPIUpdateService.isChecking && !cliProxyAPIUpdateService.isUpdating
+                ) {
+                    Button(cliproxyAPIUpdateActionTitle(
+                        state: cliProxyAPIUpdateService.state,
+                        availableUpdate: cliProxyAPIUpdateService.availableUpdate,
+                        pendingUpdate: cliProxyAPIUpdateService.pendingUpdate
+                    )) {
+                        if cliProxyAPIUpdateService.pendingUpdate != nil {
+                            showApplyPrompt = true
+                        } else if cliProxyAPIUpdateService.availableUpdate != nil {
+                            Task {
+                                await cliProxyAPIUpdateService.downloadAvailableUpdate()
+                                if cliProxyAPIUpdateService.pendingUpdate != nil {
+                                    showApplyPrompt = true
+                                }
+                            }
+                        } else {
+                            Task { await cliProxyAPIUpdateService.checkNow() }
+                        }
+                    }
+                    .controlSize(.small)
+                }
             }
 
             SettingsGroup(title: "Routing") {
@@ -102,6 +134,29 @@ struct ServerSettingsView: View {
         }
         .padding(.horizontal, 32)
         .padding(.vertical, 28)
+        .confirmationDialog(
+            "Apply CLIProxyAPI update now?",
+            isPresented: $showApplyPrompt,
+            titleVisibility: .visible
+        ) {
+            Button(viewModel.serverControlState.isRunning ? "Apply now and restart server" : "Apply now") {
+                Task {
+                    do {
+                        try cliProxyAPIUpdateService.applyPendingNow()
+                        if viewModel.serverControlState.isRunning {
+                            await viewModel.restartServer()
+                        }
+                        viewModel.settingsMessage = "CLIProxyAPI update applied."
+                    } catch {
+                        viewModel.settingsMessage = "CLIProxyAPI update failed: \(error.localizedDescription)"
+                    }
+                }
+            }
+            Button("Apply on next server start") {
+                viewModel.settingsMessage = "CLIProxyAPI update will be applied on next server start."
+            }
+            Button("Cancel", role: .cancel) {}
+        }
     }
 }
 
@@ -178,6 +233,39 @@ func aboutVersionText(bundle: Bundle = .main) -> String {
     let version = bundle.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.2"
     let build = bundle.infoDictionary?["CFBundleVersion"] as? String ?? "6"
     return "Version \(version) (\(build))"
+}
+
+func cliproxyAPIUpdateDescription(
+    currentVersion: String,
+    state: CLIProxyAPIUpdateServiceState,
+    availableUpdate: CLIProxyAPIRelease?,
+    pendingUpdate: CLIProxyAPIBinaryManifest?
+) -> String {
+    if let pendingUpdate {
+        return "Version \(pendingUpdate.version) will be applied on next server start."
+    }
+    if let availableUpdate {
+        return "Version \(availableUpdate.version.description) is available."
+    }
+    switch state {
+    case .checking:
+        return "Checking for CLIProxyAPI updates…"
+    case .failed:
+        return "Last check failed."
+    default:
+        return "Current version: \(currentVersion)"
+    }
+}
+
+func cliproxyAPIUpdateActionTitle(
+    state: CLIProxyAPIUpdateServiceState,
+    availableUpdate: CLIProxyAPIRelease?,
+    pendingUpdate: CLIProxyAPIBinaryManifest?
+) -> String {
+    if pendingUpdate != nil { return "Apply now" }
+    if availableUpdate != nil { return "Update…" }
+    if state == .checking { return "Checking…" }
+    return "Check now"
 }
 
 struct AboutSettingsView: View {
