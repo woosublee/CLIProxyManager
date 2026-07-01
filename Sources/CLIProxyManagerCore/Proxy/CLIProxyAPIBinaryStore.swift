@@ -81,11 +81,6 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
     }
 
     public func prepareActiveBinary(bundledBinaryURL: URL?, bundledManifestURL: URL?) throws {
-        if fileManager.fileExists(atPath: paths.pendingClipProxyBinary.path) || fileManager.fileExists(atPath: paths.pendingClipProxyManifest.path) {
-            try applyPending()
-            return
-        }
-
         guard let bundledBinaryURL, fileManager.fileExists(atPath: bundledBinaryURL.path) else {
             if fileManager.fileExists(atPath: paths.clipProxyBinary.path) {
                 return
@@ -98,6 +93,8 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
         guard let bundledVersion = bundledManifest.parsedVersion else {
             throw CLIProxyAPIBinaryStoreError.invalidManifestVersion(bundledManifest.version)
         }
+
+        try applyUsablePendingIfNewerThanBundled(bundledVersion: bundledVersion)
 
         guard fileManager.fileExists(atPath: paths.clipProxyBinary.path), let active = try activeManifest() else {
             try installBundled(binaryURL: bundledBinaryURL, manifest: bundledManifest)
@@ -119,6 +116,20 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
                 try installBundled(binaryURL: bundledBinaryURL, manifest: bundledManifest)
             }
         }
+    }
+
+    private func applyUsablePendingIfNewerThanBundled(bundledVersion: CLIProxyAPIVersion) throws {
+        guard fileManager.fileExists(atPath: paths.pendingClipProxyBinary.path) || fileManager.fileExists(atPath: paths.pendingClipProxyManifest.path) else {
+            return
+        }
+        guard let pending = try? pendingManifest(),
+              let pendingVersion = pending.parsedVersion,
+              pendingVersion > bundledVersion,
+              (try? binaryMatches(paths.pendingClipProxyBinary, manifest: pending)) == true else {
+            try? fileManager.removeItem(at: paths.pendingClipProxyDirectory)
+            return
+        }
+        try applyPending()
     }
 
     private func installBundled(binaryURL: URL, manifest: CLIProxyAPIBinaryManifest) throws {
@@ -162,11 +173,26 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
 
     private func replaceFile(from source: URL, to destination: URL) throws {
         try fileManager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let temporary = destination.deletingLastPathComponent().appendingPathComponent(".\(destination.lastPathComponent).tmp")
+        let directory = destination.deletingLastPathComponent()
+        let temporary = directory.appendingPathComponent(".\(destination.lastPathComponent).tmp")
+        let backup = directory.appendingPathComponent(".\(destination.lastPathComponent).backup")
         try? fileManager.removeItem(at: temporary)
+        try? fileManager.removeItem(at: backup)
         try fileManager.copyItem(at: source, to: temporary)
-        try? fileManager.removeItem(at: destination)
-        try fileManager.moveItem(at: temporary, to: destination)
+        let hadDestination = fileManager.fileExists(atPath: destination.path)
+        if hadDestination {
+            try fileManager.moveItem(at: destination, to: backup)
+        }
+        do {
+            try fileManager.moveItem(at: temporary, to: destination)
+            try? fileManager.removeItem(at: backup)
+        } catch {
+            if hadDestination, fileManager.fileExists(atPath: backup.path) {
+                try? fileManager.moveItem(at: backup, to: destination)
+            }
+            try? fileManager.removeItem(at: temporary)
+            throw error
+        }
     }
 
     private static func iso8601Now() -> String {

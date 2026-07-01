@@ -162,7 +162,7 @@ final class DashboardViewModel: ObservableObject {
         self.shellInstaller = shellInstaller
         self.modelClient = modelClient
         self.authProfileStore = authProfileStore
-        let defaultRuntimePreparer = ProxyServiceManager(paths: ManagedPaths(), bundledBinaryURL: BundledProxyBinary.url())
+        let defaultRuntimePreparer = ProxyServiceManager(paths: ManagedPaths(), bundledBinaryURL: BundledProxyBinary.url(), bundledManifestURL: BundledProxyBinary.manifestURL())
         self.oauthLoginService = oauthLoginService ?? OAuthLoginService(runtimePreparer: defaultRuntimePreparer)
         self.automaticShellInstallService = automaticShellInstallService ?? AutomaticShellInstallService(installer: shellInstaller)
         self.proxyHealthClient = proxyHealthClient

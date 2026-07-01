@@ -32,6 +32,39 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         XCTAssertEqual(service.availableUpdate?.version.description, "7.2.42")
     }
 
+    func testAutomaticFailureRecordsLastCheckedAtForThrottle() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let now = Date(timeIntervalSince1970: 123_456)
+        let checker = StubUpdateChecking(error: NSError(domain: "Network", code: 1, userInfo: [NSLocalizedDescriptionKey: "offline"]))
+        let service = CLIProxyAPIUpdateService(paths: paths, checker: checker, downloader: StubUpdateDownloading(), store: StubUpdateBinaryStore(currentVersion: "7.2.41"), now: { now })
+
+        await service.checkAutomaticallyOnLaunch()
+
+        let data = try Data(contentsOf: paths.clipProxyUpdateStateFile)
+        let state = try JSONDecoder().decode(CLIProxyAPIUpdateState.self, from: data)
+        XCTAssertEqual(state.lastCheckedAt, ISO8601DateFormatter().string(from: now))
+        XCTAssertEqual(state.lastFailureMessage, "offline")
+    }
+
+    func testCurrentVersionFallsBackToBundledManifestWhenActiveManifestIsMissing() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let bundledManifest = sandbox.appendingPathComponent("bundle/cliproxyapi.manifest.json")
+        try writeManifest(manifest("7.2.42", sourceKind: .bundled), to: bundledManifest)
+        let checker = StubUpdateChecking(release: release("7.2.42"))
+        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let service = CLIProxyAPIUpdateService(paths: paths, checker: checker, downloader: StubUpdateDownloading(), store: store, bundledManifestURL: bundledManifest, now: { Date() })
+
+        await service.checkNow()
+
+        XCTAssertNil(service.availableUpdate)
+        if case .upToDate = service.state {} else {
+            XCTFail("Expected upToDate, got \(service.state)")
+        }
+        XCTAssertEqual(service.currentVersionText, "7.2.42")
+    }
+
     func testManualCheckIgnoresLastCheckThrottle() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
@@ -101,8 +134,14 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         CLIProxyAPIRelease(version: CLIProxyAPIVersion(version)!, tagName: "v\(version)", assetName: "CLIProxyAPI_\(version)_darwin_aarch64.tar.gz", assetURL: URL(string: "https://example.com/archive.tar.gz")!, assetSha256: "archive-sha")
     }
 
-    private func manifest(_ version: String) -> CLIProxyAPIBinaryManifest {
-        CLIProxyAPIBinaryManifest(name: "cliproxyapi", version: version, commit: "commit", builtAt: "2026-07-01T00:00:00Z", sourceKind: .userUpdated, source: "https://example.com/archive.tar.gz", upstreamRepository: "router-for-me/CLIProxyAPI", upstreamTag: "v\(version)", upstreamAsset: "CLIProxyAPI_\(version)_darwin_aarch64.tar.gz", upstreamAssetSha256: "archive-sha", vendoredBinaryName: "cliproxyapi", vendoredBinarySha256: "binary-sha", vendoredBinarySizeBytes: 1, vendoredFromArchivePath: "cli-proxy-api")
+    private func manifest(_ version: String, sourceKind: CLIProxyAPIBinarySourceKind = .userUpdated) -> CLIProxyAPIBinaryManifest {
+        CLIProxyAPIBinaryManifest(name: "cliproxyapi", version: version, commit: "commit", builtAt: "2026-07-01T00:00:00Z", sourceKind: sourceKind, source: "https://example.com/archive.tar.gz", upstreamRepository: "router-for-me/CLIProxyAPI", upstreamTag: "v\(version)", upstreamAsset: "CLIProxyAPI_\(version)_darwin_aarch64.tar.gz", upstreamAssetSha256: "archive-sha", vendoredBinaryName: "cliproxyapi", vendoredBinarySha256: "binary-sha", vendoredBinarySizeBytes: 1, vendoredFromArchivePath: "cli-proxy-api")
+    }
+
+    private func writeManifest(_ manifest: CLIProxyAPIBinaryManifest, to url: URL) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let data = try JSONEncoder().encode(manifest)
+        try data.write(to: url)
     }
 
     private func writeState(lastCheckedAt: Date, to url: URL) throws {
@@ -119,15 +158,25 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
 
 private final class StubUpdateChecking: CLIProxyAPIUpdateChecking, @unchecked Sendable {
     private let lock = NSLock()
-    private let release: CLIProxyAPIRelease
+    private let release: CLIProxyAPIRelease?
+    private let error: Error?
     private var _invocationCount = 0
     var invocationCount: Int { lock.withLock { _invocationCount } }
 
-    init(release: CLIProxyAPIRelease) { self.release = release }
+    init(release: CLIProxyAPIRelease) {
+        self.release = release
+        self.error = nil
+    }
+
+    init(error: Error) {
+        self.release = nil
+        self.error = error
+    }
 
     func latestRelease() async throws -> CLIProxyAPIRelease {
         lock.withLock { _invocationCount += 1 }
-        return release
+        if let error { throw error }
+        return release!
     }
 }
 
@@ -157,7 +206,7 @@ private final class StubUpdateBinaryStore: CLIProxyAPIUpdateBinaryStoring, @unch
         self.current = currentVersion.flatMap(CLIProxyAPIVersion.init)
     }
 
-    func currentVersion() throws -> CLIProxyAPIVersion? { current }
+    func currentVersion(bundledManifestURL: URL?) throws -> CLIProxyAPIVersion? { current }
     func pendingManifest() throws -> CLIProxyAPIBinaryManifest? { nil }
 
     func savePending(binaryURL: URL, manifest: CLIProxyAPIBinaryManifest) throws {
