@@ -77,8 +77,9 @@ final class ProxyServiceManagerTests: XCTestCase {
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         let bundledBinary = sandbox.appendingPathComponent("bundle/cliproxyapi")
         try createBinary(at: bundledBinary, contents: "#!/bin/sh\necho bundled\n")
+        let bundledManifestURL = try writeBundledManifest(for: bundledBinary, version: "7.2.41", in: sandbox)
         let launcher = FakeProcessLauncher()
-        let manager = ProxyServiceManager(paths: paths, bundledBinaryURL: bundledBinary, launcher: launcher)
+        let manager = ProxyServiceManager(paths: paths, bundledBinaryURL: bundledBinary, bundledManifestURL: bundledManifestURL, launcher: launcher)
 
         try await manager.start(port: 8317)
 
@@ -93,12 +94,65 @@ final class ProxyServiceManagerTests: XCTestCase {
         try createBinary(at: paths.clipProxyBinary, contents: "#!/bin/sh\necho old\n")
         let bundledBinary = sandbox.appendingPathComponent("bundle/cliproxyapi")
         try createBinary(at: bundledBinary, contents: "#!/bin/sh\necho new\n")
+        let bundledManifestURL = try writeBundledManifest(for: bundledBinary, version: "7.2.41", in: sandbox)
         let launcher = FakeProcessLauncher()
-        let manager = ProxyServiceManager(paths: paths, bundledBinaryURL: bundledBinary, launcher: launcher)
+        let manager = ProxyServiceManager(paths: paths, bundledBinaryURL: bundledBinary, bundledManifestURL: bundledManifestURL, launcher: launcher)
 
         try await manager.start(port: 8317)
 
         XCTAssertEqual(try String(contentsOf: paths.clipProxyBinary, encoding: .utf8), "#!/bin/sh\necho new\n")
+    }
+
+    func testStartKeepsUserUpdatedBinaryWhenBundledBinaryIsOlder() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary, contents: "#!/bin/sh\necho active\n")
+        let activeManifest = CLIProxyAPIBinaryManifest(
+            name: "cliproxyapi",
+            version: "7.2.42",
+            commit: "active",
+            builtAt: "2026-07-01T00:00:00Z",
+            sourceKind: .userUpdated,
+            source: "https://example.com/active.tar.gz",
+            upstreamRepository: "router-for-me/CLIProxyAPI",
+            upstreamTag: "v7.2.42",
+            upstreamAsset: "CLIProxyAPI_7.2.42_darwin_aarch64.tar.gz",
+            upstreamAssetSha256: "archive",
+            vendoredBinaryName: "cliproxyapi",
+            vendoredBinarySha256: try Data(contentsOf: paths.clipProxyBinary).sha256HexDigest(),
+            vendoredBinarySizeBytes: try XCTUnwrap(paths.clipProxyBinary.resourceValues(forKeys: [.fileSizeKey]).fileSize),
+            vendoredFromArchivePath: "cli-proxy-api"
+        )
+        try FileManager.default.createDirectory(at: paths.activeClipProxyManifest.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(activeManifest).write(to: paths.activeClipProxyManifest)
+        let bundledBinary = sandbox.appendingPathComponent("bundle/cliproxyapi")
+        let bundledManifestURL = sandbox.appendingPathComponent("bundle/cliproxyapi.manifest.json")
+        try createBinary(at: bundledBinary, contents: "#!/bin/sh\necho bundled\n")
+        let bundledManifest = CLIProxyAPIBinaryManifest(
+            name: "cliproxyapi",
+            version: "7.2.41",
+            commit: "bundled",
+            builtAt: "2026-06-25T17:56:53Z",
+            sourceKind: .bundled,
+            source: "https://example.com/bundled.tar.gz",
+            upstreamRepository: "router-for-me/CLIProxyAPI",
+            upstreamTag: "v7.2.41",
+            upstreamAsset: "CLIProxyAPI_7.2.41_darwin_aarch64.tar.gz",
+            upstreamAssetSha256: "archive",
+            vendoredBinaryName: "cliproxyapi",
+            vendoredBinarySha256: try Data(contentsOf: bundledBinary).sha256HexDigest(),
+            vendoredBinarySizeBytes: try XCTUnwrap(bundledBinary.resourceValues(forKeys: [.fileSizeKey]).fileSize),
+            vendoredFromArchivePath: "cli-proxy-api"
+        )
+        try FileManager.default.createDirectory(at: bundledManifestURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(bundledManifest).write(to: bundledManifestURL)
+        let launcher = FakeProcessLauncher()
+        let manager = ProxyServiceManager(paths: paths, bundledBinaryURL: bundledBinary, bundledManifestURL: bundledManifestURL, launcher: launcher)
+
+        try await manager.start(port: 8317)
+
+        XCTAssertEqual(try String(contentsOf: paths.clipProxyBinary, encoding: .utf8), "#!/bin/sh\necho active\n")
+        XCTAssertEqual(launcher.invocations.first?.executable, paths.clipProxyBinary.path)
     }
 
     func testStartDoesNotUseRealHomeWhenPathsUseTemporaryRoot() async throws {
@@ -420,6 +474,29 @@ final class ProxyServiceManagerTests: XCTestCase {
     private func createBinary(at url: URL, contents: String = "#!/bin/sh\n") throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data(contents.utf8).write(to: url)
+    }
+
+    private func writeBundledManifest(for binaryURL: URL, version: String, in sandbox: URL) throws -> URL {
+        let manifestURL = sandbox.appendingPathComponent("bundle/cliproxyapi.manifest.json")
+        let manifest = CLIProxyAPIBinaryManifest(
+            name: "cliproxyapi",
+            version: version,
+            commit: "bundled-\(version)",
+            builtAt: "2026-06-25T17:56:53Z",
+            sourceKind: .bundled,
+            source: "https://example.com/bundled.tar.gz",
+            upstreamRepository: "router-for-me/CLIProxyAPI",
+            upstreamTag: "v\(version)",
+            upstreamAsset: "CLIProxyAPI_\(version)_darwin_aarch64.tar.gz",
+            upstreamAssetSha256: "archive",
+            vendoredBinaryName: "cliproxyapi",
+            vendoredBinarySha256: try Data(contentsOf: binaryURL).sha256HexDigest(),
+            vendoredBinarySizeBytes: try XCTUnwrap(binaryURL.resourceValues(forKeys: [.fileSizeKey]).fileSize),
+            vendoredFromArchivePath: "cli-proxy-api"
+        )
+        try FileManager.default.createDirectory(at: manifestURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(manifest).write(to: manifestURL)
+        return manifestURL
     }
 
     private func XCTAssertEventuallyEqual<T: Equatable>(
