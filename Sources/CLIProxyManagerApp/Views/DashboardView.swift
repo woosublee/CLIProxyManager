@@ -129,7 +129,7 @@ struct DashboardView: View {
                         if viewModel.serverControlState.isRunning {
                             await viewModel.restartServer()
                         }
-                        viewModel.settingsMessage = "CLIProxyAPI update applied."
+                        viewModel.settingsMessage = "CLIProxyAPI binary updated. Restarting the app is not required."
                     } catch {
                         viewModel.settingsMessage = "CLIProxyAPI update failed: \(error.localizedDescription)"
                     }

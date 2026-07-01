@@ -102,25 +102,31 @@ struct ServerSettingsView: View {
                     ),
                     isEnabled: !cliProxyAPIUpdateService.isChecking && !cliProxyAPIUpdateService.isUpdating
                 ) {
-                    Button(cliproxyAPIUpdateActionTitle(
-                        state: cliProxyAPIUpdateService.state,
-                        availableUpdate: cliProxyAPIUpdateService.availableUpdate,
-                        pendingUpdate: cliProxyAPIUpdateService.pendingUpdate
-                    )) {
-                        if cliProxyAPIUpdateService.pendingUpdate != nil {
-                            showApplyPrompt = true
-                        } else if cliProxyAPIUpdateService.availableUpdate != nil {
-                            Task {
-                                await cliProxyAPIUpdateService.downloadAvailableUpdate()
-                                if cliProxyAPIUpdateService.pendingUpdate != nil {
-                                    showApplyPrompt = true
-                                }
-                            }
-                        } else {
-                            Task { await cliProxyAPIUpdateService.checkNow() }
+                    HStack(spacing: 8) {
+                        if cliProxyAPIUpdateService.isChecking || cliProxyAPIUpdateService.isUpdating {
+                            ProgressView()
+                                .controlSize(.small)
                         }
+                        Button(cliproxyAPIUpdateActionTitle(
+                            state: cliProxyAPIUpdateService.state,
+                            availableUpdate: cliProxyAPIUpdateService.availableUpdate,
+                            pendingUpdate: cliProxyAPIUpdateService.pendingUpdate
+                        )) {
+                            if cliProxyAPIUpdateService.pendingUpdate != nil {
+                                showApplyPrompt = true
+                            } else if cliProxyAPIUpdateService.availableUpdate != nil {
+                                Task {
+                                    await cliProxyAPIUpdateService.downloadAvailableUpdate()
+                                    if cliProxyAPIUpdateService.pendingUpdate != nil {
+                                        showApplyPrompt = true
+                                    }
+                                }
+                            } else {
+                                Task { await cliProxyAPIUpdateService.checkNow() }
+                            }
+                        }
+                        .controlSize(.small)
                     }
-                    .controlSize(.small)
                 }
             }
 
@@ -241,20 +247,23 @@ func cliproxyAPIUpdateDescription(
     availableUpdate: CLIProxyAPIRelease?,
     pendingUpdate: CLIProxyAPIBinaryManifest?
 ) -> String {
-    if let pendingUpdate {
-        return "Version \(pendingUpdate.version) will be applied on next server start."
-    }
-    if let availableUpdate {
-        return "Version \(availableUpdate.version.description) is available."
-    }
     switch state {
     case .checking:
-        return "Checking for CLIProxyAPI updates…"
+        return "Current version: \(currentVersion) · Checking for updates…"
+    case .downloading:
+        return "Current version: \(currentVersion) · Downloading and verifying update…"
     case .failed:
-        return "Last check failed."
+        return "Current version: \(currentVersion) · Last check failed."
     default:
-        return "Current version: \(currentVersion)"
+        break
     }
+    if let pendingUpdate {
+        return "Current version: \(currentVersion) · Pending: \(pendingUpdate.version)"
+    }
+    if let availableUpdate {
+        return "Current version: \(currentVersion) · Available: \(availableUpdate.version.description)"
+    }
+    return "Current version: \(currentVersion)"
 }
 
 func cliproxyAPIUpdateActionTitle(
@@ -262,9 +271,10 @@ func cliproxyAPIUpdateActionTitle(
     availableUpdate: CLIProxyAPIRelease?,
     pendingUpdate: CLIProxyAPIBinaryManifest?
 ) -> String {
+    if state == .checking { return "Checking…" }
+    if state == .downloading { return "Updating…" }
     if pendingUpdate != nil { return "Apply now" }
     if availableUpdate != nil { return "Update…" }
-    if state == .checking { return "Checking…" }
     return "Check now"
 }
 

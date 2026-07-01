@@ -15,7 +15,7 @@ final class CLIProxyAPIUpdateUITests: XCTestCase {
         )
     }
 
-    func testServerSettingsDescriptionShowsAvailableVersion() {
+    func testServerSettingsDescriptionShowsCurrentAndAvailableVersion() {
         let release = CLIProxyAPIRelease(
             version: CLIProxyAPIVersion("7.2.42")!,
             tagName: "v7.2.42",
@@ -31,11 +31,11 @@ final class CLIProxyAPIUpdateUITests: XCTestCase {
                 availableUpdate: release,
                 pendingUpdate: nil
             ),
-            "Version 7.2.42 is available."
+            "Current version: 7.2.41 · Available: 7.2.42"
         )
     }
 
-    func testServerSettingsDescriptionShowsPendingVersion() {
+    func testServerSettingsDescriptionShowsCurrentAndPendingVersion() {
         XCTAssertEqual(
             cliproxyAPIUpdateDescription(
                 currentVersion: "7.2.41",
@@ -43,7 +43,28 @@ final class CLIProxyAPIUpdateUITests: XCTestCase {
                 availableUpdate: nil,
                 pendingUpdate: manifest("7.2.42")
             ),
-            "Version 7.2.42 will be applied on next server start."
+            "Current version: 7.2.41 · Pending: 7.2.42"
+        )
+    }
+
+    func testServerSettingsDescriptionShowsProgressStatesWithCurrentVersion() {
+        XCTAssertEqual(
+            cliproxyAPIUpdateDescription(
+                currentVersion: "7.2.41",
+                state: .checking,
+                availableUpdate: nil,
+                pendingUpdate: nil
+            ),
+            "Current version: 7.2.41 · Checking for updates…"
+        )
+        XCTAssertEqual(
+            cliproxyAPIUpdateDescription(
+                currentVersion: "7.2.41",
+                state: .downloading,
+                availableUpdate: nil,
+                pendingUpdate: nil
+            ),
+            "Current version: 7.2.41 · Downloading and verifying update…"
         )
     }
 
@@ -58,8 +79,23 @@ final class CLIProxyAPIUpdateUITests: XCTestCase {
 
         XCTAssertEqual(cliproxyAPIUpdateActionTitle(state: .idle, availableUpdate: nil, pendingUpdate: nil), "Check now")
         XCTAssertEqual(cliproxyAPIUpdateActionTitle(state: .checking, availableUpdate: nil, pendingUpdate: nil), "Checking…")
+        XCTAssertEqual(cliproxyAPIUpdateActionTitle(state: .downloading, availableUpdate: nil, pendingUpdate: nil), "Updating…")
         XCTAssertEqual(cliproxyAPIUpdateActionTitle(state: .updateAvailable, availableUpdate: release, pendingUpdate: nil), "Update…")
         XCTAssertEqual(cliproxyAPIUpdateActionTitle(state: .pending, availableUpdate: nil, pendingUpdate: manifest("7.2.42")), "Apply now")
+    }
+
+    func testServerSettingsSourceShowsProgressIndicatorWhileCheckingOrUpdating() throws {
+        let source = try String(contentsOf: repositoryRoot().appendingPathComponent("Sources/CLIProxyManagerApp/Views/GeneralSettingsView.swift"), encoding: .utf8)
+
+        XCTAssertTrue(source.contains("ProgressView()"))
+        XCTAssertTrue(source.contains("cliProxyAPIUpdateService.isChecking || cliProxyAPIUpdateService.isUpdating"))
+    }
+
+    func testDashboardViewCopyClarifiesOnlyServerRestarts() throws {
+        let source = try String(contentsOf: repositoryRoot().appendingPathComponent("Sources/CLIProxyManagerApp/Views/DashboardView.swift"), encoding: .utf8)
+
+        XCTAssertTrue(source.contains("Apply now and restart server"))
+        XCTAssertTrue(source.contains("CLIProxyAPI binary updated. Restarting the app is not required."))
     }
 
     func testDashboardViewSourceStartsAutomaticCLIProxyAPICheckAndShowsConfirmationDialogs() throws {
