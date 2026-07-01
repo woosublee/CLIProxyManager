@@ -10,6 +10,17 @@ final class ProxyServiceManagerTests: XCTestCase {
         XCTAssertEqual(paths.authDirectory, sandbox.appendingPathComponent("managed/auth", isDirectory: true))
     }
 
+    func testManagedPathsExposeCLIProxyAPIUpdatePaths() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+
+        XCTAssertEqual(paths.activeClipProxyManifest, sandbox.appendingPathComponent("managed/cliproxyapi/active-manifest.json"))
+        XCTAssertEqual(paths.pendingClipProxyDirectory, sandbox.appendingPathComponent("managed/cliproxyapi/pending", isDirectory: true))
+        XCTAssertEqual(paths.pendingClipProxyBinary, sandbox.appendingPathComponent("managed/cliproxyapi/pending/cliproxyapi"))
+        XCTAssertEqual(paths.pendingClipProxyManifest, sandbox.appendingPathComponent("managed/cliproxyapi/pending/manifest.json"))
+        XCTAssertEqual(paths.clipProxyUpdateStateFile, sandbox.appendingPathComponent("managed/cliproxyapi/update-state.json"))
+    }
+
     func testStartWritesCompatibleConfigAndLaunchesBinaryWithConfigPath() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
