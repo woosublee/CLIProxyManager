@@ -13,18 +13,30 @@ struct AutomaticShellInstallService: Sendable {
     private let installer: any ShellFunctionInstalling
     private let secretStore: any SecretStore
     private let defaultHelperCommand: String
+    private let isEnabled: Bool
 
     init(
         installer: any ShellFunctionInstalling,
         secretStore: any SecretStore = KeychainSecretStore(),
-        helperCommand: String = "/usr/local/bin/cliproxy-manager"
+        helperCommand: String = "/usr/local/bin/cliproxy-manager",
+        isEnabled: Bool = true
     ) {
         self.installer = installer
         self.secretStore = secretStore
         self.defaultHelperCommand = helperCommand
+        self.isEnabled = isEnabled
+    }
+
+    static func runtimeDefault(installer: any ShellFunctionInstalling) -> AutomaticShellInstallService {
+        #if DEBUG
+        AutomaticShellInstallService(installer: installer, isEnabled: false)
+        #else
+        AutomaticShellInstallService(installer: installer)
+        #endif
     }
 
     func apply(config: AppConfig, helperCommand: String? = nil, enabledFunctions: EnabledFunctions = .allOAuth) throws {
+        guard isEnabled else { return }
         let includeClaudeOAuth = enabledFunctions.claudeOAuth && !config.commands.cc.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let includeCodex = enabledFunctions.codex && !config.commands.ccodex.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let includeClaudeAPI = try enabledFunctions.claudeAPI

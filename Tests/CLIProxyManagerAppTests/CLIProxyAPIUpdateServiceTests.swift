@@ -99,7 +99,8 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         let checker = StubUpdateChecking(release: release)
         let downloader = StubUpdateDownloading(result: CLIProxyAPIBinaryVerificationResult(
             binaryURL: sandbox.appendingPathComponent("verified/cliproxyapi"),
-            manifest: manifest("7.2.42")
+            manifest: manifest("7.2.42"),
+            temporaryDirectory: sandbox.appendingPathComponent("verified")
         ))
         try writeExecutable("#!/bin/sh\n", to: downloader.result!.binaryURL)
         let store = StubUpdateBinaryStore(currentVersion: "7.2.41")
@@ -110,6 +111,44 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
 
         XCTAssertEqual(store.savedPendingVersions, ["7.2.42"])
         XCTAssertEqual(service.pendingUpdate?.version, "7.2.42")
+        XCTAssertNil(service.availableUpdate)
+        XCTAssertEqual(downloader.cleanedTemporaryDirectories.map(\.path), [sandbox.appendingPathComponent("verified").path])
+    }
+
+    func testInitClearsStalePendingStateAfterAutostartPromotion() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try writeFullState(CLIProxyAPIUpdateState(lastAvailableVersion: "7.2.42", pendingVersion: "7.2.42"), to: paths.clipProxyUpdateStateFile)
+        let store = StubUpdateBinaryStore(currentVersion: "7.2.42", pending: nil)
+
+        let service = CLIProxyAPIUpdateService(paths: paths, checker: StubUpdateChecking(release: release("7.2.42")), downloader: StubUpdateDownloading(), store: store, now: { Date() })
+
+        XCTAssertNil(service.pendingUpdate)
+        XCTAssertEqual(service.currentVersionText, "7.2.42")
+        let data = try Data(contentsOf: paths.clipProxyUpdateStateFile)
+        let state = try JSONDecoder().decode(CLIProxyAPIUpdateState.self, from: data)
+        XCTAssertNil(state.pendingVersion)
+        XCTAssertNil(state.lastAvailableVersion)
+    }
+
+    func testApplyPendingNowClearsAvailableAndPersistedAvailableVersion() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try writeFullState(CLIProxyAPIUpdateState(lastAvailableVersion: "7.2.42", lastDeferredVersion: "7.2.42", pendingVersion: "7.2.42"), to: paths.clipProxyUpdateStateFile)
+        let store = StubUpdateBinaryStore(currentVersion: "7.2.41", pending: manifest("7.2.42"), currentAfterApply: "7.2.42")
+        let service = CLIProxyAPIUpdateService(paths: paths, checker: StubUpdateChecking(release: release("7.2.42")), downloader: StubUpdateDownloading(), store: store, now: { Date() })
+        service.availableUpdate = release("7.2.42")
+
+        try service.applyPendingNow()
+
+        XCTAssertNil(service.pendingUpdate)
+        XCTAssertNil(service.availableUpdate)
+        XCTAssertEqual(service.currentVersionText, "7.2.42")
+        let data = try Data(contentsOf: paths.clipProxyUpdateStateFile)
+        let state = try JSONDecoder().decode(CLIProxyAPIUpdateState.self, from: data)
+        XCTAssertNil(state.pendingVersion)
+        XCTAssertNil(state.lastAvailableVersion)
+        XCTAssertNil(state.lastDeferredVersion)
     }
 
     func testApplyPendingNowCallsStore() throws {
@@ -145,9 +184,15 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
     }
 
     private func writeState(lastCheckedAt: Date, to url: URL) throws {
+        var state = CLIProxyAPIUpdateState()
+        state.lastCheckedAt = ISO8601DateFormatter().string(from: lastCheckedAt)
+        try writeFullState(state, to: url)
+    }
+
+    private func writeFullState(_ state: CLIProxyAPIUpdateState, to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let text = "{\"lastCheckedAt\":\"\(ISO8601DateFormatter().string(from: lastCheckedAt))\"}"
-        try Data(text.utf8).write(to: url)
+        let data = try JSONEncoder().encode(state)
+        try data.write(to: url)
     }
 
     private func writeExecutable(_ text: String, to url: URL) throws {
@@ -181,7 +226,11 @@ private final class StubUpdateChecking: CLIProxyAPIUpdateChecking, @unchecked Se
 }
 
 private final class StubUpdateDownloading: CLIProxyAPIUpdateDownloading, @unchecked Sendable {
+    private let lock = NSLock()
     let result: CLIProxyAPIBinaryVerificationResult?
+    private var _cleanedTemporaryDirectories: [URL] = []
+
+    var cleanedTemporaryDirectories: [URL] { lock.withLock { _cleanedTemporaryDirectories } }
 
     init(result: CLIProxyAPIBinaryVerificationResult? = nil) {
         self.result = result
@@ -191,29 +240,47 @@ private final class StubUpdateDownloading: CLIProxyAPIUpdateDownloading, @unchec
         if let result { return result }
         throw NSError(domain: "test", code: 1)
     }
+
+    func cleanup(_ result: CLIProxyAPIBinaryVerificationResult) {
+        guard let temporaryDirectory = result.temporaryDirectory else { return }
+        lock.withLock { _cleanedTemporaryDirectories.append(temporaryDirectory) }
+    }
 }
 
 private final class StubUpdateBinaryStore: CLIProxyAPIUpdateBinaryStoring, @unchecked Sendable {
     private let lock = NSLock()
-    private let current: CLIProxyAPIVersion?
+    private var current: CLIProxyAPIVersion?
+    private var pending: CLIProxyAPIBinaryManifest?
+    private let currentAfterApply: CLIProxyAPIVersion?
     private var _savedPendingVersions: [String] = []
     private var _applyPendingCallCount = 0
 
     var savedPendingVersions: [String] { lock.withLock { _savedPendingVersions } }
     var applyPendingCallCount: Int { lock.withLock { _applyPendingCallCount } }
 
-    init(currentVersion: String?) {
+    init(currentVersion: String?, pending: CLIProxyAPIBinaryManifest? = nil, currentAfterApply: String? = nil) {
         self.current = currentVersion.flatMap(CLIProxyAPIVersion.init)
+        self.pending = pending
+        self.currentAfterApply = currentAfterApply.flatMap(CLIProxyAPIVersion.init)
     }
 
-    func currentVersion(bundledManifestURL: URL?) throws -> CLIProxyAPIVersion? { current }
-    func pendingManifest() throws -> CLIProxyAPIBinaryManifest? { nil }
+    func currentVersion(bundledManifestURL: URL?) throws -> CLIProxyAPIVersion? { lock.withLock { current } }
+    func pendingManifest() throws -> CLIProxyAPIBinaryManifest? { lock.withLock { pending } }
 
     func savePending(binaryURL: URL, manifest: CLIProxyAPIBinaryManifest) throws {
-        lock.withLock { _savedPendingVersions.append(manifest.version) }
+        lock.withLock {
+            _savedPendingVersions.append(manifest.version)
+            pending = manifest
+        }
     }
 
     func applyPending() throws {
-        lock.withLock { _applyPendingCallCount += 1 }
+        lock.withLock {
+            _applyPendingCallCount += 1
+            pending = nil
+            if let currentAfterApply {
+                current = currentAfterApply
+            }
+        }
     }
 }

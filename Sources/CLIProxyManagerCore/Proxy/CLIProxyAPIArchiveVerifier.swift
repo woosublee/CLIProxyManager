@@ -12,10 +12,12 @@ public enum CLIProxyAPIArchiveVerifierError: Error, Equatable {
 public struct CLIProxyAPIBinaryVerificationResult: Equatable, Sendable {
     public let binaryURL: URL
     public let manifest: CLIProxyAPIBinaryManifest
+    public let temporaryDirectory: URL?
 
-    public init(binaryURL: URL, manifest: CLIProxyAPIBinaryManifest) {
+    public init(binaryURL: URL, manifest: CLIProxyAPIBinaryManifest, temporaryDirectory: URL? = nil) {
         self.binaryURL = binaryURL
         self.manifest = manifest
+        self.temporaryDirectory = temporaryDirectory
     }
 }
 
@@ -85,7 +87,12 @@ public struct CLIProxyAPIArchiveVerifier: Sendable {
             vendoredFromArchivePath: "cli-proxy-api",
             downloadedAt: ISO8601DateFormatter().string(from: Date())
         )
-        return CLIProxyAPIBinaryVerificationResult(binaryURL: binaryURL, manifest: manifest)
+        return CLIProxyAPIBinaryVerificationResult(binaryURL: binaryURL, manifest: manifest, temporaryDirectory: tempDirectory)
+    }
+
+    public func cleanup(_ result: CLIProxyAPIBinaryVerificationResult) {
+        guard let temporaryDirectory = result.temporaryDirectory else { return }
+        try? fileManager.removeItem(at: temporaryDirectory)
     }
 
     static func parseVersionLine(_ output: String) -> (version: String, commit: String, builtAt: String)? {
@@ -124,5 +131,9 @@ private final class FileManagerBox: @unchecked Sendable {
 
     func setAttributes(_ attributes: [FileAttributeKey: Any], ofItemAtPath path: String) throws {
         try fileManager.setAttributes(attributes, ofItemAtPath: path)
+    }
+
+    func removeItem(at url: URL) throws {
+        try fileManager.removeItem(at: url)
     }
 }

@@ -94,7 +94,9 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
             throw CLIProxyAPIBinaryStoreError.invalidManifestVersion(bundledManifest.version)
         }
 
-        try applyUsablePendingIfNewerThanBundled(bundledVersion: bundledVersion)
+        let active = try validActiveManifest()
+        let activeVersion = active?.parsedVersion
+        try applyUsablePendingIfNewest(bundledVersion: bundledVersion, activeVersion: activeVersion)
 
         guard fileManager.fileExists(atPath: paths.clipProxyBinary.path), let active = try activeManifest() else {
             try installBundled(binaryURL: bundledBinaryURL, manifest: bundledManifest)
@@ -110,21 +112,37 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
             let activeBinaryMatches = try binaryMatches(paths.clipProxyBinary, manifest: active)
             if activeVersion < bundledVersion || !activeBinaryMatches {
                 try installBundled(binaryURL: bundledBinaryURL, manifest: bundledManifest)
+            } else {
+                try ensureExecutable(paths.clipProxyBinary)
             }
         case .userUpdated:
-            if activeVersion < bundledVersion {
+            let activeBinaryMatches = try binaryMatches(paths.clipProxyBinary, manifest: active)
+            if activeVersion < bundledVersion || !activeBinaryMatches {
                 try installBundled(binaryURL: bundledBinaryURL, manifest: bundledManifest)
+            } else {
+                try ensureExecutable(paths.clipProxyBinary)
             }
         }
     }
 
-    private func applyUsablePendingIfNewerThanBundled(bundledVersion: CLIProxyAPIVersion) throws {
+    private func validActiveManifest() throws -> CLIProxyAPIBinaryManifest? {
+        guard fileManager.fileExists(atPath: paths.clipProxyBinary.path),
+              let active = try activeManifest(),
+              active.parsedVersion != nil,
+              try binaryMatches(paths.clipProxyBinary, manifest: active) else {
+            return nil
+        }
+        return active
+    }
+
+    private func applyUsablePendingIfNewest(bundledVersion: CLIProxyAPIVersion, activeVersion: CLIProxyAPIVersion?) throws {
         guard fileManager.fileExists(atPath: paths.pendingClipProxyBinary.path) || fileManager.fileExists(atPath: paths.pendingClipProxyManifest.path) else {
             return
         }
         guard let pending = try? pendingManifest(),
               let pendingVersion = pending.parsedVersion,
               pendingVersion > bundledVersion,
+              activeVersion.map({ pendingVersion > $0 }) ?? true,
               (try? binaryMatches(paths.pendingClipProxyBinary, manifest: pending)) == true else {
             try? fileManager.removeItem(at: paths.pendingClipProxyDirectory)
             return
@@ -169,6 +187,10 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
         } catch {
             return false
         }
+    }
+
+    private func ensureExecutable(_ url: URL) throws {
+        try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 
     private func replaceFile(from source: URL, to destination: URL) throws {

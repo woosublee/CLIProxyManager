@@ -30,7 +30,7 @@ public struct CLIProxyAPIReleaseClient: Sendable {
     private let latestReleaseURL: URL
 
     public init(
-        httpClient: any HTTPClient = URLSessionHTTPClient(),
+        httpClient: any HTTPClient = URLSessionHTTPClient(session: URLSessionHTTPClient.makeExternalUpdateSession()),
         latestReleaseURL: URL = URL(string: "https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/latest")!
     ) {
         self.httpClient = httpClient

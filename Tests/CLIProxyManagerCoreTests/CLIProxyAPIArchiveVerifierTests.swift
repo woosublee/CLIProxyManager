@@ -38,6 +38,30 @@ final class CLIProxyAPIArchiveVerifierTests: XCTestCase {
         XCTAssertEqual(result.manifest.upstreamAssetSha256, archiveData.sha256HexDigest())
         XCTAssertEqual(result.manifest.vendoredBinaryName, "cliproxyapi")
         XCTAssertTrue(FileManager.default.fileExists(atPath: result.binaryURL.path))
+        XCTAssertNotNil(result.temporaryDirectory)
+    }
+
+    func testCleanupRemovesVerificationTemporaryDirectory() async throws {
+        let archiveData = Data("archive".utf8)
+        let release = release(assetSha256: archiveData.sha256HexDigest())
+        let runner = StubVerifierRunner(results: [
+            ProcessResult(exitCode: 0, stdout: "", stderr: ""),
+            ProcessResult(exitCode: 0, stdout: "CLIProxyAPI Version: 7.2.42, Commit: abcdef12, BuiltAt: 2026-07-01T00:00:00Z\n", stderr: "")
+        ])
+        let verifier = CLIProxyAPIArchiveVerifier(
+            runner: runner,
+            extractedBinaryLocator: { tempDirectory in
+                let binary = tempDirectory.appendingPathComponent("cli-proxy-api")
+                try Data("#!/bin/sh\n".utf8).write(to: binary)
+                return binary
+            }
+        )
+        let result = try await verifier.verify(archiveData: archiveData, release: release)
+        let temporaryDirectory = try XCTUnwrap(result.temporaryDirectory)
+
+        verifier.cleanup(result)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: temporaryDirectory.path))
     }
 
     func testAcceptsVersionMetadataWhenVersionCommandExitsNonZero() async throws {

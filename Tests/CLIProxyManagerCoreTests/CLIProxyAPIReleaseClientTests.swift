@@ -3,6 +3,24 @@ import XCTest
 @testable import CLIProxyManagerCore
 
 final class CLIProxyAPIReleaseClientTests: XCTestCase {
+    func testExternalUpdateSessionRespectsSystemProxyAndUsesDownloadTimeouts() {
+        let session = URLSessionHTTPClient.makeExternalUpdateSession()
+        let configuration = session.configuration
+
+        XCTAssertNil(configuration.connectionProxyDictionary)
+        XCTAssertEqual(configuration.timeoutIntervalForRequest, 30)
+        XCTAssertEqual(configuration.timeoutIntervalForResource, 300)
+    }
+
+    func testLoopbackDefaultSessionStillBypassesSystemProxy() {
+        let session = URLSessionHTTPClient.makeDefaultSession()
+        let configuration = session.configuration
+
+        XCTAssertEqual(configuration.connectionProxyDictionary?.isEmpty, true)
+        XCTAssertEqual(configuration.timeoutIntervalForRequest, 5)
+        XCTAssertEqual(configuration.timeoutIntervalForResource, 10)
+    }
+
     func testParsesLatestReleaseAndChecksumForDarwinArm64Asset() async throws {
         let latestURL = URL(string: "https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/latest")!
         let checksumURL = URL(string: "https://downloads.example/checksums.txt")!
