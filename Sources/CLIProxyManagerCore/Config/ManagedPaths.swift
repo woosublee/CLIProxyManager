@@ -60,7 +60,12 @@ public struct ManagedPaths: Equatable, Sendable {
     }
 
     public static func defaultRootDirectory() -> URL {
-        FileManager.default.homeDirectoryForCurrentUser
+        let productionRoot = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".cliproxy-manager", isDirectory: true)
+        #if DEBUG
+        return productionRoot.appendingPathComponent("dev", isDirectory: true)
+        #else
+        return productionRoot
+        #endif
     }
 }

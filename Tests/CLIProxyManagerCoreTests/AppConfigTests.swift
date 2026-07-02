@@ -179,6 +179,20 @@ final class AppConfigTests: XCTestCase {
         XCTAssertFalse(config.roundRobinEnabled)
     }
 
+    func testDefaultRootDirectoryUsesDevelopmentSubdirectoryInDebugBuilds() {
+        let productionRoot = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".cliproxy-manager", isDirectory: true)
+
+        #if DEBUG
+        XCTAssertEqual(
+            ManagedPaths.defaultRootDirectory(),
+            productionRoot.appendingPathComponent("dev", isDirectory: true)
+        )
+        #else
+        XCTAssertEqual(ManagedPaths.defaultRootDirectory(), productionRoot)
+        #endif
+    }
+
     func testManagedPathsCanBeRootedInTemporaryDirectory() {
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent(UUID().uuidString)
