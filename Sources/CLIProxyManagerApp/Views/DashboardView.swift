@@ -91,14 +91,14 @@ struct DashboardView: View {
         .task {
             await viewModel.refresh()
             await viewModel.performAutostartIfEnabled()
-            await cliProxyAPIUpdateService.checkAutomaticallyOnLaunch()
-        }
-        .onChange(of: cliProxyAPIUpdateService.availableUpdate?.tagName) { _, tag in
-            showCLIProxyAPIUpdatePrompt = tag != nil
-        }
-        .onChange(of: cliProxyAPIUpdateService.pendingUpdate?.version) { _, version in
-            if version != nil {
+            let automaticCheckResult = await cliProxyAPIUpdateService.checkAutomaticallyOnLaunch()
+            switch automaticCheckResult {
+            case .availableUpdate:
+                showCLIProxyAPIUpdatePrompt = true
+            case .pendingUpdate:
                 showCLIProxyAPIApplyPrompt = true
+            case .none:
+                break
             }
         }
         .frame(width: AppWindowMetrics.mainWidth, height: preferredHeight)
@@ -117,7 +117,12 @@ struct DashboardView: View {
                 availableUpdate: cliProxyAPIUpdateService.availableUpdate,
                 pendingUpdate: nil
             )) {
-                Task { await cliProxyAPIUpdateService.downloadAvailableUpdate() }
+                Task {
+                    await cliProxyAPIUpdateService.downloadAvailableUpdate()
+                    if cliProxyAPIUpdateService.pendingUpdate != nil {
+                        showCLIProxyAPIApplyPrompt = true
+                    }
+                }
             }
             Button("Later", role: .cancel) {
                 cliProxyAPIUpdateService.deferAvailableUpdate()

@@ -15,7 +15,7 @@ extension CLIProxyAPIUpdateDownloading {
 }
 
 protocol CLIProxyAPIUpdateBinaryStoring: Sendable {
-    func currentVersion(bundledManifestURL: URL?) throws -> CLIProxyAPIVersion?
+    func validatedCurrentVersion(bundledManifestURL: URL?) throws -> CLIProxyAPIVersion?
     func savePending(binaryURL: URL, manifest: CLIProxyAPIBinaryManifest) throws
     func pendingManifest() throws -> CLIProxyAPIBinaryManifest?
     func applyPending() throws
@@ -40,6 +40,12 @@ enum CLIProxyAPIUpdateServiceState: Equatable {
     case failed(String)
 }
 
+enum CLIProxyAPIAutomaticCheckResult: Equatable {
+    case none
+    case availableUpdate
+    case pendingUpdate
+}
+
 extension CLIProxyAPIReleaseClient: CLIProxyAPIUpdateChecking {}
 
 struct CLIProxyAPIUpdateDownloader: CLIProxyAPIUpdateDownloading {
@@ -56,17 +62,7 @@ struct CLIProxyAPIUpdateDownloader: CLIProxyAPIUpdateDownloading {
     }
 }
 
-extension CLIProxyAPIBinaryStore: CLIProxyAPIUpdateBinaryStoring {
-    public func currentVersion(bundledManifestURL: URL?) throws -> CLIProxyAPIVersion? {
-        if let activeVersion = try activeManifest()?.parsedVersion {
-            return activeVersion
-        }
-        guard let bundledManifestURL else { return nil }
-        guard FileManager.default.fileExists(atPath: bundledManifestURL.path) else { return nil }
-        let manifest = try JSONDecoder().decode(CLIProxyAPIBinaryManifest.self, from: Data(contentsOf: bundledManifestURL))
-        return manifest.parsedVersion
-    }
-}
+extension CLIProxyAPIBinaryStore: CLIProxyAPIUpdateBinaryStoring {}
 
 @MainActor
 final class CLIProxyAPIUpdateService: ObservableObject {
@@ -109,16 +105,17 @@ final class CLIProxyAPIUpdateService: ObservableObject {
         refreshStoredStatus()
     }
 
-    func checkAutomaticallyOnLaunch() async {
-        let state = loadState()
-        if let lastCheckedAt = state.lastCheckedAt.flatMap(Self.parseDate), now().timeIntervalSince(lastCheckedAt) < 86_400 {
-            return
+    func checkAutomaticallyOnLaunch() async -> CLIProxyAPIAutomaticCheckResult {
+        refreshStoredStatus()
+        let storedState = loadState()
+        if let lastCheckedAt = storedState.lastCheckedAt.flatMap(Self.parseDate), now().timeIntervalSince(lastCheckedAt) < 86_400 {
+            return pendingUpdate == nil ? .none : .pendingUpdate
         }
-        await check(suppressDeferredVersion: true)
+        return await check(suppressDeferredVersion: true)
     }
 
     func checkNow() async {
-        await check(suppressDeferredVersion: false)
+        _ = await check(suppressDeferredVersion: false)
     }
 
     func deferAvailableUpdate() {
@@ -141,11 +138,11 @@ final class CLIProxyAPIUpdateService: ObservableObject {
             try store.savePending(binaryURL: result.binaryURL, manifest: result.manifest)
             pendingUpdate = result.manifest
             availableUpdate = nil
-            currentVersionText = (try? store.currentVersion(bundledManifestURL: bundledManifestURL)?.description) ?? currentVersionText
+            currentVersionText = (try? store.validatedCurrentVersion(bundledManifestURL: bundledManifestURL)?.description) ?? currentVersionText
             var updateState = loadState()
             updateState.pendingVersion = result.manifest.version
             updateState.lastAvailableVersion = nil
-            saveState(reconciled(updateState, currentVersion: try? store.currentVersion(bundledManifestURL: bundledManifestURL)))
+            saveState(reconciled(updateState, currentVersion: try? store.validatedCurrentVersion(bundledManifestURL: bundledManifestURL)))
             state = .pending
         } catch {
             recordFailure(error)
@@ -157,7 +154,7 @@ final class CLIProxyAPIUpdateService: ObservableObject {
         try store.applyPending()
         pendingUpdate = nil
         availableUpdate = nil
-        let current = try? store.currentVersion(bundledManifestURL: bundledManifestURL)
+        let current = try? store.validatedCurrentVersion(bundledManifestURL: bundledManifestURL)
         currentVersionText = current?.description ?? currentVersionText
         var updateState = loadState()
         updateState.pendingVersion = nil
@@ -168,8 +165,8 @@ final class CLIProxyAPIUpdateService: ObservableObject {
         state = .idle
     }
 
-    private func check(suppressDeferredVersion: Bool) async {
-        guard !isChecking else { return }
+    private func check(suppressDeferredVersion: Bool) async -> CLIProxyAPIAutomaticCheckResult {
+        guard !isChecking else { return .none }
         isChecking = true
         state = .checking
         defer { isChecking = false }
@@ -179,25 +176,34 @@ final class CLIProxyAPIUpdateService: ObservableObject {
             updateState.lastCheckedAt = Self.formatDate(now())
             updateState.lastAvailableVersion = release.version.description
             saveState(updateState)
-            let current = try store.currentVersion(bundledManifestURL: bundledManifestURL)
+            let current = try store.validatedCurrentVersion(bundledManifestURL: bundledManifestURL)
             currentVersionText = current?.description ?? "Unknown"
             updateState = reconciled(updateState, currentVersion: current)
             saveState(updateState)
             pendingUpdate = try? store.pendingManifest()
+            if let pendingUpdate, pendingUpdate.parsedVersion == release.version {
+                updateState.lastAvailableVersion = nil
+                saveState(updateState)
+                availableUpdate = nil
+                state = .pending
+                return .pendingUpdate
+            }
             if let current, release.version <= current {
                 availableUpdate = nil
                 state = .upToDate
-                return
+                return .none
             }
             if suppressDeferredVersion, updateState.lastDeferredVersion == release.version.description {
                 availableUpdate = nil
                 state = .idle
-                return
+                return .none
             }
             availableUpdate = release
             state = .updateAvailable
+            return .availableUpdate
         } catch {
             recordFailure(error)
+            return .none
         }
     }
 
@@ -215,7 +221,7 @@ final class CLIProxyAPIUpdateService: ObservableObject {
 
     private func refreshStoredStatus() {
         pendingUpdate = try? store.pendingManifest()
-        let current = try? store.currentVersion(bundledManifestURL: bundledManifestURL)
+        let current = try? store.validatedCurrentVersion(bundledManifestURL: bundledManifestURL)
         currentVersionText = current?.description ?? "Unknown"
         let updateState = reconciled(loadState(), currentVersion: current)
         saveState(updateState)

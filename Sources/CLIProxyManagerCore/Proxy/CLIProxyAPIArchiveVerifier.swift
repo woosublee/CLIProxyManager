@@ -44,6 +44,12 @@ public struct CLIProxyAPIArchiveVerifier: Sendable {
             .appendingPathComponent("cliproxyapi-update")
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try fileManager.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        var didTransferTemporaryDirectoryOwnership = false
+        defer {
+            if !didTransferTemporaryDirectoryOwnership {
+                try? fileManager.removeItem(at: tempDirectory)
+            }
+        }
         let archiveURL = tempDirectory.appendingPathComponent(release.assetName)
         try archiveData.write(to: archiveURL, options: .atomic)
 
@@ -87,6 +93,7 @@ public struct CLIProxyAPIArchiveVerifier: Sendable {
             vendoredFromArchivePath: "cli-proxy-api",
             downloadedAt: ISO8601DateFormatter().string(from: Date())
         )
+        didTransferTemporaryDirectoryOwnership = true
         return CLIProxyAPIBinaryVerificationResult(binaryURL: binaryURL, manifest: manifest, temporaryDirectory: tempDirectory)
     }
 

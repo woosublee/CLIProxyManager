@@ -64,6 +64,31 @@ final class CLIProxyAPIArchiveVerifierTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: temporaryDirectory.path))
     }
 
+    func testVerifyCleansTemporaryDirectoryAfterChecksumPassesButExtractedBinaryIsMissing() async {
+        let archiveData = Data("archive".utf8)
+        let release = release(assetSha256: archiveData.sha256HexDigest())
+        let runner = StubVerifierRunner(results: [
+            ProcessResult(exitCode: 0, stdout: "", stderr: "")
+        ])
+        let capturedTempDirectory = CapturedURLBox()
+        let verifier = CLIProxyAPIArchiveVerifier(
+            runner: runner,
+            extractedBinaryLocator: { tempDirectory in
+                capturedTempDirectory.url = tempDirectory
+                return tempDirectory.appendingPathComponent("cli-proxy-api")
+            }
+        )
+
+        await XCTAssertThrowsErrorAsync(try await verifier.verify(archiveData: archiveData, release: release)) { error in
+            XCTAssertEqual(error as? CLIProxyAPIArchiveVerifierError, .missingExtractedBinary)
+        }
+
+        XCTAssertNotNil(capturedTempDirectory.url)
+        if let tempDirectory = capturedTempDirectory.url {
+            XCTAssertFalse(FileManager.default.fileExists(atPath: tempDirectory.path))
+        }
+    }
+
     func testAcceptsVersionMetadataWhenVersionCommandExitsNonZero() async throws {
         let archiveData = Data("archive".utf8)
         let release = release(assetSha256: archiveData.sha256HexDigest())
@@ -132,6 +157,16 @@ private func XCTAssertThrowsErrorAsync(
         XCTFail("Expected error", file: file, line: line)
     } catch {
         assertion(error)
+    }
+}
+
+private final class CapturedURLBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var capturedURL: URL?
+
+    var url: URL? {
+        get { lock.withLock { capturedURL } }
+        set { lock.withLock { capturedURL = newValue } }
     }
 }
 

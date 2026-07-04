@@ -65,14 +65,22 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
             try fileManager.moveItem(at: paths.clipProxyBinary, to: backup)
         }
 
+        var movedPendingToActive = false
         do {
             try fileManager.moveItem(at: paths.pendingClipProxyBinary, to: paths.clipProxyBinary)
+            movedPendingToActive = true
             try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: paths.clipProxyBinary.path)
             try writeManifest(manifest, to: paths.activeClipProxyManifest)
             try? fileManager.removeItem(at: paths.pendingClipProxyDirectory)
             try? fileManager.removeItem(at: backup)
         } catch {
-            try? fileManager.removeItem(at: paths.clipProxyBinary)
+            if movedPendingToActive, fileManager.fileExists(atPath: paths.clipProxyBinary.path) {
+                try? fileManager.createDirectory(at: paths.pendingClipProxyDirectory, withIntermediateDirectories: true)
+                try? fileManager.removeItem(at: paths.pendingClipProxyBinary)
+                try? fileManager.moveItem(at: paths.clipProxyBinary, to: paths.pendingClipProxyBinary)
+            } else {
+                try? fileManager.removeItem(at: paths.clipProxyBinary)
+            }
             if fileManager.fileExists(atPath: backup.path) {
                 try? fileManager.moveItem(at: backup, to: paths.clipProxyBinary)
             }
@@ -94,30 +102,18 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
             throw CLIProxyAPIBinaryStoreError.invalidManifestVersion(bundledManifest.version)
         }
 
-        let active = try validActiveManifest()
+        let active = validActiveManifest()
         let activeVersion = active?.parsedVersion
         try applyUsablePendingIfNewest(bundledVersion: bundledVersion, activeVersion: activeVersion)
 
-        guard fileManager.fileExists(atPath: paths.clipProxyBinary.path), let active = try activeManifest() else {
-            try installBundled(binaryURL: bundledBinaryURL, manifest: bundledManifest)
-            return
-        }
-        guard let activeVersion = active.parsedVersion else {
+        guard let active = validActiveManifest(), let activeVersion = active.parsedVersion else {
             try installBundled(binaryURL: bundledBinaryURL, manifest: bundledManifest)
             return
         }
 
         switch active.sourceKind {
-        case .bundled:
-            let activeBinaryMatches = try binaryMatches(paths.clipProxyBinary, manifest: active)
-            if activeVersion < bundledVersion || !activeBinaryMatches {
-                try installBundled(binaryURL: bundledBinaryURL, manifest: bundledManifest)
-            } else {
-                try ensureExecutable(paths.clipProxyBinary)
-            }
-        case .userUpdated:
-            let activeBinaryMatches = try binaryMatches(paths.clipProxyBinary, manifest: active)
-            if activeVersion < bundledVersion || !activeBinaryMatches {
+        case .bundled, .userUpdated:
+            if activeVersion < bundledVersion {
                 try installBundled(binaryURL: bundledBinaryURL, manifest: bundledManifest)
             } else {
                 try ensureExecutable(paths.clipProxyBinary)
@@ -125,11 +121,20 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
         }
     }
 
-    private func validActiveManifest() throws -> CLIProxyAPIBinaryManifest? {
+    public func validatedCurrentVersion(bundledManifestURL: URL?) throws -> CLIProxyAPIVersion? {
+        if let activeVersion = validActiveManifest()?.parsedVersion {
+            return activeVersion
+        }
+        guard let bundledManifestURL else { return nil }
+        guard fileManager.fileExists(atPath: bundledManifestURL.path) else { return nil }
+        return try readManifestIfExists(bundledManifestURL)?.parsedVersion
+    }
+
+    private func validActiveManifest() -> CLIProxyAPIBinaryManifest? {
         guard fileManager.fileExists(atPath: paths.clipProxyBinary.path),
-              let active = try activeManifest(),
+              let active = try? activeManifest(),
               active.parsedVersion != nil,
-              try binaryMatches(paths.clipProxyBinary, manifest: active) else {
+              binaryMatches(paths.clipProxyBinary, manifest: active) else {
             return nil
         }
         return active
@@ -143,7 +148,7 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
               let pendingVersion = pending.parsedVersion,
               pendingVersion > bundledVersion,
               activeVersion.map({ pendingVersion > $0 }) ?? true,
-              (try? binaryMatches(paths.pendingClipProxyBinary, manifest: pending)) == true else {
+              binaryMatches(paths.pendingClipProxyBinary, manifest: pending) else {
             try? fileManager.removeItem(at: paths.pendingClipProxyDirectory)
             return
         }
@@ -180,7 +185,7 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
         }
     }
 
-    private func binaryMatches(_ url: URL, manifest: CLIProxyAPIBinaryManifest) throws -> Bool {
+    private func binaryMatches(_ url: URL, manifest: CLIProxyAPIBinaryManifest) -> Bool {
         do {
             try validateBinary(at: url, manifest: manifest)
             return true

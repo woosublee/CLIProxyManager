@@ -12,10 +12,30 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         let checker = StubUpdateChecking(release: release("7.2.42"))
         let service = CLIProxyAPIUpdateService(paths: paths, checker: checker, downloader: StubUpdateDownloading(), store: StubUpdateBinaryStore(currentVersion: "7.2.41"), now: { Date() })
 
-        await service.checkAutomaticallyOnLaunch()
+        _ = await service.checkAutomaticallyOnLaunch()
 
         XCTAssertEqual(checker.invocationCount, 0)
         XCTAssertNil(service.availableUpdate)
+    }
+
+    func testAutomaticCheckRefreshesStoredStatusBeforeThrottleReturn() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try writeFullState(CLIProxyAPIUpdateState(lastCheckedAt: ISO8601DateFormatter().string(from: Date()), pendingVersion: "7.2.42"), to: paths.clipProxyUpdateStateFile)
+        let checker = StubUpdateChecking(release: release("7.2.42"))
+        let store = StubUpdateBinaryStore(currentVersion: "7.2.41", pending: manifest("7.2.42"))
+        let service = CLIProxyAPIUpdateService(paths: paths, checker: checker, downloader: StubUpdateDownloading(), store: store, now: { Date() })
+        XCTAssertEqual(service.pendingUpdate?.version, "7.2.42")
+        store.replaceState(currentVersion: "7.2.42", pending: nil)
+
+        _ = await service.checkAutomaticallyOnLaunch()
+
+        XCTAssertEqual(checker.invocationCount, 0)
+        XCTAssertNil(service.pendingUpdate)
+        XCTAssertEqual(service.currentVersionText, "7.2.42")
+        let data = try Data(contentsOf: paths.clipProxyUpdateStateFile)
+        let state = try JSONDecoder().decode(CLIProxyAPIUpdateState.self, from: data)
+        XCTAssertNil(state.pendingVersion)
     }
 
     func testAutomaticCheckPublishesNewerReleaseWhenLastCheckIsOld() async throws {
@@ -26,7 +46,7 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         let checker = StubUpdateChecking(release: release("7.2.42"))
         let service = CLIProxyAPIUpdateService(paths: paths, checker: checker, downloader: StubUpdateDownloading(), store: StubUpdateBinaryStore(currentVersion: "7.2.41"), now: { Date(timeIntervalSince1970: 90_000) })
 
-        await service.checkAutomaticallyOnLaunch()
+        _ = await service.checkAutomaticallyOnLaunch()
 
         XCTAssertEqual(checker.invocationCount, 1)
         XCTAssertEqual(service.availableUpdate?.version.description, "7.2.42")
@@ -39,7 +59,7 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         let checker = StubUpdateChecking(error: NSError(domain: "Network", code: 1, userInfo: [NSLocalizedDescriptionKey: "offline"]))
         let service = CLIProxyAPIUpdateService(paths: paths, checker: checker, downloader: StubUpdateDownloading(), store: StubUpdateBinaryStore(currentVersion: "7.2.41"), now: { now })
 
-        await service.checkAutomaticallyOnLaunch()
+        _ = await service.checkAutomaticallyOnLaunch()
 
         let data = try Data(contentsOf: paths.clipProxyUpdateStateFile)
         let state = try JSONDecoder().decode(CLIProxyAPIUpdateState.self, from: data)
@@ -65,6 +85,22 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         XCTAssertEqual(service.currentVersionText, "7.2.42")
     }
 
+    func testCurrentVersionIgnoresStaleActiveManifestWhenBinaryIsMissing() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let bundledManifest = sandbox.appendingPathComponent("bundle/cliproxyapi.manifest.json")
+        try writeManifest(manifest("7.2.42", sourceKind: .bundled), to: bundledManifest)
+        try writeManifest(manifest("9.0.0", sourceKind: .userUpdated), to: paths.activeClipProxyManifest)
+        let checker = StubUpdateChecking(release: release("7.2.43"))
+        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let service = CLIProxyAPIUpdateService(paths: paths, checker: checker, downloader: StubUpdateDownloading(), store: store, bundledManifestURL: bundledManifest, now: { Date() })
+
+        await service.checkNow()
+
+        XCTAssertEqual(service.currentVersionText, "7.2.42")
+        XCTAssertEqual(service.availableUpdate?.version.description, "7.2.43")
+    }
+
     func testManualCheckIgnoresLastCheckThrottle() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
@@ -78,6 +114,22 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         XCTAssertEqual(service.availableUpdate?.version.description, "7.2.42")
     }
 
+    func testManualCheckKeepsMatchingPendingReleaseInPendingState() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let checker = StubUpdateChecking(release: release("7.2.42"))
+        let store = StubUpdateBinaryStore(currentVersion: "7.2.41", pending: manifest("7.2.42"))
+        let service = CLIProxyAPIUpdateService(paths: paths, checker: checker, downloader: StubUpdateDownloading(), store: store, now: { Date() })
+
+        await service.checkNow()
+
+        XCTAssertNil(service.availableUpdate)
+        XCTAssertEqual(service.pendingUpdate?.version, "7.2.42")
+        if case .pending = service.state {} else {
+            XCTFail("Expected pending, got \(service.state)")
+        }
+    }
+
     func testDeferredVersionSuppressesRepeatedAutomaticPrompt() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
@@ -87,7 +139,7 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         await service.checkNow()
         service.deferAvailableUpdate()
         service.availableUpdate = nil
-        await service.checkAutomaticallyOnLaunch()
+        _ = await service.checkAutomaticallyOnLaunch()
 
         XCTAssertNil(service.availableUpdate)
     }
@@ -264,8 +316,15 @@ private final class StubUpdateBinaryStore: CLIProxyAPIUpdateBinaryStoring, @unch
         self.currentAfterApply = currentAfterApply.flatMap(CLIProxyAPIVersion.init)
     }
 
-    func currentVersion(bundledManifestURL: URL?) throws -> CLIProxyAPIVersion? { lock.withLock { current } }
+    func validatedCurrentVersion(bundledManifestURL: URL?) throws -> CLIProxyAPIVersion? { lock.withLock { current } }
     func pendingManifest() throws -> CLIProxyAPIBinaryManifest? { lock.withLock { pending } }
+
+    func replaceState(currentVersion: String?, pending: CLIProxyAPIBinaryManifest?) {
+        lock.withLock {
+            current = currentVersion.flatMap(CLIProxyAPIVersion.init)
+            self.pending = pending
+        }
+    }
 
     func savePending(binaryURL: URL, manifest: CLIProxyAPIBinaryManifest) throws {
         lock.withLock {

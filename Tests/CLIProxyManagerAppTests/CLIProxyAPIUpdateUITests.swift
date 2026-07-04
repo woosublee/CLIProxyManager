@@ -161,6 +161,16 @@ final class CLIProxyAPIUpdateUITests: XCTestCase {
         XCTAssertTrue(source.contains("Apply on next server start"))
     }
 
+    func testDashboardPromptsAreDrivenByAutomaticCheckResultOnly() throws {
+        let source = try String(contentsOf: repositoryRoot().appendingPathComponent("Sources/CLIProxyManagerApp/Views/DashboardView.swift"), encoding: .utf8)
+
+        XCTAssertFalse(source.contains(".onChange(of: cliProxyAPIUpdateService.availableUpdate"))
+        XCTAssertFalse(source.contains(".onChange(of: cliProxyAPIUpdateService.pendingUpdate"))
+        XCTAssertTrue(source.contains("let automaticCheckResult = await cliProxyAPIUpdateService.checkAutomaticallyOnLaunch()"))
+        XCTAssertTrue(source.contains("case .availableUpdate:"))
+        XCTAssertTrue(source.contains("case .pendingUpdate:"))
+    }
+
     private func release(_ version: String) -> CLIProxyAPIRelease {
         CLIProxyAPIRelease(
             version: CLIProxyAPIVersion(version)!,
