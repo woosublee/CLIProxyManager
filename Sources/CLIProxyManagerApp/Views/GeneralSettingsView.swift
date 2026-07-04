@@ -258,10 +258,10 @@ func cliproxyAPIUpdateDescription(
         break
     }
     if let pendingUpdate {
-        return "Current version: \(currentVersion) · Pending: \(pendingUpdate.version)"
+        return "Current version: \(currentVersion) · Pending version: \(pendingUpdate.version)"
     }
     if let availableUpdate {
-        return "Current version: \(currentVersion) · Available: \(availableUpdate.version.description)"
+        return "Current version: \(currentVersion) · Available version: \(availableUpdate.version.description)"
     }
     return "Current version: \(currentVersion)"
 }
@@ -273,9 +273,39 @@ func cliproxyAPIUpdateActionTitle(
 ) -> String {
     if state == .checking { return "Checking…" }
     if state == .downloading { return "Updating…" }
-    if pendingUpdate != nil { return "Apply now" }
-    if availableUpdate != nil { return "Update…" }
+    if let pendingUpdate { return "Apply \(pendingUpdate.version) now" }
+    if let availableUpdate { return "Download \(availableUpdate.version.description)" }
     return "Check now"
+}
+
+func cliProxyAPIAvailableUpdatePromptTitle(
+    currentVersion: String,
+    availableUpdate: CLIProxyAPIRelease?
+) -> String {
+    guard let availableUpdate else { return "CLIProxyAPI update available" }
+    return "Update CLIProxyAPI from \(currentVersion) to \(availableUpdate.version.description)?"
+}
+
+func cliProxyAPIPendingUpdatePromptTitle(pendingUpdate: CLIProxyAPIBinaryManifest?) -> String {
+    guard let pendingUpdate else { return "Apply CLIProxyAPI update?" }
+    return "Apply CLIProxyAPI \(pendingUpdate.version)?"
+}
+
+func cliProxyAPIPendingUpdatePromptMessage(currentVersion: String) -> String {
+    "Current version: \(currentVersion)"
+}
+
+func cliProxyAPIApplyButtonTitle(
+    pendingUpdate: CLIProxyAPIBinaryManifest?,
+    isServerRunning: Bool
+) -> String {
+    guard let pendingUpdate else {
+        return isServerRunning ? "Apply now and restart server" : "Apply now"
+    }
+    if isServerRunning {
+        return "Apply \(pendingUpdate.version) and restart server"
+    }
+    return "Apply \(pendingUpdate.version) now"
 }
 
 struct AboutSettingsView: View {
