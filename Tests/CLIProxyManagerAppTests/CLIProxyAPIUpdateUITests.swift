@@ -141,10 +141,13 @@ final class CLIProxyAPIUpdateUITests: XCTestCase {
         XCTAssertTrue(aboutSource.contains("cliProxyAPIUpdateService.isChecking || cliProxyAPIUpdateService.isUpdating"))
     }
 
-    func testDashboardViewCopyClarifiesOnlyServerRestarts() throws {
+    func testDashboardViewCopyUsesVersionAwareCLIProxyAPIUpdatePrompts() throws {
         let source = try String(contentsOf: repositoryRoot().appendingPathComponent("Sources/CLIProxyManagerApp/Views/DashboardView.swift"), encoding: .utf8)
 
-        XCTAssertTrue(source.contains("Apply now and restart server"))
+        XCTAssertTrue(source.contains("cliProxyAPIAvailableUpdatePromptTitle(currentVersion:"))
+        XCTAssertTrue(source.contains("cliProxyAPIPendingUpdatePromptTitle(pendingUpdate:"))
+        XCTAssertTrue(source.contains("cliProxyAPIPendingUpdatePromptMessage(currentVersion:"))
+        XCTAssertTrue(source.contains("cliProxyAPIApplyButtonTitle("))
         XCTAssertTrue(source.contains("CLIProxyAPI binary updated. Restarting the app is not required."))
     }
 
@@ -154,7 +157,7 @@ final class CLIProxyAPIUpdateUITests: XCTestCase {
         XCTAssertTrue(source.contains("await cliProxyAPIUpdateService.checkAutomaticallyOnLaunch()"))
         XCTAssertTrue(source.contains("showCLIProxyAPIUpdatePrompt"))
         XCTAssertTrue(source.contains("showCLIProxyAPIApplyPrompt"))
-        XCTAssertTrue(source.contains("Apply now and restart server"))
+        XCTAssertTrue(source.contains("Download"))
         XCTAssertTrue(source.contains("Apply on next server start"))
     }
 

@@ -106,11 +106,17 @@ struct DashboardView: View {
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .settingsToast(message: viewModel.settingsMessage, dismiss: viewModel.clearSettingsMessage)
         .confirmationDialog(
-            cliProxyAPIUpdateService.availableUpdate.map { "CLIProxyAPI \($0.version.description) is available" } ?? "CLIProxyAPI update available",
+            cliProxyAPIAvailableUpdatePromptTitle(currentVersion: cliProxyAPIUpdateService.currentVersionText,
+                                                  availableUpdate: cliProxyAPIUpdateService.availableUpdate),
             isPresented: $showCLIProxyAPIUpdatePrompt,
             titleVisibility: .visible
         ) {
-            Button("Update") {
+            // Available updates use a Download button title with the target version.
+            Button(cliproxyAPIUpdateActionTitle(
+                state: cliProxyAPIUpdateService.state,
+                availableUpdate: cliProxyAPIUpdateService.availableUpdate,
+                pendingUpdate: nil
+            )) {
                 Task { await cliProxyAPIUpdateService.downloadAvailableUpdate() }
             }
             Button("Later", role: .cancel) {
@@ -118,11 +124,14 @@ struct DashboardView: View {
             }
         }
         .confirmationDialog(
-            cliProxyAPIUpdateService.pendingUpdate.map { "Apply CLIProxyAPI \($0.version) now?" } ?? "Apply CLIProxyAPI update now?",
+            cliProxyAPIPendingUpdatePromptTitle(pendingUpdate: cliProxyAPIUpdateService.pendingUpdate),
             isPresented: $showCLIProxyAPIApplyPrompt,
             titleVisibility: .visible
         ) {
-            Button(viewModel.serverControlState.isRunning ? "Apply now and restart server" : "Apply now") {
+            Button(cliProxyAPIApplyButtonTitle(
+                pendingUpdate: cliProxyAPIUpdateService.pendingUpdate,
+                isServerRunning: viewModel.serverControlState.isRunning
+            )) {
                 Task {
                     do {
                         try cliProxyAPIUpdateService.applyPendingNow()
@@ -139,6 +148,8 @@ struct DashboardView: View {
                 viewModel.settingsMessage = "CLIProxyAPI update will be applied on next server start."
             }
             Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(cliProxyAPIPendingUpdatePromptMessage(currentVersion: cliProxyAPIUpdateService.currentVersionText))
         }
         .sheet(item: $activeSheet) { sheet in
             Group {
