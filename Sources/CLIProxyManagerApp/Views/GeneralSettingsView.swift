@@ -49,8 +49,6 @@ struct GeneralSettingsView: View {
 
 struct ServerSettingsView: View {
     @ObservedObject var viewModel: DashboardViewModel
-    @ObservedObject var cliProxyAPIUpdateService: CLIProxyAPIUpdateService
-    @State private var showApplyPrompt = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -92,42 +90,6 @@ struct ServerSettingsView: View {
                     .labelsHidden()
                     .toggleStyle(SettingsToggleStyle())
                 }
-                SettingsRow(
-                    label: "CLIProxyAPI binary",
-                    description: cliproxyAPIUpdateDescription(
-                        currentVersion: cliProxyAPIUpdateService.currentVersionText,
-                        state: cliProxyAPIUpdateService.state,
-                        availableUpdate: cliProxyAPIUpdateService.availableUpdate,
-                        pendingUpdate: cliProxyAPIUpdateService.pendingUpdate
-                    ),
-                    isEnabled: !cliProxyAPIUpdateService.isChecking && !cliProxyAPIUpdateService.isUpdating
-                ) {
-                    HStack(spacing: 8) {
-                        if cliProxyAPIUpdateService.isChecking || cliProxyAPIUpdateService.isUpdating {
-                            ProgressView()
-                                .controlSize(.small)
-                        }
-                        Button(cliproxyAPIUpdateActionTitle(
-                            state: cliProxyAPIUpdateService.state,
-                            availableUpdate: cliProxyAPIUpdateService.availableUpdate,
-                            pendingUpdate: cliProxyAPIUpdateService.pendingUpdate
-                        )) {
-                            if cliProxyAPIUpdateService.pendingUpdate != nil {
-                                showApplyPrompt = true
-                            } else if cliProxyAPIUpdateService.availableUpdate != nil {
-                                Task {
-                                    await cliProxyAPIUpdateService.downloadAvailableUpdate()
-                                    if cliProxyAPIUpdateService.pendingUpdate != nil {
-                                        showApplyPrompt = true
-                                    }
-                                }
-                            } else {
-                                Task { await cliProxyAPIUpdateService.checkNow() }
-                            }
-                        }
-                        .controlSize(.small)
-                    }
-                }
             }
 
             SettingsGroup(title: "Routing") {
@@ -140,29 +102,6 @@ struct ServerSettingsView: View {
         }
         .padding(.horizontal, 32)
         .padding(.vertical, 28)
-        .confirmationDialog(
-            "Apply CLIProxyAPI update now?",
-            isPresented: $showApplyPrompt,
-            titleVisibility: .visible
-        ) {
-            Button(viewModel.serverControlState.isRunning ? "Apply now and restart server" : "Apply now") {
-                Task {
-                    do {
-                        try cliProxyAPIUpdateService.applyPendingNow()
-                        if viewModel.serverControlState.isRunning {
-                            await viewModel.restartServer()
-                        }
-                        viewModel.settingsMessage = "CLIProxyAPI update applied."
-                    } catch {
-                        viewModel.settingsMessage = "CLIProxyAPI update failed: \(error.localizedDescription)"
-                    }
-                }
-            }
-            Button("Apply on next server start") {
-                viewModel.settingsMessage = "CLIProxyAPI update will be applied on next server start."
-            }
-            Button("Cancel", role: .cancel) {}
-        }
     }
 }
 
@@ -309,8 +248,11 @@ func cliProxyAPIApplyButtonTitle(
 }
 
 struct AboutSettingsView: View {
+    @ObservedObject var viewModel: DashboardViewModel
     @ObservedObject var updaterService: UpdaterService
+    @ObservedObject var cliProxyAPIUpdateService: CLIProxyAPIUpdateService
     @State private var showLicenses: Bool = false
+    @State private var showApplyPrompt = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -346,6 +288,42 @@ struct AboutSettingsView: View {
                     }
                     .controlSize(.small)
                 }
+                SettingsRow(
+                    label: "CLIProxyAPI binary",
+                    description: cliproxyAPIUpdateDescription(
+                        currentVersion: cliProxyAPIUpdateService.currentVersionText,
+                        state: cliProxyAPIUpdateService.state,
+                        availableUpdate: cliProxyAPIUpdateService.availableUpdate,
+                        pendingUpdate: cliProxyAPIUpdateService.pendingUpdate
+                    ),
+                    isEnabled: !cliProxyAPIUpdateService.isChecking && !cliProxyAPIUpdateService.isUpdating
+                ) {
+                    HStack(spacing: 8) {
+                        if cliProxyAPIUpdateService.isChecking || cliProxyAPIUpdateService.isUpdating {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                        Button(cliproxyAPIUpdateActionTitle(
+                            state: cliProxyAPIUpdateService.state,
+                            availableUpdate: cliProxyAPIUpdateService.availableUpdate,
+                            pendingUpdate: cliProxyAPIUpdateService.pendingUpdate
+                        )) {
+                            if cliProxyAPIUpdateService.pendingUpdate != nil {
+                                showApplyPrompt = true
+                            } else if cliProxyAPIUpdateService.availableUpdate != nil {
+                                Task {
+                                    await cliProxyAPIUpdateService.downloadAvailableUpdate()
+                                    if cliProxyAPIUpdateService.pendingUpdate != nil {
+                                        showApplyPrompt = true
+                                    }
+                                }
+                            } else {
+                                Task { await cliProxyAPIUpdateService.checkNow() }
+                            }
+                        }
+                        .controlSize(.small)
+                    }
+                }
             }
 
             VStack(spacing: 6) {
@@ -370,6 +348,34 @@ struct AboutSettingsView: View {
         .padding(.vertical, 28)
         .sheet(isPresented: $showLicenses) {
             LicensesSheet(onClose: { showLicenses = false })
+        }
+        .confirmationDialog(
+            cliProxyAPIPendingUpdatePromptTitle(pendingUpdate: cliProxyAPIUpdateService.pendingUpdate),
+            isPresented: $showApplyPrompt,
+            titleVisibility: .visible
+        ) {
+            Button(cliProxyAPIApplyButtonTitle(
+                pendingUpdate: cliProxyAPIUpdateService.pendingUpdate,
+                isServerRunning: viewModel.serverControlState.isRunning
+            )) {
+                Task {
+                    do {
+                        try cliProxyAPIUpdateService.applyPendingNow()
+                        if viewModel.serverControlState.isRunning {
+                            await viewModel.restartServer()
+                        }
+                        viewModel.settingsMessage = "CLIProxyAPI update applied."
+                    } catch {
+                        viewModel.settingsMessage = "CLIProxyAPI update failed: \(error.localizedDescription)"
+                    }
+                }
+            }
+            Button("Apply on next server start") {
+                viewModel.settingsMessage = "CLIProxyAPI update will be applied on next server start."
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(cliProxyAPIPendingUpdatePromptMessage(currentVersion: cliProxyAPIUpdateService.currentVersionText))
         }
     }
 }

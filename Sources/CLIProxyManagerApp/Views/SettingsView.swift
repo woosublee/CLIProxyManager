@@ -53,11 +53,15 @@ struct SettingsView: View {
                 case .general:
                     GeneralSettingsView(viewModel: viewModel)
                 case .server:
-                    ServerSettingsView(viewModel: viewModel, cliProxyAPIUpdateService: cliProxyAPIUpdateService)
+                    ServerSettingsView(viewModel: viewModel)
                 case .advanced:
                     AdvancedSettingsView(viewModel: viewModel)
                 case .about:
-                    AboutSettingsView(updaterService: updaterService)
+                    AboutSettingsView(
+                        viewModel: viewModel,
+                        updaterService: updaterService,
+                        cliProxyAPIUpdateService: cliProxyAPIUpdateService
+                    )
                 }
             }
         }

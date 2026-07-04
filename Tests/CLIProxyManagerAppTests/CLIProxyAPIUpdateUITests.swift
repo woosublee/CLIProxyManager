@@ -126,11 +126,19 @@ final class CLIProxyAPIUpdateUITests: XCTestCase {
         )
     }
 
-    func testServerSettingsSourceShowsProgressIndicatorWhileCheckingOrUpdating() throws {
+    func testCLIProxyAPIUpdateControlsLiveInAboutSettingsInsteadOfServerSettings() throws {
         let source = try String(contentsOf: repositoryRoot().appendingPathComponent("Sources/CLIProxyManagerApp/Views/GeneralSettingsView.swift"), encoding: .utf8)
+        let serverRange = source.range(of: "struct ServerSettingsView: View")!.lowerBound..<source.range(of: "struct AdvancedSettingsView: View")!.lowerBound
+        let aboutRange = source.range(of: "struct AboutSettingsView: View")!.lowerBound..<source.endIndex
+        let serverSource = String(source[serverRange])
+        let aboutSource = String(source[aboutRange])
 
-        XCTAssertTrue(source.contains("ProgressView()"))
-        XCTAssertTrue(source.contains("cliProxyAPIUpdateService.isChecking || cliProxyAPIUpdateService.isUpdating"))
+        XCTAssertFalse(serverSource.contains("CLIProxyAPI binary"))
+        XCTAssertFalse(serverSource.contains("cliProxyAPIUpdateService"))
+        XCTAssertTrue(aboutSource.contains("CLIProxyAPI binary"))
+        XCTAssertTrue(aboutSource.contains("cliProxyAPIUpdateService"))
+        XCTAssertTrue(aboutSource.contains("ProgressView()"))
+        XCTAssertTrue(aboutSource.contains("cliProxyAPIUpdateService.isChecking || cliProxyAPIUpdateService.isUpdating"))
     }
 
     func testDashboardViewCopyClarifiesOnlyServerRestarts() throws {
