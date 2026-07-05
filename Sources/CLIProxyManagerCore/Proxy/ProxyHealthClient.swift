@@ -29,6 +29,14 @@ public struct URLSessionHTTPClient: HTTPClient {
         return URLSession(configuration: configuration)
     }
 
+    public static func makeExternalUpdateSession() -> URLSession {
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = 30
+        configuration.timeoutIntervalForResource = 300
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: configuration)
+    }
+
     public func get(_ url: URL, headers: [String: String] = [:]) async throws -> Data {
         var request = URLRequest(url: url)
         for (name, value) in headers {

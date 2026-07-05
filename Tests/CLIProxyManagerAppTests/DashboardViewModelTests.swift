@@ -870,6 +870,10 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         config.commands.ccodex = "customcodex"
         let store = StubConfigStore(config: config)
         let installer = StubShellInstaller()
+        let automaticInstaller = AutomaticShellInstallService(
+            installer: installer,
+            helperCommand: "/usr/local/bin/cliproxy-manager"
+        )
         let viewModel = DashboardViewModel(
             configStore: store,
             shellInstaller: installer,
@@ -878,6 +882,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
                 AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
             ]),
             oauthLoginService: StubOAuthLoginService(),
+            automaticShellInstallService: automaticInstaller,
             proxyService: StubProxyServiceStarter(),
             claudeConnector: connectedClaudeConnector()
         )

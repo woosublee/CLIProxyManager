@@ -94,7 +94,7 @@ final class ShellFunctionRendererTests: XCTestCase {
         ).render()
 
         XCTAssertTrue(script.contains("cc() {"))
-        XCTAssertTrue(script.contains("ANTHROPIC_BASE_URL=\"http://127.0.0.1:18317\""))
+        XCTAssertTrue(script.contains("ANTHROPIC_BASE_URL=\"http://127.0.0.1:\(AppConfig.default.port)\""))
         XCTAssertTrue(script.contains("ANTHROPIC_AUTH_TOKEN='sk-dummy'"))
         XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='claude-opus-4-7'"))
         XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL='claude-sonnet-4-6'"))
@@ -153,7 +153,7 @@ final class ShellFunctionRendererTests: XCTestCase {
         ).render()
 
         XCTAssertTrue(script.contains("curl -sf -H 'Authorization: Bearer sk-dummy'"))
-        XCTAssertTrue(script.contains("http://127.0.0.1:18317/v1/models"))
+        XCTAssertTrue(script.contains("http://127.0.0.1:\(AppConfig.default.port)/v1/models"))
     }
 
     func testDangerousPermissionFlagIsOptIn() throws {

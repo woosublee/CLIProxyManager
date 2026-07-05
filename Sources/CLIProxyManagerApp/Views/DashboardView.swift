@@ -21,10 +21,13 @@ enum DashboardSheet: Identifiable, Equatable {
 
 struct DashboardView: View {
     @ObservedObject var viewModel: DashboardViewModel
+    @ObservedObject var cliProxyAPIUpdateService: CLIProxyAPIUpdateService
     let openSettings: () -> Void
     let quit: () -> Void
     @State private var activeSheet: DashboardSheet?
     @State private var copiedEndpoint: Bool = false
+    @State private var showCLIProxyAPIUpdatePrompt = false
+    @State private var showCLIProxyAPIApplyPrompt = false
 
     private var preferredHeight: CGFloat {
         min(
@@ -88,11 +91,63 @@ struct DashboardView: View {
         .task {
             await viewModel.refresh()
             await viewModel.performAutostartIfEnabled()
+            let automaticCheckResult = await cliProxyAPIUpdateService.checkAutomaticallyOnLaunch()
+            switch automaticCheckResult {
+            case .availableUpdate:
+                showCLIProxyAPIUpdatePrompt = true
+            case .pendingUpdate:
+                showCLIProxyAPIApplyPrompt = true
+            case .none:
+                break
+            }
         }
         .frame(width: AppWindowMetrics.mainWidth, height: preferredHeight)
         .background(.regularMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .settingsToast(message: viewModel.settingsMessage, dismiss: viewModel.clearSettingsMessage)
+        .confirmationDialog(
+            cliProxyAPIAvailableUpdatePromptTitle(currentVersion: cliProxyAPIUpdateService.currentVersionText,
+                                                  availableUpdate: cliProxyAPIUpdateService.availableUpdate),
+            isPresented: $showCLIProxyAPIUpdatePrompt,
+            titleVisibility: .visible
+        ) {
+            // Available updates use a Download button title with the target version.
+            Button(cliproxyAPIUpdateActionTitle(
+                state: cliProxyAPIUpdateService.state,
+                availableUpdate: cliProxyAPIUpdateService.availableUpdate,
+                pendingUpdate: nil
+            )) {
+                Task {
+                    await cliProxyAPIUpdateService.downloadAvailableUpdate()
+                    if cliProxyAPIUpdateService.pendingUpdate != nil {
+                        showCLIProxyAPIApplyPrompt = true
+                    } else if case let .failed(message) = cliProxyAPIUpdateService.state {
+                        viewModel.settingsMessage = "CLIProxyAPI update failed: \(message)"
+                    }
+                }
+            }
+            Button("Later", role: .cancel) {
+                cliProxyAPIUpdateService.deferAvailableUpdate()
+            }
+        }
+        .confirmationDialog(
+            cliProxyAPIPendingUpdatePromptTitle(pendingUpdate: cliProxyAPIUpdateService.pendingUpdate),
+            isPresented: $showCLIProxyAPIApplyPrompt,
+            titleVisibility: .visible
+        ) {
+            Button(cliProxyAPIApplyButtonTitle(
+                pendingUpdate: cliProxyAPIUpdateService.pendingUpdate,
+                isServerRunning: viewModel.serverControlState.isRunning
+            )) {
+                Task { await viewModel.applyCLIProxyAPIPendingUpdate(using: cliProxyAPIUpdateService) }
+            }
+            Button("Apply on next server start") {
+                viewModel.settingsMessage = "CLIProxyAPI update will be applied on next server start."
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(cliProxyAPIPendingUpdatePromptMessage(currentVersion: cliProxyAPIUpdateService.currentVersionText))
+        }
         .sheet(item: $activeSheet) { sheet in
             Group {
                 switch sheet {
@@ -110,7 +165,7 @@ struct DashboardView: View {
                     providerSettingsSheet(provider, isInitialSetup: isInitialSetup)
                 }
             }
-            .onChange(of: viewModel.activeOAuthLoginProvider) { provider in
+            .onChange(of: viewModel.activeOAuthLoginProvider) { _, provider in
                 guard provider == nil, let connectedProvider = viewModel.completedOAuthLoginProvider else { return }
                 activeSheet = DashboardSheet.afterOAuthLoginCompletion(
                     connectedProvider,

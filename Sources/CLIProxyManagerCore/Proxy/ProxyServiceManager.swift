@@ -235,6 +235,8 @@ public enum ProxyServiceError: Error, Equatable {
 public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
     private let paths: ManagedPaths
     private let bundledBinaryURL: URL?
+    private let bundledManifestURL: URL?
+    private let binaryStore: CLIProxyAPIBinaryStore
     private let launcher: any ProcessLaunching
     private let launchctl: any LaunchctlManaging
     private let fileManager: FileManager
@@ -244,12 +246,14 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
     public init(
         paths: ManagedPaths,
         bundledBinaryURL: URL? = nil,
+        bundledManifestURL: URL? = nil,
         launcher: any ProcessLaunching = ProcessLauncher(),
         fileManager: FileManager = .default
     ) {
         self.init(
             paths: paths,
             bundledBinaryURL: bundledBinaryURL,
+            bundledManifestURL: bundledManifestURL,
             launcher: launcher,
             launchctl: LaunchctlRunner(),
             fileManager: fileManager
@@ -259,12 +263,15 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
     init(
         paths: ManagedPaths,
         bundledBinaryURL: URL? = nil,
+        bundledManifestURL: URL? = nil,
         launcher: any ProcessLaunching = ProcessLauncher(),
         launchctl: any LaunchctlManaging,
         fileManager: FileManager = .default
     ) {
         self.paths = paths
         self.bundledBinaryURL = bundledBinaryURL
+        self.bundledManifestURL = bundledManifestURL
+        self.binaryStore = CLIProxyAPIBinaryStore(paths: paths, fileManager: fileManager)
         self.launcher = launcher
         self.launchctl = launchctl
         self.fileManager = fileManager
@@ -442,27 +449,19 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
     }
 
     private func installBundledBinaryIfNeeded() throws {
-        try fileManager.createDirectory(at: paths.clipProxyDirectory, withIntermediateDirectories: true)
-
-        guard let bundledBinaryURL, fileManager.fileExists(atPath: bundledBinaryURL.path) else {
+        do {
+            try binaryStore.prepareActiveBinary(
+                bundledBinaryURL: bundledBinaryURL,
+                bundledManifestURL: bundledManifestURL
+            )
+        } catch CLIProxyAPIBinaryStoreError.missingBundledBinary {
             if fileManager.fileExists(atPath: paths.clipProxyBinary.path) {
                 return
             }
             throw ProxyServiceError.missingBinary(paths.clipProxyBinary.path)
+        } catch {
+            throw error
         }
-
-        if fileManager.fileExists(atPath: paths.clipProxyBinary.path) {
-            let installedData = try Data(contentsOf: paths.clipProxyBinary)
-            let bundledData = try Data(contentsOf: bundledBinaryURL)
-            if installedData == bundledData {
-                try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: paths.clipProxyBinary.path)
-                return
-            }
-            try fileManager.removeItem(at: paths.clipProxyBinary)
-        }
-
-        try fileManager.copyItem(at: bundledBinaryURL, to: paths.clipProxyBinary)
-        try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: paths.clipProxyBinary.path)
     }
 
     private func config(for port: Int) -> String {
