@@ -74,8 +74,7 @@ public struct CLIProxyAPIArchiveVerifier: Sendable {
         guard metadata.version == release.version.description else {
             throw CLIProxyAPIArchiveVerifierError.versionMismatch(expected: release.version.description, actual: metadata.version)
         }
-        let binaryData = try Data(contentsOf: binaryURL)
-        let size = try binaryURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? binaryData.count
+        let size = try binaryURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
         let manifest = CLIProxyAPIBinaryManifest(
             name: "cliproxyapi",
             version: metadata.version,
@@ -88,7 +87,7 @@ public struct CLIProxyAPIArchiveVerifier: Sendable {
             upstreamAsset: release.assetName,
             upstreamAssetSha256: release.assetSha256,
             vendoredBinaryName: "cliproxyapi",
-            vendoredBinarySha256: binaryData.sha256HexDigest(),
+            vendoredBinarySha256: try binaryURL.sha256HexDigest(),
             vendoredBinarySizeBytes: size,
             vendoredFromArchivePath: "cli-proxy-api",
             downloadedAt: ISO8601DateFormatter().string(from: Date())

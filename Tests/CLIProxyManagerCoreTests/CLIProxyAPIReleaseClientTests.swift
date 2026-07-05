@@ -48,6 +48,9 @@ final class CLIProxyAPIReleaseClientTests: XCTestCase {
         XCTAssertEqual(release.assetURL, archiveURL)
         XCTAssertEqual(release.assetSha256, "archive-sha")
         XCTAssertEqual(http.requestedURLs, [latestURL, checksumURL])
+        XCTAssertEqual(http.requestedHeaders[latestURL]?["Accept"], "application/vnd.github+json")
+        XCTAssertEqual(http.requestedHeaders[latestURL]?["User-Agent"], "CLIProxyManager")
+        XCTAssertEqual(http.requestedHeaders[checksumURL]?["User-Agent"], "CLIProxyManager")
     }
 
     func testRejectsPrereleaseLatestRelease() async {
@@ -94,6 +97,7 @@ final class CLIProxyAPIReleaseClientTests: XCTestCase {
         let downloaded = try await client.downloadArchive(for: release)
 
         XCTAssertEqual(downloaded, data)
+        XCTAssertEqual(http.requestedHeaders[archiveURL]?["User-Agent"], "CLIProxyManager")
     }
 }
 
@@ -101,15 +105,20 @@ private final class StubReleaseHTTPClient: HTTPClient, @unchecked Sendable {
     private let lock = NSLock()
     private let responses: [URL: Data]
     private var _requestedURLs: [URL] = []
+    private var _requestedHeaders: [URL: [String: String]] = [:]
 
     var requestedURLs: [URL] { lock.withLock { _requestedURLs } }
+    var requestedHeaders: [URL: [String: String]] { lock.withLock { _requestedHeaders } }
 
     init(responses: [URL: Data]) {
         self.responses = responses
     }
 
     func get(_ url: URL, headers: [String: String]) async throws -> Data {
-        lock.withLock { _requestedURLs.append(url) }
+        lock.withLock {
+            _requestedURLs.append(url)
+            _requestedHeaders[url] = headers
+        }
         guard let data = responses[url] else { throw HTTPClientError.badStatus(404) }
         return data
     }

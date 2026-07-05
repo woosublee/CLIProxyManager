@@ -301,6 +301,18 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
+    func applyCLIProxyAPIPendingUpdate(using service: CLIProxyAPIUpdateService) async {
+        do {
+            try service.applyPendingNow()
+            if serverControlState.isRunning {
+                await restartServer()
+            }
+            settingsMessage = "CLIProxyAPI binary updated. Restarting the app is not required."
+        } catch {
+            settingsMessage = "CLIProxyAPI update failed: \(error.localizedDescription)"
+        }
+    }
+
     func setServerEnabled(_ isEnabled: Bool) async {
         if isEnabled {
             await startServer()

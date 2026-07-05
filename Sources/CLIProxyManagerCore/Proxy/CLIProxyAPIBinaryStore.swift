@@ -12,6 +12,8 @@ public enum CLIProxyAPIBinaryStoreError: Error, Equatable {
 }
 
 public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
+    private static let operationLock = NSLock()
+
     private let paths: ManagedPaths
     private let fileManager: FileManager
     private let encoder: JSONEncoder
@@ -38,6 +40,35 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
     }
 
     public func savePending(binaryURL: URL, manifest: CLIProxyAPIBinaryManifest, validate: Bool) throws {
+        try Self.operationLock.withLock {
+            try savePendingLocked(binaryURL: binaryURL, manifest: manifest, validate: validate)
+        }
+    }
+
+    public func applyPending() throws {
+        try Self.operationLock.withLock {
+            try applyPendingLocked()
+        }
+    }
+
+    public func prepareActiveBinary(bundledBinaryURL: URL?, bundledManifestURL: URL?) throws {
+        try Self.operationLock.withLock {
+            try prepareActiveBinaryLocked(bundledBinaryURL: bundledBinaryURL, bundledManifestURL: bundledManifestURL)
+        }
+    }
+
+    public func validatedCurrentVersion(bundledManifestURL: URL?) throws -> CLIProxyAPIVersion? {
+        try Self.operationLock.withLock {
+            if let activeVersion = validActiveManifest()?.parsedVersion {
+                return activeVersion
+            }
+            guard let bundledManifestURL else { return nil }
+            guard fileManager.fileExists(atPath: bundledManifestURL.path) else { return nil }
+            return try readManifestIfExists(bundledManifestURL)?.parsedVersion
+        }
+    }
+
+    private func savePendingLocked(binaryURL: URL, manifest: CLIProxyAPIBinaryManifest, validate: Bool) throws {
         if validate {
             try validateBinary(at: binaryURL, manifest: manifest)
         }
@@ -47,7 +78,7 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
         try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: paths.pendingClipProxyBinary.path)
     }
 
-    public func applyPending() throws {
+    private func applyPendingLocked() throws {
         guard fileManager.fileExists(atPath: paths.pendingClipProxyBinary.path) else {
             throw CLIProxyAPIBinaryStoreError.missingPendingBinary
         }
@@ -88,7 +119,7 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
         }
     }
 
-    public func prepareActiveBinary(bundledBinaryURL: URL?, bundledManifestURL: URL?) throws {
+    private func prepareActiveBinaryLocked(bundledBinaryURL: URL?, bundledManifestURL: URL?) throws {
         guard let bundledBinaryURL, fileManager.fileExists(atPath: bundledBinaryURL.path) else {
             if fileManager.fileExists(atPath: paths.clipProxyBinary.path) {
                 return
@@ -121,15 +152,6 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
         }
     }
 
-    public func validatedCurrentVersion(bundledManifestURL: URL?) throws -> CLIProxyAPIVersion? {
-        if let activeVersion = validActiveManifest()?.parsedVersion {
-            return activeVersion
-        }
-        guard let bundledManifestURL else { return nil }
-        guard fileManager.fileExists(atPath: bundledManifestURL.path) else { return nil }
-        return try readManifestIfExists(bundledManifestURL)?.parsedVersion
-    }
-
     private func validActiveManifest() -> CLIProxyAPIBinaryManifest? {
         guard fileManager.fileExists(atPath: paths.clipProxyBinary.path),
               let active = try? activeManifest(),
@@ -152,7 +174,7 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
             try? fileManager.removeItem(at: paths.pendingClipProxyDirectory)
             return
         }
-        try applyPending()
+        try applyPendingLocked()
     }
 
     private func installBundled(binaryURL: URL, manifest: CLIProxyAPIBinaryManifest) throws {
@@ -176,7 +198,7 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
     }
 
     private func validateBinary(at url: URL, manifest: CLIProxyAPIBinaryManifest) throws {
-        if try Data(contentsOf: url).sha256HexDigest() != manifest.vendoredBinarySha256 {
+        if try url.sha256HexDigest() != manifest.vendoredBinarySha256 {
             throw CLIProxyAPIBinaryStoreError.binaryChecksumMismatch
         }
         let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? -1
@@ -230,5 +252,18 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
 extension Data {
     func sha256HexDigest() -> String {
         SHA256.hash(data: self).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+
+extension URL {
+    func sha256HexDigest() throws -> String {
+        let fileHandle = try FileHandle(forReadingFrom: self)
+        defer { try? fileHandle.close() }
+        var sha256 = SHA256()
+        while let data = try fileHandle.read(upToCount: 64 * 1024), data.isEmpty == false {
+            sha256.update(data: data)
+        }
+        return sha256.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }

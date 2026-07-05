@@ -121,6 +121,8 @@ struct DashboardView: View {
                     await cliProxyAPIUpdateService.downloadAvailableUpdate()
                     if cliProxyAPIUpdateService.pendingUpdate != nil {
                         showCLIProxyAPIApplyPrompt = true
+                    } else if case let .failed(message) = cliProxyAPIUpdateService.state {
+                        viewModel.settingsMessage = "CLIProxyAPI update failed: \(message)"
                     }
                 }
             }
@@ -137,17 +139,7 @@ struct DashboardView: View {
                 pendingUpdate: cliProxyAPIUpdateService.pendingUpdate,
                 isServerRunning: viewModel.serverControlState.isRunning
             )) {
-                Task {
-                    do {
-                        try cliProxyAPIUpdateService.applyPendingNow()
-                        if viewModel.serverControlState.isRunning {
-                            await viewModel.restartServer()
-                        }
-                        viewModel.settingsMessage = "CLIProxyAPI binary updated. Restarting the app is not required."
-                    } catch {
-                        viewModel.settingsMessage = "CLIProxyAPI update failed: \(error.localizedDescription)"
-                    }
-                }
+                Task { await viewModel.applyCLIProxyAPIPendingUpdate(using: cliProxyAPIUpdateService) }
             }
             Button("Apply on next server start") {
                 viewModel.settingsMessage = "CLIProxyAPI update will be applied on next server start."

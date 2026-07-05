@@ -26,6 +26,12 @@ public enum CLIProxyAPIReleaseClientError: Error, Equatable {
 }
 
 public struct CLIProxyAPIReleaseClient: Sendable {
+    private static let userAgentHeaders = ["User-Agent": "CLIProxyManager"]
+    private static let githubReleaseHeaders = [
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "CLIProxyManager"
+    ]
+
     private let httpClient: any HTTPClient
     private let latestReleaseURL: URL
 
@@ -38,7 +44,7 @@ public struct CLIProxyAPIReleaseClient: Sendable {
     }
 
     public func latestRelease() async throws -> CLIProxyAPIRelease {
-        let data = try await httpClient.get(latestReleaseURL, headers: ["Accept": "application/vnd.github+json"])
+        let data = try await httpClient.get(latestReleaseURL, headers: Self.githubReleaseHeaders)
         let githubRelease = try JSONDecoder().decode(GitHubRelease.self, from: data)
         guard let version = CLIProxyAPIVersion(githubRelease.tagName) else {
             throw CLIProxyAPIReleaseClientError.invalidVersion(githubRelease.tagName)
@@ -59,7 +65,7 @@ public struct CLIProxyAPIReleaseClient: Sendable {
         guard let checksumURL = URL(string: checksumAsset.browserDownloadURL) else {
             throw CLIProxyAPIReleaseClientError.invalidAssetURL(checksumAsset.browserDownloadURL)
         }
-        let checksums = try await httpClient.get(checksumURL, headers: [:])
+        let checksums = try await httpClient.get(checksumURL, headers: Self.userAgentHeaders)
         guard let assetSha = Self.checksum(for: assetName, in: checksums) else {
             throw CLIProxyAPIReleaseClientError.missingChecksumEntry(assetName)
         }
@@ -73,14 +79,16 @@ public struct CLIProxyAPIReleaseClient: Sendable {
     }
 
     public func downloadArchive(for release: CLIProxyAPIRelease) async throws -> Data {
-        try await httpClient.get(release.assetURL, headers: [:])
+        try await httpClient.get(release.assetURL, headers: Self.userAgentHeaders)
     }
 
     static func checksum(for assetName: String, in data: Data) -> String? {
         guard let text = String(data: data, encoding: .utf8) else { return nil }
         for line in text.split(whereSeparator: { $0 == "\n" || $0 == "\r" }) {
             let parts = line.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
-            if parts.count >= 2, parts[1] == assetName {
+            guard parts.count >= 2 else { continue }
+            let filename = parts[1].hasPrefix("*") ? String(parts[1].dropFirst()) : parts[1]
+            if filename == assetName {
                 return parts[0]
             }
         }

@@ -253,6 +253,17 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         XCTAssertEqual(try store.pendingManifest()?.version, "7.2.42")
     }
 
+
+    func testBinaryStoreSerializesMutableOperationsWithSharedLock() throws {
+        let source = try String(contentsOf: repositoryRoot().appendingPathComponent("Sources/CLIProxyManagerCore/Proxy/CLIProxyAPIBinaryStore.swift"), encoding: .utf8)
+
+        XCTAssertTrue(source.contains("private static let operationLock = NSLock()"))
+        XCTAssertTrue(source.contains("try Self.operationLock.withLock"))
+        XCTAssertTrue(source.contains("private func applyPendingLocked() throws"))
+        XCTAssertTrue(source.contains("private func prepareActiveBinaryLocked(bundledBinaryURL: URL?, bundledManifestURL: URL?) throws"))
+        XCTAssertTrue(source.contains("func sha256HexDigest() throws -> String"))
+    }
+
     private func makeSandbox() throws -> URL {
         let sandbox = FileManager.default.temporaryDirectory
             .appendingPathComponent("CLIProxyManagerBinaryStoreTests")
@@ -296,6 +307,12 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
     private func sha256(_ url: URL) throws -> String {
         let data = try Data(contentsOf: url)
         return data.sha256HexDigest()
+    }
+
+    private func repositoryRoot() -> URL {
+        var url = URL(fileURLWithPath: #filePath)
+        for _ in 0..<3 { url.deleteLastPathComponent() }
+        return url
     }
 
     private func fileSize(_ url: URL) throws -> Int {

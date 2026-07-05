@@ -28,11 +28,12 @@
 ## File Structure
 
 - Modify: `Sources/CLIProxyManagerApp/Views/GeneralSettingsView.swift`
-  - Responsibility: Settings subviews and update UI copy helpers currently live here.
-  - Changes: remove CLIProxyAPI update controls from `ServerSettingsView`; add `viewModel` and `cliProxyAPIUpdateService` dependencies plus CLIProxyAPI update controls to `AboutSettingsView`; update helper functions to include target versions.
+  - Responsibility: Settings subviews and update UI copy helpers live here.
+  - Implementation change: remove CLIProxyAPI update controls from `ServerSettingsView`; add `viewModel` and `cliProxyAPIUpdateService` dependencies plus CLIProxyAPI update controls to `AboutSettingsView`; update helper functions to include target versions.
+  - Completed-state note: `AboutSettingsView` owns the `CLIProxyAPI binary` row, and `ServerSettingsView` has no `cliProxyAPIUpdateService` dependency.
 - Modify: `Sources/CLIProxyManagerApp/Views/SettingsView.swift`
   - Responsibility: Routes settings tabs to concrete settings views.
-  - Changes: stop passing `cliProxyAPIUpdateService` into `ServerSettingsView`; start passing `viewModel` and `cliProxyAPIUpdateService` into `AboutSettingsView`.
+  - Implementation change: stop passing `cliProxyAPIUpdateService` into `ServerSettingsView`; start passing `viewModel` and `cliProxyAPIUpdateService` into `AboutSettingsView`.
 - Modify: `Sources/CLIProxyManagerApp/Views/DashboardView.swift`
   - Responsibility: Main window and automatic CLIProxyAPI update confirmation dialogs.
   - Changes: use version-aware helper functions for dialog titles and buttons.

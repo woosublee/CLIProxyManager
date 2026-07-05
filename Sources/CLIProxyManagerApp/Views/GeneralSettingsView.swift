@@ -191,8 +191,11 @@ func cliproxyAPIUpdateDescription(
         return "Current version: \(currentVersion) · Checking for updates…"
     case .downloading:
         return "Current version: \(currentVersion) · Downloading and verifying update…"
-    case .failed:
-        return "Current version: \(currentVersion) · Last check failed."
+    case .failed(let message):
+        if message.isEmpty {
+            return "Current version: \(currentVersion) · Last check failed."
+        }
+        return "Current version: \(currentVersion) · Last check failed: \(message)"
     default:
         break
     }
@@ -315,6 +318,8 @@ struct AboutSettingsView: View {
                                     await cliProxyAPIUpdateService.downloadAvailableUpdate()
                                     if cliProxyAPIUpdateService.pendingUpdate != nil {
                                         showApplyPrompt = true
+                                    } else if case let .failed(message) = cliProxyAPIUpdateService.state {
+                                        viewModel.settingsMessage = "CLIProxyAPI update failed: \(message)"
                                     }
                                 }
                             } else {
@@ -358,17 +363,7 @@ struct AboutSettingsView: View {
                 pendingUpdate: cliProxyAPIUpdateService.pendingUpdate,
                 isServerRunning: viewModel.serverControlState.isRunning
             )) {
-                Task {
-                    do {
-                        try cliProxyAPIUpdateService.applyPendingNow()
-                        if viewModel.serverControlState.isRunning {
-                            await viewModel.restartServer()
-                        }
-                        viewModel.settingsMessage = "CLIProxyAPI update applied."
-                    } catch {
-                        viewModel.settingsMessage = "CLIProxyAPI update failed: \(error.localizedDescription)"
-                    }
-                }
+                Task { await viewModel.applyCLIProxyAPIPendingUpdate(using: cliProxyAPIUpdateService) }
             }
             Button("Apply on next server start") {
                 viewModel.settingsMessage = "CLIProxyAPI update will be applied on next server start."

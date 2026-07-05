@@ -201,7 +201,6 @@ func cliProxyAPIAvailableUpdatePromptTitle(
 ) -> String
 
 func cliProxyAPIPendingUpdatePromptTitle(
-    currentVersion: String,
     pendingUpdate: CLIProxyAPIBinaryManifest?
 ) -> String
 

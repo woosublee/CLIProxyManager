@@ -67,7 +67,7 @@ final class CLIProxyAPIUpdateUITests: XCTestCase {
                 availableUpdate: nil,
                 pendingUpdate: nil
             ),
-            "Current version: 7.2.41 · Last check failed."
+            "Current version: 7.2.41 · Last check failed: Network unavailable"
         )
     }
 
@@ -148,7 +148,8 @@ final class CLIProxyAPIUpdateUITests: XCTestCase {
         XCTAssertTrue(source.contains("cliProxyAPIPendingUpdatePromptTitle(pendingUpdate:"))
         XCTAssertTrue(source.contains("cliProxyAPIPendingUpdatePromptMessage(currentVersion:"))
         XCTAssertTrue(source.contains("cliProxyAPIApplyButtonTitle("))
-        XCTAssertTrue(source.contains("CLIProxyAPI binary updated. Restarting the app is not required."))
+        XCTAssertTrue(source.contains("applyCLIProxyAPIPendingUpdate(using:"))
+        XCTAssertTrue(source.contains("CLIProxyAPI update failed: \\(message)"))
     }
 
     func testDashboardViewSourceStartsAutomaticCLIProxyAPICheckAndShowsConfirmationDialogs() throws {
@@ -169,6 +170,19 @@ final class CLIProxyAPIUpdateUITests: XCTestCase {
         XCTAssertTrue(source.contains("let automaticCheckResult = await cliProxyAPIUpdateService.checkAutomaticallyOnLaunch()"))
         XCTAssertTrue(source.contains("case .availableUpdate:"))
         XCTAssertTrue(source.contains("case .pendingUpdate:"))
+    }
+
+    func testSharedApplyFlowLivesInDashboardViewModel() throws {
+        let viewModelSource = try String(contentsOf: repositoryRoot().appendingPathComponent("Sources/CLIProxyManagerApp/ViewModels/DashboardViewModel.swift"), encoding: .utf8)
+        let dashboardSource = try String(contentsOf: repositoryRoot().appendingPathComponent("Sources/CLIProxyManagerApp/Views/DashboardView.swift"), encoding: .utf8)
+        let settingsSource = try String(contentsOf: repositoryRoot().appendingPathComponent("Sources/CLIProxyManagerApp/Views/GeneralSettingsView.swift"), encoding: .utf8)
+
+        XCTAssertTrue(viewModelSource.contains("func applyCLIProxyAPIPendingUpdate(using service: CLIProxyAPIUpdateService) async"))
+        XCTAssertTrue(viewModelSource.contains("CLIProxyAPI binary updated. Restarting the app is not required."))
+        XCTAssertTrue(dashboardSource.contains("viewModel.applyCLIProxyAPIPendingUpdate(using: cliProxyAPIUpdateService)"))
+        XCTAssertTrue(settingsSource.contains("viewModel.applyCLIProxyAPIPendingUpdate(using: cliProxyAPIUpdateService)"))
+        XCTAssertFalse(dashboardSource.contains("try cliProxyAPIUpdateService.applyPendingNow()"))
+        XCTAssertFalse(settingsSource.contains("try cliProxyAPIUpdateService.applyPendingNow()"))
     }
 
     private func release(_ version: String) -> CLIProxyAPIRelease {
