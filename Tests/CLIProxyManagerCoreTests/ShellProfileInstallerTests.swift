@@ -387,6 +387,26 @@ final class ShellProfileInstallerTests: XCTestCase {
         XCTAssertFalse(installer.isInstalled())
     }
 
+    func testIsInstalledFindsCurrentSourceAfterOtherEnvironmentBlock() throws {
+        let sandbox = try makeSandbox()
+        let zshrcFile = sandbox.appendingPathComponent(".zshrc")
+        let productionPaths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let developmentPaths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed/dev"))
+        let productionSourceLine = "source '\(productionPaths.functionsFile.path)'"
+        let developmentSourceLine = "source '\(developmentPaths.functionsFile.path)'"
+        try """
+        # >>> CLIProxyAPI Manager >>>
+        \(productionSourceLine)
+        # <<< CLIProxyAPI Manager <<<
+        # >>> CLIProxyAPI Manager >>>
+        \(developmentSourceLine)
+        # <<< CLIProxyAPI Manager <<<
+        """.write(to: zshrcFile, atomically: true, encoding: .utf8)
+        let installer = ShellProfileInstaller(paths: developmentPaths, zshrcFile: zshrcFile)
+
+        XCTAssertTrue(installer.isInstalled())
+    }
+
     private func makeSandbox() throws -> URL {
         let sandbox = FileManager.default.temporaryDirectory
             .appendingPathComponent("CLIProxyManagerTests")
