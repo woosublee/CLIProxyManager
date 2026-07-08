@@ -23,6 +23,10 @@ func roundRobinShowsConfigurationDetails(isEnabled: Bool) -> Bool {
     isEnabled
 }
 
+func roundRobinSavesImmediatelyAfterToggle(previousIsEnabled: Bool, newIsEnabled: Bool) -> Bool {
+    previousIsEnabled && !newIsEnabled
+}
+
 struct RoundRobinSettingsView: View {
     @ObservedObject var viewModel: DashboardViewModel
 
@@ -79,7 +83,13 @@ private struct RoundRobinProviderSettingsCard: View {
             Spacer()
             Toggle("", isOn: Binding(
                 get: { state.profile.isEnabled },
-                set: { value in state.profile.isEnabled = value }
+                set: { value in
+                    let previousValue = state.profile.isEnabled
+                    state.profile.isEnabled = value
+                    if roundRobinSavesImmediatelyAfterToggle(previousIsEnabled: previousValue, newIsEnabled: value) {
+                        saveCurrentSettings()
+                    }
+                }
             ))
             .labelsHidden()
             .toggleStyle(SettingsToggleStyle())
@@ -157,12 +167,16 @@ private struct RoundRobinProviderSettingsCard: View {
         HStack {
             Spacer()
             Button("Save") {
-                let didSave = viewModel.saveSetting { try viewModel.saveRoundRobinSettings(state) }
-                if didSave {
-                    state = viewModel.roundRobinSettings(for: provider)
-                }
+                saveCurrentSettings()
             }
             .disabled(state.profile.isEnabled && (state.profile.commandName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || commandNameCheckState != .available))
+        }
+    }
+
+    private func saveCurrentSettings() {
+        let didSave = viewModel.saveSetting { try viewModel.saveRoundRobinSettings(state) }
+        if didSave {
+            state = viewModel.roundRobinSettings(for: provider)
         }
     }
 

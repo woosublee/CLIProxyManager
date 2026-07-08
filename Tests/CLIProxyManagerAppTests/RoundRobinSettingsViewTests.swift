@@ -23,4 +23,10 @@ final class RoundRobinSettingsViewTests: XCTestCase {
         XCTAssertFalse(roundRobinShowsConfigurationDetails(isEnabled: false))
         XCTAssertTrue(roundRobinShowsConfigurationDetails(isEnabled: true))
     }
+
+    func testRoundRobinToggleOffSavesImmediately() {
+        XCTAssertTrue(roundRobinSavesImmediatelyAfterToggle(previousIsEnabled: true, newIsEnabled: false))
+        XCTAssertFalse(roundRobinSavesImmediatelyAfterToggle(previousIsEnabled: false, newIsEnabled: true))
+        XCTAssertFalse(roundRobinSavesImmediatelyAfterToggle(previousIsEnabled: true, newIsEnabled: true))
+    }
 }
