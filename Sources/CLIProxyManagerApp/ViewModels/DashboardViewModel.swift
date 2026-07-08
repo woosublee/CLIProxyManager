@@ -574,6 +574,7 @@ final class DashboardViewModel: ObservableObject {
             if !disabled {
                 settingsMessage = "\(providerName) auth file was not found."
             } else {
+                try saveConfig(config, validateShellFunctions: true)
                 settingsMessage = "\(providerName) connection was disabled. The auth file was not deleted."
             }
         } catch {
@@ -677,7 +678,19 @@ final class DashboardViewModel: ObservableObject {
         let options = roundRobinAccountOptions(for: profile.provider)
         let validIDs = Set(options.map(\.id))
         profile.includedAuthProfileIDs = profile.includedAuthProfileIDs.filter { validIDs.contains($0) }
-        if profile.isEnabled, !roundRobinAvailability(profile: profile, options: options).canEnable {
+
+        guard profile.isEnabled else {
+            updatedConfig.roundRobinProfiles.removeAll { $0.id == profile.id }
+            try saveConfig(
+                updatedConfig,
+                validateShellFunctions: true,
+                shellProfileValidationNames: []
+            )
+            settingsMessage = "Round-robin settings saved."
+            return
+        }
+
+        if !roundRobinAvailability(profile: profile, options: options).canEnable {
             throw RoundRobinSettingsError.insufficientAccounts
         }
         if let index = updatedConfig.roundRobinProfiles.firstIndex(where: { $0.id == profile.id }) {
@@ -688,8 +701,9 @@ final class DashboardViewModel: ObservableObject {
         try saveConfig(
             updatedConfig,
             validateShellFunctions: true,
-            shellProfileValidationNames: profile.isEnabled ? [profile.commandName] : []
+            shellProfileValidationNames: [profile.commandName]
         )
+        settingsMessage = "Round-robin settings saved."
     }
 
     func saveClaudeFunctionName(_ functionName: String) throws {
@@ -1203,7 +1217,7 @@ final class DashboardViewModel: ObservableObject {
         validateShellFunctions: Bool = false,
         shellProfileValidationNames: [String]? = nil
     ) throws {
-        let updatedConfig = Self.persistedConfig(updatedConfig)
+        let updatedConfig = Self.persistedConfig(removingUnavailableRoundRobinProfiles(from: updatedConfig))
         if validateShellFunctions {
             let activeNames = activeFunctionNames(in: updatedConfig)
             try ShellCommandNameValidator.validate(activeNames)
@@ -1353,22 +1367,30 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func renderableRoundRobinProfiles(in config: AppConfig) -> [AppConfig.RoundRobinProfile] {
+        config.roundRobinProfiles.filter { isRoundRobinProfileUsable($0, in: config) }
+    }
+
+    private func removingUnavailableRoundRobinProfiles(from config: AppConfig) -> AppConfig {
+        var updatedConfig = config
+        updatedConfig.roundRobinProfiles = config.roundRobinProfiles.filter { isRoundRobinProfileUsable($0, in: config) }
+        return updatedConfig
+    }
+
+    private func isRoundRobinProfileUsable(_ profile: AppConfig.RoundRobinProfile, in config: AppConfig) -> Bool {
+        guard profile.isEnabled else { return false }
         let authProfilesByID = Dictionary(uniqueKeysWithValues: authProfiles.map { ($0.id, $0) })
         let commandProfilesByAuthID = commandProfilesByAuthID(in: config)
-        return config.roundRobinProfiles.filter { profile in
-            guard profile.isEnabled else { return false }
-            let usableCount = profile.includedAuthProfileIDs.reduce(into: 0) { count, authProfileID in
-                guard let authProfile = authProfilesByID[authProfileID],
-                      authProfile.type == profile.provider,
-                      !authProfile.disabled,
-                      let prefix = routingPrefix(authProfile: authProfile, commandProfile: commandProfilesByAuthID[authProfileID]),
-                      !prefix.isEmpty else {
-                    return
-                }
-                count += 1
+        let usableCount = profile.includedAuthProfileIDs.reduce(into: 0) { count, authProfileID in
+            guard let authProfile = authProfilesByID[authProfileID],
+                  authProfile.type == profile.provider,
+                  !authProfile.disabled,
+                  let prefix = routingPrefix(authProfile: authProfile, commandProfile: commandProfilesByAuthID[authProfileID]),
+                  !prefix.isEmpty else {
+                return
             }
-            return usableCount >= 2
+            count += 1
         }
+        return usableCount >= 2
     }
 
     private func roundRobinProfile(for providerType: AuthProfileType) -> AppConfig.RoundRobinProfile {
@@ -1383,7 +1405,7 @@ final class DashboardViewModel: ObservableObject {
             id: defaultID,
             provider: providerType,
             isEnabled: false,
-            commandName: providerType == .codex ? "ccodex" : "cc",
+            commandName: "",
             includedAuthProfileIDs: roundRobinAccountOptions(for: providerType).filter { $0.isEnabled && $0.hasPrefix }.map(\.id),
             codex: providerType == .codex ? config.ccodex : nil
         )

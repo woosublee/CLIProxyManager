@@ -1,4 +1,5 @@
 import CLIProxyManagerCore
+import Foundation
 
 struct AutomaticShellInstallService: Sendable {
     struct EnabledFunctions: Sendable {
@@ -28,7 +29,25 @@ struct AutomaticShellInstallService: Sendable {
     }
 
     static func runtimeDefault(installer: any ShellFunctionInstalling) -> AutomaticShellInstallService {
-        AutomaticShellInstallService(installer: installer)
+        AutomaticShellInstallService(installer: installer, helperCommand: resolvedDefaultHelperCommand())
+    }
+
+    static func resolvedDefaultHelperCommand(
+        currentExecutableURL: URL? = Bundle.main.executableURL,
+        fileExists: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
+    ) -> String {
+        #if DEBUG
+        if let currentExecutableURL {
+            let helperPath = currentExecutableURL
+                .deletingLastPathComponent()
+                .appendingPathComponent("cliproxy-manager")
+                .path
+            if fileExists(helperPath) {
+                return helperPath
+            }
+        }
+        #endif
+        return "/usr/local/bin/cliproxy-manager"
     }
 
     func apply(config: AppConfig, helperCommand: String? = nil, enabledFunctions: EnabledFunctions = .allOAuth) throws {

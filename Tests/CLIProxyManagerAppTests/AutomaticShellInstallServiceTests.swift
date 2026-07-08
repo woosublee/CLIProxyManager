@@ -16,6 +16,19 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
         XCTAssertEqual(installer.installedFunctionNames, ["cc"])
     }
 
+    func testDebugDefaultHelperCommandUsesHelperBesideCurrentExecutableWhenAvailable() {
+        #if DEBUG
+        let executableURL = URL(fileURLWithPath: "/build/debug/CLIProxyManager")
+
+        let helperCommand = AutomaticShellInstallService.resolvedDefaultHelperCommand(
+            currentExecutableURL: executableURL,
+            fileExists: { $0 == "/build/debug/cliproxy-manager" }
+        )
+
+        XCTAssertEqual(helperCommand, "/build/debug/cliproxy-manager")
+        #endif
+    }
+
     func testViewModelCreatesEmptyShellFunctionsFileOnInitialization() {
         let installer = StubShellInstaller()
         let automaticInstaller = AutomaticShellInstallService(
