@@ -12,6 +12,8 @@
     <string>com.woosublee.CLIProxyManager</string>
     <key>CFBundleIconFile</key>
     <string>CLIProxyManager</string>
+    <key>LSUIElement</key>
+    <true/>
     <key>CFBundleVersion</key>
     <string>12</string>
     <key>CFBundleShortVersionString</key>

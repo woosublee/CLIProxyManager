@@ -27,6 +27,16 @@ final class UpdaterConfigurationTests: XCTestCase {
         XCTAssertEqual(infoPlist["SUEnableAutomaticChecks"] as? Bool, true)
     }
 
+    func testInfoPlistStartsAsAgentAppSoMenuBarOnlyLaunchDoesNotShowDockIcon() throws {
+        let infoPlist = try loadInfoPlist()
+
+        XCTAssertEqual(
+            infoPlist["LSUIElement"] as? Bool,
+            true,
+            "The bundle must start as an agent app so saved menu-bar-only launches never appear in the Dock before runtime preferences are applied."
+        )
+    }
+
     func testPackageConfiguresSparkleExactDependencyAndAppProduct() throws {
         let package = try String(contentsOf: repositoryRoot().appendingPathComponent("Package.swift"), encoding: .utf8)
 
