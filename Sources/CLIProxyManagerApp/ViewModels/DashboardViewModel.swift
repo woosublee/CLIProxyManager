@@ -574,6 +574,7 @@ final class DashboardViewModel: ObservableObject {
             if !disabled {
                 settingsMessage = "\(providerName) auth file was not found."
             } else {
+                try saveConfig(config, validateShellFunctions: true)
                 settingsMessage = "\(providerName) connection was disabled. The auth file was not deleted."
             }
         } catch {
@@ -635,6 +636,74 @@ final class DashboardViewModel: ObservableObject {
         } catch {
             return .unavailable(error.localizedDescription)
         }
+    }
+
+    func roundRobinSettings(for providerType: AuthProfileType) -> RoundRobinSettingsState {
+        let profile = roundRobinProfile(for: providerType)
+        return roundRobinSettings(updating: profile)
+    }
+
+    func roundRobinSettings(updating profile: AppConfig.RoundRobinProfile) -> RoundRobinSettingsState {
+        let options = roundRobinAccountOptions(for: profile.provider)
+        let availability = roundRobinAvailability(profile: profile, options: options)
+        return RoundRobinSettingsState(profile: profile, accountOptions: options, availability: availability)
+    }
+
+    func roundRobinCommandNameAvailability(profileID: String, functionName: String) async -> CommandNameAvailability {
+        let normalizedName = normalizeCommandName(functionName)
+        do {
+            try ShellCommandNameValidator.validate(normalizedName)
+            var updatedConfig = config
+            if let index = updatedConfig.roundRobinProfiles.firstIndex(where: { $0.id == profileID }) {
+                updatedConfig.roundRobinProfiles[index].commandName = normalizedName
+                updatedConfig.roundRobinProfiles[index].isEnabled = true
+            } else if profileID.hasPrefix("codex") {
+                updatedConfig.roundRobinProfiles.append(AppConfig.RoundRobinProfile(id: profileID, provider: .codex, isEnabled: true, commandName: normalizedName, includedAuthProfileIDs: roundRobinProfile(for: .codex).includedAuthProfileIDs))
+            } else {
+                updatedConfig.roundRobinProfiles.append(AppConfig.RoundRobinProfile(id: profileID, provider: .claude, isEnabled: true, commandName: normalizedName, includedAuthProfileIDs: roundRobinProfile(for: .claude).includedAuthProfileIDs))
+            }
+            let activeNames = activeFunctionNames(in: updatedConfig)
+            try ShellCommandNameValidator.validate(activeNames)
+            try shellInstaller.validateFunctionNames([normalizedName])
+            return .available
+        } catch {
+            return .unavailable(error.localizedDescription)
+        }
+    }
+
+    func saveRoundRobinSettings(_ state: RoundRobinSettingsState) throws {
+        var updatedConfig = config
+        var profile = state.profile
+        profile.commandName = normalizeCommandName(profile.commandName)
+        let options = roundRobinAccountOptions(for: profile.provider)
+        let validIDs = Set(options.map(\.id))
+        profile.includedAuthProfileIDs = profile.includedAuthProfileIDs.filter { validIDs.contains($0) }
+
+        guard profile.isEnabled else {
+            updatedConfig.roundRobinProfiles.removeAll { $0.id == profile.id }
+            try saveConfig(
+                updatedConfig,
+                validateShellFunctions: true,
+                shellProfileValidationNames: []
+            )
+            settingsMessage = "Round-robin settings saved."
+            return
+        }
+
+        if !roundRobinAvailability(profile: profile, options: options).canEnable {
+            throw RoundRobinSettingsError.insufficientAccounts
+        }
+        if let index = updatedConfig.roundRobinProfiles.firstIndex(where: { $0.id == profile.id }) {
+            updatedConfig.roundRobinProfiles[index] = profile
+        } else {
+            updatedConfig.roundRobinProfiles.append(profile)
+        }
+        try saveConfig(
+            updatedConfig,
+            validateShellFunctions: true,
+            shellProfileValidationNames: [profile.commandName]
+        )
+        settingsMessage = "Round-robin settings saved."
     }
 
     func saveClaudeFunctionName(_ functionName: String) throws {
@@ -1148,7 +1217,7 @@ final class DashboardViewModel: ObservableObject {
         validateShellFunctions: Bool = false,
         shellProfileValidationNames: [String]? = nil
     ) throws {
-        let updatedConfig = Self.persistedConfig(updatedConfig)
+        let updatedConfig = Self.persistedConfig(removingUnavailableRoundRobinProfiles(from: updatedConfig))
         if validateShellFunctions {
             let activeNames = activeFunctionNames(in: updatedConfig)
             try ShellCommandNameValidator.validate(activeNames)
@@ -1175,7 +1244,7 @@ final class DashboardViewModel: ObservableObject {
         var didApplyShellInstall = false
         do {
             prefixRollbacks = try syncAuthProfilePrefixesForSave()
-            try automaticShellInstallService.apply(config: updatedConfig, enabledFunctions: enabledShellFunctions(in: updatedConfig))
+            try automaticShellInstallService.apply(config: shellInstallConfig(in: updatedConfig), enabledFunctions: enabledShellFunctions(in: updatedConfig))
             didApplyShellInstall = true
             try configStore.save(updatedConfig)
             lastPersistedConfig = updatedConfig
@@ -1184,7 +1253,7 @@ final class DashboardViewModel: ObservableObject {
         } catch {
             rollbackAuthProfilePrefixes(prefixRollbacks)
             if didApplyShellInstall {
-                try? automaticShellInstallService.apply(config: oldConfig, enabledFunctions: enabledShellFunctions(in: oldConfig))
+                try? automaticShellInstallService.apply(config: shellInstallConfig(in: oldConfig), enabledFunctions: enabledShellFunctions(in: oldConfig))
             }
             config = oldConfig
             cards = oldCards
@@ -1252,26 +1321,37 @@ final class DashboardViewModel: ObservableObject {
     private func applyShellInstallForCurrentProfiles() throws {
         let activeNames = activeFunctionNames(in: config)
         try ShellCommandNameValidator.validate(activeNames)
-        try automaticShellInstallService.apply(config: config, enabledFunctions: enabledShellFunctions())
+        try automaticShellInstallService.apply(config: shellInstallConfig(in: config), enabledFunctions: enabledShellFunctions())
     }
 
     private func enabledShellFunctions() -> AutomaticShellInstallService.EnabledFunctions {
         enabledShellFunctions(in: config)
     }
 
+    private func shellInstallConfig(in config: AppConfig) -> AppConfig {
+        var installConfig = config
+        let renderableIDs = Set(renderableRoundRobinProfiles(in: config).map(\.id))
+        installConfig.roundRobinProfiles = config.roundRobinProfiles.filter { renderableIDs.contains($0.id) }
+        return installConfig
+    }
+
     private func enabledShellFunctions(in config: AppConfig) -> AutomaticShellInstallService.EnabledFunctions {
         let enabledProfiles = renderableOAuthCommandProfiles(in: config)
+        let enabledRoundRobinProfiles = renderableRoundRobinProfiles(in: config)
         return AutomaticShellInstallService.EnabledFunctions(
-            claudeOAuth: enabledProfiles.contains { $0.provider == .claude },
-            codex: enabledProfiles.contains { $0.provider == .codex },
+            claudeOAuth: enabledProfiles.contains { $0.provider == .claude } || enabledRoundRobinProfiles.contains { $0.provider == .claude },
+            codex: enabledProfiles.contains { $0.provider == .codex } || enabledRoundRobinProfiles.contains { $0.provider == .codex },
             claudeAPI: false
         )
     }
 
     private func activeFunctionNames(in config: AppConfig) -> [String] {
-        renderableOAuthCommandProfiles(in: config)
+        let oauthNames = renderableOAuthCommandProfiles(in: config)
             .map { normalizeCommandName($0.commandName) }
-            .filter { !$0.isEmpty }
+        let roundRobinNames = config.roundRobinProfiles
+            .filter { $0.isEnabled }
+            .map { normalizeCommandName($0.commandName) }
+        return (oauthNames + roundRobinNames).filter { !$0.isEmpty }
     }
 
     private func renderableOAuthCommandProfiles(in config: AppConfig) -> [AppConfig.OAuthCommandProfile] {
@@ -1284,6 +1364,106 @@ final class DashboardViewModel: ObservableObject {
             }
             return true
         }
+    }
+
+    private func renderableRoundRobinProfiles(in config: AppConfig) -> [AppConfig.RoundRobinProfile] {
+        config.roundRobinProfiles.filter { isRoundRobinProfileUsable($0, in: config) }
+    }
+
+    private func removingUnavailableRoundRobinProfiles(from config: AppConfig) -> AppConfig {
+        var updatedConfig = config
+        updatedConfig.roundRobinProfiles = config.roundRobinProfiles.filter { isRoundRobinProfileUsable($0, in: config) }
+        return updatedConfig
+    }
+
+    private func isRoundRobinProfileUsable(_ profile: AppConfig.RoundRobinProfile, in config: AppConfig) -> Bool {
+        guard profile.isEnabled else { return false }
+        let authProfilesByID = Dictionary(uniqueKeysWithValues: authProfiles.map { ($0.id, $0) })
+        let commandProfilesByAuthID = commandProfilesByAuthID(in: config)
+        let usableCount = profile.includedAuthProfileIDs.reduce(into: 0) { count, authProfileID in
+            guard let authProfile = authProfilesByID[authProfileID],
+                  authProfile.type == profile.provider,
+                  !authProfile.disabled,
+                  let prefix = routingPrefix(authProfile: authProfile, commandProfile: commandProfilesByAuthID[authProfileID]),
+                  !prefix.isEmpty else {
+                return
+            }
+            count += 1
+        }
+        return usableCount >= 2
+    }
+
+    private func roundRobinProfile(for providerType: AuthProfileType) -> AppConfig.RoundRobinProfile {
+        let defaultID = providerType == .codex ? "codex-default" : "claude-default"
+        if var existing = config.roundRobinProfiles.first(where: { $0.id == defaultID }) {
+            if providerType == .codex, existing.codex == nil {
+                existing.codex = config.ccodex
+            }
+            return existing
+        }
+        return AppConfig.RoundRobinProfile(
+            id: defaultID,
+            provider: providerType,
+            isEnabled: false,
+            commandName: "",
+            includedAuthProfileIDs: roundRobinAccountOptions(for: providerType).filter { $0.isEnabled && $0.hasPrefix }.map(\.id),
+            codex: providerType == .codex ? config.ccodex : nil
+        )
+    }
+
+    private func roundRobinAccountOptions(for providerType: AuthProfileType) -> [RoundRobinAccountOption] {
+        let commandProfilesByAuthID = commandProfilesByAuthID(in: config)
+        return authProfiles
+            .filter { $0.type == providerType }
+            .map { profile in
+                let commandProfile = commandProfilesByAuthID[profile.id]
+                let prefix = routingPrefix(authProfile: profile, commandProfile: commandProfile) ?? ""
+                let nickname = commandProfile?.nickname.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let title = nickname.isEmpty ? profile.email ?? profile.id : nickname
+                let detailParts = [
+                    profile.disabled || commandProfile?.isEnabled == false ? "Disabled" : "Connected",
+                    prefix.isEmpty ? "No routing prefix" : "Prefix: \(prefix)"
+                ]
+                return RoundRobinAccountOption(
+                    id: profile.id,
+                    title: title,
+                    detail: detailParts.joined(separator: " · "),
+                    isEnabled: !profile.disabled && commandProfile?.isEnabled != false,
+                    hasPrefix: !prefix.isEmpty
+                )
+            }
+    }
+
+    private func commandProfilesByAuthID(in config: AppConfig) -> [String: AppConfig.OAuthCommandProfile] {
+        config.oauthCommandProfiles.reduce(into: [:]) { result, commandProfile in
+            result[commandProfile.authProfileID] = commandProfile
+        }
+    }
+
+    private func routingPrefix(authProfile: AuthProfile, commandProfile: AppConfig.OAuthCommandProfile?) -> String? {
+        let commandPrefix = commandProfile?.modelPrefix.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !commandPrefix.isEmpty { return commandPrefix }
+        let authPrefix = authProfile.prefix?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return authPrefix.isEmpty ? nil : authPrefix
+    }
+
+    private func roundRobinAvailability(
+        profile: AppConfig.RoundRobinProfile,
+        options: [RoundRobinAccountOption]
+    ) -> RoundRobinAvailability {
+        let enabledOptions = options.filter { $0.isEnabled }
+        guard enabledOptions.count >= 2 else {
+            return .insufficientProviderAccounts(count: enabledOptions.count)
+        }
+        let selectedOptions = enabledOptions.filter { profile.includedAuthProfileIDs.contains($0.id) }
+        guard selectedOptions.count >= 2 else {
+            return .insufficientSelectedAccounts(count: selectedOptions.count)
+        }
+        let missingPrefixIDs = selectedOptions.filter { !$0.hasPrefix }.map(\.id)
+        guard missingPrefixIDs.isEmpty else {
+            return .missingPrefixes(missingPrefixIDs)
+        }
+        return .available(count: selectedOptions.count)
     }
 
     private func rebuildProviderRows(claudeStatus: DiagnosticStatus?, codexStatus: DiagnosticStatus?) {

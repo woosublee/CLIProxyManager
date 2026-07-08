@@ -17,6 +17,7 @@ final class AppConfigStoreTests: XCTestCase {
         XCTAssertEqual(config.ccodex.opus, AppConfig.CodexRole(model: "gpt-5.5", reasoning: .xhigh, contextWindow: .auto))
         XCTAssertEqual(config.ccodex.sonnet, AppConfig.CodexRole(model: "gpt-5.5", reasoning: .medium, contextWindow: .auto))
         XCTAssertEqual(config.ccodex.haiku, AppConfig.CodexRole(model: "gpt-5.5", reasoning: .low, contextWindow: .auto))
+        XCTAssertEqual(config.roundRobinProfiles, [])
     }
 
     func testStoreReturnsDefaultWhenConfigFileDoesNotExist() throws {

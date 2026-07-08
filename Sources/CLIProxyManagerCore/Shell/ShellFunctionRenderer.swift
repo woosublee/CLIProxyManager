@@ -53,10 +53,6 @@ public enum ShellCommandNameValidator {
 }
 
 public struct ShellFunctionRenderer: Sendable {
-    private static let defaultClaudeOpusModel = "claude-opus-4-7"
-    private static let defaultClaudeSonnetModel = "claude-sonnet-4-6"
-    private static let defaultClaudeHaikuModel = "claude-haiku-4-5-20251001"
-
     public struct EnabledFunctions: Sendable {
         public var claudeOAuth: Bool
         public var codex: Bool
@@ -108,6 +104,10 @@ public struct ShellFunctionRenderer: Sendable {
             }
         }
 
+        for roundRobinProfile in roundRobinProfilesToRender() {
+            script += renderRoundRobinFunction(roundRobinProfile)
+        }
+
         if enabledFunctions.claudeAPI, hasCommandName(config.commands.ccapi) {
             let claudeCommand = config.includeDangerouslySkipPermissions
                 ? "claude --dangerously-skip-permissions \"$@\""
@@ -139,9 +139,9 @@ public struct ShellFunctionRenderer: Sendable {
         let opusModel = config.ccodex.opus.modelIdentifier
         let sonnetModel = config.ccodex.sonnet.modelIdentifier
         let haikuModel = config.ccodex.haiku.modelIdentifier
-        let claudeOpusModel = Self.defaultClaudeOpusModel
-        let claudeSonnetModel = Self.defaultClaudeSonnetModel
-        let claudeHaikuModel = Self.defaultClaudeHaikuModel
+        let claudeOpusModel = OAuthModelDefaults.claudeOpusModel
+        let claudeSonnetModel = OAuthModelDefaults.claudeSonnetModel
+        let claudeHaikuModel = OAuthModelDefaults.claudeHaikuModel
 
         var script = ""
         if enabledFunctions.claudeOAuth, hasCommandName(config.commands.cc) {
@@ -213,13 +213,47 @@ public struct ShellFunctionRenderer: Sendable {
         """
     }
 
+    private func renderRoundRobinFunction(_ profile: AppConfig.RoundRobinProfile) -> String {
+        let claudeCommand = profile.dangerousPermissionsEnabled
+            ? "claude --dangerously-skip-permissions \"$@\""
+            : "claude \"$@\""
+        let port = config.port
+        let commandName = profile.commandName
+        let providerName = profile.provider == .codex ? "Codex" : "Claude"
+
+        return """
+        \(commandName)() {
+          local routing_env
+          if ! routing_env="$(\(shellSingleQuoted(helperCommand)) routing next \(shellSingleQuoted(profile.id)))"; then
+            echo "Cannot select a \(providerName) account for round-robin. Open CLIProxyManager to check routing settings."
+            return 1
+          fi
+
+          eval "$routing_env"
+
+          if ! curl -sf -H 'Authorization: Bearer sk-dummy' "http://127.0.0.1:\(port)/v1/models" >/dev/null; then
+            echo "CLIProxyAPI Manager is not running or authentication settings are invalid. Open the app to check the status."
+            return 1
+          fi
+
+          ANTHROPIC_BASE_URL="http://127.0.0.1:\(port)" \\
+          ANTHROPIC_AUTH_TOKEN='sk-dummy' \\
+          ANTHROPIC_DEFAULT_OPUS_MODEL="$ANTHROPIC_DEFAULT_OPUS_MODEL" \\
+          ANTHROPIC_DEFAULT_SONNET_MODEL="$ANTHROPIC_DEFAULT_SONNET_MODEL" \\
+          ANTHROPIC_DEFAULT_HAIKU_MODEL="$ANTHROPIC_DEFAULT_HAIKU_MODEL" \\
+          \(claudeCommand)
+        }
+
+        """
+    }
+
     private func defaultModels(for commandProfile: AppConfig.OAuthCommandProfile) -> (opus: String, sonnet: String, haiku: String) {
         switch commandProfile.provider {
         case .claude:
             return (
-                prefixedModel(Self.defaultClaudeOpusModel, prefix: commandProfile.modelPrefix),
-                prefixedModel(Self.defaultClaudeSonnetModel, prefix: commandProfile.modelPrefix),
-                prefixedModel(Self.defaultClaudeHaikuModel, prefix: commandProfile.modelPrefix)
+                prefixedModel(OAuthModelDefaults.claudeOpusModel, prefix: commandProfile.modelPrefix),
+                prefixedModel(OAuthModelDefaults.claudeSonnetModel, prefix: commandProfile.modelPrefix),
+                prefixedModel(OAuthModelDefaults.claudeHaikuModel, prefix: commandProfile.modelPrefix)
             )
         case .codex:
             let codex = commandProfile.codex ?? config.ccodex
@@ -232,9 +266,7 @@ public struct ShellFunctionRenderer: Sendable {
     }
 
     private func prefixedModel(_ model: String, prefix: String) -> String {
-        let trimmedPrefix = prefix.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedPrefix.isEmpty else { return model }
-        return "\(trimmedPrefix)/\(model)"
+        OAuthModelDefaults.prefixedModel(model, prefix: prefix)
     }
 
     private func functionNamesToRender() -> [String] {
@@ -246,6 +278,7 @@ public struct ShellFunctionRenderer: Sendable {
         } else {
             names = oauthCommandProfilesToRender().map(\.commandName)
         }
+        names.append(contentsOf: roundRobinProfilesToRender().map(\.commandName))
         if enabledFunctions.claudeAPI, hasCommandName(config.commands.ccapi) { names.append(config.commands.ccapi) }
         return names
     }
@@ -254,6 +287,18 @@ public struct ShellFunctionRenderer: Sendable {
         config.oauthCommandProfiles.filter { commandProfile in
             guard commandProfile.isEnabled, hasCommandName(commandProfile.commandName) else { return false }
             switch commandProfile.provider {
+            case .claude:
+                return enabledFunctions.claudeOAuth
+            case .codex:
+                return enabledFunctions.codex
+            }
+        }
+    }
+
+    private func roundRobinProfilesToRender() -> [AppConfig.RoundRobinProfile] {
+        config.roundRobinProfiles.filter { profile in
+            guard profile.isEnabled, hasCommandName(profile.commandName) else { return false }
+            switch profile.provider {
             case .claude:
                 return enabledFunctions.claudeOAuth
             case .codex:
@@ -273,7 +318,6 @@ public struct ShellFunctionRenderer: Sendable {
     }
 
     private func shellSingleQuoted(_ value: String) -> String {
-        if value.isEmpty { return "''" }
-        return "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        OAuthModelDefaults.shellSingleQuoted(value)
     }
 }

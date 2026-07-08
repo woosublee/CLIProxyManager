@@ -4,7 +4,7 @@ import CLIProxyManagerCore
 
 @MainActor
 final class AutomaticShellInstallServiceTests: XCTestCase {
-    func testRuntimeDefaultDoesNotInstallInDebugBuild() throws {
+    func testRuntimeDefaultInstallsShellFunctionsInDebugBuild() throws {
         let installer = StubShellInstaller()
         let service = AutomaticShellInstallService.runtimeDefault(installer: installer)
         var config = AppConfig.default
@@ -12,10 +12,20 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
 
         try service.apply(config: config)
 
-        #if DEBUG
-        XCTAssertNil(installer.installedScript)
-        #else
         XCTAssertNotNil(installer.installedScript)
+        XCTAssertEqual(installer.installedFunctionNames, ["cc"])
+    }
+
+    func testDebugDefaultHelperCommandUsesHelperBesideCurrentExecutableWhenAvailable() {
+        #if DEBUG
+        let executableURL = URL(fileURLWithPath: "/build/debug/CLIProxyManager")
+
+        let helperCommand = AutomaticShellInstallService.resolvedDefaultHelperCommand(
+            currentExecutableURL: executableURL,
+            fileExists: { $0 == "/build/debug/cliproxy-manager" }
+        )
+
+        XCTAssertEqual(helperCommand, "/build/debug/cliproxy-manager")
         #endif
     }
 
@@ -116,6 +126,30 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
         XCTAssertTrue(installer.installedScript?.contains("cc() {") == true)
         XCTAssertTrue(installer.installedScript?.contains("codexcustom() {") == true)
         XCTAssertFalse(installer.installedScript?.contains("ccapi() {") == true)
+    }
+
+    func testApplyIncludesRoundRobinNameWithoutBlankLegacyName() throws {
+        var config = AppConfig.default
+        config.roundRobinProfiles = [
+            AppConfig.RoundRobinProfile(
+                id: "codex-default",
+                provider: .codex,
+                isEnabled: true,
+                commandName: "ccodex",
+                includedAuthProfileIDs: ["codex-a.json", "codex-b.json"]
+            )
+        ]
+        let installer = StubShellInstaller()
+        let service = AutomaticShellInstallService(
+            installer: installer,
+            secretStore: FailingSecretStore(error: SecretStoreError.missingSecret(SecretKey.claudeAPIKey.rawValue)),
+            helperCommand: "/usr/local/bin/cliproxy-manager"
+        )
+
+        try service.apply(config: config)
+
+        XCTAssertEqual(installer.installedFunctionNames, ["ccodex"])
+        XCTAssertTrue(installer.installedScript?.contains("ccodex() {") == true)
     }
 
     func testApplyIncludesClaudeAPIWhenSecretExists() throws {

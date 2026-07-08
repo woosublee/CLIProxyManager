@@ -15,6 +15,10 @@ public struct ManagedPaths: Equatable, Sendable {
         rootDirectory.appendingPathComponent("config.json")
     }
 
+    public var roundRobinStateFile: URL {
+        rootDirectory.appendingPathComponent("round-robin-state.json")
+    }
+
     public var logsDirectory: URL {
         rootDirectory.appendingPathComponent("logs")
     }
