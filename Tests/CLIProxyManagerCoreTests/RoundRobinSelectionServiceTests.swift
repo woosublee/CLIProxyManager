@@ -95,6 +95,36 @@ final class RoundRobinSelectionServiceTests: XCTestCase {
         }
     }
 
+    func testDuplicateCommandProfilesForIncludedAuthProfileThrowExplicitError() throws {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "codex-a", provider: .codex, authProfileID: "codex-a.json", commandName: "cca", modelPrefix: "codex-a"),
+            AppConfig.OAuthCommandProfile(id: "codex-a-duplicate", provider: .codex, authProfileID: "codex-a.json", commandName: "ccadup", modelPrefix: "codex-a-dup"),
+            AppConfig.OAuthCommandProfile(id: "codex-b", provider: .codex, authProfileID: "codex-b.json", commandName: "ccb", modelPrefix: "codex-b")
+        ]
+        config.roundRobinProfiles = [
+            AppConfig.RoundRobinProfile(
+                id: "codex-default",
+                provider: .codex,
+                isEnabled: true,
+                commandName: "ccodex",
+                includedAuthProfileIDs: ["codex-a.json", "codex-b.json"]
+            )
+        ]
+        let service = RoundRobinSelectionService(stateSelector: StubRoundRobinStateSelector(selections: []))
+
+        XCTAssertThrowsError(try service.shellEnvironmentAssignments(
+            profileID: "codex-default",
+            config: config,
+            authProfiles: [
+                AuthProfile(fileName: "codex-a.json", type: .codex, email: nil, accountID: nil, expired: nil, disabled: false, prefix: "codex-a"),
+                AuthProfile(fileName: "codex-b.json", type: .codex, email: nil, accountID: nil, expired: nil, disabled: false, prefix: "codex-b")
+            ]
+        )) { error in
+            XCTAssertEqual(error as? RoundRobinSelectionError, .duplicateCommandProfiles("codex-a.json"))
+        }
+    }
+
     private func testCodex(model: String) -> AppConfig.Codex {
         AppConfig.Codex(
             opus: AppConfig.CodexRole(model: model, reasoning: .xhigh, contextWindow: .auto),

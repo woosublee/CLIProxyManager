@@ -6,6 +6,7 @@ public enum RoundRobinSelectionError: Error, Equatable, LocalizedError {
     case insufficientCandidates(String, Int)
     case selectedProfileUnavailable(String)
     case missingModelPrefix(String)
+    case duplicateCommandProfiles(String)
 
     public var errorDescription: String? {
         switch self {
@@ -19,6 +20,8 @@ public enum RoundRobinSelectionError: Error, Equatable, LocalizedError {
             "Selected round-robin auth profile `\(id)` is unavailable."
         case .missingModelPrefix(let id):
             "Selected round-robin auth profile `\(id)` does not have a routing prefix."
+        case .duplicateCommandProfiles(let authProfileID):
+            "Round-robin auth profile `\(authProfileID)` has duplicate command profiles."
         }
     }
 }
@@ -47,7 +50,7 @@ public struct RoundRobinSelectionService: Sendable {
             throw RoundRobinSelectionError.profileDisabled(profileID)
         }
 
-        let candidates = candidates(for: profile, config: config, authProfiles: authProfiles)
+        let candidates = try candidates(for: profile, config: config, authProfiles: authProfiles)
         guard candidates.count >= 2 else {
             throw RoundRobinSelectionError.insufficientCandidates(profile.id, candidates.count)
         }
@@ -76,18 +79,23 @@ public struct RoundRobinSelectionService: Sendable {
         for profile: AppConfig.RoundRobinProfile,
         config: AppConfig,
         authProfiles: [AuthProfile]
-    ) -> [Candidate] {
+    ) throws -> [Candidate] {
         let authProfilesByID = Dictionary(uniqueKeysWithValues: authProfiles.map { ($0.id, $0) })
-        let commandProfilesByAuthID = Dictionary(uniqueKeysWithValues: config.oauthCommandProfiles.map { ($0.authProfileID, $0) })
+        let commandProfilesByAuthID = Dictionary(grouping: config.oauthCommandProfiles, by: \.authProfileID)
 
-        return profile.includedAuthProfileIDs.compactMap { authProfileID in
+        return try profile.includedAuthProfileIDs.compactMap { authProfileID in
             guard let authProfile = authProfilesByID[authProfileID],
                   authProfile.type == profile.provider,
-                  authProfile.disabled == false,
-                  let commandProfile = commandProfilesByAuthID[authProfileID],
-                  commandProfile.provider == profile.provider,
-                  commandProfile.isEnabled else {
+                  authProfile.disabled == false else {
                 return nil
+            }
+
+            let matchingCommandProfiles = (commandProfilesByAuthID[authProfileID] ?? []).filter { commandProfile in
+                commandProfile.provider == profile.provider && commandProfile.isEnabled
+            }
+            guard !matchingCommandProfiles.isEmpty else { return nil }
+            guard matchingCommandProfiles.count == 1, let commandProfile = matchingCommandProfiles.first else {
+                throw RoundRobinSelectionError.duplicateCommandProfiles(authProfileID)
             }
 
             let prefix = commandProfile.modelPrefix.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
