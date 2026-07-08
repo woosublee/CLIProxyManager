@@ -239,8 +239,14 @@ public struct AppConfig: Codable, Equatable, Sendable {
         self.logLevel = try c.decodeIfPresent(LogLevel.self, forKey: .logLevel) ?? .info
     }
 
+    #if DEBUG
+    private static let defaultPort = 18_318
+    #else
+    private static let defaultPort = 18_317
+    #endif
+
     public static let `default` = AppConfig(
-        port: 18_317,
+        port: defaultPort,
         commands: Commands(cc: "", ccapi: "", ccodex: ""),
         ccapi: ClaudeAPI(model: "claude-opus-4-8"),
         ccodex: Codex(

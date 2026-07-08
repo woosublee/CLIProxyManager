@@ -179,9 +179,9 @@ final class DashboardViewModel: ObservableObject {
         self.shellInstaller = shellInstaller
         self.modelClient = modelClient
         self.authProfileStore = authProfileStore
-        let defaultRuntimePreparer = ProxyServiceManager(paths: ManagedPaths(), bundledBinaryURL: BundledProxyBinary.url())
+        let defaultRuntimePreparer = ProxyServiceManager(paths: ManagedPaths(), bundledBinaryURL: BundledProxyBinary.url(), bundledManifestURL: BundledProxyBinary.manifestURL())
         self.oauthLoginService = oauthLoginService ?? OAuthLoginService(runtimePreparer: defaultRuntimePreparer)
-        self.automaticShellInstallService = automaticShellInstallService ?? AutomaticShellInstallService(installer: shellInstaller)
+        self.automaticShellInstallService = automaticShellInstallService ?? AutomaticShellInstallService.runtimeDefault(installer: shellInstaller)
         self.proxyHealthClient = proxyHealthClient
         self.proxyService = proxyService
         self.claudeConnector = claudeConnector
@@ -319,6 +319,18 @@ final class DashboardViewModel: ObservableObject {
             waitForReady: true
         ) {
             try await proxyService.restart(port: config.port)
+        }
+    }
+
+    func applyCLIProxyAPIPendingUpdate(using service: CLIProxyAPIUpdateService) async {
+        do {
+            try service.applyPendingNow()
+            if serverControlState.isRunning {
+                await restartServer()
+            }
+            settingsMessage = "CLIProxyAPI binary updated. Restarting the app is not required."
+        } catch {
+            settingsMessage = "CLIProxyAPI update failed: \(error.localizedDescription)"
         }
     }
 

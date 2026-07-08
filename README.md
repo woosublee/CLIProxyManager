@@ -38,6 +38,10 @@ Sparkle's EdDSA signature is separate from macOS code signing. The current autom
 
 The app currently keeps the hardened-runtime `disable-library-validation` entitlement enabled for this non-Developer-ID Sparkle distribution path. Release builds re-sign the bundled Sparkle framework and helper executables with the `cliproxymanager` identity, and without this entitlement macOS can reject the app at launch because the re-signed Sparkle code is not loaded under a matching Developer ID Team ID. Revisit this when Developer ID signing and notarization are introduced.
 
+CLIProxyAPI binary updates are separate from CLIProxyManager app updates. On launch, CLIProxyManager checks the upstream `router-for-me/CLIProxyAPI` GitHub Releases feed in the background at most once every 24 hours. If a newer stable macOS arm64 CLIProxyAPI release is available, the app asks before downloading or applying it.
+
+When the user accepts a CLIProxyAPI binary update, the app downloads `CLIProxyAPI_<version>_darwin_aarch64.tar.gz` and verifies it against upstream `checksums.txt` before storing it. The user can apply the verified binary immediately, which restarts the app-managed server if it is running, or defer it until the next server start. Checksum mismatches, missing assets, extraction failures, and version metadata mismatches keep the existing binary unchanged.
+
 ## Quick start
 
 1. Open CLIProxyManager.
@@ -217,6 +221,8 @@ CLIProxyManager vendors the official macOS arm64 CLIProxyAPI release binary into
 ```text
 Sources/CLIProxyManagerApp/Resources/cliproxyapi/cliproxyapi
 ```
+
+This vendoring flow changes the default binary shipped inside the app. It is still useful for release baselines, but day-to-day CLIProxyAPI updates can also be applied by the installed app through the in-app CLIProxyAPI binary updater.
 
 Use the vendoring script with an upstream release version:
 

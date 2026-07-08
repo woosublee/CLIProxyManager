@@ -39,13 +39,33 @@ public struct ManagedPaths: Equatable, Sendable {
         clipProxyDirectory.appendingPathComponent("cliproxyapi")
     }
 
+    public var activeClipProxyManifest: URL {
+        clipProxyDirectory.appendingPathComponent("active-manifest.json")
+    }
+
+    public var pendingClipProxyDirectory: URL {
+        clipProxyDirectory.appendingPathComponent("pending", isDirectory: true)
+    }
+
+    public var pendingClipProxyBinary: URL {
+        pendingClipProxyDirectory.appendingPathComponent("cliproxyapi")
+    }
+
+    public var pendingClipProxyManifest: URL {
+        pendingClipProxyDirectory.appendingPathComponent("manifest.json")
+    }
+
+    public var clipProxyUpdateStateFile: URL {
+        clipProxyDirectory.appendingPathComponent("update-state.json")
+    }
+
     public static func defaultRootDirectory() -> URL {
-        let root = FileManager.default.homeDirectoryForCurrentUser
+        let productionRoot = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".cliproxy-manager", isDirectory: true)
         #if DEBUG
-        return root.appendingPathComponent("dev", isDirectory: true)
+        return productionRoot.appendingPathComponent("dev", isDirectory: true)
         #else
-        return root
+        return productionRoot
         #endif
     }
 }

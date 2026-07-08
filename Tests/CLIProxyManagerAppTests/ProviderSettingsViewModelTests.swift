@@ -405,10 +405,12 @@ final class ProviderSettingsViewModelTests: XCTestCase {
     func testSaveCodexSettingsIgnoresClaudeZshrcConflict() throws {
         let store = StubConfigStore(config: .default)
         let installer = StubShellInstaller(conflictingFunctionNames: ["cc"])
+        let automaticInstaller = AutomaticShellInstallService(installer: installer)
         let viewModel = DashboardViewModel(
             configStore: store,
             shellInstaller: installer,
             authProfileStore: StubAuthProfileStore(profiles: [claudeProfile(), codexProfile()]),
+            automaticShellInstallService: automaticInstaller,
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector()
         )
@@ -426,10 +428,12 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         config.commands.cc = "cc"
         config.commands.ccodex = "ccd123"
         let installer = StubShellInstaller(conflictingFunctionNames: ["cc"])
+        let automaticInstaller = AutomaticShellInstallService(installer: installer)
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: config),
             shellInstaller: installer,
             authProfileStore: StubAuthProfileStore(profiles: [claudeProfile(), codexProfile()]),
+            automaticShellInstallService: automaticInstaller,
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector()
         )
@@ -660,6 +664,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         ]
         let store = StubConfigStore(config: config)
         let installer = StubShellInstaller(installError: NSError(domain: "shell", code: 1))
+        let automaticInstaller = AutomaticShellInstallService(installer: installer)
         let authStore = StubAuthProfileStore(profiles: [
             AuthProfile(fileName: "claude-work.json", type: .claude, email: "work@example.com", accountID: nil, expired: nil, disabled: false, prefix: "claude-old-team")
         ])
@@ -667,6 +672,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             configStore: store,
             shellInstaller: installer,
             authProfileStore: authStore,
+            automaticShellInstallService: automaticInstaller,
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector()
         )
@@ -708,10 +714,12 @@ final class ProviderSettingsViewModelTests: XCTestCase {
     func testSaveCodexSettingsKeepsViewModelStateAlignedWithPersistedConfigWhenShellApplyFails() {
         let store = StubConfigStore(config: .default)
         let installer = StubShellInstaller(installError: NSError(domain: "shell", code: 1))
+        let automaticInstaller = AutomaticShellInstallService(installer: installer)
         let viewModel = DashboardViewModel(
             configStore: store,
             shellInstaller: installer,
             authProfileStore: StubAuthProfileStore(profiles: [codexProfile()]),
+            automaticShellInstallService: automaticInstaller,
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector()
         )
@@ -806,10 +814,12 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         var config = AppConfig.default
         config.commands.cc = "cc"
         config.commands.ccodex = "ccodex"
+        let automaticInstaller = AutomaticShellInstallService(installer: installer)
         _ = DashboardViewModel(
             configStore: StubConfigStore(config: config),
             shellInstaller: installer,
             authProfileStore: authStore,
+            automaticShellInstallService: automaticInstaller,
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector()
         )
@@ -819,6 +829,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             configStore: StubConfigStore(config: config),
             shellInstaller: installer,
             authProfileStore: authStore,
+            automaticShellInstallService: automaticInstaller,
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector()
         )

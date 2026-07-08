@@ -40,9 +40,9 @@ struct PortSettingsSheet: View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Port")
                 .font(.title2.bold())
-            TextField("18317", text: $portText)
+            TextField(String(AppConfig.default.port), text: $portText)
                 .textFieldStyle(.roundedBorder)
-            Text("Use an available port between 1024 and 65535. Use 18317 to keep it separate from the legacy 8317 port.")
+            Text("Use an available port between 1024 and 65535. Use \(AppConfig.default.port) to keep it separate from the legacy 8317 port.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
             actionButtons {
@@ -59,7 +59,7 @@ struct PortSettingsSheet: View {
 
     private func actionButtons(saveAction: @escaping () throws -> Void) -> some View {
         HStack {
-            Button("Default") { portText = "18317" }
+            Button("Default") { portText = String(AppConfig.default.port) }
             Spacer()
             Button("Cancel") { dismiss() }
             Button("Save") {

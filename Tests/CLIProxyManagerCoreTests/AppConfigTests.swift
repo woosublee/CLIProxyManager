@@ -5,7 +5,11 @@ final class AppConfigTests: XCTestCase {
     func testDefaultConfigMatchesMVPDecisions() {
         let config = AppConfig.default
 
+        #if DEBUG
+        XCTAssertEqual(config.port, 18_318)
+        #else
         XCTAssertEqual(config.port, 18_317)
+        #endif
         XCTAssertEqual(config.commands.cc, "")
         XCTAssertEqual(config.commands.ccapi, "")
         XCTAssertEqual(config.commands.ccodex, "")
@@ -272,20 +276,17 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(config.commands.ccodex, "ccodex")
     }
 
-    func testManagedPathsDefaultRootUsesDevelopmentDirectoryInDebugBuilds() {
-        let home = FileManager.default.homeDirectoryForCurrentUser
+    func testDefaultRootDirectoryUsesDevelopmentSubdirectoryInDebugBuilds() {
+        let productionRoot = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".cliproxy-manager", isDirectory: true)
 
         #if DEBUG
         XCTAssertEqual(
             ManagedPaths.defaultRootDirectory(),
-            home.appendingPathComponent(".cliproxy-manager", isDirectory: true)
-                .appendingPathComponent("dev", isDirectory: true)
+            productionRoot.appendingPathComponent("dev", isDirectory: true)
         )
         #else
-        XCTAssertEqual(
-            ManagedPaths.defaultRootDirectory(),
-            home.appendingPathComponent(".cliproxy-manager", isDirectory: true)
-        )
+        XCTAssertEqual(ManagedPaths.defaultRootDirectory(), productionRoot)
         #endif
     }
 
