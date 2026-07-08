@@ -9,8 +9,8 @@ struct CLIProxyManagerApp: App {
     @StateObject private var cliProxyAPIUpdateService: CLIProxyAPIUpdateService
 
     init() {
-        LaunchAppearanceBootstrapper().applySavedDockVisibility()
-        let viewModel = DashboardViewModel()
+        let config = LaunchAppearanceBootstrapper().applySavedDockVisibility()
+        let viewModel = DashboardViewModel(config: config)
         _viewModel = StateObject(wrappedValue: viewModel)
         _quitCoordinator = StateObject(wrappedValue: QuitCoordinator(shouldStopServerBeforeQuit: {
             viewModel.serverControlState.shouldStopServerBeforeQuit

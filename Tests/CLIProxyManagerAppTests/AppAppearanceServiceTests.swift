@@ -23,12 +23,13 @@ final class AppAppearanceServiceTests: XCTestCase {
         config.showDockIcon = false
         let appearanceService = StubAppAppearanceService()
 
-        LaunchAppearanceBootstrapper(
+        let bootstrappedConfig = LaunchAppearanceBootstrapper(
             configStore: StubConfigStore(config: config),
             appAppearanceService: appearanceService
         ).applySavedDockVisibility()
 
         XCTAssertEqual(appearanceService.showDockIconValues, [false])
+        XCTAssertFalse(bootstrappedConfig.showDockIcon)
     }
 
     func testStartAtLoginToggleCallsLoginServiceAndPersistsConfig() throws {

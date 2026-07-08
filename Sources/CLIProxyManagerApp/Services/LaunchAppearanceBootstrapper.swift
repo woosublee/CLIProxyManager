@@ -14,8 +14,10 @@ struct LaunchAppearanceBootstrapper {
         self.appAppearanceService = appAppearanceService
     }
 
-    func applySavedDockVisibility() {
+    @discardableResult
+    func applySavedDockVisibility() -> AppConfig {
         let config = DashboardViewModel.availableConfig((try? configStore.load()) ?? .default)
         appAppearanceService.apply(showDockIcon: config.showDockIcon)
+        return config
     }
 }
