@@ -531,8 +531,9 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     func testConnectProviderStartsBundledOAuthLoginAndRefreshesProfiles() async {
         let authStore = StubAuthProfileStore(profiles: [])
         let oauth = StubOAuthLoginService()
+        let store = StubConfigStore(config: .default)
         let viewModel = DashboardViewModel(
-            configStore: StubConfigStore(config: .default),
+            configStore: store,
             shellInstaller: StubShellInstaller(),
             authProfileStore: authStore,
             oauthLoginService: oauth,
@@ -546,13 +547,15 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         await viewModel.connectProvider(.codex)
 
         XCTAssertEqual(oauth.invocations, [.codex])
-        XCTAssertEqual(authStore.disabledUpdates.map(\.type), [.codex])
-        XCTAssertEqual(authStore.disabledUpdates.map(\.disabled), [false])
+        XCTAssertEqual(authStore.disabledIDUpdates.map(\.id), ["codex.json"])
+        XCTAssertEqual(authStore.disabledIDUpdates.map(\.disabled), [false])
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.connectionDetail, "codex@example.com")
         XCTAssertFalse(viewModel.isProfileLoginInProgress)
         XCTAssertNil(viewModel.activeOAuthLoginProvider)
         XCTAssertEqual(viewModel.completedOAuthLoginProvider, .codex)
         XCTAssertTrue(viewModel.completedOAuthLoginIsInitialSetup)
+        XCTAssertEqual(store.savedConfigs.last?.oauthCommandProfiles.map(\.authProfileID), ["codex.json"])
+        XCTAssertEqual(store.config.oauthCommandProfiles.map(\.authProfileID), ["codex.json"])
     }
 
     func testReconnectDisabledProviderCompletesAsExistingSetup() async {
@@ -870,9 +873,10 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         viewModel.disconnectProvider(ProviderRowState.ID(rawValue: "claude-work"))
 
+        XCTAssertEqual(authStore.disabledIDUpdates.map(\.id), ["claude-work.json"])
         XCTAssertEqual(authStore.disabledUpdates, [])
         XCTAssertEqual(viewModel.providerRows.map(\.authProfileID), ["claude-work.json", "claude-personal.json"])
-        XCTAssertEqual(viewModel.settingsMessage, "Claude OAuth auth file was not found.")
+        XCTAssertEqual(viewModel.settingsMessage, "Claude OAuth connection was disabled. The auth file was not deleted.")
     }
 
     func testDisconnectProviderDisablesAuthProfileAndRefreshesRows() {
@@ -893,8 +897,9 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         viewModel.disconnectProvider(.codex)
 
-        XCTAssertEqual(authStore.disabledUpdates.map(\.type), [.codex])
-        XCTAssertEqual(authStore.disabledUpdates.map(\.disabled), [true])
+        XCTAssertEqual(authStore.disabledIDUpdates.map(\.id), ["codex.json"])
+        XCTAssertEqual(authStore.disabledIDUpdates.map(\.disabled), [true])
+        XCTAssertEqual(authStore.disabledUpdates, [])
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.connectionTitle, "Needs connection")
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.isConnected, false)
         XCTAssertEqual(viewModel.settingsMessage, "Codex OAuth connection was disabled. The auth file was not deleted.")
@@ -1557,11 +1562,16 @@ private final class StubAuthProfileStore: AuthProfileManaging, @unchecked Sendab
     private let lock = NSLock()
     private var _profiles: [AuthProfile]
     private var _disabledUpdates: [DisabledUpdate] = []
+    private var _disabledIDUpdates: [DisabledIDUpdate] = []
     private var _deleteInvocations: [AuthProfileType] = []
     var nextProfiles: [AuthProfile]?
 
     var disabledUpdates: [DisabledUpdate] {
         lock.withLock { _disabledUpdates }
+    }
+
+    var disabledIDUpdates: [DisabledIDUpdate] {
+        lock.withLock { _disabledIDUpdates }
     }
 
     var deleteInvocations: [AuthProfileType] {
@@ -1591,6 +1601,41 @@ private final class StubAuthProfileStore: AuthProfileManaging, @unchecked Sendab
         }
     }
 
+    func setDisabled(_ disabled: Bool, id: String) throws -> Bool {
+        lock.withLock {
+            guard let index = _profiles.firstIndex(where: { $0.id == id }) else { return false }
+            _disabledIDUpdates.append(DisabledIDUpdate(id: id, disabled: disabled))
+            let profile = _profiles[index]
+            _profiles[index] = AuthProfile(
+                fileName: profile.fileName,
+                type: profile.type,
+                email: profile.email,
+                accountID: profile.accountID,
+                expired: profile.expired,
+                disabled: disabled,
+                prefix: profile.prefix
+            )
+            return true
+        }
+    }
+
+    func setPrefix(_ prefix: String?, id: String) throws -> Bool {
+        lock.withLock {
+            guard let index = _profiles.firstIndex(where: { $0.id == id }) else { return false }
+            let profile = _profiles[index]
+            _profiles[index] = AuthProfile(
+                fileName: profile.fileName,
+                type: profile.type,
+                email: profile.email,
+                accountID: profile.accountID,
+                expired: profile.expired,
+                disabled: profile.disabled,
+                prefix: prefix
+            )
+            return true
+        }
+    }
+
     func setDisabled(_ disabled: Bool, for type: AuthProfileType) throws -> Int {
         lock.withLock {
             _disabledUpdates.append(DisabledUpdate(type: type, disabled: disabled))
@@ -1601,6 +1646,11 @@ private final class StubAuthProfileStore: AuthProfileManaging, @unchecked Sendab
 
 private struct DisabledUpdate: Equatable {
     let type: AuthProfileType
+    let disabled: Bool
+}
+
+private struct DisabledIDUpdate: Equatable {
+    let id: String
     let disabled: Bool
 }
 

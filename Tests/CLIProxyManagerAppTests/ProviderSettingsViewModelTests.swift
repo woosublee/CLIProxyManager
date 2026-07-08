@@ -581,6 +581,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector()
         )
+        let initialConfig = viewModel.config
         installer.reset()
 
         XCTAssertThrowsError(try viewModel.saveClaudeOAuthSettings(
@@ -592,6 +593,9 @@ final class ProviderSettingsViewModelTests: XCTestCase {
 
         XCTAssertNil(installer.installedScript)
         XCTAssertEqual(installer.installedFunctionNames, [])
+        XCTAssertEqual(store.savedConfigs, [])
+        XCTAssertEqual(store.config, config)
+        XCTAssertEqual(viewModel.config, initialConfig)
         XCTAssertEqual(authStore.prefixUpdates, [PrefixUpdate(id: "claude-work.json", prefix: "claude-work-team")])
     }
 
@@ -631,6 +635,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector()
         )
+        let initialConfig = viewModel.config
         installer.reset()
 
         XCTAssertThrowsError(try viewModel.saveClaudeOAuthSettings(
@@ -642,6 +647,9 @@ final class ProviderSettingsViewModelTests: XCTestCase {
 
         XCTAssertNil(installer.installedScript)
         XCTAssertEqual(installer.installedFunctionNames, [])
+        XCTAssertEqual(store.savedConfigs, [])
+        XCTAssertEqual(store.config, config)
+        XCTAssertEqual(viewModel.config, initialConfig)
         XCTAssertEqual(authStore.prefixUpdates, [
             PrefixUpdate(id: "claude-work.json", prefix: "claude-new-work"),
             PrefixUpdate(id: "claude-personal.json", prefix: "claude-new-work-2"),
@@ -676,6 +684,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector()
         )
+        let initialConfig = viewModel.config
         installer.reset()
 
         XCTAssertThrowsError(try viewModel.saveClaudeOAuthSettings(
@@ -686,6 +695,9 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         ))
 
         XCTAssertNil(installer.installedScript)
+        XCTAssertEqual(store.savedConfigs, [])
+        XCTAssertEqual(store.config, config)
+        XCTAssertEqual(viewModel.config, initialConfig)
         XCTAssertEqual(authStore.prefixUpdates, [
             PrefixUpdate(id: "claude-work.json", prefix: "claude-work-team"),
             PrefixUpdate(id: "claude-work.json", prefix: "claude-old-team")
@@ -711,7 +723,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(installer.installedFunctionNames, [])
     }
 
-    func testSaveCodexSettingsKeepsViewModelStateAlignedWithPersistedConfigWhenShellApplyFails() {
+    func testSaveCodexSettingsKeepsCurrentConfigWhenShellApplyFails() {
         let store = StubConfigStore(config: .default)
         let installer = StubShellInstaller(installError: NSError(domain: "shell", code: 1))
         let automaticInstaller = AutomaticShellInstallService(installer: installer)
@@ -723,19 +735,16 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector()
         )
+        let initialConfig = viewModel.config
         let codex = testCodex()
         installer.reset()
 
         XCTAssertThrowsError(try viewModel.saveCodexSettings(functionName: "mycodex", nickname: "team", codex: codex, dangerousPermissionsEnabled: true))
 
-        XCTAssertEqual(store.savedConfigs.last?.commands.ccodex, "mycodex")
-        XCTAssertEqual(store.config.commands.ccodex, "mycodex")
-        XCTAssertEqual(viewModel.config, store.config)
-        XCTAssertEqual(viewModel.config.commands.ccodex, "mycodex")
-        XCTAssertEqual(viewModel.config.nicknames.ccodex, "team")
-        XCTAssertEqual(viewModel.config.ccodex, codex)
-        XCTAssertEqual(viewModel.config.includeDangerouslySkipPermissions, true)
-        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.functionName, "mycodex")
+        XCTAssertEqual(store.savedConfigs, [])
+        XCTAssertEqual(store.config, .default)
+        XCTAssertEqual(viewModel.config, initialConfig)
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.functionName, "")
     }
 
     func testSaveCodexSettingsKeepsCurrentConfigWhenPersistenceFails() {
@@ -747,11 +756,12 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector()
         )
+        let initialConfig = viewModel.config
         let codex = testCodex()
 
         XCTAssertThrowsError(try viewModel.saveCodexSettings(functionName: "mycodex", nickname: "", codex: codex, dangerousPermissionsEnabled: true))
 
-        XCTAssertEqual(viewModel.config, .default)
+        XCTAssertEqual(viewModel.config, initialConfig)
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.functionName, "")
         XCTAssertEqual(store.savedConfigs, [])
     }

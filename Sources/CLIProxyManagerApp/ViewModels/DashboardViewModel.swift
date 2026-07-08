@@ -476,9 +476,10 @@ final class DashboardViewModel: ObservableObject {
             updatedConfig.oauthCommandProfiles[index].isEnabled = true
         }
         enableAuthProfile(selectedProfile)
-        config = Self.mirroredLegacyFields(in: updatedConfig)
-        reconcileAuthProfilePrefixes()
-        return ProviderRowState.ID(rawValue: config.oauthCommandProfiles.first(where: { $0.authProfileID == selectedProfile.id })?.id ?? selectedProfile.type.rawValue)
+        let finalConfig = Self.mirroredLegacyFields(in: updatedConfig)
+        let completedID = finalConfig.oauthCommandProfiles.first(where: { $0.authProfileID == selectedProfile.id })?.id ?? selectedProfile.type.rawValue
+        try? saveConfig(finalConfig)
+        return ProviderRowState.ID(rawValue: completedID)
     }
 
     private func authProfileID(for provider: ProviderRowState.ID) -> String? {
@@ -1157,26 +1158,32 @@ final class DashboardViewModel: ObservableObject {
                 try shellInstaller.validateFunctionNames(activeNames)
             }
         }
-        do {
-            try configStore.save(updatedConfig)
-        } catch {
-            config = lastPersistedConfig
-            cards = ProfileCard.makeDefaultCards(config: lastPersistedConfig)
-            rebuildOptionRows()
-            rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
-            throw error
-        }
-        lastPersistedConfig = updatedConfig
+        let oldConfig = config
+        let oldCards = cards
         config = updatedConfig
         cards = ProfileCard.makeDefaultCards(config: updatedConfig)
         rebuildOptionRows()
         rebuildProviderRows(claudeStatus: nil, codexStatus: nil)
-        let prefixRollbacks = try syncAuthProfilePrefixesForSave()
+
+        var prefixRollbacks: [AuthProfilePrefixRollback] = []
+        var didApplyShellInstall = false
         do {
+            prefixRollbacks = try syncAuthProfilePrefixesForSave()
             try automaticShellInstallService.apply(config: updatedConfig, enabledFunctions: enabledShellFunctions(in: updatedConfig))
+            didApplyShellInstall = true
+            try configStore.save(updatedConfig)
+            lastPersistedConfig = updatedConfig
+            rebuildOptionRows()
+            rebuildProviderRows(claudeStatus: nil, codexStatus: nil)
         } catch {
             rollbackAuthProfilePrefixes(prefixRollbacks)
-            rebuildProviderRows(claudeStatus: nil, codexStatus: nil)
+            if didApplyShellInstall {
+                try? automaticShellInstallService.apply(config: oldConfig, enabledFunctions: enabledShellFunctions(in: oldConfig))
+            }
+            config = oldConfig
+            cards = oldCards
+            rebuildOptionRows()
+            rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
             throw error
         }
     }
