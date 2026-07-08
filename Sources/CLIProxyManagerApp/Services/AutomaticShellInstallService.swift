@@ -28,11 +28,7 @@ struct AutomaticShellInstallService: Sendable {
     }
 
     static func runtimeDefault(installer: any ShellFunctionInstalling) -> AutomaticShellInstallService {
-        #if DEBUG
-        AutomaticShellInstallService(installer: installer, isEnabled: false)
-        #else
         AutomaticShellInstallService(installer: installer)
-        #endif
     }
 
     func apply(config: AppConfig, helperCommand: String? = nil, enabledFunctions: EnabledFunctions = .allOAuth) throws {

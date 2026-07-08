@@ -18,4 +18,9 @@ final class RoundRobinSettingsViewTests: XCTestCase {
             "Claude OAuth round-robin uses the default Claude OAuth model mappings. Only the account prefix changes between sessions."
         )
     }
+
+    func testRoundRobinConfigurationDetailsOnlyShowWhenEnabled() {
+        XCTAssertFalse(roundRobinShowsConfigurationDetails(isEnabled: false))
+        XCTAssertTrue(roundRobinShowsConfigurationDetails(isEnabled: true))
+    }
 }

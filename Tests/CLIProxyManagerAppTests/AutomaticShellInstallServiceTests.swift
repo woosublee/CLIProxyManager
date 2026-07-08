@@ -4,7 +4,7 @@ import CLIProxyManagerCore
 
 @MainActor
 final class AutomaticShellInstallServiceTests: XCTestCase {
-    func testRuntimeDefaultDoesNotInstallInDebugBuild() throws {
+    func testRuntimeDefaultInstallsShellFunctionsInDebugBuild() throws {
         let installer = StubShellInstaller()
         let service = AutomaticShellInstallService.runtimeDefault(installer: installer)
         var config = AppConfig.default
@@ -12,11 +12,8 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
 
         try service.apply(config: config)
 
-        #if DEBUG
-        XCTAssertNil(installer.installedScript)
-        #else
         XCTAssertNotNil(installer.installedScript)
-        #endif
+        XCTAssertEqual(installer.installedFunctionNames, ["cc"])
     }
 
     func testViewModelCreatesEmptyShellFunctionsFileOnInitialization() {

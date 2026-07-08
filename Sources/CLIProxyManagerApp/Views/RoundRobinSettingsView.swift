@@ -19,6 +19,10 @@ func roundRobinModelDescription(provider: AuthProfileType) -> String {
     }
 }
 
+func roundRobinShowsConfigurationDetails(isEnabled: Bool) -> Bool {
+    isEnabled
+}
+
 struct RoundRobinSettingsView: View {
     @ObservedObject var viewModel: DashboardViewModel
 
@@ -46,12 +50,14 @@ private struct RoundRobinProviderSettingsCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
-            availabilityMessage
-            commandNameField
-            accountSelection
-            modelSettings
-            permissionsToggle
-            saveButton
+            if roundRobinShowsConfigurationDetails(isEnabled: state.profile.isEnabled) {
+                availabilityMessage
+                commandNameField
+                accountSelection
+                modelSettings
+                permissionsToggle
+                saveButton
+            }
         }
         .padding(14)
         .glassCard(cornerRadius: 10, opacity: 0.04)
