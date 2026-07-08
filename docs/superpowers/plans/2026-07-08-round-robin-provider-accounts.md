@@ -1789,6 +1789,8 @@ Expected: compile failure because UI helper functions do not exist.
 
 - [ ] **Step 3: Create round-robin settings view**
 
+Implementation note: the Codex section must expose the full `AppConfig.CodexRole` settings for each tier: `model`, `reasoning`, and `contextWindow`. Reuse the existing `CodexProviderSettingsSheet` routing-row controls or extract shared role controls rather than only editing the model string. When account checkboxes change, recompute `RoundRobinAvailability` against the updated `includedAuthProfileIDs`, not the stale state returned before the checkbox mutation.
+
 Create `Sources/CLIProxyManagerApp/Views/RoundRobinSettingsView.swift`:
 
 ```swift
