@@ -1,9 +1,10 @@
+import CLIProxyManagerCore
 import SwiftUI
 
 struct AddProviderModal: View {
     @Environment(\.dismiss) private var dismiss
     let activeOAuthLoginProvider: ProviderRowState.ID?
-    let onPick: (ProviderRowState.ID) -> Void
+    let onPick: (AuthProfileType) -> Void
     let onCancelLogin: () -> Void
 
     var body: some View {
@@ -94,12 +95,7 @@ private struct OAuthLoginProgressView: View {
     }
 
     private var providerName: String {
-        switch provider {
-        case .claude:
-            "Claude"
-        case .codex:
-            "Codex"
-        }
+        provider.inferredProviderType == .codex ? "Codex" : "Claude"
     }
 }
 

@@ -24,6 +24,17 @@ public struct ProxyModelClient: Sendable {
         return uniqueBaseModels(from: models)
     }
 
+    public func codexBaseModels(port: Int, modelPrefix: String) async throws -> [String] {
+        let prefix = modelPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prefix.isEmpty else { return try await codexBaseModels(port: port) }
+        let models = try await sortedModels(port: port)
+            .filter(isCodexModel)
+            .map(\.id)
+            .filter { $0.hasPrefix("\(prefix)/") }
+            .map { String($0.dropFirst(prefix.count + 1)) }
+        return uniqueBaseModels(from: models)
+    }
+
     private func sortedModels(port: Int) async throws -> [ModelsResponse.Model] {
         guard (1...65_535).contains(port) else {
             throw ProxyServiceError.invalidPort(port)

@@ -531,8 +531,9 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     func testConnectProviderStartsBundledOAuthLoginAndRefreshesProfiles() async {
         let authStore = StubAuthProfileStore(profiles: [])
         let oauth = StubOAuthLoginService()
+        let store = StubConfigStore(config: .default)
         let viewModel = DashboardViewModel(
-            configStore: StubConfigStore(config: .default),
+            configStore: store,
             shellInstaller: StubShellInstaller(),
             authProfileStore: authStore,
             oauthLoginService: oauth,
@@ -546,13 +547,15 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         await viewModel.connectProvider(.codex)
 
         XCTAssertEqual(oauth.invocations, [.codex])
-        XCTAssertEqual(authStore.disabledUpdates.map(\.type), [.codex])
-        XCTAssertEqual(authStore.disabledUpdates.map(\.disabled), [false])
+        XCTAssertEqual(authStore.disabledIDUpdates.map(\.id), ["codex.json"])
+        XCTAssertEqual(authStore.disabledIDUpdates.map(\.disabled), [false])
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.connectionDetail, "codex@example.com")
         XCTAssertFalse(viewModel.isProfileLoginInProgress)
         XCTAssertNil(viewModel.activeOAuthLoginProvider)
         XCTAssertEqual(viewModel.completedOAuthLoginProvider, .codex)
         XCTAssertTrue(viewModel.completedOAuthLoginIsInitialSetup)
+        XCTAssertEqual(store.savedConfigs.last?.oauthCommandProfiles.map(\.authProfileID), ["codex.json"])
+        XCTAssertEqual(store.config.oauthCommandProfiles.map(\.authProfileID), ["codex.json"])
     }
 
     func testReconnectDisabledProviderCompletesAsExistingSetup() async {
@@ -625,6 +628,38 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertNil(viewModel.activeOAuthLoginProvider)
         XCTAssertFalse(viewModel.isProfileLoginInProgress)
         XCTAssertEqual(viewModel.completedOAuthLoginProvider, .claude)
+    }
+
+    func testStartOAuthLoginUsesCodexForCustomCodexCommandProfileID() async throws {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex-work",
+                provider: .codex,
+                authProfileID: "codex-work.json",
+                commandName: "ccwork"
+            )
+        ]
+        let oauth = SuspendedOAuthLoginService()
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "codex-work.json", type: .codex, email: "work@example.com", accountID: nil, expired: nil, disabled: false)
+            ]),
+            oauthLoginService: oauth,
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        viewModel.startOAuthLogin(ProviderRowState.ID(rawValue: "codex-work"))
+        await oauth.waitUntilStarted()
+
+        XCTAssertEqual(oauth.providers, [.codex])
+        XCTAssertEqual(viewModel.activeOAuthLoginProvider, .codex)
+
+        oauth.complete()
+        try await Task.sleep(nanoseconds: 50_000_000)
     }
 
     func testCancelOAuthLoginCancelsActiveProviderLogin() async throws {
@@ -726,6 +761,107 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertNil(viewModel.settingsMessage)
     }
 
+    func testRemoveExplicitCommandProfileDoesNotFallbackToProviderWideDeleteWhenIDDeleteFails() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "claude-work",
+                provider: .claude,
+                authProfileID: "claude-work.json",
+                commandName: "ccwork"
+            ),
+            AppConfig.OAuthCommandProfile(
+                id: "claude-personal",
+                provider: .claude,
+                authProfileID: "claude-personal.json",
+                commandName: "ccpersonal"
+            )
+        ]
+        let authStore = StubAuthProfileStore(profiles: [
+            AuthProfile(fileName: "claude-work.json", type: .claude, email: "work@example.com", accountID: nil, expired: nil, disabled: false),
+            AuthProfile(fileName: "claude-personal.json", type: .claude, email: "personal@example.com", accountID: nil, expired: nil, disabled: false)
+        ])
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: authStore,
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        viewModel.removeProvider(ProviderRowState.ID(rawValue: "claude-work"))
+
+        XCTAssertEqual(authStore.deleteInvocations, [])
+        XCTAssertEqual(viewModel.providerRows.map(\.authProfileID), ["claude-work.json", "claude-personal.json"])
+        XCTAssertEqual(viewModel.settingsMessage, "Claude OAuth auth file was not found.")
+    }
+
+    func testRemoveCustomCodexCommandProfileUsesCodexProviderType() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex-work",
+                provider: .codex,
+                authProfileID: "codex-work.json",
+                commandName: "ccwork"
+            )
+        ]
+        let store = StubConfigStore(config: config)
+        let authStore = StubAuthProfileStore(
+            profiles: [
+                AuthProfile(fileName: "codex-work.json", type: .codex, email: "work@example.com", accountID: nil, expired: nil, disabled: false)
+            ],
+            supportsIDDelete: true
+        )
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: authStore,
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        viewModel.removeProvider(ProviderRowState.ID(rawValue: "codex-work"))
+
+        XCTAssertEqual(authStore.deletedIDs, ["codex-work.json"])
+        XCTAssertEqual(authStore.deleteInvocations, [])
+        XCTAssertEqual(store.savedConfigs.last?.commands.cc, AppConfig.default.commands.cc)
+        XCTAssertEqual(store.savedConfigs.last?.commands.ccodex, AppConfig.default.commands.ccodex)
+        XCTAssertEqual(viewModel.settingsMessage, "Codex OAuth account was removed.")
+    }
+
+    func testDisconnectCustomCodexCommandProfileUsesCodexProviderType() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex-work",
+                provider: .codex,
+                authProfileID: "codex-work.json",
+                commandName: "ccwork"
+            )
+        ]
+        let authStore = StubAuthProfileStore(profiles: [
+            AuthProfile(fileName: "codex-work.json", type: .codex, email: "work@example.com", accountID: nil, expired: nil, disabled: false)
+        ])
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: authStore,
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        viewModel.disconnectProvider(ProviderRowState.ID(rawValue: "codex-work"))
+
+        XCTAssertEqual(authStore.disabledIDUpdates.map(\.id), ["codex-work.json"])
+        XCTAssertEqual(authStore.disabledIDUpdates.map(\.disabled), [true])
+        XCTAssertEqual(authStore.disabledUpdates, [])
+        XCTAssertEqual(viewModel.settingsMessage, "Codex OAuth connection was disabled. The auth file was not deleted.")
+    }
+
     func testRemoveProviderResetsOnlyRemovedClaudeAccountPrivacy() {
         var config = AppConfig.default
         config.accountPrivacy = AppConfig.AccountPrivacy(claudeHidden: false, codexHidden: false)
@@ -803,6 +939,43 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(MenuBarStatusSnapshot(serverStatus: viewModel.serverStatus, providers: viewModel.providerRows).erroredCount, 0)
     }
 
+    func testDisconnectExplicitCommandProfileDoesNotFallbackToProviderWideDisableWhenIDDisableFails() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "claude-work",
+                provider: .claude,
+                authProfileID: "claude-work.json",
+                commandName: "ccwork"
+            ),
+            AppConfig.OAuthCommandProfile(
+                id: "claude-personal",
+                provider: .claude,
+                authProfileID: "claude-personal.json",
+                commandName: "ccpersonal"
+            )
+        ]
+        let authStore = StubAuthProfileStore(profiles: [
+            AuthProfile(fileName: "claude-work.json", type: .claude, email: "work@example.com", accountID: nil, expired: nil, disabled: false),
+            AuthProfile(fileName: "claude-personal.json", type: .claude, email: "personal@example.com", accountID: nil, expired: nil, disabled: false)
+        ])
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: authStore,
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        viewModel.disconnectProvider(ProviderRowState.ID(rawValue: "claude-work"))
+
+        XCTAssertEqual(authStore.disabledIDUpdates.map(\.id), ["claude-work.json"])
+        XCTAssertEqual(authStore.disabledUpdates, [])
+        XCTAssertEqual(viewModel.providerRows.map(\.authProfileID), ["claude-work.json", "claude-personal.json"])
+        XCTAssertEqual(viewModel.settingsMessage, "Claude OAuth connection was disabled. The auth file was not deleted.")
+    }
+
     func testDisconnectProviderDisablesAuthProfileAndRefreshesRows() {
         let authStore = StubAuthProfileStore(profiles: [
             AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: nil, disabled: false)
@@ -821,8 +994,9 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         viewModel.disconnectProvider(.codex)
 
-        XCTAssertEqual(authStore.disabledUpdates.map(\.type), [.codex])
-        XCTAssertEqual(authStore.disabledUpdates.map(\.disabled), [true])
+        XCTAssertEqual(authStore.disabledIDUpdates.map(\.id), ["codex.json"])
+        XCTAssertEqual(authStore.disabledIDUpdates.map(\.disabled), [true])
+        XCTAssertEqual(authStore.disabledUpdates, [])
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.connectionTitle, "Needs connection")
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.isConnected, false)
         XCTAssertEqual(viewModel.settingsMessage, "Codex OAuth connection was disabled. The auth file was not deleted.")
@@ -1485,19 +1659,31 @@ private final class StubAuthProfileStore: AuthProfileManaging, @unchecked Sendab
     private let lock = NSLock()
     private var _profiles: [AuthProfile]
     private var _disabledUpdates: [DisabledUpdate] = []
+    private var _disabledIDUpdates: [DisabledIDUpdate] = []
+    private var _deletedIDs: [String] = []
     private var _deleteInvocations: [AuthProfileType] = []
+    private let supportsIDDelete: Bool
     var nextProfiles: [AuthProfile]?
 
     var disabledUpdates: [DisabledUpdate] {
         lock.withLock { _disabledUpdates }
     }
 
+    var disabledIDUpdates: [DisabledIDUpdate] {
+        lock.withLock { _disabledIDUpdates }
+    }
+
+    var deletedIDs: [String] {
+        lock.withLock { _deletedIDs }
+    }
+
     var deleteInvocations: [AuthProfileType] {
         lock.withLock { _deleteInvocations }
     }
 
-    init(profiles: [AuthProfile]) {
+    init(profiles: [AuthProfile], supportsIDDelete: Bool = false) {
         self._profiles = profiles
+        self.supportsIDDelete = supportsIDDelete
     }
 
     func profiles() throws -> [AuthProfile] {
@@ -1510,12 +1696,59 @@ private final class StubAuthProfileStore: AuthProfileManaging, @unchecked Sendab
         }
     }
 
+    func delete(id: String) throws -> Bool {
+        lock.withLock {
+            guard supportsIDDelete,
+                  _profiles.contains(where: { $0.id == id }) else {
+                return false
+            }
+            _deletedIDs.append(id)
+            _profiles.removeAll { $0.id == id }
+            return true
+        }
+    }
+
     func delete(for type: AuthProfileType) throws -> Int {
         lock.withLock {
             _deleteInvocations.append(type)
             let count = _profiles.filter { $0.type == type }.count
             _profiles.removeAll { $0.type == type }
             return count
+        }
+    }
+
+    func setDisabled(_ disabled: Bool, id: String) throws -> Bool {
+        lock.withLock {
+            guard let index = _profiles.firstIndex(where: { $0.id == id }) else { return false }
+            _disabledIDUpdates.append(DisabledIDUpdate(id: id, disabled: disabled))
+            let profile = _profiles[index]
+            _profiles[index] = AuthProfile(
+                fileName: profile.fileName,
+                type: profile.type,
+                email: profile.email,
+                accountID: profile.accountID,
+                expired: profile.expired,
+                disabled: disabled,
+                prefix: profile.prefix
+            )
+            return true
+        }
+    }
+
+    func setPrefix(_ prefix: String?, id: String) throws -> Bool {
+        lock.withLock {
+            guard let index = _profiles.firstIndex(where: { $0.id == id }) else { return false }
+            let profile = _profiles[index]
+            _profiles[index] = AuthProfile(
+                fileName: profile.fileName,
+                type: profile.type,
+                email: profile.email,
+                accountID: profile.accountID,
+                expired: profile.expired,
+                disabled: profile.disabled,
+                prefix: prefix
+            )
+            return true
         }
     }
 
@@ -1529,6 +1762,11 @@ private final class StubAuthProfileStore: AuthProfileManaging, @unchecked Sendab
 
 private struct DisabledUpdate: Equatable {
     let type: AuthProfileType
+    let disabled: Bool
+}
+
+private struct DisabledIDUpdate: Equatable {
+    let id: String
     let disabled: Bool
 }
 
@@ -1554,12 +1792,14 @@ private final class SuspendedOAuthLoginService: OAuthLoginStarting, @unchecked S
     private var hasCompleted = false
     private var _wasCancelled = false
     private var _invocationCount = 0
+    private var _providers: [OAuthLoginProvider] = []
 
     var wasCancelled: Bool { lock.withLock { _wasCancelled } }
     var invocationCount: Int { lock.withLock { _invocationCount } }
+    var providers: [OAuthLoginProvider] { lock.withLock { _providers } }
 
     func login(provider: OAuthLoginProvider, port: Int) async throws {
-        await markStarted()
+        await markStarted(provider)
         await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 lock.lock()
@@ -1616,10 +1856,11 @@ private final class SuspendedOAuthLoginService: OAuthLoginStarting, @unchecked S
         continuation?.resume()
     }
 
-    private func markStarted() async {
+    private func markStarted(_ provider: OAuthLoginProvider) async {
         await withCheckedContinuation { continuation in
             lock.lock()
             _invocationCount += 1
+            _providers.append(provider)
             hasStarted = true
             let waitingContinuation = startedContinuation
             startedContinuation = nil

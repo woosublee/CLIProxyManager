@@ -237,6 +237,21 @@ private final class StubAuthProfileStore: AuthProfileManaging, @unchecked Sendab
 
     func profiles() throws -> [AuthProfile] { profilesValue }
 
+    func setPrefix(_ prefix: String?, id: String) throws -> Bool {
+        guard let index = profilesValue.firstIndex(where: { $0.id == id }) else { return false }
+        let profile = profilesValue[index]
+        profilesValue[index] = AuthProfile(
+            fileName: profile.fileName,
+            type: profile.type,
+            email: profile.email,
+            accountID: profile.accountID,
+            expired: profile.expired,
+            disabled: profile.disabled,
+            prefix: prefix
+        )
+        return true
+    }
+
     func setDisabled(_ disabled: Bool, for type: AuthProfileType) throws -> Int {
         if let nextProfiles { profilesValue = nextProfiles }
         return 1

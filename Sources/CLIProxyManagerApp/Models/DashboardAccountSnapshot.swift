@@ -1,3 +1,5 @@
+import CLIProxyManagerCore
+
 struct DashboardAccountSnapshot: Equatable, Identifiable {
     enum Status: Equatable {
         case connected
@@ -5,6 +7,7 @@ struct DashboardAccountSnapshot: Equatable, Identifiable {
     }
 
     let id: ProviderRowState.ID
+    let providerType: AuthProfileType
     let title: String
     let commandName: String
     let commandSlug: String
@@ -21,6 +24,7 @@ struct DashboardAccountSnapshot: Equatable, Identifiable {
 
     init(provider: ProviderRowState) {
         id = provider.id
+        providerType = provider.providerType
         title = provider.displayTitle
         commandName = provider.functionName
         commandSlug = "$ \(provider.functionName)"

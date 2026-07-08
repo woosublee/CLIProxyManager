@@ -29,6 +29,29 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.settingsMessage, "Claude API profiles are hidden from the default account list in this version.")
     }
 
+    func testRollbackLegacyFallbackProviderRowsUseUniqueIDsForMultipleSameProviderAuthProfiles() {
+        let store = StubConfigStore(config: .default, saveError: NSError(domain: "test", code: 1))
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "claude-work.json", type: .claude, email: "work@example.com", accountID: nil, expired: nil, disabled: false),
+                AuthProfile(fileName: "claude-personal.json", type: .claude, email: "personal@example.com", accountID: nil, expired: nil, disabled: false)
+            ]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        XCTAssertThrowsError(try viewModel.saveClaudeOAuthSettings(provider: .claude, functionName: "ccwork", nickname: "", dangerousPermissionsEnabled: false))
+
+        XCTAssertEqual(viewModel.providerRows.map(\.id), [
+            ProviderRowState.ID(rawValue: "claude"),
+            ProviderRowState.ID(rawValue: "claude-claude-personal-json")
+        ])
+        XCTAssertEqual(Set(viewModel.providerRows.map(\.id)).count, 2)
+        XCTAssertEqual(viewModel.providerRows.map(\.authProfileID), ["claude-work.json", "claude-personal.json"])
+    }
+
     func testSaveClaudeFunctionNamePersistsAndRebuildsRows() throws {
         let store = StubConfigStore(config: .default)
         let viewModel = DashboardViewModel(
@@ -457,6 +480,273 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.functionName, "mycodex")
     }
 
+    func testSaveClaudeOAuthSettingsRecomputesModelPrefixFromNicknameAndSyncsAuthProfilePrefix() throws {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "claude-work",
+                provider: .claude,
+                authProfileID: "claude-work.json",
+                commandName: "ccwork",
+                nickname: "Old Team",
+                modelPrefix: "claude-old-team"
+            )
+        ]
+        let store = StubConfigStore(config: config)
+        let authStore = StubAuthProfileStore(profiles: [
+            AuthProfile(fileName: "claude-work.json", type: .claude, email: "work@example.com", accountID: nil, expired: nil, disabled: false, prefix: "claude-old-team")
+        ])
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: authStore,
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        try viewModel.saveClaudeOAuthSettings(
+            provider: ProviderRowState.ID(rawValue: "claude-work"),
+            functionName: "ccwork",
+            nickname: "Work Team",
+            dangerousPermissionsEnabled: false
+        )
+
+        XCTAssertEqual(store.savedConfigs.last?.oauthCommandProfiles.map(\.modelPrefix), ["claude-work-team"])
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.map(\.modelPrefix), ["claude-work-team"])
+        XCTAssertEqual(authStore.prefixUpdates, [PrefixUpdate(id: "claude-work.json", prefix: "claude-work-team")])
+    }
+
+    func testSaveCodexSettingsFallsBackToShortAuthProfilePrefixWhenNicknameIsBlankAndSyncsAuthProfilePrefix() throws {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex-team",
+                provider: .codex,
+                authProfileID: "codex-18c2ca10-woosub-classting-com-team.json",
+                commandName: "ccteam",
+                nickname: "Team",
+                codex: testCodex(),
+                modelPrefix: "codex-team"
+            )
+        ]
+        let store = StubConfigStore(config: config)
+        let authStore = StubAuthProfileStore(profiles: [
+            AuthProfile(fileName: "codex-18c2ca10-woosub-classting-com-team.json", type: .codex, email: "team@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-team")
+        ])
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: authStore,
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        try viewModel.saveCodexSettings(
+            provider: ProviderRowState.ID(rawValue: "codex-team"),
+            functionName: "ccteam",
+            nickname: "   ",
+            codex: testCodex(),
+            dangerousPermissionsEnabled: false
+        )
+
+        XCTAssertEqual(store.savedConfigs.last?.oauthCommandProfiles.map(\.modelPrefix), ["codex-18c2ca10"])
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.map(\.modelPrefix), ["codex-18c2ca10"])
+        XCTAssertEqual(authStore.prefixUpdates, [PrefixUpdate(id: "codex-18c2ca10-woosub-classting-com-team.json", prefix: "codex-18c2ca10")])
+    }
+
+    func testSaveClaudeOAuthSettingsPrefixSyncFailureBlocksShellInstall() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "claude-work",
+                provider: .claude,
+                authProfileID: "claude-work.json",
+                commandName: "ccwork",
+                nickname: "Old Team",
+                modelPrefix: "claude-old-team"
+            )
+        ]
+        let store = StubConfigStore(config: config)
+        let installer = StubShellInstaller()
+        let authStore = StubAuthProfileStore(
+            profiles: [
+                AuthProfile(fileName: "claude-work.json", type: .claude, email: "work@example.com", accountID: nil, expired: nil, disabled: false, prefix: "claude-old-team")
+            ],
+            setPrefixError: NSError(domain: "auth", code: 1)
+        )
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: installer,
+            authProfileStore: authStore,
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+        let initialConfig = viewModel.config
+        installer.reset()
+
+        XCTAssertThrowsError(try viewModel.saveClaudeOAuthSettings(
+            provider: ProviderRowState.ID(rawValue: "claude-work"),
+            functionName: "ccwork",
+            nickname: "Work Team",
+            dangerousPermissionsEnabled: false
+        ))
+
+        XCTAssertNil(installer.installedScript)
+        XCTAssertEqual(installer.installedFunctionNames, [])
+        XCTAssertEqual(store.savedConfigs, [])
+        XCTAssertEqual(store.config, config)
+        XCTAssertEqual(viewModel.config, initialConfig)
+        XCTAssertEqual(authStore.prefixUpdates, [PrefixUpdate(id: "claude-work.json", prefix: "claude-work-team")])
+    }
+
+    func testSaveClaudeOAuthSettingsPartialPrefixSyncFailureRollsBackEarlierAuthProfiles() throws {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "claude-work",
+                provider: .claude,
+                authProfileID: "claude-work.json",
+                commandName: "ccwork",
+                nickname: "Old Work",
+                modelPrefix: "claude-old-work"
+            ),
+            AppConfig.OAuthCommandProfile(
+                id: "claude-personal",
+                provider: .claude,
+                authProfileID: "claude-personal.json",
+                commandName: "ccpersonal",
+                nickname: "New Work",
+                modelPrefix: "claude-new-work"
+            )
+        ]
+        let store = StubConfigStore(config: config)
+        let installer = StubShellInstaller()
+        let authStore = StubAuthProfileStore(
+            profiles: [
+                AuthProfile(fileName: "claude-work.json", type: .claude, email: "work@example.com", accountID: nil, expired: nil, disabled: false, prefix: "claude-old-work"),
+                AuthProfile(fileName: "claude-personal.json", type: .claude, email: "personal@example.com", accountID: nil, expired: nil, disabled: false, prefix: "claude-new-work")
+            ],
+            setPrefixErrors: [nil, NSError(domain: "auth", code: 2)]
+        )
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: installer,
+            authProfileStore: authStore,
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+        let initialConfig = viewModel.config
+        installer.reset()
+
+        XCTAssertThrowsError(try viewModel.saveClaudeOAuthSettings(
+            provider: ProviderRowState.ID(rawValue: "claude-work"),
+            functionName: "ccwork",
+            nickname: "New Work",
+            dangerousPermissionsEnabled: false
+        ))
+
+        XCTAssertNil(installer.installedScript)
+        XCTAssertEqual(installer.installedFunctionNames, [])
+        XCTAssertEqual(store.savedConfigs, [])
+        XCTAssertEqual(store.config, config)
+        XCTAssertEqual(viewModel.config, initialConfig)
+        XCTAssertEqual(authStore.prefixUpdates, [
+            PrefixUpdate(id: "claude-work.json", prefix: "claude-new-work"),
+            PrefixUpdate(id: "claude-personal.json", prefix: "claude-new-work-2"),
+            PrefixUpdate(id: "claude-work.json", prefix: "claude-old-work")
+        ])
+        XCTAssertEqual(try authStore.profiles().map(\.prefix), ["claude-old-work", "claude-new-work"])
+    }
+
+    func testSaveClaudeOAuthSettingsShellInstallFailureRollsBackAuthProfilePrefix() throws {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "claude-work",
+                provider: .claude,
+                authProfileID: "claude-work.json",
+                commandName: "ccwork",
+                nickname: "Old Team",
+                modelPrefix: "claude-old-team"
+            )
+        ]
+        let store = StubConfigStore(config: config)
+        let installer = StubShellInstaller(installError: NSError(domain: "shell", code: 1))
+        let automaticInstaller = AutomaticShellInstallService(installer: installer)
+        let authStore = StubAuthProfileStore(profiles: [
+            AuthProfile(fileName: "claude-work.json", type: .claude, email: "work@example.com", accountID: nil, expired: nil, disabled: false, prefix: "claude-old-team")
+        ])
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: installer,
+            authProfileStore: authStore,
+            automaticShellInstallService: automaticInstaller,
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+        let initialConfig = viewModel.config
+        installer.reset()
+
+        XCTAssertThrowsError(try viewModel.saveClaudeOAuthSettings(
+            provider: ProviderRowState.ID(rawValue: "claude-work"),
+            functionName: "ccwork",
+            nickname: "Work Team",
+            dangerousPermissionsEnabled: false
+        ))
+
+        XCTAssertNil(installer.installedScript)
+        XCTAssertEqual(store.savedConfigs, [])
+        XCTAssertEqual(store.config, config)
+        XCTAssertEqual(viewModel.config, initialConfig)
+        XCTAssertEqual(authStore.prefixUpdates, [
+            PrefixUpdate(id: "claude-work.json", prefix: "claude-work-team"),
+            PrefixUpdate(id: "claude-work.json", prefix: "claude-old-team")
+        ])
+        XCTAssertEqual(try authStore.profiles().first?.prefix, "claude-old-team")
+    }
+
+    func testSaveCodexSettingsDoesNotApplyShellInstallWhenPersistenceFails() {
+        let store = StubConfigStore(config: .default, saveError: NSError(domain: "test", code: 1))
+        let installer = StubShellInstaller()
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: installer,
+            authProfileStore: StubAuthProfileStore(profiles: [codexProfile()]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+        installer.reset()
+
+        XCTAssertThrowsError(try viewModel.saveCodexSettings(functionName: "mycodex", nickname: "", codex: testCodex(), dangerousPermissionsEnabled: true))
+
+        XCTAssertNil(installer.installedScript)
+        XCTAssertEqual(installer.installedFunctionNames, [])
+    }
+
+    func testSaveCodexSettingsKeepsCurrentConfigWhenShellApplyFails() {
+        let store = StubConfigStore(config: .default)
+        let installer = StubShellInstaller(installError: NSError(domain: "shell", code: 1))
+        let automaticInstaller = AutomaticShellInstallService(installer: installer)
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: installer,
+            authProfileStore: StubAuthProfileStore(profiles: [codexProfile()]),
+            automaticShellInstallService: automaticInstaller,
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+        let initialConfig = viewModel.config
+        let codex = testCodex()
+        installer.reset()
+
+        XCTAssertThrowsError(try viewModel.saveCodexSettings(functionName: "mycodex", nickname: "team", codex: codex, dangerousPermissionsEnabled: true))
+
+        XCTAssertEqual(store.savedConfigs, [])
+        XCTAssertEqual(store.config, .default)
+        XCTAssertEqual(viewModel.config, initialConfig)
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.functionName, "")
+    }
+
     func testSaveCodexSettingsKeepsCurrentConfigWhenPersistenceFails() {
         let store = StubConfigStore(config: .default, saveError: NSError(domain: "test", code: 1))
         let viewModel = DashboardViewModel(
@@ -466,11 +756,12 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector()
         )
+        let initialConfig = viewModel.config
         let codex = testCodex()
 
         XCTAssertThrowsError(try viewModel.saveCodexSettings(functionName: "mycodex", nickname: "", codex: codex, dangerousPermissionsEnabled: true))
 
-        XCTAssertEqual(viewModel.config, .default)
+        XCTAssertEqual(viewModel.config, initialConfig)
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.functionName, "")
         XCTAssertEqual(store.savedConfigs, [])
     }
@@ -579,6 +870,177 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(installer.installedFunctionNames, [])
     }
 
+    func testSameProviderCanHaveTwoAccountsAndCommandProfiles() {
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "claude-work.json", type: .claude, email: "work@example.com", accountID: nil, expired: nil, disabled: false),
+                AuthProfile(fileName: "claude-personal.json", type: .claude, email: "personal@example.com", accountID: nil, expired: nil, disabled: false)
+            ]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        XCTAssertEqual(viewModel.providerRows.map(\.id), [
+            ProviderRowState.ID(rawValue: "claude"),
+            ProviderRowState.ID(rawValue: "claude-claude-personal-json")
+        ])
+        XCTAssertEqual(viewModel.providerRows.map(\.authProfileID), ["claude-work.json", "claude-personal.json"])
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.map(\.authProfileID), ["claude-work.json", "claude-personal.json"])
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.map(\.modelPrefix), ["claude-work", "claude-personal"])
+    }
+
+    func testReconciliationUsesNicknameBasedModelPrefixesWithDuplicateSuffixes() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "claude-work",
+                provider: .claude,
+                authProfileID: "claude-work.json",
+                nickname: "Work",
+                modelPrefix: "claude-claude-work-json"
+            ),
+            AppConfig.OAuthCommandProfile(
+                id: "codex-team",
+                provider: .codex,
+                authProfileID: "codex-18c2ca10-woosub-classting-com-team.json",
+                nickname: "Team",
+                modelPrefix: "codex-codex-18c2ca10-woosub-classting-com-team-json"
+            ),
+            AppConfig.OAuthCommandProfile(
+                id: "codex-team-secondary",
+                provider: .codex,
+                authProfileID: "codex-dntjqdlekd-gmail-com-pro.json",
+                nickname: "Team",
+                modelPrefix: "codex-codex-dntjqdlekd-gmail-com-pro-json"
+            )
+        ]
+
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "claude-work.json", type: .claude, email: "work@example.com", accountID: nil, expired: nil, disabled: false, prefix: "claude-claude-work-json"),
+                AuthProfile(fileName: "codex-18c2ca10-woosub-classting-com-team.json", type: .codex, email: "team@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-codex-18c2ca10-woosub-classting-com-team-json"),
+                AuthProfile(fileName: "codex-dntjqdlekd-gmail-com-pro.json", type: .codex, email: "personal@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-codex-dntjqdlekd-gmail-com-pro-json")
+            ]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.map(\.modelPrefix), [
+            "claude-work",
+            "codex-team",
+            "codex-team-2"
+        ])
+    }
+
+    func testBlankNicknameFallsBackToShortAuthProfileModelPrefix() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex-team",
+                provider: .codex,
+                authProfileID: "codex-18c2ca10-woosub-classting-com-team.json",
+                nickname: "   ",
+                modelPrefix: "codex-codex-18c2ca10-woosub-classting-com-team-json"
+            )
+        ]
+
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "codex-18c2ca10-woosub-classting-com-team.json", type: .codex, email: "team@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-codex-18c2ca10-woosub-classting-com-team-json")
+            ]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.map(\.modelPrefix), ["codex-18c2ca10"])
+    }
+
+    func testRemoveExplicitCommandProfileDeletesOnlySelectedAccount() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "claude-work", provider: .claude, authProfileID: "claude-work.json", commandName: "ccwork"),
+            AppConfig.OAuthCommandProfile(id: "claude-personal", provider: .claude, authProfileID: "claude-personal.json", commandName: "ccpersonal")
+        ]
+        let store = StubConfigStore(config: config)
+        let authStore = StubAuthProfileStore(profiles: [
+            AuthProfile(fileName: "claude-work.json", type: .claude, email: "work@example.com", accountID: nil, expired: nil, disabled: false),
+            AuthProfile(fileName: "claude-personal.json", type: .claude, email: "personal@example.com", accountID: nil, expired: nil, disabled: false)
+        ])
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: authStore,
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        viewModel.removeProvider(ProviderRowState.ID(rawValue: "claude-work"))
+
+        XCTAssertEqual(authStore.deletedIDs, ["claude-work.json"])
+        XCTAssertEqual(authStore.deleteInvocations, [])
+        XCTAssertEqual(viewModel.providerRows.map(\.authProfileID), ["claude-personal.json"])
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.map(\.authProfileID), ["claude-personal.json"])
+        XCTAssertEqual(store.savedConfigs.last?.oauthCommandProfiles.map(\.authProfileID), ["claude-personal.json"])
+    }
+
+    func testDisconnectExplicitCommandProfileDisablesOnlySelectedAccount() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "claude-work", provider: .claude, authProfileID: "claude-work.json", commandName: "ccwork"),
+            AppConfig.OAuthCommandProfile(id: "claude-personal", provider: .claude, authProfileID: "claude-personal.json", commandName: "ccpersonal")
+        ]
+        let authStore = StubAuthProfileStore(profiles: [
+            AuthProfile(fileName: "claude-work.json", type: .claude, email: "work@example.com", accountID: nil, expired: nil, disabled: false),
+            AuthProfile(fileName: "claude-personal.json", type: .claude, email: "personal@example.com", accountID: nil, expired: nil, disabled: false)
+        ])
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: authStore,
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        viewModel.disconnectProvider(ProviderRowState.ID(rawValue: "claude-work"))
+
+        XCTAssertEqual(authStore.disabledIDUpdates.map(\.id), ["claude-work.json"])
+        XCTAssertEqual(authStore.disabledIDUpdates.map(\.disabled), [true])
+        XCTAssertEqual(authStore.disabledUpdates, [])
+        XCTAssertEqual(viewModel.providerRows.first { $0.authProfileID == "claude-work.json" }?.isConnected, false)
+        XCTAssertEqual(viewModel.providerRows.first { $0.authProfileID == "claude-personal.json" }?.isConnected, true)
+    }
+
+    func testCommandNameAvailabilityChecksAllOAuthCommandProfilesForDuplicates() async {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "claude-work", provider: .claude, authProfileID: "claude-work.json", commandName: "ccwork"),
+            AppConfig.OAuthCommandProfile(id: "claude-personal", provider: .claude, authProfileID: "claude-personal.json", commandName: "ccpersonal")
+        ]
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "claude-work.json", type: .claude, email: "work@example.com", accountID: nil, expired: nil, disabled: false),
+                AuthProfile(fileName: "claude-personal.json", type: .claude, email: "personal@example.com", accountID: nil, expired: nil, disabled: false)
+            ]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        let availability = await viewModel.commandNameAvailability(
+            provider: ProviderRowState.ID(rawValue: "claude-work"),
+            functionName: "ccpersonal"
+        )
+
+        XCTAssertEqual(availability, .unavailable("Command name `ccpersonal` is already used by another provider."))
+    }
+
     private func testCodex(model: String = "gpt-5.5") -> AppConfig.Codex {
         AppConfig.Codex(
             opus: AppConfig.CodexRole(model: model, reasoning: .xhigh, contextWindow: .auto),
@@ -628,17 +1090,20 @@ private final class StubConfigStore: AppConfigStoring, @unchecked Sendable {
 
 private final class StubShellInstaller: ShellFunctionInstalling, @unchecked Sendable {
     private let validationError: Error?
+    private let installError: Error?
     private let conflictingFunctionNames: Set<String>
     private(set) var installedScript: String?
     private(set) var installedFunctionNames: [String] = []
     private(set) var validatedFunctionNames: [[String]] = []
 
-    init(validationError: Error? = nil, conflictingFunctionNames: Set<String> = []) {
+    init(validationError: Error? = nil, installError: Error? = nil, conflictingFunctionNames: Set<String> = []) {
         self.validationError = validationError
+        self.installError = installError
         self.conflictingFunctionNames = conflictingFunctionNames
     }
 
     func install(functionScript: String, functionNames: [String]) throws {
+        if let installError { throw installError }
         installedScript = functionScript
         installedFunctionNames = functionNames
     }
@@ -661,27 +1126,96 @@ private final class StubShellInstaller: ShellFunctionInstalling, @unchecked Send
 
 private final class StubAuthProfileStore: AuthProfileManaging, @unchecked Sendable {
     private var profilesValue: [AuthProfile]
+    private let setPrefixError: Error?
+    private var setPrefixErrors: [Error?]
+    private(set) var disabledUpdates: [DisabledUpdate] = []
+    private(set) var disabledIDUpdates: [DisabledIDUpdate] = []
+    private(set) var prefixUpdates: [PrefixUpdate] = []
+    private(set) var deletedIDs: [String] = []
+    private(set) var deleteInvocations: [AuthProfileType] = []
 
-    init(profiles: [AuthProfile]) {
+    init(profiles: [AuthProfile], setPrefixError: Error? = nil, setPrefixErrors: [Error?] = []) {
         profilesValue = profiles
+        self.setPrefixError = setPrefixError
+        self.setPrefixErrors = setPrefixErrors
     }
 
     func profiles() throws -> [AuthProfile] { profilesValue }
 
+    func setDisabled(_ disabled: Bool, id: String) throws -> Bool {
+        guard let index = profilesValue.firstIndex(where: { $0.id == id }) else { return false }
+        disabledIDUpdates.append(DisabledIDUpdate(id: id, disabled: disabled))
+        let profile = profilesValue[index]
+        profilesValue[index] = AuthProfile(
+            fileName: profile.fileName,
+            type: profile.type,
+            email: profile.email,
+            accountID: profile.accountID,
+            expired: profile.expired,
+            disabled: disabled,
+            prefix: profile.prefix
+        )
+        return true
+    }
+
+    func setPrefix(_ prefix: String?, id: String) throws -> Bool {
+        guard let index = profilesValue.firstIndex(where: { $0.id == id }) else { return false }
+        prefixUpdates.append(PrefixUpdate(id: id, prefix: prefix))
+        if let nextSetPrefixError = setPrefixErrors.isEmpty ? nil : setPrefixErrors.removeFirst() {
+            throw nextSetPrefixError
+        }
+        if let setPrefixError { throw setPrefixError }
+        let profile = profilesValue[index]
+        profilesValue[index] = AuthProfile(
+            fileName: profile.fileName,
+            type: profile.type,
+            email: profile.email,
+            accountID: profile.accountID,
+            expired: profile.expired,
+            disabled: profile.disabled,
+            prefix: prefix
+        )
+        return true
+    }
+
     func setDisabled(_ disabled: Bool, for type: AuthProfileType) throws -> Int {
+        disabledUpdates.append(DisabledUpdate(type: type, disabled: disabled))
         let matchingCount = profilesValue.filter { $0.type == type }.count
         profilesValue = profilesValue.map { profile in
             guard profile.type == type else { return profile }
-            return AuthProfile(fileName: profile.fileName, type: profile.type, email: profile.email, accountID: profile.accountID, expired: profile.expired, disabled: disabled)
+            return AuthProfile(fileName: profile.fileName, type: profile.type, email: profile.email, accountID: profile.accountID, expired: profile.expired, disabled: disabled, prefix: profile.prefix)
         }
         return matchingCount
     }
 
+    func delete(id: String) throws -> Bool {
+        guard profilesValue.contains(where: { $0.id == id }) else { return false }
+        deletedIDs.append(id)
+        profilesValue.removeAll { $0.id == id }
+        return true
+    }
+
     func delete(for type: AuthProfileType) throws -> Int {
+        deleteInvocations.append(type)
         let matchingCount = profilesValue.filter { $0.type == type }.count
         profilesValue.removeAll { $0.type == type }
         return matchingCount
     }
+}
+
+private struct DisabledUpdate: Equatable {
+    let type: AuthProfileType
+    let disabled: Bool
+}
+
+private struct DisabledIDUpdate: Equatable {
+    let id: String
+    let disabled: Bool
+}
+
+private struct PrefixUpdate: Equatable {
+    let id: String
+    let prefix: String?
 }
 
 private final class StubProxyService: ProxyServiceControlling, @unchecked Sendable {

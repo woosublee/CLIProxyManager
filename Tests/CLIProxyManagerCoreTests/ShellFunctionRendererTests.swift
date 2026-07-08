@@ -125,6 +125,97 @@ final class ShellFunctionRendererTests: XCTestCase {
         XCTAssertTrue(script.contains("'/opt/cliproxy-manager/bin/cliproxy-manager' secret get claude-api-key"))
     }
 
+    func testRenderUsesMultipleOAuthCommandProfilesWithModelPrefixesAndCodexProfileMapping() throws {
+        var config = configuredCommands()
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "claude-work",
+                provider: .claude,
+                authProfileID: "claude-work.json",
+                commandName: "ccwork",
+                dangerousPermissionsEnabled: true,
+                modelPrefix: "claude-work"
+            ),
+            AppConfig.OAuthCommandProfile(
+                id: "claude-personal",
+                provider: .claude,
+                authProfileID: "claude-personal.json",
+                commandName: "ccpersonal",
+                modelPrefix: "claude-personal"
+            ),
+            AppConfig.OAuthCommandProfile(
+                id: "codex-fast",
+                provider: .codex,
+                authProfileID: "codex-fast.json",
+                commandName: "ccfast",
+                codex: AppConfig.Codex(
+                    opus: AppConfig.CodexRole(model: "gpt-fast", reasoning: .high, contextWindow: .auto),
+                    sonnet: AppConfig.CodexRole(model: "gpt-fast", reasoning: .medium, contextWindow: .auto),
+                    haiku: AppConfig.CodexRole(model: "gpt-fast-mini", reasoning: .auto, contextWindow: .auto)
+                ),
+                modelPrefix: "codex-fast"
+            ),
+            AppConfig.OAuthCommandProfile(
+                id: "codex-deep",
+                provider: .codex,
+                authProfileID: "codex-deep.json",
+                commandName: "ccdeep",
+                codex: AppConfig.Codex(
+                    opus: AppConfig.CodexRole(model: "gpt-deep", reasoning: .xhigh, contextWindow: .auto),
+                    sonnet: AppConfig.CodexRole(model: "gpt-deep", reasoning: .high, contextWindow: .auto),
+                    haiku: AppConfig.CodexRole(model: "gpt-deep-mini", reasoning: .low, contextWindow: .auto)
+                ),
+                modelPrefix: "codex-deep"
+            ),
+            AppConfig.OAuthCommandProfile(
+                id: "codex-team-2",
+                provider: .codex,
+                authProfileID: "codex-team-2.json",
+                commandName: "ccteam2",
+                codex: AppConfig.Codex(
+                    opus: AppConfig.CodexRole(model: "gpt-team", reasoning: .xhigh, contextWindow: .context1m),
+                    sonnet: AppConfig.CodexRole(model: "gpt-team", reasoning: .medium, contextWindow: .auto),
+                    haiku: AppConfig.CodexRole(model: "gpt-team-mini", reasoning: .low, contextWindow: .auto)
+                ),
+                modelPrefix: "codex-team-2"
+            )
+        ]
+
+        let script = try ShellFunctionRenderer(
+            config: config,
+            helperCommand: "/usr/local/bin/cliproxy-manager"
+        ).render()
+
+        XCTAssertTrue(script.contains("ccwork() {"))
+        XCTAssertTrue(script.contains("ccpersonal() {"))
+        XCTAssertTrue(script.contains("ccfast() {"))
+        XCTAssertTrue(script.contains("ccdeep() {"))
+        XCTAssertTrue(script.contains("ccteam2() {"))
+        XCTAssertEqual(script.components(separatedBy: "claude \"$@\"").count - 1, 4)
+        XCTAssertEqual(script.components(separatedBy: "claude --dangerously-skip-permissions \"$@\"").count - 1, 1)
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='claude-work/claude-opus-4-7'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL='claude-personal/claude-sonnet-4-6'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='codex-fast/gpt-fast(high)'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL='codex-fast/gpt-fast-mini'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='codex-deep/gpt-deep(xhigh)'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL='codex-deep/gpt-deep-mini(low)'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='codex-team-2/gpt-team(xhigh)'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL='codex-team-2/gpt-team-mini(low)'"))
+    }
+
+    func testLegacyFallbackRenderingRemainsActiveWhenNoOAuthCommandProfilesExist() throws {
+        let script = try ShellFunctionRenderer(
+            config: configuredCommands(),
+            helperCommand: "/usr/local/bin/cliproxy-manager"
+        ).render()
+
+        XCTAssertTrue(script.contains("cc() {"))
+        XCTAssertTrue(script.contains("ccodex() {"))
+        XCTAssertFalse(script.contains("ccwork() {"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='claude-opus-4-7'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='gpt-5.5(xhigh)'"))
+    }
+
     func testRenderUsesConfiguredCodexRoleSettings() throws {
         var config = configuredCommands()
         config.port = 18_888
