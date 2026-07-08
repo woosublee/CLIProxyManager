@@ -178,21 +178,9 @@ private struct ProviderTile: View {
     private var logo: some View {
         switch kind {
         case .claude:
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(BrandPalette.claude)
-                .overlay {
-                    Text("C")
-                        .font(.system(size: 18, weight: .heavy, design: .rounded))
-                        .foregroundStyle(.white)
-                }
+            ProviderAvatar(providerID: .claude, providerType: .claude, size: 40)
         case .codex:
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(BrandPalette.codex)
-                .overlay {
-                    Text(verbatim: "<>")
-                        .font(.system(size: 14, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.white)
-                }
+            ProviderAvatar(providerID: .codex, providerType: .codex, size: 40)
         case .gemini:
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(

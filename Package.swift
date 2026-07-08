@@ -31,7 +31,8 @@ let package = Package(
             path: "Sources/CLIProxyManagerApp",
             resources: [
                 .copy("Resources/cliproxyapi"),
-                .copy("Resources/Licenses")
+                .copy("Resources/Licenses"),
+                .copy("Resources/ProviderImages")
             ]
         ),
         .executableTarget(
