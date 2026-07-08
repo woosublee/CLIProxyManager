@@ -31,14 +31,30 @@ extension ShellProfileInstaller: ShellFunctionInstalling {}
 protocol ProxyModelListing: Sendable {
     func baseModels(port: Int) async throws -> [String]
     func codexBaseModels(port: Int) async throws -> [String]
+    func codexBaseModels(port: Int, modelPrefix: String) async throws -> [String]
+}
+
+extension ProxyModelListing {
+    func codexBaseModels(port: Int, modelPrefix: String) async throws -> [String] {
+        try await codexBaseModels(port: port)
+    }
 }
 
 extension ProxyModelClient: ProxyModelListing {}
 
 protocol AuthProfileManaging: Sendable {
     func profiles() throws -> [AuthProfile]
+    func setDisabled(_ disabled: Bool, id: String) throws -> Bool
     func setDisabled(_ disabled: Bool, for type: AuthProfileType) throws -> Int
+    func setPrefix(_ prefix: String?, id: String) throws -> Bool
+    func delete(id: String) throws -> Bool
     func delete(for type: AuthProfileType) throws -> Int
+}
+
+extension AuthProfileManaging {
+    func setDisabled(_ disabled: Bool, id: String) throws -> Bool { false }
+    func setPrefix(_ prefix: String?, id: String) throws -> Bool { false }
+    func delete(id: String) throws -> Bool { false }
 }
 
 extension AuthProfileStore: AuthProfileManaging {}
@@ -141,6 +157,7 @@ final class DashboardViewModel: ObservableObject {
     private var settingsMessageAutoClearTask: Task<Void, Never>?
     private var lastClaudeStatus: DiagnosticStatus?
     private var lastCodexStatus: DiagnosticStatus?
+    private var lastPersistedConfig: AppConfig
 
     init(
         config: AppConfig? = nil,
@@ -172,7 +189,11 @@ final class DashboardViewModel: ObservableObject {
         self.appAppearanceService = appAppearanceService
         self.serverStatusRetryDelayNanoseconds = serverStatusRetryDelayNanoseconds
         self.settingsMessageAutoClearDelayNanoseconds = settingsMessageAutoClearDelayNanoseconds
-        let initialConfig = Self.availableConfig(config ?? ((try? configStore.load()) ?? .default))
+        let persistedConfig = Self.availableConfig(config ?? ((try? configStore.load()) ?? .default))
+        var initialConfig = persistedConfig
+        self.authProfiles = (try? authProfileStore.profiles()) ?? []
+        initialConfig = Self.reconciledOAuthCommandProfiles(in: initialConfig, authProfiles: self.authProfiles)
+        self.lastPersistedConfig = persistedConfig
         self.config = initialConfig
         cards = ProfileCard.makeDefaultCards(config: initialConfig)
         serverStatus = DiagnosticStatus(
@@ -180,9 +201,9 @@ final class DashboardViewModel: ObservableObject {
             title: "Needs check",
             message: "Server status has not been checked yet."
         )
-        self.authProfiles = (try? authProfileStore.profiles()) ?? []
+        reconcileAuthProfilePrefixes()
+        refreshProfiles()
         rebuildOptionRows()
-        rebuildProviderRows(claudeStatus: nil, codexStatus: nil)
         appAppearanceService.apply(showDockIcon: initialConfig.showDockIcon)
         appAppearanceService.apply(appearance: initialConfig.appearance)
         applyInitialShellInstall()
@@ -311,6 +332,7 @@ final class DashboardViewModel: ObservableObject {
 
     func refreshProfiles() {
         authProfiles = (try? authProfileStore.profiles()) ?? []
+        reconcileConfigWithAuthProfiles()
         rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
     }
 
@@ -321,16 +343,21 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func startOAuthLogin(_ provider: ProviderRowState.ID) {
+        startOAuthLogin(providerType: oauthProviderType(for: provider))
+    }
+
+    func startOAuthLogin(providerType: AuthProfileType) {
         guard oauthLoginTask == nil else { return }
         let sessionID = UUID()
+        let provider = providerID(for: providerType)
         oauthLoginSessionID = sessionID
         completedOAuthLoginProvider = nil
         completedOAuthLoginIsInitialSetup = true
         activeOAuthLoginProvider = provider
         isProfileLoginInProgress = true
-        let isInitialSetup = isInitialOAuthSetup(for: provider)
+        let isInitialSetup = isInitialOAuthSetup(for: providerType)
         oauthLoginTask = Task { [weak self] in
-            await self?.runOAuthLogin(provider, sessionID: sessionID, isInitialSetup: isInitialSetup)
+            await self?.runOAuthLogin(providerType, sessionID: sessionID, isInitialSetup: isInitialSetup)
         }
     }
 
@@ -352,17 +379,30 @@ final class DashboardViewModel: ObservableObject {
 
     func connectProvider(_ provider: ProviderRowState.ID) async {
         guard oauthLoginTask == nil, isProfileLoginInProgress == false else { return }
+        let providerType = oauthProviderType(for: provider)
         let sessionID = UUID()
         oauthLoginSessionID = sessionID
         completedOAuthLoginProvider = nil
         completedOAuthLoginIsInitialSetup = true
-        activeOAuthLoginProvider = provider
+        activeOAuthLoginProvider = providerID(for: providerType)
         isProfileLoginInProgress = true
-        await runOAuthLogin(provider, sessionID: sessionID, isInitialSetup: isInitialOAuthSetup(for: provider))
+        await runOAuthLogin(providerType, sessionID: sessionID, isInitialSetup: isInitialOAuthSetup(for: providerType))
+    }
+
+    private func oauthProviderType(for provider: ProviderRowState.ID) -> AuthProfileType {
+        provider.rawValue == ProviderRowState.ID.codex.rawValue ? .codex : .claude
+    }
+
+    private func providerID(for providerType: AuthProfileType) -> ProviderRowState.ID {
+        providerType == .codex ? .codex : .claude
     }
 
     private func oauthProviderName(_ provider: ProviderRowState.ID) -> String {
-        switch provider {
+        oauthProviderName(oauthProviderType(for: provider))
+    }
+
+    private func oauthProviderName(_ providerType: AuthProfileType) -> String {
+        switch providerType {
         case .claude:
             "Claude OAuth"
         case .codex:
@@ -371,11 +411,14 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func isInitialOAuthSetup(for provider: ProviderRowState.ID) -> Bool {
-        let profileType: AuthProfileType = provider == .claude ? .claude : .codex
-        return !authProfiles.contains { $0.type == profileType }
+        isInitialOAuthSetup(for: oauthProviderType(for: provider))
     }
 
-    private func runOAuthLogin(_ provider: ProviderRowState.ID, sessionID: UUID, isInitialSetup: Bool) async {
+    private func isInitialOAuthSetup(for providerType: AuthProfileType) -> Bool {
+        !authProfiles.contains { $0.type == providerType }
+    }
+
+    private func runOAuthLogin(_ providerType: AuthProfileType, sessionID: UUID, isInitialSetup: Bool) async {
         defer {
             if oauthLoginSessionID == sessionID {
                 isProfileLoginInProgress = false
@@ -385,22 +428,18 @@ final class DashboardViewModel: ObservableObject {
             }
         }
 
-        let loginProvider: OAuthLoginProvider
-        switch provider {
-        case .claude:
-            loginProvider = .claude
-        case .codex:
-            loginProvider = .codex
-        }
-        let providerName = oauthProviderName(provider)
+        let beforeProfiles = authProfiles
+        let loginProvider: OAuthLoginProvider = providerType == .codex ? .codex : .claude
+        let providerName = oauthProviderName(providerType)
 
         do {
             try await oauthLoginService.login(provider: loginProvider, port: config.port)
             try Task.checkCancellation()
             guard oauthLoginSessionID == sessionID else { return }
-            _ = try authProfileStore.setDisabled(false, for: loginProvider.authProfileType)
+            authProfiles = (try? authProfileStore.profiles()) ?? []
+            let completedID = reconcileOAuthLoginCompletion(providerType: providerType, beforeProfiles: beforeProfiles)
             refreshProfiles()
-            completedOAuthLoginProvider = provider
+            completedOAuthLoginProvider = completedID
             completedOAuthLoginIsInitialSetup = isInitialSetup
             settingsMessage = "\(providerName) connection was updated."
         } catch is CancellationError {
@@ -414,17 +453,72 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
-    func removeInitialProvider(_ provider: ProviderRowState.ID) {
-        let profileType: AuthProfileType
-        switch provider {
-        case .claude:
-            profileType = .claude
-        case .codex:
-            profileType = .codex
-        }
+    private func reconcileOAuthLoginCompletion(providerType: AuthProfileType, beforeProfiles: [AuthProfile]) -> ProviderRowState.ID {
+        let beforeIDs = Set(beforeProfiles.map(\.id))
+        let candidates = authProfiles.filter { $0.type == providerType }
+        let selectedProfile = candidates.first(where: { !beforeIDs.contains($0.id) }) ?? candidates.first
+        guard let selectedProfile else { return providerID(for: providerType) }
 
+        var updatedConfig = Self.reconciledOAuthCommandProfiles(in: config, authProfiles: authProfiles)
+        if let index = updatedConfig.oauthCommandProfiles.firstIndex(where: { $0.authProfileID == selectedProfile.id }) {
+            updatedConfig.oauthCommandProfiles[index].isEnabled = true
+        }
+        enableAuthProfile(selectedProfile)
+        config = Self.mirroredLegacyFields(in: updatedConfig)
+        reconcileAuthProfilePrefixes()
+        return ProviderRowState.ID(rawValue: config.oauthCommandProfiles.first(where: { $0.authProfileID == selectedProfile.id })?.id ?? selectedProfile.type.rawValue)
+    }
+
+    private func authProfileID(for provider: ProviderRowState.ID) -> String? {
+        if let commandProfile = config.oauthCommandProfiles.first(where: { $0.id == provider.rawValue }) {
+            return commandProfile.authProfileID
+        }
+        let providerType = oauthProviderType(for: provider)
+        return authProfiles.first(where: { $0.type == providerType })?.id
+    }
+
+    private func allowsLegacyProviderWideAuthFallback(for provider: ProviderRowState.ID) -> Bool {
+        let providerType = oauthProviderType(for: provider)
+        return lastPersistedConfig.oauthCommandProfiles.isEmpty
+            && provider == providerID(for: providerType)
+            && authProfiles.filter { $0.type == providerType }.count <= 1
+    }
+
+    private func enableAuthProfile(_ profile: AuthProfile) {
+        if (try? authProfileStore.setDisabled(false, id: profile.id)) != true {
+            _ = try? authProfileStore.setDisabled(false, for: profile.type)
+        }
+    }
+
+    @discardableResult
+    private func removeAuthProfile(for provider: ProviderRowState.ID) throws -> Bool {
+        let providerType = oauthProviderType(for: provider)
+        if let authProfileID = authProfileID(for: provider) {
+            let deleted = try authProfileStore.delete(id: authProfileID)
+            if deleted || !allowsLegacyProviderWideAuthFallback(for: provider) {
+                return deleted
+            }
+        }
+        guard allowsLegacyProviderWideAuthFallback(for: provider) else { return false }
+        return try authProfileStore.delete(for: providerType) > 0
+    }
+
+    @discardableResult
+    private func disableAuthProfile(for provider: ProviderRowState.ID) throws -> Bool {
+        let providerType = oauthProviderType(for: provider)
+        if let authProfileID = authProfileID(for: provider) {
+            let disabled = try authProfileStore.setDisabled(true, id: authProfileID)
+            if disabled || !allowsLegacyProviderWideAuthFallback(for: provider) {
+                return disabled
+            }
+        }
+        guard allowsLegacyProviderWideAuthFallback(for: provider) else { return false }
+        return try authProfileStore.setDisabled(true, for: providerType) > 0
+    }
+
+    func removeInitialProvider(_ provider: ProviderRowState.ID) {
         do {
-            _ = try authProfileStore.delete(for: profileType)
+            _ = try removeAuthProfile(for: provider)
             refreshProfiles()
             try resetProviderSettings(provider)
             settingsMessage = nil
@@ -435,21 +529,12 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func removeProvider(_ provider: ProviderRowState.ID) {
-        let profileType: AuthProfileType
-        let providerName: String
-        switch provider {
-        case .claude:
-            profileType = .claude
-            providerName = "Claude OAuth"
-        case .codex:
-            profileType = .codex
-            providerName = "Codex OAuth"
-        }
+        let providerName = oauthProviderName(oauthProviderType(for: provider))
 
         do {
-            let deletedCount = try authProfileStore.delete(for: profileType)
+            let deleted = try removeAuthProfile(for: provider)
             refreshProfiles()
-            if deletedCount == 0 {
+            if !deleted {
                 settingsMessage = "\(providerName) auth file was not found."
             } else {
                 try resetProviderSettings(provider)
@@ -462,21 +547,12 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func disconnectProvider(_ provider: ProviderRowState.ID) {
-        let profileType: AuthProfileType
-        let providerName: String
-        switch provider {
-        case .claude:
-            profileType = .claude
-            providerName = "Claude OAuth"
-        case .codex:
-            profileType = .codex
-            providerName = "Codex OAuth"
-        }
+        let providerName = oauthProviderName(oauthProviderType(for: provider))
 
         do {
-            let disabledCount = try authProfileStore.setDisabled(true, for: profileType)
+            let disabled = try disableAuthProfile(for: provider)
             refreshProfiles()
-            if disabledCount == 0 {
+            if !disabled {
                 settingsMessage = "\(providerName) auth file was not found."
             } else {
                 settingsMessage = "\(providerName) connection was disabled. The auth file was not deleted."
@@ -492,8 +568,19 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func toggleAccountDetailVisibility(_ provider: ProviderRowState.ID) {
+        var updatedConfig = config
+        if let index = updatedConfig.oauthCommandProfiles.firstIndex(where: { $0.id == provider.rawValue }) {
+            updatedConfig.oauthCommandProfiles[index].accountDetailHidden.toggle()
+            do {
+                try savePrivacyOnlyConfig(updatedConfig)
+            } catch {
+                settingsMessage = "Account privacy update failed: \(error.localizedDescription)"
+            }
+            return
+        }
+
         var accountPrivacy = config.accountPrivacy
-        switch provider {
+        switch oauthProviderType(for: provider) {
         case .claude:
             accountPrivacy.claudeHidden.toggle()
         case .codex:
@@ -512,11 +599,15 @@ final class DashboardViewModel: ObservableObject {
         do {
             try ShellCommandNameValidator.validate(normalizedName)
             var updatedConfig = config
-            switch provider {
-            case .claude:
-                updatedConfig.commands.cc = normalizedName
-            case .codex:
-                updatedConfig.commands.ccodex = normalizedName
+            if let index = updatedConfig.oauthCommandProfiles.firstIndex(where: { $0.id == provider.rawValue }) {
+                updatedConfig.oauthCommandProfiles[index].commandName = normalizedName
+            } else {
+                switch oauthProviderType(for: provider) {
+                case .claude:
+                    updatedConfig.commands.cc = normalizedName
+                case .codex:
+                    updatedConfig.commands.ccodex = normalizedName
+                }
             }
             let activeNames = activeFunctionNames(in: updatedConfig)
             try ShellCommandNameValidator.validate(activeNames)
@@ -528,20 +619,47 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func saveClaudeFunctionName(_ functionName: String) throws {
-        var commands = config.commands
-        commands.cc = normalizeCommandName(functionName)
-        try saveCommands(commands)
+        if let claudeProfile = config.oauthCommandProfiles.first(where: { $0.provider == AuthProfileType.claude }) {
+            try saveClaudeOAuthSettings(
+                provider: ProviderRowState.ID(rawValue: claudeProfile.id),
+                functionName: functionName,
+                nickname: claudeProfile.nickname,
+                dangerousPermissionsEnabled: claudeProfile.dangerousPermissionsEnabled
+            )
+        } else {
+            var commands = config.commands
+            commands.cc = normalizeCommandName(functionName)
+            try saveCommands(commands)
+        }
     }
 
     func saveClaudeOAuthSettings(functionName: String, nickname: String, dangerousPermissionsEnabled: Bool) throws {
+        let provider = config.oauthCommandProfiles.first(where: { $0.provider == AuthProfileType.claude })
+            .map { ProviderRowState.ID(rawValue: $0.id) } ?? .claude
+        try saveClaudeOAuthSettings(
+            provider: provider,
+            functionName: functionName,
+            nickname: nickname,
+            dangerousPermissionsEnabled: dangerousPermissionsEnabled
+        )
+    }
+
+    func saveClaudeOAuthSettings(provider: ProviderRowState.ID, functionName: String, nickname: String, dangerousPermissionsEnabled: Bool) throws {
         var updatedConfig = config
-        updatedConfig.commands.cc = normalizeCommandName(functionName)
-        updatedConfig.nicknames.cc = nickname
-        updatedConfig.includeDangerouslySkipPermissions = dangerousPermissionsEnabled
+        let normalizedFunctionName = normalizeCommandName(functionName)
+        if let index = updatedConfig.oauthCommandProfiles.firstIndex(where: { $0.id == provider.rawValue }) {
+            updatedConfig.oauthCommandProfiles[index].commandName = normalizedFunctionName
+            updatedConfig.oauthCommandProfiles[index].nickname = nickname
+            updatedConfig.oauthCommandProfiles[index].dangerousPermissionsEnabled = dangerousPermissionsEnabled
+        } else {
+            updatedConfig.commands.cc = normalizedFunctionName
+            updatedConfig.nicknames.cc = nickname
+            updatedConfig.includeDangerouslySkipPermissions = dangerousPermissionsEnabled
+        }
         try saveConfig(
             updatedConfig,
             validateShellFunctions: true,
-            shellProfileValidationNames: [updatedConfig.commands.cc]
+            shellProfileValidationNames: [normalizedFunctionName]
         )
     }
 
@@ -557,26 +675,47 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func saveCodexSettings(functionName: String, codex: AppConfig.Codex) throws {
-        var updatedConfig = config
-        updatedConfig.commands.ccodex = normalizeCommandName(functionName)
-        updatedConfig.ccodex = codex
-        try saveConfig(
-            updatedConfig,
-            validateShellFunctions: true,
-            shellProfileValidationNames: [updatedConfig.commands.ccodex]
+        let commandProfile = config.oauthCommandProfiles.first(where: { $0.provider == AuthProfileType.codex })
+        let provider = commandProfile.map { ProviderRowState.ID(rawValue: $0.id) } ?? .codex
+        try saveCodexSettings(
+            provider: provider,
+            functionName: functionName,
+            nickname: commandProfile?.nickname ?? config.nicknames.ccodex,
+            codex: codex,
+            dangerousPermissionsEnabled: commandProfile?.dangerousPermissionsEnabled ?? config.includeDangerouslySkipPermissions
         )
     }
 
     func saveCodexSettings(functionName: String, nickname: String, codex: AppConfig.Codex, dangerousPermissionsEnabled: Bool) throws {
+        let provider = config.oauthCommandProfiles.first(where: { $0.provider == AuthProfileType.codex })
+            .map { ProviderRowState.ID(rawValue: $0.id) } ?? .codex
+        try saveCodexSettings(
+            provider: provider,
+            functionName: functionName,
+            nickname: nickname,
+            codex: codex,
+            dangerousPermissionsEnabled: dangerousPermissionsEnabled
+        )
+    }
+
+    func saveCodexSettings(provider: ProviderRowState.ID, functionName: String, nickname: String, codex: AppConfig.Codex, dangerousPermissionsEnabled: Bool) throws {
         var updatedConfig = config
-        updatedConfig.commands.ccodex = normalizeCommandName(functionName)
-        updatedConfig.nicknames.ccodex = nickname
-        updatedConfig.ccodex = codex
-        updatedConfig.includeDangerouslySkipPermissions = dangerousPermissionsEnabled
+        let normalizedFunctionName = normalizeCommandName(functionName)
+        if let index = updatedConfig.oauthCommandProfiles.firstIndex(where: { $0.id == provider.rawValue }) {
+            updatedConfig.oauthCommandProfiles[index].commandName = normalizedFunctionName
+            updatedConfig.oauthCommandProfiles[index].nickname = nickname
+            updatedConfig.oauthCommandProfiles[index].codex = codex
+            updatedConfig.oauthCommandProfiles[index].dangerousPermissionsEnabled = dangerousPermissionsEnabled
+        } else {
+            updatedConfig.commands.ccodex = normalizedFunctionName
+            updatedConfig.nicknames.ccodex = nickname
+            updatedConfig.ccodex = codex
+            updatedConfig.includeDangerouslySkipPermissions = dangerousPermissionsEnabled
+        }
         try saveConfig(
             updatedConfig,
             validateShellFunctions: true,
-            shellProfileValidationNames: [updatedConfig.commands.ccodex]
+            shellProfileValidationNames: [normalizedFunctionName]
         )
     }
 
@@ -708,21 +847,281 @@ final class DashboardViewModel: ObservableObject {
         return config
     }
 
+    private static func persistedConfig(_ config: AppConfig) -> AppConfig {
+        var updatedConfig = availableConfig(config)
+        updatedConfig.oauthCommandProfiles = commandProfilesWithRecomputedModelPrefixes(updatedConfig.oauthCommandProfiles)
+        return mirroredLegacyFields(in: updatedConfig)
+    }
+
+    private static func reconciledOAuthCommandProfiles(in config: AppConfig, authProfiles: [AuthProfile]) -> AppConfig {
+        var updatedConfig = config
+        var commandProfiles = config.oauthCommandProfiles
+        let hasStoredProfiles = !commandProfiles.isEmpty
+        var usedIDs = Set(commandProfiles.map(\.id))
+        var seenAuthProfileIDs = Set(commandProfiles.map(\.authProfileID))
+        var firstProviderSeen: Set<AuthProfileType> = []
+
+        for authProfile in authProfiles {
+            let isFirstForProvider = !firstProviderSeen.contains(authProfile.type)
+            firstProviderSeen.insert(authProfile.type)
+            guard !seenAuthProfileIDs.contains(authProfile.id) else { continue }
+
+            let id = commandProfileID(
+                provider: authProfile.type,
+                authProfileID: authProfile.id,
+                preferLegacyID: isFirstForProvider && !hasStoredProfiles,
+                usedIDs: &usedIDs
+            )
+            let legacyCommandName: String
+            let legacyNickname: String
+            let legacyPrivacyHidden: Bool
+            let legacyCodex: AppConfig.Codex?
+            switch authProfile.type {
+            case .claude:
+                legacyCommandName = isFirstForProvider && !hasStoredProfiles ? config.commands.cc : ""
+                legacyNickname = isFirstForProvider && !hasStoredProfiles ? config.nicknames.cc : ""
+                legacyPrivacyHidden = isFirstForProvider && !hasStoredProfiles ? config.accountPrivacy.claudeHidden : true
+                legacyCodex = nil
+            case .codex:
+                legacyCommandName = isFirstForProvider && !hasStoredProfiles ? config.commands.ccodex : ""
+                legacyNickname = isFirstForProvider && !hasStoredProfiles ? config.nicknames.ccodex : ""
+                legacyPrivacyHidden = isFirstForProvider && !hasStoredProfiles ? config.accountPrivacy.codexHidden : true
+                legacyCodex = isFirstForProvider && !hasStoredProfiles ? config.ccodex : AppConfig.default.ccodex
+            }
+            commandProfiles.append(
+                AppConfig.OAuthCommandProfile(
+                    id: id,
+                    provider: authProfile.type,
+                    authProfileID: authProfile.id,
+                    commandName: legacyCommandName,
+                    nickname: legacyNickname,
+                    accountDetailHidden: legacyPrivacyHidden,
+                    dangerousPermissionsEnabled: isFirstForProvider && !hasStoredProfiles ? config.includeDangerouslySkipPermissions : false,
+                    codex: legacyCodex,
+                    modelPrefix: "",
+                    isEnabled: true
+                )
+            )
+            seenAuthProfileIDs.insert(authProfile.id)
+        }
+
+        updatedConfig.oauthCommandProfiles = commandProfilesWithRecomputedModelPrefixes(commandProfiles)
+        return mirroredLegacyFields(in: updatedConfig)
+    }
+
+    private static func mirroredLegacyFields(in config: AppConfig) -> AppConfig {
+        var updatedConfig = config
+        if let claudeProfile = config.oauthCommandProfiles.first(where: { $0.provider == AuthProfileType.claude }) {
+            updatedConfig.commands.cc = claudeProfile.commandName
+            updatedConfig.nicknames.cc = claudeProfile.nickname
+            updatedConfig.accountPrivacy.claudeHidden = claudeProfile.accountDetailHidden
+            updatedConfig.includeDangerouslySkipPermissions = claudeProfile.dangerousPermissionsEnabled
+        }
+        if let codexProfile = config.oauthCommandProfiles.first(where: { $0.provider == AuthProfileType.codex }) {
+            updatedConfig.commands.ccodex = codexProfile.commandName
+            updatedConfig.nicknames.ccodex = codexProfile.nickname
+            updatedConfig.accountPrivacy.codexHidden = codexProfile.accountDetailHidden
+            updatedConfig.ccodex = codexProfile.codex ?? AppConfig.default.ccodex
+            if updatedConfig.oauthCommandProfiles.first(where: { $0.provider == AuthProfileType.claude }) == nil {
+                updatedConfig.includeDangerouslySkipPermissions = codexProfile.dangerousPermissionsEnabled
+            }
+        }
+        return updatedConfig
+    }
+
+    private static func commandProfileID(
+        provider: AuthProfileType,
+        authProfileID: String,
+        preferLegacyID: Bool,
+        usedIDs: inout Set<String>
+    ) -> String {
+        let legacyID = provider.rawValue
+        if preferLegacyID, !usedIDs.contains(legacyID) {
+            usedIDs.insert(legacyID)
+            return legacyID
+        }
+
+        let baseID = "\(provider.rawValue)-\(slug(for: authProfileID))"
+        var candidate = baseID
+        var suffix = 2
+        while usedIDs.contains(candidate) {
+            candidate = "\(baseID)-\(suffix)"
+            suffix += 1
+        }
+        usedIDs.insert(candidate)
+        return candidate
+    }
+
+    private static func commandProfilesWithRecomputedModelPrefixes(
+        _ commandProfiles: [AppConfig.OAuthCommandProfile]
+    ) -> [AppConfig.OAuthCommandProfile] {
+        var usedPrefixes: Set<String> = []
+        return commandProfiles.map { commandProfile in
+            var updatedProfile = commandProfile
+            updatedProfile.modelPrefix = uniqueModelPrefix(
+                provider: commandProfile.provider,
+                nickname: commandProfile.nickname,
+                authProfileID: commandProfile.authProfileID,
+                usedPrefixes: &usedPrefixes
+            )
+            return updatedProfile
+        }
+    }
+
+    private static func uniqueModelPrefix(
+        provider: AuthProfileType,
+        nickname: String,
+        authProfileID: String,
+        usedPrefixes: inout Set<String>
+    ) -> String {
+        let basePrefix = modelPrefixBase(provider: provider, nickname: nickname, authProfileID: authProfileID)
+        var candidate = basePrefix
+        var suffix = 2
+        while usedPrefixes.contains(candidate) {
+            candidate = "\(basePrefix)-\(suffix)"
+            suffix += 1
+        }
+        usedPrefixes.insert(candidate)
+        return candidate
+    }
+
+    private static func modelPrefixBase(provider: AuthProfileType, nickname: String, authProfileID: String) -> String {
+        let suffix = nonEmptySlug(for: nickname) ?? shortAuthProfileSlug(provider: provider, authProfileID: authProfileID)
+        return "\(provider.rawValue)-\(suffix)"
+    }
+
+    private static func shortAuthProfileSlug(provider: AuthProfileType, authProfileID: String) -> String {
+        let fileName = URL(fileURLWithPath: authProfileID).deletingPathExtension().lastPathComponent
+        let fullSlug = slug(for: fileName)
+        let providerPrefix = "\(provider.rawValue)-"
+        let suffixSource: String
+        if fullSlug == provider.rawValue {
+            suffixSource = "account"
+        } else if fullSlug.hasPrefix(providerPrefix) {
+            suffixSource = String(fullSlug.dropFirst(providerPrefix.count))
+        } else {
+            suffixSource = fullSlug
+        }
+
+        let firstSegment = suffixSource.split(separator: "-", maxSplits: 1).first.map(String.init) ?? ""
+        return firstSegment.isEmpty ? "account" : firstSegment
+    }
+
+    private static func nonEmptySlug(for value: String) -> String? {
+        let slug = rawSlug(for: value)
+        return slug.isEmpty ? nil : slug
+    }
+
+    private static func slug(for value: String) -> String {
+        let slug = rawSlug(for: value)
+        return slug.isEmpty ? "account" : slug
+    }
+
+    private static func rawSlug(for value: String) -> String {
+        let lowercasedValue = value.lowercased()
+        var result = ""
+        var previousWasSeparator = false
+        for scalar in lowercasedValue.unicodeScalars {
+            let isAllowed = (97...122).contains(Int(scalar.value)) || (48...57).contains(Int(scalar.value))
+            if isAllowed {
+                result.unicodeScalars.append(scalar)
+                previousWasSeparator = false
+            } else if !previousWasSeparator {
+                result.append("-")
+                previousWasSeparator = true
+            }
+        }
+        return result.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+    }
+
+    private func reconcileConfigWithAuthProfiles() {
+        let updatedConfig = Self.reconciledOAuthCommandProfiles(in: config, authProfiles: authProfiles)
+        if updatedConfig != config {
+            config = updatedConfig
+            cards = ProfileCard.makeDefaultCards(config: updatedConfig)
+            rebuildOptionRows()
+        }
+        reconcileAuthProfilePrefixes()
+    }
+
+    private struct AuthProfilePrefixRollback {
+        let authProfileID: String
+        let oldPrefix: String?
+    }
+
+    private enum AuthProfilePrefixSyncError: LocalizedError {
+        case profileNotUpdated(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .profileNotUpdated(let authProfileID):
+                "Failed to update auth profile prefix for `\(authProfileID)`."
+            }
+        }
+    }
+
+    private func reconcileAuthProfilePrefixes() {
+        _ = try? syncAuthProfilePrefixesForSave()
+    }
+
+    @discardableResult
+    private func syncAuthProfilePrefixesForSave() throws -> [AuthProfilePrefixRollback] {
+        var rollbacks: [AuthProfilePrefixRollback] = []
+        let profilesByID = Dictionary(uniqueKeysWithValues: authProfiles.map { ($0.id, $0) })
+        do {
+            for commandProfile in config.oauthCommandProfiles where commandProfile.isEnabled {
+                guard let authProfile = profilesByID[commandProfile.authProfileID],
+                      authProfile.prefix != commandProfile.modelPrefix else {
+                    continue
+                }
+                let updated = try authProfileStore.setPrefix(commandProfile.modelPrefix, id: commandProfile.authProfileID)
+                guard updated else { throw AuthProfilePrefixSyncError.profileNotUpdated(commandProfile.authProfileID) }
+                rollbacks.append(AuthProfilePrefixRollback(authProfileID: commandProfile.authProfileID, oldPrefix: authProfile.prefix))
+            }
+            if !rollbacks.isEmpty {
+                authProfiles = try authProfileStore.profiles()
+            }
+            return rollbacks
+        } catch {
+            rollbackAuthProfilePrefixes(rollbacks)
+            throw error
+        }
+    }
+
+    private func rollbackAuthProfilePrefixes(_ rollbacks: [AuthProfilePrefixRollback]) {
+        guard !rollbacks.isEmpty else { return }
+        for rollback in rollbacks.reversed() {
+            _ = try? authProfileStore.setPrefix(rollback.oldPrefix, id: rollback.authProfileID)
+        }
+        authProfiles = (try? authProfileStore.profiles()) ?? authProfiles
+    }
+
     private func resetProviderSettings(_ provider: ProviderRowState.ID) throws {
         var updatedConfig = config
-        switch provider {
-        case .claude:
-            updatedConfig.commands.cc = AppConfig.default.commands.cc
-            updatedConfig.nicknames.cc = ""
-            updatedConfig.accountPrivacy.claudeHidden = true
-        case .codex:
-            updatedConfig.commands.ccodex = AppConfig.default.commands.ccodex
-            updatedConfig.nicknames.ccodex = ""
-            updatedConfig.ccodex = AppConfig.default.ccodex
-            updatedConfig.accountPrivacy.codexHidden = true
+        if let index = updatedConfig.oauthCommandProfiles.firstIndex(where: { $0.id == provider.rawValue }) {
+            updatedConfig.oauthCommandProfiles.remove(at: index)
+            resetLegacyFields(for: oauthProviderType(for: provider), in: &updatedConfig)
+            try saveConfig(updatedConfig, validateShellFunctions: true)
+            return
         }
-        updatedConfig.includeDangerouslySkipPermissions = false
+
+        resetLegacyFields(for: oauthProviderType(for: provider), in: &updatedConfig)
         try saveConfig(updatedConfig, validateShellFunctions: true)
+    }
+
+    private func resetLegacyFields(for providerType: AuthProfileType, in config: inout AppConfig) {
+        switch providerType {
+        case .claude:
+            config.commands.cc = AppConfig.default.commands.cc
+            config.nicknames.cc = ""
+            config.accountPrivacy.claudeHidden = true
+        case .codex:
+            config.commands.ccodex = AppConfig.default.commands.ccodex
+            config.nicknames.ccodex = ""
+            config.ccodex = AppConfig.default.ccodex
+            config.accountPrivacy.codexHidden = true
+        }
+        config.includeDangerouslySkipPermissions = false
     }
 
     private func saveConfig(
@@ -730,7 +1129,7 @@ final class DashboardViewModel: ObservableObject {
         validateShellFunctions: Bool = false,
         shellProfileValidationNames: [String]? = nil
     ) throws {
-        let updatedConfig = Self.availableConfig(updatedConfig)
+        let updatedConfig = Self.persistedConfig(updatedConfig)
         if validateShellFunctions {
             let activeNames = activeFunctionNames(in: updatedConfig)
             try ShellCommandNameValidator.validate(activeNames)
@@ -746,19 +1145,40 @@ final class DashboardViewModel: ObservableObject {
                 try shellInstaller.validateFunctionNames(activeNames)
             }
         }
-        try automaticShellInstallService.apply(config: updatedConfig, enabledFunctions: enabledShellFunctions())
-        try configStore.save(updatedConfig)
+        do {
+            try configStore.save(updatedConfig)
+        } catch {
+            config = lastPersistedConfig
+            cards = ProfileCard.makeDefaultCards(config: lastPersistedConfig)
+            rebuildOptionRows()
+            rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
+            throw error
+        }
+        lastPersistedConfig = updatedConfig
         config = updatedConfig
         cards = ProfileCard.makeDefaultCards(config: updatedConfig)
         rebuildOptionRows()
         rebuildProviderRows(claudeStatus: nil, codexStatus: nil)
+        let prefixRollbacks = try syncAuthProfilePrefixesForSave()
+        do {
+            try automaticShellInstallService.apply(config: updatedConfig, enabledFunctions: enabledShellFunctions(in: updatedConfig))
+        } catch {
+            rollbackAuthProfilePrefixes(prefixRollbacks)
+            rebuildProviderRows(claudeStatus: nil, codexStatus: nil)
+            throw error
+        }
     }
 
     private func saveAccountPrivacy(_ accountPrivacy: AppConfig.AccountPrivacy) throws {
         var updatedConfig = config
         updatedConfig.accountPrivacy = accountPrivacy
-        let availableConfig = Self.availableConfig(updatedConfig)
+        try savePrivacyOnlyConfig(updatedConfig)
+    }
+
+    private func savePrivacyOnlyConfig(_ updatedConfig: AppConfig) throws {
+        let availableConfig = Self.persistedConfig(updatedConfig)
         try configStore.save(availableConfig)
+        lastPersistedConfig = availableConfig
         config = availableConfig
         cards = ProfileCard.makeDefaultCards(config: availableConfig).map { card in
             switch card.id {
@@ -780,6 +1200,7 @@ final class DashboardViewModel: ObservableObject {
         }
         rebuildOptionRows()
         rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
+        _ = try syncAuthProfilePrefixesForSave()
     }
 
     private func applyInitialShellInstall() {
@@ -797,66 +1218,98 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func enabledShellFunctions() -> AutomaticShellInstallService.EnabledFunctions {
-        AutomaticShellInstallService.EnabledFunctions(
-            claudeOAuth: authProfiles.contains { $0.type == .claude && !$0.disabled },
-            codex: authProfiles.contains { $0.type == .codex && !$0.disabled },
+        enabledShellFunctions(in: config)
+    }
+
+    private func enabledShellFunctions(in config: AppConfig) -> AutomaticShellInstallService.EnabledFunctions {
+        let enabledProfiles = renderableOAuthCommandProfiles(in: config)
+        return AutomaticShellInstallService.EnabledFunctions(
+            claudeOAuth: enabledProfiles.contains { $0.provider == .claude },
+            codex: enabledProfiles.contains { $0.provider == .codex },
             claudeAPI: false
         )
     }
 
     private func activeFunctionNames(in config: AppConfig) -> [String] {
-        var names: [String] = []
-        let claudeCommand = normalizeCommandName(config.commands.cc)
-        let codexCommand = normalizeCommandName(config.commands.ccodex)
-        if authProfiles.contains(where: { $0.type == .claude && !$0.disabled }), !claudeCommand.isEmpty { names.append(claudeCommand) }
-        if authProfiles.contains(where: { $0.type == .codex && !$0.disabled }), !codexCommand.isEmpty { names.append(codexCommand) }
-        return names
+        renderableOAuthCommandProfiles(in: config)
+            .map { normalizeCommandName($0.commandName) }
+            .filter { !$0.isEmpty }
+    }
+
+    private func renderableOAuthCommandProfiles(in config: AppConfig) -> [AppConfig.OAuthCommandProfile] {
+        let authProfilesByID = Dictionary(uniqueKeysWithValues: authProfiles.map { ($0.id, $0) })
+        return config.oauthCommandProfiles.filter { commandProfile in
+            guard commandProfile.isEnabled,
+                  let authProfile = authProfilesByID[commandProfile.authProfileID],
+                  !authProfile.disabled else {
+                return false
+            }
+            return true
+        }
     }
 
     private func rebuildProviderRows(claudeStatus: DiagnosticStatus?, codexStatus: DiagnosticStatus?) {
-        let claudeAny = authProfiles.first { $0.type == .claude }
-        let codexAny = authProfiles.first { $0.type == .codex }
-        let claudeEnabled = claudeAny.flatMap { $0.disabled ? nil : $0 }
-        let codexEnabled = codexAny.flatMap { $0.disabled ? nil : $0 }
+        let authProfilesByID = Dictionary(uniqueKeysWithValues: authProfiles.map { ($0.id, $0) })
+        if config.oauthCommandProfiles.isEmpty {
+            var usedIDs: Set<String> = []
+            var firstProviderSeen: Set<AuthProfileType> = []
+            providerRows = authProfiles.map { authProfile in
+                let enabledProfile = authProfile.disabled ? nil : authProfile
+                let diagnosticStatus = authProfile.type == .codex ? codexStatus : claudeStatus
+                let fallback = authProfile.type == .codex
+                    ? diagnosticStatus?.message ?? "Connect the bundled CLIProxyAPI Codex OAuth profile."
+                    : diagnosticStatus?.message ?? "Connect the bundled CLIProxyAPI Claude OAuth profile."
+                let isFirstForProvider = !firstProviderSeen.contains(authProfile.type)
+                firstProviderSeen.insert(authProfile.type)
+                let rowID = Self.commandProfileID(
+                    provider: authProfile.type,
+                    authProfileID: authProfile.id,
+                    preferLegacyID: isFirstForProvider,
+                    usedIDs: &usedIDs
+                )
+                return ProviderRowState(
+                    id: ProviderRowState.ID(rawValue: rowID),
+                    providerType: authProfile.type,
+                    authProfileID: authProfile.id,
+                    commandProfileID: rowID,
+                    name: authProfile.type == .codex ? "Codex OAuth" : "Claude OAuth",
+                    nickname: authProfile.type == .codex ? config.nicknames.ccodex : config.nicknames.cc,
+                    functionName: authProfile.type == .codex ? config.commands.ccodex : config.commands.cc,
+                    connectionTitle: enabledProfile == nil ? "Needs connection" : "Connected",
+                    connectionDetail: profileDetail(profile: enabledProfile ?? authProfile, fallback: fallback),
+                    isConnected: enabledProfile != nil,
+                    isErrored: isProviderErrored(providerType: authProfile.type, enabledProfile: enabledProfile, diagnosticStatus: diagnosticStatus),
+                    accountDetailHidden: authProfile.type == .codex ? config.accountPrivacy.codexHidden : config.accountPrivacy.claudeHidden
+                )
+            }
+            return
+        }
 
-        var rows: [ProviderRowState] = []
-        if claudeAny != nil {
-            rows.append(
-                ProviderRowState(
-                    id: .claude,
-                    name: "Claude OAuth",
-                    nickname: config.nicknames.cc,
-                    functionName: config.commands.cc,
-                    connectionTitle: claudeEnabled == nil ? "Needs connection" : "Connected",
-                    connectionDetail: profileDetail(
-                        profile: claudeEnabled ?? claudeAny,
-                        fallback: claudeStatus?.message ?? "Connect the bundled CLIProxyAPI Claude OAuth profile."
-                    ),
-                    isConnected: claudeEnabled != nil,
-                    isErrored: isProviderErrored(id: .claude, enabledProfile: claudeEnabled, diagnosticStatus: claudeStatus),
-                    accountDetailHidden: config.accountPrivacy.claudeHidden
-                )
+        providerRows = config.oauthCommandProfiles.compactMap { commandProfile in
+            guard let authProfile = authProfilesByID[commandProfile.authProfileID] else { return nil }
+            let enabledProfile = authProfile.disabled ? nil : authProfile
+            let diagnosticStatus = commandProfile.provider == .codex ? codexStatus : claudeStatus
+            let fallback = commandProfile.provider == .codex
+                ? diagnosticStatus?.message ?? "Connect the bundled CLIProxyAPI Codex OAuth profile."
+                : diagnosticStatus?.message ?? "Connect the bundled CLIProxyAPI Claude OAuth profile."
+            return ProviderRowState(
+                id: ProviderRowState.ID(rawValue: commandProfile.id),
+                providerType: commandProfile.provider,
+                authProfileID: commandProfile.authProfileID,
+                commandProfileID: commandProfile.id,
+                name: commandProfile.provider == .codex ? "Codex OAuth" : "Claude OAuth",
+                nickname: commandProfile.nickname,
+                functionName: commandProfile.commandName,
+                connectionTitle: enabledProfile == nil ? "Needs connection" : "Connected",
+                connectionDetail: profileDetail(
+                    profile: enabledProfile ?? authProfile,
+                    fallback: fallback
+                ),
+                isConnected: enabledProfile != nil,
+                isErrored: isProviderErrored(providerType: commandProfile.provider, enabledProfile: enabledProfile, diagnosticStatus: diagnosticStatus),
+                accountDetailHidden: commandProfile.accountDetailHidden
             )
         }
-        if codexAny != nil {
-            rows.append(
-                ProviderRowState(
-                    id: .codex,
-                    name: "Codex OAuth",
-                    nickname: config.nicknames.ccodex,
-                    functionName: config.commands.ccodex,
-                    connectionTitle: codexEnabled == nil ? "Needs connection" : "Connected",
-                    connectionDetail: profileDetail(
-                        profile: codexEnabled ?? codexAny,
-                        fallback: codexStatus?.message ?? "Connect the bundled CLIProxyAPI Codex OAuth profile."
-                    ),
-                    isConnected: codexEnabled != nil,
-                    isErrored: isProviderErrored(id: .codex, enabledProfile: codexEnabled, diagnosticStatus: codexStatus),
-                    accountDetailHidden: config.accountPrivacy.codexHidden
-                )
-            )
-        }
-        providerRows = rows
     }
 
     private func rebuildOptionRows() {
@@ -936,7 +1389,7 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func isProviderErrored(
-        id: ProviderRowState.ID,
+        providerType: AuthProfileType,
         enabledProfile: AuthProfile?,
         diagnosticStatus: DiagnosticStatus?
     ) -> Bool {
@@ -948,7 +1401,7 @@ final class DashboardViewModel: ObservableObject {
             return false
         }
 
-        switch id {
+        switch providerType {
         case .claude:
             return false
         case .codex:

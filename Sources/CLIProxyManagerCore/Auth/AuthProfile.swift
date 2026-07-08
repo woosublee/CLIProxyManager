@@ -14,6 +14,7 @@ public struct AuthProfile: Equatable, Identifiable, Sendable {
     public let accountID: String?
     public let expired: String?
     public let disabled: Bool
+    public let prefix: String?
 
     public init(
         fileName: String,
@@ -21,7 +22,8 @@ public struct AuthProfile: Equatable, Identifiable, Sendable {
         email: String?,
         accountID: String?,
         expired: String?,
-        disabled: Bool
+        disabled: Bool,
+        prefix: String? = nil
     ) {
         self.fileName = fileName
         self.type = type
@@ -29,5 +31,6 @@ public struct AuthProfile: Equatable, Identifiable, Sendable {
         self.accountID = accountID
         self.expired = expired
         self.disabled = disabled
+        self.prefix = prefix
     }
 }

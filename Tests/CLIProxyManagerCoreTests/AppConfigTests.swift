@@ -179,6 +179,116 @@ final class AppConfigTests: XCTestCase {
         XCTAssertFalse(config.roundRobinEnabled)
     }
 
+    func testOAuthCommandProfilesDecodeAndEncodeRoundTrip() throws {
+        let data = Data(#"""
+        {
+          "port": 18317,
+          "commands": { "cc": "cc", "ccapi": "ccapi", "ccodex": "ccodex" },
+          "ccapi": { "model": "claude-opus-4-8" },
+          "ccodex": {
+            "opus": { "model": "gpt-5.5", "reasoning": "xhigh", "contextWindow": "auto" },
+            "sonnet": { "model": "gpt-5.5", "reasoning": "medium", "contextWindow": "auto" },
+            "haiku": { "model": "gpt-5.5", "reasoning": "low", "contextWindow": "auto" }
+          },
+          "includeDangerouslySkipPermissions": false,
+          "startAtLogin": false,
+          "showDockIcon": true,
+          "showMenuBarIcon": true,
+          "oauthCommandProfiles": [
+            {
+              "id": "claude-work",
+              "provider": "claude",
+              "authProfileID": "claude-work.json",
+              "commandName": "ccwork",
+              "nickname": "Work",
+              "accountDetailHidden": false,
+              "dangerousPermissionsEnabled": true,
+              "modelPrefix": "team",
+              "isEnabled": true
+            },
+            {
+              "id": "codex-personal",
+              "provider": "codex",
+              "authProfileID": "codex-personal.json",
+              "commandName": "ccpersonal",
+              "nickname": "Personal",
+              "accountDetailHidden": true,
+              "dangerousPermissionsEnabled": false,
+              "codex": {
+                "opus": { "model": "gpt-5.6", "reasoning": "high", "contextWindow": "auto" },
+                "sonnet": { "model": "gpt-5.6", "reasoning": "medium", "contextWindow": "400k" },
+                "haiku": { "model": "gpt-5.6-mini", "reasoning": "low", "contextWindow": "200k" }
+              },
+              "modelPrefix": "codex-personal",
+              "isEnabled": false
+            }
+          ]
+        }
+        """#.utf8)
+
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+        let encoded = try JSONEncoder().encode(decoded)
+        let roundTripped = try JSONDecoder().decode(AppConfig.self, from: encoded)
+
+        XCTAssertEqual(roundTripped.oauthCommandProfiles, decoded.oauthCommandProfiles)
+        XCTAssertEqual(roundTripped.oauthCommandProfiles.count, 2)
+        XCTAssertEqual(roundTripped.oauthCommandProfiles[0], AppConfig.OAuthCommandProfile(
+            id: "claude-work",
+            provider: .claude,
+            authProfileID: "claude-work.json",
+            commandName: "ccwork",
+            nickname: "Work",
+            accountDetailHidden: false,
+            dangerousPermissionsEnabled: true,
+            modelPrefix: "team",
+            isEnabled: true
+        ))
+        XCTAssertEqual(roundTripped.oauthCommandProfiles[1].codex?.sonnet.contextWindow, .context400k)
+        XCTAssertEqual(roundTripped.oauthCommandProfiles[1].codex?.haiku.contextWindow, .context200k)
+    }
+
+    func testMissingOAuthCommandProfilesDecodesToEmptyArray() throws {
+        let data = Data(#"""
+        {
+          "port": 18317,
+          "commands": { "cc": "cc", "ccapi": "ccapi", "ccodex": "ccodex" },
+          "ccapi": { "model": "claude-opus-4-7" },
+          "ccodex": {
+            "opus": { "model": "gpt-5.5", "reasoning": "xhigh", "contextWindow": "auto" },
+            "sonnet": { "model": "gpt-5.5", "reasoning": "medium", "contextWindow": "auto" },
+            "haiku": { "model": "gpt-5.5", "reasoning": "low", "contextWindow": "auto" }
+          },
+          "includeDangerouslySkipPermissions": false,
+          "startAtLogin": false,
+          "showDockIcon": true,
+          "showMenuBarIcon": true
+        }
+        """#.utf8)
+
+        let config = try JSONDecoder().decode(AppConfig.self, from: data)
+
+        XCTAssertEqual(config.oauthCommandProfiles, [])
+        XCTAssertEqual(config.commands.cc, "cc")
+        XCTAssertEqual(config.commands.ccodex, "ccodex")
+    }
+
+    func testManagedPathsDefaultRootUsesDevelopmentDirectoryInDebugBuilds() {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+
+        #if DEBUG
+        XCTAssertEqual(
+            ManagedPaths.defaultRootDirectory(),
+            home.appendingPathComponent(".cliproxy-manager", isDirectory: true)
+                .appendingPathComponent("dev", isDirectory: true)
+        )
+        #else
+        XCTAssertEqual(
+            ManagedPaths.defaultRootDirectory(),
+            home.appendingPathComponent(".cliproxy-manager", isDirectory: true)
+        )
+        #endif
+    }
+
     func testManagedPathsCanBeRootedInTemporaryDirectory() {
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent(UUID().uuidString)

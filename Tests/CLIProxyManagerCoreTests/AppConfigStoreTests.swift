@@ -27,7 +27,7 @@ final class AppConfigStoreTests: XCTestCase {
     func testStoreSavesAndLoadsConfig() throws {
         let sandbox = try makeSandbox()
         let store = AppConfigStore(paths: ManagedPaths(rootDirectory: sandbox))
-        let config = AppConfig(
+        var config = AppConfig(
             port: 18_888,
             commands: AppConfig.Commands(cc: "mine", ccapi: "mineapi", ccodex: "minecodex"),
             ccapi: AppConfig.ClaudeAPI(model: "claude-sonnet-4-6"),
@@ -41,6 +41,35 @@ final class AppConfigStoreTests: XCTestCase {
             showDockIcon: false,
             showMenuBarIcon: true
         )
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "claude-work",
+                provider: .claude,
+                authProfileID: "claude-work.json",
+                commandName: "ccwork",
+                nickname: "Work",
+                accountDetailHidden: false,
+                dangerousPermissionsEnabled: true,
+                modelPrefix: "team",
+                isEnabled: true
+            ),
+            AppConfig.OAuthCommandProfile(
+                id: "codex-personal",
+                provider: .codex,
+                authProfileID: "codex-personal.json",
+                commandName: "ccpersonal",
+                nickname: "Personal",
+                accountDetailHidden: true,
+                dangerousPermissionsEnabled: false,
+                codex: AppConfig.Codex(
+                    opus: AppConfig.CodexRole(model: "gpt-5.6", reasoning: .high, contextWindow: .auto),
+                    sonnet: AppConfig.CodexRole(model: "gpt-5.6", reasoning: .medium, contextWindow: .context400k),
+                    haiku: AppConfig.CodexRole(model: "gpt-5.6-mini", reasoning: .low, contextWindow: .context200k)
+                ),
+                modelPrefix: "codex-personal",
+                isEnabled: false
+            )
+        ]
 
         try store.save(config)
 

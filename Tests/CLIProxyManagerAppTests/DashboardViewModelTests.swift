@@ -726,6 +726,42 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertNil(viewModel.settingsMessage)
     }
 
+    func testRemoveExplicitCommandProfileDoesNotFallbackToProviderWideDeleteWhenIDDeleteFails() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "claude-work",
+                provider: .claude,
+                authProfileID: "claude-work.json",
+                commandName: "ccwork"
+            ),
+            AppConfig.OAuthCommandProfile(
+                id: "claude-personal",
+                provider: .claude,
+                authProfileID: "claude-personal.json",
+                commandName: "ccpersonal"
+            )
+        ]
+        let authStore = StubAuthProfileStore(profiles: [
+            AuthProfile(fileName: "claude-work.json", type: .claude, email: "work@example.com", accountID: nil, expired: nil, disabled: false),
+            AuthProfile(fileName: "claude-personal.json", type: .claude, email: "personal@example.com", accountID: nil, expired: nil, disabled: false)
+        ])
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: authStore,
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        viewModel.removeProvider(ProviderRowState.ID(rawValue: "claude-work"))
+
+        XCTAssertEqual(authStore.deleteInvocations, [])
+        XCTAssertEqual(viewModel.providerRows.map(\.authProfileID), ["claude-work.json", "claude-personal.json"])
+        XCTAssertEqual(viewModel.settingsMessage, "Claude OAuth auth file was not found.")
+    }
+
     func testRemoveProviderResetsOnlyRemovedClaudeAccountPrivacy() {
         var config = AppConfig.default
         config.accountPrivacy = AppConfig.AccountPrivacy(claudeHidden: false, codexHidden: false)
@@ -801,6 +837,42 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.isErrored, false)
         XCTAssertEqual(MenuBarStatusSnapshot(serverStatus: viewModel.serverStatus, providers: viewModel.providerRows).erroredCount, 0)
+    }
+
+    func testDisconnectExplicitCommandProfileDoesNotFallbackToProviderWideDisableWhenIDDisableFails() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "claude-work",
+                provider: .claude,
+                authProfileID: "claude-work.json",
+                commandName: "ccwork"
+            ),
+            AppConfig.OAuthCommandProfile(
+                id: "claude-personal",
+                provider: .claude,
+                authProfileID: "claude-personal.json",
+                commandName: "ccpersonal"
+            )
+        ]
+        let authStore = StubAuthProfileStore(profiles: [
+            AuthProfile(fileName: "claude-work.json", type: .claude, email: "work@example.com", accountID: nil, expired: nil, disabled: false),
+            AuthProfile(fileName: "claude-personal.json", type: .claude, email: "personal@example.com", accountID: nil, expired: nil, disabled: false)
+        ])
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: authStore,
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        viewModel.disconnectProvider(ProviderRowState.ID(rawValue: "claude-work"))
+
+        XCTAssertEqual(authStore.disabledUpdates, [])
+        XCTAssertEqual(viewModel.providerRows.map(\.authProfileID), ["claude-work.json", "claude-personal.json"])
+        XCTAssertEqual(viewModel.settingsMessage, "Claude OAuth auth file was not found.")
     }
 
     func testDisconnectProviderDisablesAuthProfileAndRefreshesRows() {

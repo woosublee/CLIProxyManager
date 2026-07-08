@@ -1,3 +1,4 @@
+import CLIProxyManagerCore
 import SwiftUI
 
 // MARK: - Brand & status palette (matches design tokens)
@@ -124,6 +125,7 @@ struct SlugPill: View {
 
 struct ProviderAvatar: View {
     let providerID: ProviderRowState.ID
+    var providerType: AuthProfileType? = nil
     var size: CGFloat = 32
 
     var body: some View {
@@ -132,7 +134,7 @@ struct ProviderAvatar: View {
             .frame(width: size, height: size)
             .overlay {
                 Group {
-                    switch providerID {
+                    switch resolvedProviderType {
                     case .claude:
                         Text("A")
                             .font(.system(size: size * 0.46, weight: .heavy, design: .rounded))
@@ -145,8 +147,12 @@ struct ProviderAvatar: View {
             }
     }
 
+    private var resolvedProviderType: AuthProfileType {
+        providerType ?? (providerID.rawValue == ProviderRowState.ID.codex.rawValue ? .codex : .claude)
+    }
+
     private var background: AnyShapeStyle {
-        switch providerID {
+        switch resolvedProviderType {
         case .claude:
             AnyShapeStyle(BrandPalette.claude)
         case .codex:

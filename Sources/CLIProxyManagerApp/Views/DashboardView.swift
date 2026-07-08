@@ -100,7 +100,7 @@ struct DashboardView: View {
                     AddProviderModal(
                         activeOAuthLoginProvider: viewModel.activeOAuthLoginProvider,
                         onPick: { provider in
-                            viewModel.startOAuthLogin(provider)
+                            viewModel.startOAuthLogin(providerType: provider)
                         },
                         onCancelLogin: {
                             viewModel.cancelOAuthLogin()
@@ -182,28 +182,31 @@ struct DashboardView: View {
     @ViewBuilder
     private func providerSettingsSheet(_ provider: ProviderRowState.ID, isInitialSetup: Bool) -> some View {
         let row = viewModel.providerRows.first { $0.id == provider }
-        switch provider {
+        let providerType = row?.providerType ?? (provider.rawValue == ProviderRowState.ID.codex.rawValue ? AuthProfileType.codex : .claude)
+        switch providerType {
         case .claude:
             ClaudeOAuthProviderSettingsSheet(
                 config: viewModel.config,
+                providerID: provider,
                 connectionDetail: row?.connectionDetail ?? "",
                 isConnected: row?.isConnected ?? false,
                 onDisconnect: {
-                    viewModel.removeProvider(.claude)
+                    viewModel.removeProvider(provider)
                     activeSheet = nil
                 },
                 checkCommandName: { functionName in
-                    await viewModel.commandNameAvailability(provider: .claude, functionName: functionName)
+                    await viewModel.commandNameAvailability(provider: provider, functionName: functionName)
                 },
                 onCancel: {
                     if isInitialSetup {
-                        viewModel.removeInitialProvider(.claude)
+                        viewModel.removeInitialProvider(provider)
                     }
                     activeSheet = nil
                 },
                 isInitialSetup: isInitialSetup,
                 save: { functionName, nickname, dangerousPermissionsEnabled in
                     try viewModel.saveClaudeOAuthSettings(
+                        provider: provider,
                         functionName: functionName,
                         nickname: nickname,
                         dangerousPermissionsEnabled: dangerousPermissionsEnabled
@@ -214,21 +217,22 @@ struct DashboardView: View {
         case .codex:
             CodexProviderSettingsSheet(
                 config: viewModel.config,
+                providerID: provider,
                 connectionDetail: row?.connectionDetail ?? "",
                 isConnected: row?.isConnected ?? false,
                 availableModels: viewModel.availableCodexModels,
                 modelLoadingState: viewModel.codexModelLoadingState,
                 refreshModels: { Task { await viewModel.refreshCodexModels() } },
                 onDisconnect: {
-                    viewModel.removeProvider(.codex)
+                    viewModel.removeProvider(provider)
                     activeSheet = nil
                 },
                 checkCommandName: { functionName in
-                    await viewModel.commandNameAvailability(provider: .codex, functionName: functionName)
+                    await viewModel.commandNameAvailability(provider: provider, functionName: functionName)
                 },
                 onCancel: {
                     if isInitialSetup {
-                        viewModel.removeInitialProvider(.codex)
+                        viewModel.removeInitialProvider(provider)
                     }
                     activeSheet = nil
                 },
@@ -236,6 +240,7 @@ struct DashboardView: View {
                 latestModel: { viewModel.latestBaseCodexModel },
                 save: { functionName, nickname, codex, dangerousPermissionsEnabled in
                     try viewModel.saveCodexSettings(
+                        provider: provider,
                         functionName: functionName,
                         nickname: nickname,
                         codex: codex,
@@ -409,7 +414,7 @@ private struct ProviderAccountCardView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            ProviderAvatar(providerID: account.id)
+            ProviderAvatar(providerID: account.id, providerType: account.providerType)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(account.title)

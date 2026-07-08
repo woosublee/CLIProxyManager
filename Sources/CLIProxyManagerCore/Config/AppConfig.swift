@@ -82,6 +82,43 @@ public struct AppConfig: Codable, Equatable, Sendable {
         }
     }
 
+    public struct OAuthCommandProfile: Codable, Equatable, Identifiable, Sendable {
+        public var id: String
+        public var provider: AuthProfileType
+        public var authProfileID: String
+        public var commandName: String
+        public var nickname: String
+        public var accountDetailHidden: Bool
+        public var dangerousPermissionsEnabled: Bool
+        public var codex: Codex?
+        public var modelPrefix: String
+        public var isEnabled: Bool
+
+        public init(
+            id: String,
+            provider: AuthProfileType,
+            authProfileID: String,
+            commandName: String = "",
+            nickname: String = "",
+            accountDetailHidden: Bool = true,
+            dangerousPermissionsEnabled: Bool = false,
+            codex: Codex? = nil,
+            modelPrefix: String = "",
+            isEnabled: Bool = true
+        ) {
+            self.id = id
+            self.provider = provider
+            self.authProfileID = authProfileID
+            self.commandName = commandName
+            self.nickname = nickname
+            self.accountDetailHidden = accountDetailHidden
+            self.dangerousPermissionsEnabled = dangerousPermissionsEnabled
+            self.codex = codex
+            self.modelPrefix = modelPrefix
+            self.isEnabled = isEnabled
+        }
+    }
+
     public struct Nicknames: Codable, Equatable, Sendable {
         public var cc: String
         public var ccodex: String
@@ -124,6 +161,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var appearance: AppearanceMode
     public var nicknames: Nicknames
     public var accountPrivacy: AccountPrivacy
+    public var oauthCommandProfiles: [OAuthCommandProfile]
     public var bindAddress: String
     public var autostartServer: Bool
     public var roundRobinEnabled: Bool
@@ -142,6 +180,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         appearance: AppearanceMode = .system,
         nicknames: Nicknames = Nicknames(),
         accountPrivacy: AccountPrivacy = AccountPrivacy(),
+        oauthCommandProfiles: [OAuthCommandProfile] = [],
         bindAddress: String = "127.0.0.1",
         autostartServer: Bool = false,
         roundRobinEnabled: Bool = false,
@@ -159,6 +198,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         self.appearance = appearance
         self.nicknames = nicknames
         self.accountPrivacy = accountPrivacy
+        self.oauthCommandProfiles = oauthCommandProfiles
         self.bindAddress = bindAddress
         self.autostartServer = autostartServer
         self.roundRobinEnabled = roundRobinEnabled
@@ -173,6 +213,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         case appearance
         case nicknames
         case accountPrivacy
+        case oauthCommandProfiles
         case bindAddress, autostartServer, roundRobinEnabled
         case logLevel
     }
@@ -191,6 +232,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         self.appearance = try c.decodeIfPresent(AppearanceMode.self, forKey: .appearance) ?? .system
         self.nicknames = try c.decodeIfPresent(Nicknames.self, forKey: .nicknames) ?? Nicknames()
         self.accountPrivacy = try c.decodeIfPresent(AccountPrivacy.self, forKey: .accountPrivacy) ?? AccountPrivacy()
+        self.oauthCommandProfiles = try c.decodeIfPresent([OAuthCommandProfile].self, forKey: .oauthCommandProfiles) ?? []
         self.bindAddress = try c.decodeIfPresent(String.self, forKey: .bindAddress) ?? "127.0.0.1"
         self.autostartServer = try c.decodeIfPresent(Bool.self, forKey: .autostartServer) ?? false
         self.roundRobinEnabled = false

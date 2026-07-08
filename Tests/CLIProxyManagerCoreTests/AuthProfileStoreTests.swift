@@ -6,7 +6,7 @@ final class AuthProfileStoreTests: XCTestCase {
         let sandbox = try makeSandbox()
         let authDirectory = sandbox.appendingPathComponent("auth", isDirectory: true)
         try FileManager.default.createDirectory(at: authDirectory, withIntermediateDirectories: true)
-        try Data(#"{"type":"claude","email":"claude@example.com","expired":"2026-05-09T11:24:01+09:00","access_token":"secret"}"#.utf8)
+        try Data(#"{"type":"claude","email":"claude@example.com","expired":"2026-05-09T11:24:01+09:00","prefix":"team-claude","access_token":"secret"}"#.utf8)
             .write(to: authDirectory.appendingPathComponent("claude.json"))
         try Data(#"{"type":"codex","email":"codex@example.com","account_id":"acct_123","disabled":false,"refresh_token":"secret"}"#.utf8)
             .write(to: authDirectory.appendingPathComponent("codex.json"))
@@ -15,9 +15,82 @@ final class AuthProfileStoreTests: XCTestCase {
         let profiles = try store.profiles()
 
         XCTAssertEqual(profiles, [
-            AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: "2026-05-09T11:24:01+09:00", disabled: false),
+            AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: "2026-05-09T11:24:01+09:00", disabled: false, prefix: "team-claude"),
             AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: nil, disabled: false)
         ])
+    }
+
+    func testSetPrefixUpdatesOnlyTargetedAuthFileAndPreservesTokensAndUnknownFields() throws {
+        let sandbox = try makeSandbox()
+        let authDirectory = sandbox.appendingPathComponent("auth", isDirectory: true)
+        try FileManager.default.createDirectory(at: authDirectory, withIntermediateDirectories: true)
+        let targetURL = authDirectory.appendingPathComponent("claude-work.json")
+        let otherURL = authDirectory.appendingPathComponent("claude-personal.json")
+        try Data(#"{"type":"claude","email":"work@example.com","prefix":"old","access_token":"access","refresh_token":"refresh","metadata":{"tier":"max"}}"#.utf8)
+            .write(to: targetURL)
+        try Data(#"{"type":"claude","email":"personal@example.com","prefix":"personal","access_token":"other"}"#.utf8)
+            .write(to: otherURL)
+
+        let store = AuthProfileStore(authDirectory: authDirectory)
+        let didUpdate = try store.setPrefix(" team ", id: "claude-work.json")
+        let targetJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: targetURL)) as? [String: Any])
+        let otherJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: otherURL)) as? [String: Any])
+        let metadata = try XCTUnwrap(targetJSON["metadata"] as? [String: Any])
+
+        XCTAssertTrue(didUpdate)
+        XCTAssertEqual(targetJSON["prefix"] as? String, "team")
+        XCTAssertEqual(targetJSON["access_token"] as? String, "access")
+        XCTAssertEqual(targetJSON["refresh_token"] as? String, "refresh")
+        XCTAssertEqual(metadata["tier"] as? String, "max")
+        XCTAssertEqual(otherJSON["prefix"] as? String, "personal")
+        XCTAssertEqual(otherJSON["access_token"] as? String, "other")
+    }
+
+    func testSetDisabledByIDUpdatesOnlyTargetedAuthFileAndPreservesTokensAndUnknownFields() throws {
+        let sandbox = try makeSandbox()
+        let authDirectory = sandbox.appendingPathComponent("auth", isDirectory: true)
+        try FileManager.default.createDirectory(at: authDirectory, withIntermediateDirectories: true)
+        let targetURL = authDirectory.appendingPathComponent("codex-work.json")
+        let otherURL = authDirectory.appendingPathComponent("codex-personal.json")
+        try Data(#"{"type":"codex","email":"work@example.com","disabled":false,"access_token":"access","refresh_token":"refresh","metadata":{"tier":"plus"}}"#.utf8)
+            .write(to: targetURL)
+        try Data(#"{"type":"codex","email":"personal@example.com","disabled":false,"access_token":"other","metadata":{"tier":"free"}}"#.utf8)
+            .write(to: otherURL)
+
+        let store = AuthProfileStore(authDirectory: authDirectory)
+        let didUpdate = try store.setDisabled(true, id: "codex-work.json")
+        let targetJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: targetURL)) as? [String: Any])
+        let otherJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: otherURL)) as? [String: Any])
+        let targetMetadata = try XCTUnwrap(targetJSON["metadata"] as? [String: Any])
+        let otherMetadata = try XCTUnwrap(otherJSON["metadata"] as? [String: Any])
+
+        XCTAssertTrue(didUpdate)
+        XCTAssertEqual(targetJSON["disabled"] as? Bool, true)
+        XCTAssertEqual(targetJSON["access_token"] as? String, "access")
+        XCTAssertEqual(targetJSON["refresh_token"] as? String, "refresh")
+        XCTAssertEqual(targetMetadata["tier"] as? String, "plus")
+        XCTAssertEqual(otherJSON["disabled"] as? Bool, false)
+        XCTAssertEqual(otherJSON["access_token"] as? String, "other")
+        XCTAssertEqual(otherMetadata["tier"] as? String, "free")
+    }
+
+    func testDeleteByIDDeletesOnlyTargetedAuthFile() throws {
+        let sandbox = try makeSandbox()
+        let authDirectory = sandbox.appendingPathComponent("auth", isDirectory: true)
+        try FileManager.default.createDirectory(at: authDirectory, withIntermediateDirectories: true)
+        let targetURL = authDirectory.appendingPathComponent("claude-work.json")
+        let otherURL = authDirectory.appendingPathComponent("claude-personal.json")
+        try Data(#"{"type":"claude","email":"work@example.com"}"#.utf8)
+            .write(to: targetURL)
+        try Data(#"{"type":"claude","email":"personal@example.com"}"#.utf8)
+            .write(to: otherURL)
+
+        let store = AuthProfileStore(authDirectory: authDirectory)
+        let didDelete = try store.delete(id: "claude-work.json")
+
+        XCTAssertTrue(didDelete)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: targetURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: otherURL.path))
     }
 
     func testProfilesIgnoreUnsupportedTypesAndInvalidJson() throws {

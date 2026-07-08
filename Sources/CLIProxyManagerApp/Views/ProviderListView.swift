@@ -1,3 +1,4 @@
+import CLIProxyManagerCore
 import SwiftUI
 
 struct ProviderListView: View {
@@ -31,8 +32,15 @@ struct ProviderListView: View {
         }
         .padding(24)
         .settingsToast(message: viewModel.settingsMessage, dismiss: viewModel.clearSettingsMessage)
-        .sheet(item: $activeProvider) { provider in
-            providerSettingsSheet(provider)
+        .sheet(isPresented: Binding(
+            get: { activeProvider != nil },
+            set: { isPresented in
+                if !isPresented { activeProvider = nil }
+            }
+        )) {
+            if let activeProvider {
+                providerSettingsSheet(activeProvider)
+            }
         }
     }
 
@@ -46,19 +54,22 @@ struct ProviderListView: View {
 
     @ViewBuilder
     private func providerSettingsSheet(_ provider: ProviderRowState.ID) -> some View {
-        switch provider {
+        let row = viewModel.providerRows.first { $0.id == provider }
+        let providerType = row?.providerType ?? (provider.rawValue == ProviderRowState.ID.codex.rawValue ? AuthProfileType.codex : .claude)
+        switch providerType {
         case .claude:
-            let row = viewModel.providerRows.first { $0.id == .claude }
             ClaudeOAuthProviderSettingsSheet(
                 config: viewModel.config,
+                providerID: provider,
                 connectionDetail: row?.connectionDetail ?? "",
                 isConnected: row?.isConnected ?? false,
-                onDisconnect: { viewModel.disconnectProvider(.claude) },
+                onDisconnect: { viewModel.disconnectProvider(provider) },
                 checkCommandName: { functionName in
-                    await viewModel.commandNameAvailability(provider: .claude, functionName: functionName)
+                    await viewModel.commandNameAvailability(provider: provider, functionName: functionName)
                 },
                 save: { functionName, nickname, dangerousPermissionsEnabled in
                     try viewModel.saveClaudeOAuthSettings(
+                        provider: provider,
                         functionName: functionName,
                         nickname: nickname,
                         dangerousPermissionsEnabled: dangerousPermissionsEnabled
@@ -66,20 +77,21 @@ struct ProviderListView: View {
                 }
             )
         case .codex:
-            let row = viewModel.providerRows.first { $0.id == .codex }
             CodexProviderSettingsSheet(
                 config: viewModel.config,
+                providerID: provider,
                 connectionDetail: row?.connectionDetail ?? "",
                 isConnected: row?.isConnected ?? false,
                 availableModels: viewModel.availableCodexModels,
                 modelLoadingState: viewModel.codexModelLoadingState,
                 refreshModels: { Task { await viewModel.refreshCodexModels() } },
-                onDisconnect: { viewModel.disconnectProvider(.codex) },
+                onDisconnect: { viewModel.disconnectProvider(provider) },
                 checkCommandName: { functionName in
-                    await viewModel.commandNameAvailability(provider: .codex, functionName: functionName)
+                    await viewModel.commandNameAvailability(provider: provider, functionName: functionName)
                 },
                 save: { functionName, nickname, codex, dangerousPermissionsEnabled in
                     try viewModel.saveCodexSettings(
+                        provider: provider,
                         functionName: functionName,
                         nickname: nickname,
                         codex: codex,
@@ -127,8 +139,4 @@ private struct ProviderRowView: View {
         .padding(14)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
-}
-
-extension ProviderRowState.ID: Identifiable {
-    var id: String { rawValue }
 }

@@ -12,6 +12,7 @@ enum ProviderSettingsSheetMetrics {
 
 private struct AccountSheetChrome<Content: View, Footer: View>: View {
     let providerID: ProviderRowState.ID
+    var providerType: AuthProfileType? = nil
     let title: String
     let width: CGFloat
     var minHeight: CGFloat = ProviderSettingsSheetMetrics.defaultMinHeight
@@ -41,7 +42,7 @@ private struct AccountSheetChrome<Content: View, Footer: View>: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            ProviderAvatar(providerID: providerID, size: 28)
+            ProviderAvatar(providerID: providerID, providerType: providerType, size: 28)
             Text(title)
                 .font(.system(size: 13, weight: .semibold))
             Spacer()
@@ -326,20 +327,30 @@ struct OAuthSettingsInitialState: Equatable {
 }
 
 func oauthSettingsRecommendedFunctionName(provider: ProviderRowState.ID) -> String {
-    switch provider {
-    case .claude:
-        return AppConfig.default.commands.cc
-    case .codex:
-        return AppConfig.default.commands.ccodex
-    }
+    provider.rawValue == ProviderRowState.ID.codex.rawValue ? AppConfig.default.commands.ccodex : AppConfig.default.commands.cc
+}
+
+func oauthSettingsRecommendedFunctionName(providerType: AuthProfileType) -> String {
+    providerType == .codex ? AppConfig.default.commands.ccodex : AppConfig.default.commands.cc
 }
 
 func oauthSettingsInitialState(config: AppConfig, provider: ProviderRowState.ID, isInitialSetup: Bool) -> OAuthSettingsInitialState {
+    if let commandProfile = config.oauthCommandProfiles.first(where: { $0.id == provider.rawValue }) {
+        return OAuthSettingsInitialState(
+            functionName: isInitialSetup ? "" : commandProfile.commandName,
+            nickname: isInitialSetup ? "" : commandProfile.nickname,
+            dangerousPermissionsEnabled: isInitialSetup ? false : commandProfile.dangerousPermissionsEnabled
+        )
+    }
+    return oauthSettingsInitialState(config: config, providerType: provider.rawValue == ProviderRowState.ID.codex.rawValue ? .codex : .claude, isInitialSetup: isInitialSetup)
+}
+
+func oauthSettingsInitialState(config: AppConfig, providerType: AuthProfileType, isInitialSetup: Bool) -> OAuthSettingsInitialState {
     if isInitialSetup {
         return OAuthSettingsInitialState(functionName: "", nickname: "", dangerousPermissionsEnabled: false)
     }
 
-    switch provider {
+    switch providerType {
     case .claude:
         return OAuthSettingsInitialState(
             functionName: config.commands.cc,
@@ -356,11 +367,16 @@ func oauthSettingsInitialState(config: AppConfig, provider: ProviderRowState.ID,
 }
 
 func oauthSettingsDangerousPermissionDefault(config: AppConfig, isInitialSetup: Bool) -> Bool {
-    oauthSettingsInitialState(config: config, provider: .claude, isInitialSetup: isInitialSetup).dangerousPermissionsEnabled
+    oauthSettingsInitialState(config: config, providerType: .claude, isInitialSetup: isInitialSetup).dangerousPermissionsEnabled
 }
 
-func oauthSettingsInitialCodex(config: AppConfig, isInitialSetup: Bool) -> AppConfig.Codex {
-    isInitialSetup ? AppConfig.default.ccodex : config.ccodex
+func oauthSettingsInitialCodex(config: AppConfig, provider: ProviderRowState.ID? = nil, isInitialSetup: Bool) -> AppConfig.Codex {
+    if let provider,
+       let commandProfile = config.oauthCommandProfiles.first(where: { $0.id == provider.rawValue }),
+       let codex = commandProfile.codex {
+        return isInitialSetup ? AppConfig.default.ccodex : codex
+    }
+    return isInitialSetup ? AppConfig.default.ccodex : config.ccodex
 }
 
 func oauthSettingsShouldBlockInitialDisplay(isInitialSetup: Bool, availability: CommandNameAvailability) -> Bool {
@@ -380,6 +396,7 @@ struct ClaudeOAuthProviderSettingsSheet: View {
     @State private var saveErrorMessage: String?
     @State private var commandNameCheckState: CommandNameCheckState = .checking
     @State private var confirmRemove: Bool = false
+    let providerID: ProviderRowState.ID
     let connectionDetail: String
     let isConnected: Bool
     let onDisconnect: () -> Void
@@ -390,6 +407,7 @@ struct ClaudeOAuthProviderSettingsSheet: View {
 
     init(
         config: AppConfig,
+        providerID: ProviderRowState.ID = .claude,
         connectionDetail: String,
         isConnected: Bool,
         onDisconnect: @escaping () -> Void,
@@ -398,10 +416,11 @@ struct ClaudeOAuthProviderSettingsSheet: View {
         isInitialSetup: Bool = false,
         save: @escaping (String, String, Bool) throws -> Void
     ) {
-        let initialState = oauthSettingsInitialState(config: config, provider: .claude, isInitialSetup: isInitialSetup)
+        let initialState = oauthSettingsInitialState(config: config, provider: providerID, isInitialSetup: isInitialSetup)
         _functionName = State(initialValue: initialState.functionName)
         _nickname = State(initialValue: initialState.nickname)
         _dangerousPermissionsEnabled = State(initialValue: initialState.dangerousPermissionsEnabled)
+        self.providerID = providerID
         self.connectionDetail = connectionDetail
         self.isConnected = isConnected
         self.onDisconnect = onDisconnect
@@ -415,7 +434,8 @@ struct ClaudeOAuthProviderSettingsSheet: View {
         let meta = accountMeta(connectionDetail: connectionDetail, providerName: "Claude OAuth", isConnected: isConnected)
 
         AccountSheetChrome(
-            providerID: .claude,
+            providerID: providerID,
+            providerType: .claude,
             title: "Account Settings",
             width: 460,
             onClose: {
@@ -438,7 +458,7 @@ struct ClaudeOAuthProviderSettingsSheet: View {
                 CommandNameField(
                     value: $functionName,
                     checkState: commandNameCheckState,
-                    recommendedName: isInitialSetup ? oauthSettingsRecommendedFunctionName(provider: .claude) : nil
+                    recommendedName: isInitialSetup ? oauthSettingsRecommendedFunctionName(providerType: .claude) : nil
                 )
                 commandNameHelpText(
                     prefix: "The terminal command that launches Claude Code with this account.",
@@ -528,6 +548,7 @@ struct CodexProviderSettingsSheet: View {
     @State private var saveErrorMessage: String?
     @State private var commandNameCheckState: CommandNameCheckState = .checking
     @State private var confirmRemove: Bool = false
+    let providerID: ProviderRowState.ID
     let connectionDetail: String
     let isConnected: Bool
     let availableModels: [String]
@@ -543,6 +564,7 @@ struct CodexProviderSettingsSheet: View {
 
     init(
         config: AppConfig,
+        providerID: ProviderRowState.ID = .codex,
         connectionDetail: String,
         isConnected: Bool,
         availableModels: [String],
@@ -555,14 +577,15 @@ struct CodexProviderSettingsSheet: View {
         latestModel: @escaping () -> String? = { nil },
         save: @escaping (String, String, AppConfig.Codex, Bool) throws -> Void
     ) {
-        let initialState = oauthSettingsInitialState(config: config, provider: .codex, isInitialSetup: isInitialSetup)
-        let initialCodex = oauthSettingsInitialCodex(config: config, isInitialSetup: isInitialSetup)
+        let initialState = oauthSettingsInitialState(config: config, provider: providerID, isInitialSetup: isInitialSetup)
+        let initialCodex = oauthSettingsInitialCodex(config: config, provider: providerID, isInitialSetup: isInitialSetup)
         _functionName = State(initialValue: initialState.functionName)
         _nickname = State(initialValue: initialState.nickname)
         _opus = State(initialValue: initialCodex.opus)
         _sonnet = State(initialValue: initialCodex.sonnet)
         _haiku = State(initialValue: initialCodex.haiku)
         _dangerousPermissionsEnabled = State(initialValue: initialState.dangerousPermissionsEnabled)
+        self.providerID = providerID
         self.connectionDetail = connectionDetail
         self.isConnected = isConnected
         self.availableModels = availableModels
@@ -580,7 +603,8 @@ struct CodexProviderSettingsSheet: View {
         let meta = accountMeta(connectionDetail: connectionDetail, providerName: "Codex OAuth", isConnected: isConnected)
 
         AccountSheetChrome(
-            providerID: .codex,
+            providerID: providerID,
+            providerType: .codex,
             title: "Account Settings",
             width: 600,
             minHeight: ProviderSettingsSheetMetrics.codexHeight,
@@ -604,7 +628,7 @@ struct CodexProviderSettingsSheet: View {
                 CommandNameField(
                     value: $functionName,
                     checkState: commandNameCheckState,
-                    recommendedName: isInitialSetup ? oauthSettingsRecommendedFunctionName(provider: .codex) : nil
+                    recommendedName: isInitialSetup ? oauthSettingsRecommendedFunctionName(providerType: .codex) : nil
                 )
                 commandNameHelpText(
                     prefix: "The terminal command launches Claude Code routed through Codex.",
