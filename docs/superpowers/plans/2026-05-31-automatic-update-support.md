@@ -130,10 +130,7 @@ final class UpdaterConfigurationTests: XCTestCase {
     }
 
     private func repositoryRoot() -> URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
+        URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
     }
 }
 ```

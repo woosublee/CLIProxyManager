@@ -237,7 +237,7 @@ struct DashboardView: View {
     @ViewBuilder
     private func providerSettingsSheet(_ provider: ProviderRowState.ID, isInitialSetup: Bool) -> some View {
         let row = viewModel.providerRows.first { $0.id == provider }
-        let providerType = row?.providerType ?? (provider.rawValue == ProviderRowState.ID.codex.rawValue ? AuthProfileType.codex : .claude)
+        let providerType = row?.providerType ?? provider.inferredProviderType
         switch providerType {
         case .claude:
             ClaudeOAuthProviderSettingsSheet(

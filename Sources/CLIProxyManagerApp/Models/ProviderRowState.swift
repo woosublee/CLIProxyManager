@@ -14,6 +14,14 @@ struct ProviderRowID: Hashable, RawRepresentable, ExpressibleByStringLiteral, Cu
 
     var description: String { rawValue }
 
+    var inferredProviderType: AuthProfileType {
+        let lowercasedValue = rawValue.lowercased()
+        if lowercasedValue == AuthProfileType.codex.rawValue || lowercasedValue.hasPrefix("\(AuthProfileType.codex.rawValue)-") {
+            return .codex
+        }
+        return .claude
+    }
+
     static let claude = ProviderRowID(rawValue: "claude")
     static let codex = ProviderRowID(rawValue: "codex")
 }
@@ -68,6 +76,6 @@ struct ProviderRowState: Identifiable, Equatable {
     }
 
     private static func inferredProviderType(from id: ID) -> AuthProfileType {
-        id.rawValue.lowercased().contains("codex") ? .codex : .claude
+        id.inferredProviderType
     }
 }

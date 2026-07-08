@@ -95,7 +95,7 @@ private struct OAuthLoginProgressView: View {
     }
 
     private var providerName: String {
-        provider.rawValue == ProviderRowState.ID.codex.rawValue ? "Codex" : "Claude"
+        provider.inferredProviderType == .codex ? "Codex" : "Claude"
     }
 }
 

@@ -7,8 +7,8 @@
 ## Scope
 
 - 연결된 Claude OAuth, Codex OAuth 계정 카드에만 privacy 토글을 표시한다.
-- 각 계정 카드의 숨김/표시 상태는 provider별로 독립적으로 저장한다.
-- 앱 재실행 후에도 각 provider의 숨김/표시 상태를 유지한다.
+- 각 계정 카드의 숨김/표시 상태는 계정별(`authProfileID` 또는 `ProviderRowState.ID`)로 독립적으로 저장한다.
+- 앱 재실행 후에도 각 계정의 숨김/표시 상태를 유지한다.
 - 저장된 상태가 없는 새 계정은 기본적으로 숨김 상태로 시작한다.
 - 숨김 상태에서는 이메일 전체를 blur 처리한다.
 - 표시 상태에서는 이메일 원문을 그대로 보여준다.
@@ -47,12 +47,11 @@
 
 ## Configuration Model
 
-`AppConfig`에 provider별 privacy 상태를 저장하는 구조를 추가한다.
+`AppConfig`에 계정별 privacy 상태를 저장하는 구조를 추가한다. 저장 키는 `authProfileID` 또는 안정적인 `ProviderRowState.ID`를 사용한다.
 
 ```swift
 public struct AccountPrivacy: Codable, Equatable, Sendable {
-    public var claudeHidden: Bool
-    public var codexHidden: Bool
+    public var hiddenByAccountID: [String: Bool]
 }
 ```
 
@@ -62,10 +61,10 @@ public struct AccountPrivacy: Codable, Equatable, Sendable {
 public var accountPrivacy: AccountPrivacy
 ```
 
-기존 config 파일에는 `accountPrivacy`가 없으므로 decoding 시 기본값을 사용한다. 기본값은 모든 provider 숨김이다.
+기존 config 파일에는 `accountPrivacy`가 없으므로 decoding 시 기본값을 사용한다. 저장된 값이 없는 계정은 숨김으로 처리한다.
 
 ```swift
-AccountPrivacy(claudeHidden: true, codexHidden: true)
+AccountPrivacy(hiddenByAccountID: [:])
 ```
 
 `resetAllSettings()`는 사용자 계정과 command/nickname을 보존하는 기존 의도를 유지하되, privacy 설정은 일반 preference로 간주해 기본 숨김 상태로 reset한다.
@@ -74,9 +73,9 @@ AccountPrivacy(claudeHidden: true, codexHidden: true)
 
 `DashboardViewModel`은 provider row를 만들 때 config의 privacy 상태를 함께 반영한다.
 
-- Claude row는 `config.accountPrivacy.claudeHidden`을 사용한다.
-- Codex row는 `config.accountPrivacy.codexHidden`을 사용한다.
-- `toggleAccountDetailVisibility(_ provider: ProviderRowState.ID)`를 추가해 provider별 hidden 값을 반전하고 config를 저장한다.
+- 각 row는 `authProfileID` 또는 `ProviderRowState.ID`로 `config.accountPrivacy.hiddenByAccountID`를 조회한다.
+- 저장된 값이 없으면 기본 숨김 상태로 표시한다.
+- `toggleAccountDetailVisibility(_ provider: ProviderRowState.ID)`를 추가해 해당 계정의 hidden 값을 반전하고 config를 저장한다.
 - 저장 성공 후 `providerRows`를 다시 빌드한다.
 - 저장 실패 시 기존 settings toast 패턴으로 오류 메시지를 표시한다.
 
@@ -118,13 +117,13 @@ let toggleAccountDetailVisibility: () -> Void
 Core config tests:
 
 - 기존 config JSON에 `accountPrivacy`가 없어도 기본 숨김 값으로 decode되는지 확인한다.
-- `AppConfig.default.accountPrivacy`가 Claude와 Codex 모두 숨김인지 확인한다.
+- `AppConfig.default.accountPrivacy`가 빈 계정별 맵을 가지며, 값이 없는 계정은 숨김으로 해석되는지 확인한다.
 
 ViewModel tests:
 
-- 초기 provider rows가 config privacy 상태를 반영하는지 확인한다.
-- Claude 토글이 Claude hidden 값만 바꾸고 Codex 값은 유지하는지 확인한다.
-- Codex 토글이 Codex hidden 값만 바꾸고 Claude 값은 유지하는지 확인한다.
+- 초기 provider rows가 계정별 config privacy 상태를 반영하는지 확인한다.
+- 특정 Claude 계정 토글이 다른 Claude 계정 hidden 값은 유지하는지 확인한다.
+- 특정 Codex 계정 토글이 다른 Codex 계정 hidden 값은 유지하는지 확인한다.
 - 토글 저장 실패 시 settings message가 표시되는지 확인한다.
 
 Snapshot/model tests:
@@ -137,6 +136,6 @@ Snapshot/model tests:
 - 연결된 각 계정 카드에서 이메일 뒤에 눈 아이콘이 보인다.
 - 새 계정은 기본적으로 이메일 전체가 blur 처리된다.
 - 눈 아이콘을 누르면 해당 카드의 이메일만 표시/숨김 전환된다.
-- 전환 상태는 앱 재실행 후에도 provider별로 유지된다.
+- 전환 상태는 앱 재실행 후에도 계정별로 유지된다.
 - 숨김 상태의 아이콘은 `eye.slash`, 표시 상태의 아이콘은 `eye`다.
 - disconnected 계정 UI는 기존처럼 보이고 privacy 토글이 없다.

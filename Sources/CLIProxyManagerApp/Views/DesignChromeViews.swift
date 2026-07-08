@@ -148,7 +148,7 @@ struct ProviderAvatar: View {
     }
 
     private var resolvedProviderType: AuthProfileType {
-        providerType ?? (providerID.rawValue == ProviderRowState.ID.codex.rawValue ? .codex : .claude)
+        providerType ?? providerID.inferredProviderType
     }
 
     private var background: AnyShapeStyle {

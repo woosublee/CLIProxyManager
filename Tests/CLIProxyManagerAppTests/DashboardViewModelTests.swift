@@ -630,6 +630,38 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.completedOAuthLoginProvider, .claude)
     }
 
+    func testStartOAuthLoginUsesCodexForCustomCodexCommandProfileID() async throws {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex-work",
+                provider: .codex,
+                authProfileID: "codex-work.json",
+                commandName: "ccwork"
+            )
+        ]
+        let oauth = SuspendedOAuthLoginService()
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "codex-work.json", type: .codex, email: "work@example.com", accountID: nil, expired: nil, disabled: false)
+            ]),
+            oauthLoginService: oauth,
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        viewModel.startOAuthLogin(ProviderRowState.ID(rawValue: "codex-work"))
+        await oauth.waitUntilStarted()
+
+        XCTAssertEqual(oauth.providers, [.codex])
+        XCTAssertEqual(viewModel.activeOAuthLoginProvider, .codex)
+
+        oauth.complete()
+        try await Task.sleep(nanoseconds: 50_000_000)
+    }
+
     func testCancelOAuthLoginCancelsActiveProviderLogin() async throws {
         let authStore = StubAuthProfileStore(profiles: [])
         authStore.nextProfiles = [
@@ -763,6 +795,71 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(authStore.deleteInvocations, [])
         XCTAssertEqual(viewModel.providerRows.map(\.authProfileID), ["claude-work.json", "claude-personal.json"])
         XCTAssertEqual(viewModel.settingsMessage, "Claude OAuth auth file was not found.")
+    }
+
+    func testRemoveCustomCodexCommandProfileUsesCodexProviderType() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex-work",
+                provider: .codex,
+                authProfileID: "codex-work.json",
+                commandName: "ccwork"
+            )
+        ]
+        let store = StubConfigStore(config: config)
+        let authStore = StubAuthProfileStore(
+            profiles: [
+                AuthProfile(fileName: "codex-work.json", type: .codex, email: "work@example.com", accountID: nil, expired: nil, disabled: false)
+            ],
+            supportsIDDelete: true
+        )
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: authStore,
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        viewModel.removeProvider(ProviderRowState.ID(rawValue: "codex-work"))
+
+        XCTAssertEqual(authStore.deletedIDs, ["codex-work.json"])
+        XCTAssertEqual(authStore.deleteInvocations, [])
+        XCTAssertEqual(store.savedConfigs.last?.commands.cc, AppConfig.default.commands.cc)
+        XCTAssertEqual(store.savedConfigs.last?.commands.ccodex, AppConfig.default.commands.ccodex)
+        XCTAssertEqual(viewModel.settingsMessage, "Codex OAuth account was removed.")
+    }
+
+    func testDisconnectCustomCodexCommandProfileUsesCodexProviderType() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex-work",
+                provider: .codex,
+                authProfileID: "codex-work.json",
+                commandName: "ccwork"
+            )
+        ]
+        let authStore = StubAuthProfileStore(profiles: [
+            AuthProfile(fileName: "codex-work.json", type: .codex, email: "work@example.com", accountID: nil, expired: nil, disabled: false)
+        ])
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: authStore,
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        viewModel.disconnectProvider(ProviderRowState.ID(rawValue: "codex-work"))
+
+        XCTAssertEqual(authStore.disabledIDUpdates.map(\.id), ["codex-work.json"])
+        XCTAssertEqual(authStore.disabledIDUpdates.map(\.disabled), [true])
+        XCTAssertEqual(authStore.disabledUpdates, [])
+        XCTAssertEqual(viewModel.settingsMessage, "Codex OAuth connection was disabled. The auth file was not deleted.")
     }
 
     func testRemoveProviderResetsOnlyRemovedClaudeAccountPrivacy() {
@@ -1563,7 +1660,9 @@ private final class StubAuthProfileStore: AuthProfileManaging, @unchecked Sendab
     private var _profiles: [AuthProfile]
     private var _disabledUpdates: [DisabledUpdate] = []
     private var _disabledIDUpdates: [DisabledIDUpdate] = []
+    private var _deletedIDs: [String] = []
     private var _deleteInvocations: [AuthProfileType] = []
+    private let supportsIDDelete: Bool
     var nextProfiles: [AuthProfile]?
 
     var disabledUpdates: [DisabledUpdate] {
@@ -1574,12 +1673,17 @@ private final class StubAuthProfileStore: AuthProfileManaging, @unchecked Sendab
         lock.withLock { _disabledIDUpdates }
     }
 
+    var deletedIDs: [String] {
+        lock.withLock { _deletedIDs }
+    }
+
     var deleteInvocations: [AuthProfileType] {
         lock.withLock { _deleteInvocations }
     }
 
-    init(profiles: [AuthProfile]) {
+    init(profiles: [AuthProfile], supportsIDDelete: Bool = false) {
         self._profiles = profiles
+        self.supportsIDDelete = supportsIDDelete
     }
 
     func profiles() throws -> [AuthProfile] {
@@ -1589,6 +1693,18 @@ private final class StubAuthProfileStore: AuthProfileManaging, @unchecked Sendab
                 self.nextProfiles = nil
             }
             return _profiles
+        }
+    }
+
+    func delete(id: String) throws -> Bool {
+        lock.withLock {
+            guard supportsIDDelete,
+                  _profiles.contains(where: { $0.id == id }) else {
+                return false
+            }
+            _deletedIDs.append(id)
+            _profiles.removeAll { $0.id == id }
+            return true
         }
     }
 
@@ -1676,12 +1792,14 @@ private final class SuspendedOAuthLoginService: OAuthLoginStarting, @unchecked S
     private var hasCompleted = false
     private var _wasCancelled = false
     private var _invocationCount = 0
+    private var _providers: [OAuthLoginProvider] = []
 
     var wasCancelled: Bool { lock.withLock { _wasCancelled } }
     var invocationCount: Int { lock.withLock { _invocationCount } }
+    var providers: [OAuthLoginProvider] { lock.withLock { _providers } }
 
     func login(provider: OAuthLoginProvider, port: Int) async throws {
-        await markStarted()
+        await markStarted(provider)
         await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 lock.lock()
@@ -1738,10 +1856,11 @@ private final class SuspendedOAuthLoginService: OAuthLoginStarting, @unchecked S
         continuation?.resume()
     }
 
-    private func markStarted() async {
+    private func markStarted(_ provider: OAuthLoginProvider) async {
         await withCheckedContinuation { continuation in
             lock.lock()
             _invocationCount += 1
+            _providers.append(provider)
             hasStarted = true
             let waitingContinuation = startedContinuation
             startedContinuation = nil

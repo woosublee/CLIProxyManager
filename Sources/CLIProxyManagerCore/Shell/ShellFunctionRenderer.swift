@@ -53,6 +53,10 @@ public enum ShellCommandNameValidator {
 }
 
 public struct ShellFunctionRenderer: Sendable {
+    private static let defaultClaudeOpusModel = "claude-opus-4-7"
+    private static let defaultClaudeSonnetModel = "claude-sonnet-4-6"
+    private static let defaultClaudeHaikuModel = "claude-haiku-4-5-20251001"
+
     public struct EnabledFunctions: Sendable {
         public var claudeOAuth: Bool
         public var codex: Bool
@@ -135,9 +139,9 @@ public struct ShellFunctionRenderer: Sendable {
         let opusModel = config.ccodex.opus.modelIdentifier
         let sonnetModel = config.ccodex.sonnet.modelIdentifier
         let haikuModel = config.ccodex.haiku.modelIdentifier
-        let claudeOpusModel = "claude-opus-4-7"
-        let claudeSonnetModel = "claude-sonnet-4-6"
-        let claudeHaikuModel = "claude-haiku-4-5-20251001"
+        let claudeOpusModel = Self.defaultClaudeOpusModel
+        let claudeSonnetModel = Self.defaultClaudeSonnetModel
+        let claudeHaikuModel = Self.defaultClaudeHaikuModel
 
         var script = ""
         if enabledFunctions.claudeOAuth, hasCommandName(config.commands.cc) {
@@ -213,9 +217,9 @@ public struct ShellFunctionRenderer: Sendable {
         switch commandProfile.provider {
         case .claude:
             return (
-                prefixedModel("claude-opus-4-7", prefix: commandProfile.modelPrefix),
-                prefixedModel("claude-sonnet-4-6", prefix: commandProfile.modelPrefix),
-                prefixedModel("claude-haiku-4-5-20251001", prefix: commandProfile.modelPrefix)
+                prefixedModel(Self.defaultClaudeOpusModel, prefix: commandProfile.modelPrefix),
+                prefixedModel(Self.defaultClaudeSonnetModel, prefix: commandProfile.modelPrefix),
+                prefixedModel(Self.defaultClaudeHaikuModel, prefix: commandProfile.modelPrefix)
             )
         case .codex:
             let codex = commandProfile.codex ?? config.ccodex

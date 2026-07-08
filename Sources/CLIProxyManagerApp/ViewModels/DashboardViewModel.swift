@@ -402,7 +402,13 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func oauthProviderType(for provider: ProviderRowState.ID) -> AuthProfileType {
-        provider.rawValue == ProviderRowState.ID.codex.rawValue ? .codex : .claude
+        if let commandProfile = config.oauthCommandProfiles.first(where: { $0.id == provider.rawValue }) {
+            return commandProfile.provider
+        }
+        if let providerRow = providerRows.first(where: { $0.id == provider }) {
+            return providerRow.providerType
+        }
+        return provider.inferredProviderType
     }
 
     private func providerID(for providerType: AuthProfileType) -> ProviderRowState.ID {
@@ -1196,8 +1202,8 @@ final class DashboardViewModel: ObservableObject {
 
     private func savePrivacyOnlyConfig(_ updatedConfig: AppConfig) throws {
         let availableConfig = Self.persistedConfig(updatedConfig)
-        try configStore.save(availableConfig)
-        lastPersistedConfig = availableConfig
+        let oldConfig = config
+        let oldCards = cards
         config = availableConfig
         cards = ProfileCard.makeDefaultCards(config: availableConfig).map { card in
             switch card.id {
@@ -1219,7 +1225,20 @@ final class DashboardViewModel: ObservableObject {
         }
         rebuildOptionRows()
         rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
-        _ = try syncAuthProfilePrefixesForSave()
+
+        var prefixRollbacks: [AuthProfilePrefixRollback] = []
+        do {
+            prefixRollbacks = try syncAuthProfilePrefixesForSave()
+            try configStore.save(availableConfig)
+            lastPersistedConfig = availableConfig
+        } catch {
+            rollbackAuthProfilePrefixes(prefixRollbacks)
+            config = oldConfig
+            cards = oldCards
+            rebuildOptionRows()
+            rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
+            throw error
+        }
     }
 
     private func applyInitialShellInstall() {

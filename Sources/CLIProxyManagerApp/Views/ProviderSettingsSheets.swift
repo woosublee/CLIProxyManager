@@ -327,7 +327,7 @@ struct OAuthSettingsInitialState: Equatable {
 }
 
 func oauthSettingsRecommendedFunctionName(provider: ProviderRowState.ID) -> String {
-    provider.rawValue == ProviderRowState.ID.codex.rawValue ? AppConfig.default.commands.ccodex : AppConfig.default.commands.cc
+    oauthSettingsRecommendedFunctionName(providerType: provider.inferredProviderType)
 }
 
 func oauthSettingsRecommendedFunctionName(providerType: AuthProfileType) -> String {
@@ -342,7 +342,7 @@ func oauthSettingsInitialState(config: AppConfig, provider: ProviderRowState.ID,
             dangerousPermissionsEnabled: isInitialSetup ? false : commandProfile.dangerousPermissionsEnabled
         )
     }
-    return oauthSettingsInitialState(config: config, providerType: provider.rawValue == ProviderRowState.ID.codex.rawValue ? .codex : .claude, isInitialSetup: isInitialSetup)
+    return oauthSettingsInitialState(config: config, providerType: provider.inferredProviderType, isInitialSetup: isInitialSetup)
 }
 
 func oauthSettingsInitialState(config: AppConfig, providerType: AuthProfileType, isInitialSetup: Bool) -> OAuthSettingsInitialState {
