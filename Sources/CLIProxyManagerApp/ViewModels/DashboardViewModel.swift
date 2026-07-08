@@ -859,7 +859,7 @@ final class DashboardViewModel: ObservableObject {
         )
     }
 
-    private static func availableConfig(_ config: AppConfig) -> AppConfig {
+    static func availableConfig(_ config: AppConfig) -> AppConfig {
         var config = config
         config.showNotifications = false
         config.roundRobinEnabled = false

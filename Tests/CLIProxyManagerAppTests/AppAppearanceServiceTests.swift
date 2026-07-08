@@ -18,6 +18,19 @@ final class AppAppearanceServiceTests: XCTestCase {
         XCTAssertEqual(appearanceService.showDockIconValues, [true])
     }
 
+    func testLaunchBootstrapperAppliesSavedDockVisibilityBeforeDashboardStartup() {
+        var config = AppConfig.default
+        config.showDockIcon = false
+        let appearanceService = StubAppAppearanceService()
+
+        LaunchAppearanceBootstrapper(
+            configStore: StubConfigStore(config: config),
+            appAppearanceService: appearanceService
+        ).applySavedDockVisibility()
+
+        XCTAssertEqual(appearanceService.showDockIconValues, [false])
+    }
+
     func testStartAtLoginToggleCallsLoginServiceAndPersistsConfig() throws {
         let store = StubConfigStore(config: .default)
         let loginService = StubLoginItemService()
