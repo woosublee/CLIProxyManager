@@ -105,7 +105,11 @@ public struct ShellProfileInstaller: @unchecked Sendable {
         var searchStart = profile.startIndex
 
         while let blockRange = nextManagedBlockRange(in: profile, from: searchStart) {
-            updatedProfile += profile[searchStart..<blockRange.lowerBound]
+            if profile[blockRange].components(separatedBy: .newlines).contains(sourceLine) {
+                updatedProfile += profile[searchStart..<blockRange.lowerBound]
+            } else {
+                updatedProfile += profile[searchStart..<blockRange.upperBound]
+            }
             searchStart = blockRange.upperBound
         }
 
