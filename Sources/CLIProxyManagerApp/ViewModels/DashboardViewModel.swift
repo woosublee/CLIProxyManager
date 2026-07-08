@@ -1261,17 +1261,20 @@ final class DashboardViewModel: ObservableObject {
 
     private func enabledShellFunctions(in config: AppConfig) -> AutomaticShellInstallService.EnabledFunctions {
         let enabledProfiles = renderableOAuthCommandProfiles(in: config)
+        let enabledRoundRobinProfiles = renderableRoundRobinProfiles(in: config)
         return AutomaticShellInstallService.EnabledFunctions(
-            claudeOAuth: enabledProfiles.contains { $0.provider == .claude },
-            codex: enabledProfiles.contains { $0.provider == .codex },
+            claudeOAuth: enabledProfiles.contains { $0.provider == .claude } || enabledRoundRobinProfiles.contains { $0.provider == .claude },
+            codex: enabledProfiles.contains { $0.provider == .codex } || enabledRoundRobinProfiles.contains { $0.provider == .codex },
             claudeAPI: false
         )
     }
 
     private func activeFunctionNames(in config: AppConfig) -> [String] {
-        renderableOAuthCommandProfiles(in: config)
+        let oauthNames = renderableOAuthCommandProfiles(in: config)
             .map { normalizeCommandName($0.commandName) }
-            .filter { !$0.isEmpty }
+        let roundRobinNames = renderableRoundRobinProfiles(in: config)
+            .map { normalizeCommandName($0.commandName) }
+        return (oauthNames + roundRobinNames).filter { !$0.isEmpty }
     }
 
     private func renderableOAuthCommandProfiles(in config: AppConfig) -> [AppConfig.OAuthCommandProfile] {
@@ -1283,6 +1286,17 @@ final class DashboardViewModel: ObservableObject {
                 return false
             }
             return true
+        }
+    }
+
+    private func renderableRoundRobinProfiles(in config: AppConfig) -> [AppConfig.RoundRobinProfile] {
+        let authProfilesByID = Dictionary(uniqueKeysWithValues: authProfiles.map { ($0.id, $0) })
+        return config.roundRobinProfiles.filter { profile in
+            guard profile.isEnabled else { return false }
+            return profile.includedAuthProfileIDs.contains { authProfileID in
+                guard let authProfile = authProfilesByID[authProfileID] else { return false }
+                return authProfile.type == profile.provider && !authProfile.disabled
+            }
         }
     }
 

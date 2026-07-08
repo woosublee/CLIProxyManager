@@ -118,6 +118,30 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
         XCTAssertFalse(installer.installedScript?.contains("ccapi() {") == true)
     }
 
+    func testApplyIncludesRoundRobinNameWithoutBlankLegacyName() throws {
+        var config = AppConfig.default
+        config.roundRobinProfiles = [
+            AppConfig.RoundRobinProfile(
+                id: "codex-default",
+                provider: .codex,
+                isEnabled: true,
+                commandName: "ccodex",
+                includedAuthProfileIDs: ["codex-a.json", "codex-b.json"]
+            )
+        ]
+        let installer = StubShellInstaller()
+        let service = AutomaticShellInstallService(
+            installer: installer,
+            secretStore: FailingSecretStore(error: SecretStoreError.missingSecret(SecretKey.claudeAPIKey.rawValue)),
+            helperCommand: "/usr/local/bin/cliproxy-manager"
+        )
+
+        try service.apply(config: config)
+
+        XCTAssertEqual(installer.installedFunctionNames, ["ccodex"])
+        XCTAssertTrue(installer.installedScript?.contains("ccodex() {") == true)
+    }
+
     func testApplyIncludesClaudeAPIWhenSecretExists() throws {
         let installer = StubShellInstaller()
         let service = AutomaticShellInstallService(

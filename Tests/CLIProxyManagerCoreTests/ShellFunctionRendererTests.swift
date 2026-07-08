@@ -216,6 +216,60 @@ final class ShellFunctionRendererTests: XCTestCase {
         XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='gpt-5.5(xhigh)'"))
     }
 
+    func testRenderIncludesEnabledRoundRobinFunction() throws {
+        var config = configuredCommands()
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "codex-fast", provider: .codex, authProfileID: "codex-fast.json", commandName: "ccfast", modelPrefix: "codex-fast"),
+            AppConfig.OAuthCommandProfile(id: "codex-deep", provider: .codex, authProfileID: "codex-deep.json", commandName: "ccdeep", modelPrefix: "codex-deep")
+        ]
+        config.roundRobinProfiles = [
+            AppConfig.RoundRobinProfile(
+                id: "codex-default",
+                provider: .codex,
+                isEnabled: true,
+                commandName: "ccodex",
+                includedAuthProfileIDs: ["codex-fast.json", "codex-deep.json"],
+                dangerousPermissionsEnabled: true,
+                codex: AppConfig.default.ccodex
+            )
+        ]
+
+        let script = try ShellFunctionRenderer(config: config, helperCommand: "/usr/local/bin/cliproxy-manager").render()
+
+        XCTAssertTrue(script.contains("ccfast() {"))
+        XCTAssertTrue(script.contains("ccdeep() {"))
+        XCTAssertTrue(script.contains("ccodex() {"))
+        XCTAssertTrue(script.contains("routing next 'codex-default'"))
+        XCTAssertTrue(script.contains("eval \"$routing_env\""))
+        XCTAssertTrue(script.contains("claude --dangerously-skip-permissions \"$@\""))
+    }
+
+    func testRenderSkipsDisabledRoundRobinFunction() throws {
+        var config = configuredCommands()
+        config.roundRobinProfiles = [
+            AppConfig.RoundRobinProfile(id: "codex-default", provider: .codex, isEnabled: false, commandName: "ccrr")
+        ]
+
+        let script = try ShellFunctionRenderer(config: config, helperCommand: "/usr/local/bin/cliproxy-manager").render()
+
+        XCTAssertFalse(script.contains("ccrr() {"))
+        XCTAssertFalse(script.contains("routing next codex-default"))
+    }
+
+    func testRoundRobinCommandNameConflictsWithFixedCommandName() throws {
+        var config = configuredCommands()
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "codex-fast", provider: .codex, authProfileID: "codex-fast.json", commandName: "same", modelPrefix: "codex-fast")
+        ]
+        config.roundRobinProfiles = [
+            AppConfig.RoundRobinProfile(id: "codex-default", provider: .codex, isEnabled: true, commandName: "same", includedAuthProfileIDs: ["codex-fast.json", "codex-deep.json"])
+        ]
+
+        XCTAssertThrowsError(try ShellFunctionRenderer(config: config, helperCommand: "/usr/local/bin/cliproxy-manager").render()) { error in
+            XCTAssertEqual(error as? ShellFunctionRendererError, .duplicateFunctionNames(["same"]))
+        }
+    }
+
     func testRenderUsesConfiguredCodexRoleSettings() throws {
         var config = configuredCommands()
         config.port = 18_888

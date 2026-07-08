@@ -271,6 +271,30 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(availability, .unavailable("Command name `same` is already used by another provider."))
     }
 
+    func testCommandNameAvailabilityReportsDuplicateRoundRobinNames() async {
+        var config = AppConfig.default
+        config.roundRobinProfiles = [
+            AppConfig.RoundRobinProfile(
+                id: "codex-default",
+                provider: .codex,
+                isEnabled: true,
+                commandName: "same",
+                includedAuthProfileIDs: ["codex.json", "codex-team.json"]
+            )
+        ]
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile(), codexProfile()]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        let availability = await viewModel.commandNameAvailability(provider: .claude, functionName: "same")
+
+        XCTAssertEqual(availability, .unavailable("Command name `same` is already used by another provider."))
+    }
+
     func testSaveClaudeOAuthSettingsRejectsDuplicateActiveProviderNames() throws {
         var config = AppConfig.default
         config.commands.ccodex = "same"
@@ -441,6 +465,34 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(installer.validatedFunctionNames, [])
         XCTAssertEqual(installer.installedFunctionNames, ["cc", "ccd123"])
         XCTAssertTrue(installer.installedScript?.contains("ccd123() {") == true)
+        XCTAssertFalse(viewModel.settingsMessage?.contains("Cannot install shell functions") == true)
+    }
+
+    func testInitialShellInstallIncludesRoundRobinFunctionWhenOnlyRoundRobinCommandExists() {
+        var config = AppConfig.default
+        config.roundRobinProfiles = [
+            AppConfig.RoundRobinProfile(
+                id: "codex-default",
+                provider: .codex,
+                isEnabled: true,
+                commandName: "ccodex",
+                includedAuthProfileIDs: ["codex.json"]
+            )
+        ]
+        let installer = StubShellInstaller()
+        let automaticInstaller = AutomaticShellInstallService(installer: installer)
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: installer,
+            authProfileStore: StubAuthProfileStore(profiles: [codexProfile()]),
+            automaticShellInstallService: automaticInstaller,
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        XCTAssertEqual(installer.installedFunctionNames, ["ccodex"])
+        XCTAssertTrue(installer.installedScript?.contains("ccodex() {") == true)
+        XCTAssertTrue(installer.installedScript?.contains("routing next 'codex-default'") == true)
         XCTAssertFalse(viewModel.settingsMessage?.contains("Cannot install shell functions") == true)
     }
 

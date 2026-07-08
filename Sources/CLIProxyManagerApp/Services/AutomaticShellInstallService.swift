@@ -59,32 +59,50 @@ struct AutomaticShellInstallService: Sendable {
     private func shouldIncludeOAuth(provider: AuthProfileType, config: AppConfig, enabled: Bool) -> Bool {
         guard enabled else { return false }
         if config.oauthCommandProfiles.isEmpty {
+            let hasLegacyCommand: Bool
             switch provider {
             case .claude:
-                return !config.commands.cc.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                hasLegacyCommand = !config.commands.cc.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             case .codex:
-                return !config.commands.ccodex.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                hasLegacyCommand = !config.commands.ccodex.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             }
+            if hasLegacyCommand { return true }
         }
-        return config.oauthCommandProfiles.contains { commandProfile in
+
+        let hasFixedCommand = config.oauthCommandProfiles.contains { commandProfile in
             commandProfile.provider == provider
                 && commandProfile.isEnabled
                 && !commandProfile.commandName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
+        let hasRoundRobinCommand = config.roundRobinProfiles.contains { roundRobinProfile in
+            roundRobinProfile.provider == provider
+                && roundRobinProfile.isEnabled
+                && !roundRobinProfile.commandName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        return hasFixedCommand || hasRoundRobinCommand
     }
 
     private func oauthFunctionNames(config: AppConfig, includeClaudeOAuth: Bool, includeCodex: Bool) -> [String] {
+        var names: [String]
         if config.oauthCommandProfiles.isEmpty {
-            var names: [String] = []
-            if includeClaudeOAuth { names.append(config.commands.cc) }
-            if includeCodex { names.append(config.commands.ccodex) }
-            return names
+            names = []
+            let claudeCommandName = config.commands.cc.trimmingCharacters(in: .whitespacesAndNewlines)
+            let codexCommandName = config.commands.ccodex.trimmingCharacters(in: .whitespacesAndNewlines)
+            if includeClaudeOAuth, !claudeCommandName.isEmpty { names.append(claudeCommandName) }
+            if includeCodex, !codexCommandName.isEmpty { names.append(codexCommandName) }
+        } else {
+            names = config.oauthCommandProfiles.compactMap { commandProfile in
+                let included = commandProfile.provider == .claude ? includeClaudeOAuth : includeCodex
+                let commandName = commandProfile.commandName.trimmingCharacters(in: .whitespacesAndNewlines)
+                return included && commandProfile.isEnabled && !commandName.isEmpty ? commandName : nil
+            }
         }
-        return config.oauthCommandProfiles.compactMap { commandProfile in
-            let included = commandProfile.provider == .claude ? includeClaudeOAuth : includeCodex
-            let commandName = commandProfile.commandName.trimmingCharacters(in: .whitespacesAndNewlines)
-            return included && commandProfile.isEnabled && !commandName.isEmpty ? commandName : nil
-        }
+        names.append(contentsOf: config.roundRobinProfiles.compactMap { profile in
+            let included = profile.provider == .claude ? includeClaudeOAuth : includeCodex
+            let commandName = profile.commandName.trimmingCharacters(in: .whitespacesAndNewlines)
+            return included && profile.isEnabled && !commandName.isEmpty ? commandName : nil
+        })
+        return names
     }
 
     private func hasClaudeAPIKey() throws -> Bool {
