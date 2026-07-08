@@ -43,7 +43,6 @@ private struct RoundRobinProviderSettingsCard: View {
     let provider: AuthProfileType
     @State private var state: RoundRobinSettingsState
     @State private var commandNameCheckState: CommandNameAvailability = .available
-    @State private var saveErrorMessage: String?
 
     init(viewModel: DashboardViewModel, provider: AuthProfileType) {
         self.viewModel = viewModel
@@ -65,7 +64,6 @@ private struct RoundRobinProviderSettingsCard: View {
         }
         .padding(14)
         .glassCard(cornerRadius: 10, opacity: 0.04)
-        .settingsToast(message: saveErrorMessage, dismiss: { saveErrorMessage = nil })
         .task(id: state.profile.commandName) {
             await updateCommandAvailability()
         }
