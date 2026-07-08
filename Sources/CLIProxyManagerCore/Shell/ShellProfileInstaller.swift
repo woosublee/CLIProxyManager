@@ -105,7 +105,11 @@ public struct ShellProfileInstaller: @unchecked Sendable {
         var searchStart = profile.startIndex
 
         while let blockRange = nextManagedBlockRange(in: profile, from: searchStart) {
-            updatedProfile += profile[searchStart..<blockRange.lowerBound]
+            if profile[blockRange].components(separatedBy: .newlines).contains(sourceLine) {
+                updatedProfile += profile[searchStart..<blockRange.lowerBound]
+            } else {
+                updatedProfile += profile[searchStart..<blockRange.upperBound]
+            }
             searchStart = blockRange.upperBound
         }
 
@@ -114,8 +118,14 @@ public struct ShellProfileInstaller: @unchecked Sendable {
     }
 
     private func containsManagedBlock(in profile: String) -> Bool {
-        guard let blockRange = nextManagedBlockRange(in: profile, from: profile.startIndex) else { return false }
-        return profile[blockRange].components(separatedBy: .newlines).contains(sourceLine)
+        var searchStart = profile.startIndex
+        while let blockRange = nextManagedBlockRange(in: profile, from: searchStart) {
+            if profile[blockRange].components(separatedBy: .newlines).contains(sourceLine) {
+                return true
+            }
+            searchStart = blockRange.upperBound
+        }
+        return false
     }
 
     private func nextManagedBlockRange(in profile: String, from startIndex: String.Index) -> Range<String.Index>? {

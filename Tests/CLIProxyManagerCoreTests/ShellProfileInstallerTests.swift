@@ -79,6 +79,32 @@ final class ShellProfileInstallerTests: XCTestCase {
         XCTAssertTrue(profile.contains("after\n"))
     }
 
+    func testInstallPreservesManagedSourceForOtherEnvironment() throws {
+        let sandbox = try makeSandbox()
+        let zshrcFile = sandbox.appendingPathComponent(".zshrc")
+        let productionPaths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let developmentPaths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed/dev"))
+        let productionSourceLine = "source '\(productionPaths.functionsFile.path)'"
+        let developmentSourceLine = "source '\(developmentPaths.functionsFile.path)'"
+        try """
+        before
+        # >>> CLIProxyAPI Manager >>>
+        \(productionSourceLine)
+        # <<< CLIProxyAPI Manager <<<
+        after
+        """.write(to: zshrcFile, atomically: true, encoding: .utf8)
+        let installer = ShellProfileInstaller(paths: developmentPaths, zshrcFile: zshrcFile)
+
+        try installer.install(functionScript: "ccdev() {}\n")
+
+        let profile = try String(contentsOf: zshrcFile, encoding: .utf8)
+        XCTAssertEqual(profile.components(separatedBy: "# >>> CLIProxyAPI Manager >>>").count - 1, 2)
+        XCTAssertEqual(profile.components(separatedBy: productionSourceLine).count - 1, 1)
+        XCTAssertEqual(profile.components(separatedBy: developmentSourceLine).count - 1, 1)
+        XCTAssertEqual(profile.components(separatedBy: "# <<< CLIProxyAPI Manager <<<").count - 1, 2)
+        XCTAssertTrue(profile.contains("before\n"))
+        XCTAssertTrue(profile.contains("after\n"))
+    }
 
     func testInstallAllowsDefaultNamesWhenOnlyInstallingSourceBlock() throws {
         let sandbox = try makeSandbox()
@@ -296,6 +322,38 @@ final class ShellProfileInstallerTests: XCTestCase {
         XCTAssertTrue(profile.contains("# unrelated\n"))
     }
 
+    func testUninstallPreservesManagedSourceForOtherEnvironment() throws {
+        let sandbox = try makeSandbox()
+        let zshrcFile = sandbox.appendingPathComponent(".zshrc")
+        let productionPaths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let developmentPaths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed/dev"))
+        let productionSourceLine = "source '\(productionPaths.functionsFile.path)'"
+        let developmentSourceLine = "source '\(developmentPaths.functionsFile.path)'"
+        try """
+        before
+        # >>> CLIProxyAPI Manager >>>
+        \(productionSourceLine)
+        # <<< CLIProxyAPI Manager <<<
+        middle
+        # >>> CLIProxyAPI Manager >>>
+        \(developmentSourceLine)
+        # <<< CLIProxyAPI Manager <<<
+        after
+        """.write(to: zshrcFile, atomically: true, encoding: .utf8)
+        let installer = ShellProfileInstaller(paths: developmentPaths, zshrcFile: zshrcFile)
+
+        try installer.uninstall()
+
+        let profile = try String(contentsOf: zshrcFile, encoding: .utf8)
+        XCTAssertEqual(profile.components(separatedBy: "# >>> CLIProxyAPI Manager >>>").count - 1, 1)
+        XCTAssertEqual(profile.components(separatedBy: productionSourceLine).count - 1, 1)
+        XCTAssertEqual(profile.components(separatedBy: developmentSourceLine).count - 1, 0)
+        XCTAssertEqual(profile.components(separatedBy: "# <<< CLIProxyAPI Manager <<<").count - 1, 1)
+        XCTAssertTrue(profile.contains("before\n"))
+        XCTAssertTrue(profile.contains("middle\n"))
+        XCTAssertTrue(profile.contains("after"))
+    }
+
     func testUninstallKeepsUnrelatedLegacyMarkerLine() throws {
         let sandbox = try makeSandbox()
         let zshrcFile = sandbox.appendingPathComponent(".zshrc")
@@ -327,6 +385,26 @@ final class ShellProfileInstallerTests: XCTestCase {
         XCTAssertTrue(installer.isInstalled())
         try installer.uninstall()
         XCTAssertFalse(installer.isInstalled())
+    }
+
+    func testIsInstalledFindsCurrentSourceAfterOtherEnvironmentBlock() throws {
+        let sandbox = try makeSandbox()
+        let zshrcFile = sandbox.appendingPathComponent(".zshrc")
+        let productionPaths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let developmentPaths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed/dev"))
+        let productionSourceLine = "source '\(productionPaths.functionsFile.path)'"
+        let developmentSourceLine = "source '\(developmentPaths.functionsFile.path)'"
+        try """
+        # >>> CLIProxyAPI Manager >>>
+        \(productionSourceLine)
+        # <<< CLIProxyAPI Manager <<<
+        # >>> CLIProxyAPI Manager >>>
+        \(developmentSourceLine)
+        # <<< CLIProxyAPI Manager <<<
+        """.write(to: zshrcFile, atomically: true, encoding: .utf8)
+        let installer = ShellProfileInstaller(paths: developmentPaths, zshrcFile: zshrcFile)
+
+        XCTAssertTrue(installer.isInstalled())
     }
 
     private func makeSandbox() throws -> URL {
