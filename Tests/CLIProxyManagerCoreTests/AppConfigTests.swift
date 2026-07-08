@@ -23,6 +23,7 @@ final class AppConfigTests: XCTestCase {
         XCTAssertTrue(config.showMenuBarIcon)
         XCTAssertFalse(config.showNotifications)
         XCTAssertFalse(config.roundRobinEnabled)
+        XCTAssertEqual(config.roundRobinProfiles, [])
     }
 
     func testDecodedConfigPreservesSavedCommandNamesAndClaudeAPIModel() throws {
@@ -181,6 +182,124 @@ final class AppConfigTests: XCTestCase {
 
         XCTAssertFalse(config.showNotifications)
         XCTAssertFalse(config.roundRobinEnabled)
+        XCTAssertEqual(config.roundRobinProfiles, [])
+    }
+
+    func testRoundRobinProfilesDecodeAndEncodeRoundTrip() throws {
+        let data = Data(#"""
+        {
+          "port": 18317,
+          "commands": { "cc": "cc", "ccapi": "ccapi", "ccodex": "ccodex" },
+          "ccapi": { "model": "claude-opus-4-8" },
+          "ccodex": {
+            "opus": { "model": "gpt-5.5", "reasoning": "xhigh", "contextWindow": "auto" },
+            "sonnet": { "model": "gpt-5.5", "reasoning": "medium", "contextWindow": "auto" },
+            "haiku": { "model": "gpt-5.5", "reasoning": "low", "contextWindow": "auto" }
+          },
+          "includeDangerouslySkipPermissions": false,
+          "startAtLogin": false,
+          "showDockIcon": true,
+          "showMenuBarIcon": true,
+          "roundRobinProfiles": [
+            {
+              "id": "codex-default",
+              "provider": "codex",
+              "isEnabled": true,
+              "commandName": "ccodexrr",
+              "nickname": "Codex Pool",
+              "includedAuthProfileIDs": ["codex-fast.json", "codex-deep.json"],
+              "accountDetailHidden": false,
+              "dangerousPermissionsEnabled": true,
+              "codex": {
+                "opus": { "model": "gpt-5.6", "reasoning": "xhigh", "contextWindow": "1m" },
+                "sonnet": { "model": "gpt-5.6", "reasoning": "medium", "contextWindow": "400k" },
+                "haiku": { "model": "gpt-5.6-mini", "reasoning": "low", "contextWindow": "200k" }
+              }
+            }
+          ]
+        }
+        """#.utf8)
+
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+        let encoded = try JSONEncoder().encode(decoded)
+        let roundTripped = try JSONDecoder().decode(AppConfig.self, from: encoded)
+
+        XCTAssertEqual(roundTripped.roundRobinProfiles, decoded.roundRobinProfiles)
+        XCTAssertEqual(roundTripped.roundRobinProfiles, [
+            AppConfig.RoundRobinProfile(
+                id: "codex-default",
+                provider: .codex,
+                isEnabled: true,
+                commandName: "ccodexrr",
+                nickname: "Codex Pool",
+                includedAuthProfileIDs: ["codex-fast.json", "codex-deep.json"],
+                accountDetailHidden: false,
+                dangerousPermissionsEnabled: true,
+                codex: AppConfig.Codex(
+                    opus: AppConfig.CodexRole(model: "gpt-5.6", reasoning: .xhigh, contextWindow: .context1m),
+                    sonnet: AppConfig.CodexRole(model: "gpt-5.6", reasoning: .medium, contextWindow: .context400k),
+                    haiku: AppConfig.CodexRole(model: "gpt-5.6-mini", reasoning: .low, contextWindow: .context200k)
+                )
+            )
+        ])
+    }
+
+    func testMissingRoundRobinProfilesDecodesToEmptyArray() throws {
+        let data = Data(#"""
+        {
+          "port": 18317,
+          "commands": { "cc": "cc", "ccapi": "ccapi", "ccodex": "ccodex" },
+          "ccapi": { "model": "claude-opus-4-8" },
+          "ccodex": {
+            "opus": { "model": "gpt-5.5", "reasoning": "xhigh", "contextWindow": "auto" },
+            "sonnet": { "model": "gpt-5.5", "reasoning": "medium", "contextWindow": "auto" },
+            "haiku": { "model": "gpt-5.5", "reasoning": "low", "contextWindow": "auto" }
+          },
+          "includeDangerouslySkipPermissions": false,
+          "startAtLogin": false,
+          "showDockIcon": true,
+          "showMenuBarIcon": true
+        }
+        """#.utf8)
+
+        let config = try JSONDecoder().decode(AppConfig.self, from: data)
+
+        XCTAssertEqual(config.roundRobinProfiles, [])
+    }
+
+    func testRoundRobinProfileDefaultsWhenOptionalFieldsAreMissing() throws {
+        let data = Data(#"""
+        {
+          "port": 18317,
+          "commands": { "cc": "cc", "ccapi": "ccapi", "ccodex": "ccodex" },
+          "ccapi": { "model": "claude-opus-4-8" },
+          "ccodex": {
+            "opus": { "model": "gpt-5.5", "reasoning": "xhigh", "contextWindow": "auto" },
+            "sonnet": { "model": "gpt-5.5", "reasoning": "medium", "contextWindow": "auto" },
+            "haiku": { "model": "gpt-5.5", "reasoning": "low", "contextWindow": "auto" }
+          },
+          "includeDangerouslySkipPermissions": false,
+          "startAtLogin": false,
+          "showDockIcon": true,
+          "showMenuBarIcon": true,
+          "roundRobinProfiles": [
+            {
+              "id": "claude-default",
+              "provider": "claude",
+              "isEnabled": true,
+              "commandName": "ccrr",
+              "includedAuthProfileIDs": ["claude-work.json", "claude-personal.json"]
+            }
+          ]
+        }
+        """#.utf8)
+
+        let config = try JSONDecoder().decode(AppConfig.self, from: data)
+
+        XCTAssertEqual(config.roundRobinProfiles.first?.nickname, "")
+        XCTAssertEqual(config.roundRobinProfiles.first?.accountDetailHidden, true)
+        XCTAssertEqual(config.roundRobinProfiles.first?.dangerousPermissionsEnabled, false)
+        XCTAssertNil(config.roundRobinProfiles.first?.codex)
     }
 
     func testOAuthCommandProfilesDecodeAndEncodeRoundTrip() throws {
