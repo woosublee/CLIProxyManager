@@ -476,7 +476,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
                 provider: .codex,
                 isEnabled: true,
                 commandName: "ccodex",
-                includedAuthProfileIDs: ["codex.json"]
+                includedAuthProfileIDs: ["codex.json", "codex-team.json"]
             )
         ]
         let installer = StubShellInstaller()
@@ -484,7 +484,10 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: config),
             shellInstaller: installer,
-            authProfileStore: StubAuthProfileStore(profiles: [codexProfile()]),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                codexProfile(),
+                AuthProfile(fileName: "codex-team.json", type: .codex, email: "team@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-team")
+            ]),
             automaticShellInstallService: automaticInstaller,
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector()
@@ -494,6 +497,199 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertTrue(installer.installedScript?.contains("ccodex() {") == true)
         XCTAssertTrue(installer.installedScript?.contains("routing next 'codex-default'") == true)
         XCTAssertFalse(viewModel.settingsMessage?.contains("Cannot install shell functions") == true)
+    }
+
+    func testRoundRobinSettingsAvailableForTwoEnabledCodexProfiles() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "codex-fast", provider: .codex, authProfileID: "codex-fast.json", commandName: "ccfast", modelPrefix: "codex-fast"),
+            AppConfig.OAuthCommandProfile(id: "codex-deep", provider: .codex, authProfileID: "codex-deep.json", commandName: "ccdeep", modelPrefix: "codex-deep")
+        ]
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "codex-fast.json", type: .codex, email: "fast@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-fast"),
+                AuthProfile(fileName: "codex-deep.json", type: .codex, email: "deep@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-deep")
+            ]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        let state = viewModel.roundRobinSettings(for: .codex)
+
+        XCTAssertEqual(state.profile.id, "codex-default")
+        XCTAssertEqual(state.profile.provider, .codex)
+        XCTAssertEqual(state.profile.commandName, "ccodex")
+        XCTAssertEqual(state.profile.includedAuthProfileIDs, ["codex-fast.json", "codex-deep.json"])
+        XCTAssertEqual(state.availability, .available(count: 2))
+    }
+
+    func testRoundRobinSettingsUnavailableForOneSelectedProfile() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "codex-fast", provider: .codex, authProfileID: "codex-fast.json", commandName: "ccfast", modelPrefix: "codex-fast"),
+            AppConfig.OAuthCommandProfile(id: "codex-deep", provider: .codex, authProfileID: "codex-deep.json", commandName: "ccdeep", modelPrefix: "codex-deep")
+        ]
+        config.roundRobinProfiles = [
+            AppConfig.RoundRobinProfile(id: "codex-default", provider: .codex, isEnabled: false, commandName: "ccodex", includedAuthProfileIDs: ["codex-fast.json"])
+        ]
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "codex-fast.json", type: .codex, email: "fast@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-fast"),
+                AuthProfile(fileName: "codex-deep.json", type: .codex, email: "deep@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-deep")
+            ]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        XCTAssertEqual(viewModel.roundRobinSettings(for: .codex).availability, .insufficientSelectedAccounts(count: 1))
+    }
+
+    func testRoundRobinSettingsUpdatingProfileRecomputesAvailabilityFromSelectedIDs() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "codex-fast", provider: .codex, authProfileID: "codex-fast.json", commandName: "ccfast", modelPrefix: "codex-fast"),
+            AppConfig.OAuthCommandProfile(id: "codex-deep", provider: .codex, authProfileID: "codex-deep.json", commandName: "ccdeep", modelPrefix: "codex-deep")
+        ]
+        config.roundRobinProfiles = [
+            AppConfig.RoundRobinProfile(id: "codex-default", provider: .codex, commandName: "ccodex", includedAuthProfileIDs: ["codex-fast.json"])
+        ]
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "codex-fast.json", type: .codex, email: "fast@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-fast"),
+                AuthProfile(fileName: "codex-deep.json", type: .codex, email: "deep@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-deep")
+            ]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+        var profile = viewModel.roundRobinSettings(for: .codex).profile
+        profile.includedAuthProfileIDs.append("codex-deep.json")
+
+        XCTAssertEqual(viewModel.roundRobinSettings(updating: profile).availability, .available(count: 2))
+    }
+
+    func testRoundRobinSettingsUsesAuthPrefixWhenCommandProfilePrefixIsBlank() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "codex-fast", provider: .codex, authProfileID: "codex-fast.json", commandName: "ccfast", modelPrefix: ""),
+            AppConfig.OAuthCommandProfile(id: "codex-deep", provider: .codex, authProfileID: "codex-deep.json", commandName: "ccdeep", modelPrefix: "")
+        ]
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "codex-fast.json", type: .codex, email: "fast@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-fast"),
+                AuthProfile(fileName: "codex-deep.json", type: .codex, email: "deep@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-deep")
+            ]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        XCTAssertEqual(viewModel.roundRobinSettings(for: .codex).availability, .available(count: 2))
+    }
+
+    func testRoundRobinSettingsToleratesDuplicateCommandProfilesForSameAuthProfile() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "codex-fast-a", provider: .codex, authProfileID: "codex-fast.json", commandName: "ccfast", modelPrefix: "codex-fast"),
+            AppConfig.OAuthCommandProfile(id: "codex-fast-b", provider: .codex, authProfileID: "codex-fast.json", commandName: "ccfast2", modelPrefix: "codex-fast-2"),
+            AppConfig.OAuthCommandProfile(id: "codex-deep", provider: .codex, authProfileID: "codex-deep.json", commandName: "ccdeep", modelPrefix: "codex-deep")
+        ]
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "codex-fast.json", type: .codex, email: "fast@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-fast"),
+                AuthProfile(fileName: "codex-deep.json", type: .codex, email: "deep@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-deep")
+            ]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        XCTAssertEqual(viewModel.roundRobinSettings(for: .codex).availability, .available(count: 2))
+    }
+
+    func testRoundRobinSettingsExistingCodexProfileFallsBackToConfiguredCodexRoles() {
+        var config = AppConfig.default
+        config.ccodex = testCodex(model: "custom-gpt")
+        config.roundRobinProfiles = [
+            AppConfig.RoundRobinProfile(id: "codex-default", provider: .codex, commandName: "ccodex", includedAuthProfileIDs: ["codex-fast.json", "codex-deep.json"])
+        ]
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "codex-fast.json", type: .codex, email: "fast@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-fast"),
+                AuthProfile(fileName: "codex-deep.json", type: .codex, email: "deep@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-deep")
+            ]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        XCTAssertEqual(viewModel.roundRobinSettings(for: .codex).profile.codex, config.ccodex)
+    }
+
+    func testSaveRoundRobinSettingsPersistsCodexRoleReasoningAndContextWindow() throws {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "codex-fast", provider: .codex, authProfileID: "codex-fast.json", commandName: "ccfast", modelPrefix: "codex-fast"),
+            AppConfig.OAuthCommandProfile(id: "codex-deep", provider: .codex, authProfileID: "codex-deep.json", commandName: "ccdeep", modelPrefix: "codex-deep")
+        ]
+        let store = StubConfigStore(config: config)
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "codex-fast.json", type: .codex, email: "fast@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-fast"),
+                AuthProfile(fileName: "codex-deep.json", type: .codex, email: "deep@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-deep")
+            ]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+        var state = viewModel.roundRobinSettings(for: .codex)
+        state.profile.codex = AppConfig.Codex(
+            opus: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .xhigh, contextWindow: .context1m),
+            sonnet: AppConfig.CodexRole(model: "gpt-5.1", reasoning: .medium, contextWindow: .context400k),
+            haiku: AppConfig.CodexRole(model: "gpt-5-mini", reasoning: .low, contextWindow: .context200k)
+        )
+
+        try viewModel.saveRoundRobinSettings(state)
+
+        XCTAssertEqual(store.savedConfigs.last?.roundRobinProfiles.first?.codex, state.profile.codex)
+    }
+
+    func testSaveRoundRobinSettingsPersistsProfileAndKeepsFixedCommands() throws {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "codex-fast", provider: .codex, authProfileID: "codex-fast.json", commandName: "ccfast", modelPrefix: "codex-fast"),
+            AppConfig.OAuthCommandProfile(id: "codex-deep", provider: .codex, authProfileID: "codex-deep.json", commandName: "ccdeep", modelPrefix: "codex-deep")
+        ]
+        let store = StubConfigStore(config: config)
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "codex-fast.json", type: .codex, email: "fast@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-fast"),
+                AuthProfile(fileName: "codex-deep.json", type: .codex, email: "deep@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-deep")
+            ]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector()
+        )
+        var state = viewModel.roundRobinSettings(for: .codex)
+        state.profile.isEnabled = true
+        state.profile.commandName = "ccodexrr"
+        state.profile.dangerousPermissionsEnabled = true
+
+        try viewModel.saveRoundRobinSettings(state)
+
+        XCTAssertEqual(store.savedConfigs.last?.roundRobinProfiles.first?.commandName, "ccodexrr")
+        XCTAssertEqual(store.savedConfigs.last?.roundRobinProfiles.first?.dangerousPermissionsEnabled, true)
+        XCTAssertEqual(store.savedConfigs.last?.oauthCommandProfiles.map(\.commandName), ["ccfast", "ccdeep"])
     }
 
     func testSaveClaudeOAuthSettingsPersistsFunctionNameAndPermission() throws {

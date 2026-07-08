@@ -93,11 +93,9 @@ struct ServerSettingsView: View {
             }
 
             SettingsGroup(title: "Routing") {
-                SettingsRow(label: "Round-robin balancing", description: "Distribute requests across connected accounts of the same provider.", isEnabled: false) {
-                    Toggle("", isOn: .constant(false))
-                        .labelsHidden()
-                        .toggleStyle(SettingsToggleStyle())
-                }
+                RoundRobinSettingsView(viewModel: viewModel)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 11)
             }
         }
         .padding(.horizontal, 32)
