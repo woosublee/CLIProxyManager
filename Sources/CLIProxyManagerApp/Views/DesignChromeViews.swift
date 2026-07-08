@@ -129,9 +129,48 @@ struct ProviderAvatar: View {
     var size: CGFloat = 32
 
     var body: some View {
+        ZStack {
+            if let image = providerImage {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                fallbackMark
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: size * 0.25, style: .continuous))
+    }
+
+    private var resolvedProviderType: AuthProfileType {
+        providerType ?? providerID.inferredProviderType
+    }
+
+    #if canImport(AppKit)
+    private static let claudeImage = providerImage(named: "claude")
+    private static let codexImage = providerImage(named: "codex")
+
+    private var providerImage: NSImage? {
+        switch resolvedProviderType {
+        case .claude:
+            Self.claudeImage
+        case .codex:
+            Self.codexImage
+        }
+    }
+
+    private static func providerImage(named name: String) -> NSImage? {
+        let url = Bundle.main.url(forResource: name, withExtension: "png", subdirectory: "ProviderImages")
+            ?? Bundle.module.url(forResource: name, withExtension: "png", subdirectory: "ProviderImages")
+        return url.flatMap(NSImage.init(contentsOf:))
+    }
+    #else
+    private var providerImage: Never? { nil }
+    #endif
+
+    private var fallbackMark: some View {
         RoundedRectangle(cornerRadius: size * 0.25, style: .continuous)
             .fill(background)
-            .frame(width: size, height: size)
             .overlay {
                 Group {
                     switch resolvedProviderType {
@@ -145,10 +184,6 @@ struct ProviderAvatar: View {
                 }
                 .foregroundStyle(.white)
             }
-    }
-
-    private var resolvedProviderType: AuthProfileType {
-        providerType ?? providerID.inferredProviderType
     }
 
     private var background: AnyShapeStyle {
