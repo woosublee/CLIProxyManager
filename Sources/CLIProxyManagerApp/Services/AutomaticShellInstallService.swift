@@ -36,17 +36,32 @@ struct AutomaticShellInstallService: Sendable {
         currentExecutableURL: URL? = Bundle.main.executableURL,
         fileExists: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
     ) -> String {
-        #if DEBUG
         if let currentExecutableURL {
-            let helperPath = currentExecutableURL
+            #if DEBUG
+            let debugHelperPath = currentExecutableURL
                 .deletingLastPathComponent()
                 .appendingPathComponent("cliproxy-manager")
                 .path
-            if fileExists(helperPath) {
-                return helperPath
+            if fileExists(debugHelperPath) {
+                return debugHelperPath
+            }
+            #endif
+
+            let macOSDirectory = currentExecutableURL.deletingLastPathComponent()
+            let contentsDirectory = macOSDirectory.deletingLastPathComponent()
+            let appBundleURL = contentsDirectory.deletingLastPathComponent()
+            if macOSDirectory.lastPathComponent == "MacOS",
+               contentsDirectory.lastPathComponent == "Contents",
+               appBundleURL.pathExtension == "app" {
+                let appBundleHelperPath = contentsDirectory
+                    .appendingPathComponent("Helpers")
+                    .appendingPathComponent("cliproxy-manager")
+                    .path
+                if fileExists(appBundleHelperPath) {
+                    return appBundleHelperPath
+                }
             }
         }
-        #endif
         return "/usr/local/bin/cliproxy-manager"
     }
 
