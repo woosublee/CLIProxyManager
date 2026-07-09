@@ -24,6 +24,16 @@ final class ProxyModelClientTests: XCTestCase {
         XCTAssertEqual(models, ["gpt-5.5", "gpt-5.6"])
     }
 
+    func testBaseModelsKeepsRoutingPrefixForGenericModelList() async throws {
+        let data = Data(#"{"data":[{"id":"codex-work/gpt-5.5(xhigh)"},{"id":"codex-work/gpt-5.5(medium)"}]}"#.utf8)
+        let httpClient = StubHTTPClient(result: .success(data))
+        let client = ProxyModelClient(httpClient: httpClient)
+
+        let models = try await client.baseModels(port: 18_317)
+
+        XCTAssertEqual(models, ["codex-work/gpt-5.5"])
+    }
+
     func testCodexBaseModelsFiltersMergedProviderModelList() async throws {
         let data = Data(
             #"""
@@ -65,6 +75,65 @@ final class ProxyModelClientTests: XCTestCase {
         let models = try await client.codexBaseModels(port: 18_317)
 
         XCTAssertEqual(models, ["gpt-image-2", "codex-auto-review"])
+    }
+
+    func testCodexBaseModelsKeepsRoutingPrefixesInGlobalModelList() async throws {
+        let data = Data(
+            #"""
+            {
+              "data": [
+                {"id":"codex-work/gpt-5.5(xhigh)","created":500},
+                {"id":"codex-personal/gpt-5.5(medium)","created":400},
+                {"id":"codex-work/gpt-5.6","created":300}
+              ]
+            }
+            """#.utf8
+        )
+        let httpClient = StubHTTPClient(result: .success(data))
+        let client = ProxyModelClient(httpClient: httpClient)
+
+        let models = try await client.codexBaseModels(port: 18_317)
+
+        XCTAssertEqual(models, ["codex-work/gpt-5.5", "codex-personal/gpt-5.5", "codex-work/gpt-5.6"])
+    }
+
+    func testCodexBaseModelsWithModelPrefixReturnsOnlyThatAccountsModels() async throws {
+        let data = Data(
+            #"""
+            {
+              "data": [
+                {"id":"codex-work/gpt-5.6","created":500},
+                {"id":"codex-personal/gpt-5.5","created":400},
+                {"id":"codex-work/gpt-5.5(xhigh)","created":300}
+              ]
+            }
+            """#.utf8
+        )
+        let httpClient = StubHTTPClient(result: .success(data))
+        let client = ProxyModelClient(httpClient: httpClient)
+
+        let models = try await client.codexBaseModels(port: 18_317, modelPrefix: "codex-work")
+
+        XCTAssertEqual(models, ["gpt-5.6", "gpt-5.5"])
+    }
+
+    func testCodexBaseModelsPreservesNamespacedOpenAIModelIDs() async throws {
+        let data = Data(
+            #"""
+            {
+              "data": [
+                {"id":"openai/gpt-5.5(xhigh)","owned_by":"openai","created":500},
+                {"id":"openai/gpt-5.5(medium)","owned_by":"openai","created":400}
+              ]
+            }
+            """#.utf8
+        )
+        let httpClient = StubHTTPClient(result: .success(data))
+        let client = ProxyModelClient(httpClient: httpClient)
+
+        let models = try await client.codexBaseModels(port: 18_317)
+
+        XCTAssertEqual(models, ["openai/gpt-5.5"])
     }
 
     func testModelsKeepsMergedProviderModelList() async throws {

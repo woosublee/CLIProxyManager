@@ -1261,6 +1261,74 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.availableCodexModels, ["gpt-5.5", "gpt-5.6"])
     }
 
+    func testCodexModelsForProviderUsesCommandProfileModelPrefix() async throws {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "codex-work", provider: .codex, authProfileID: "codex-work.json", commandName: "ccwork", modelPrefix: "codex-work"),
+            AppConfig.OAuthCommandProfile(id: "codex-personal", provider: .codex, authProfileID: "codex-personal.json", commandName: "ccpersonal", modelPrefix: "codex-personal")
+        ]
+        let modelClient = StubProxyModelClient(modelsByPrefix: [
+            "codex-work": ["gpt-5.6"],
+            "codex-personal": ["gpt-5.5"]
+        ])
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            modelClient: modelClient,
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "codex-work.json", type: .codex, email: "work@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-work"),
+                AuthProfile(fileName: "codex-personal.json", type: .codex, email: "personal@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-personal")
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        let models = try await viewModel.codexModels(for: ProviderRowState.ID(rawValue: "codex-work"))
+
+        XCTAssertEqual(models, ["gpt-5.6"])
+        XCTAssertEqual(modelClient.prefixRequests, [PrefixModelRequest(port: viewModel.config.port, prefix: "codex-work")])
+    }
+
+    func testCodexModelsForRoundRobinProfileUsesCommonModelsAcrossSelectedAccounts() async throws {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "codex-work", provider: .codex, authProfileID: "codex-work.json", commandName: "ccwork", modelPrefix: "codex-work"),
+            AppConfig.OAuthCommandProfile(id: "codex-personal", provider: .codex, authProfileID: "codex-personal.json", commandName: "ccpersonal", modelPrefix: "codex-personal")
+        ]
+        let modelClient = StubProxyModelClient(modelsByPrefix: [
+            "codex-work": ["gpt-5.6", "gpt-5.5"],
+            "codex-personal": ["gpt-5.5"]
+        ])
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            modelClient: modelClient,
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "codex-work.json", type: .codex, email: "work@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-work"),
+                AuthProfile(fileName: "codex-personal.json", type: .codex, email: "personal@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-personal")
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+        let profile = AppConfig.RoundRobinProfile(
+            id: "codex-default",
+            provider: .codex,
+            isEnabled: true,
+            commandName: "ccodex",
+            includedAuthProfileIDs: ["codex-work.json", "codex-personal.json"]
+        )
+
+        let models = try await viewModel.codexModels(forRoundRobinProfile: profile)
+
+        XCTAssertEqual(models, ["gpt-5.5"])
+        XCTAssertEqual(modelClient.prefixRequests, [
+            PrefixModelRequest(port: viewModel.config.port, prefix: "codex-work"),
+            PrefixModelRequest(port: viewModel.config.port, prefix: "codex-personal")
+        ])
+    }
+
     func testLatestBaseCodexModelPrefersMainGptModelWithSuffix() async {
         let modelClient = StubProxyModelClient(models: ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo"])
         let viewModel = DashboardViewModel(
@@ -1615,10 +1683,17 @@ private final class StubShellInstaller: ShellFunctionInstalling, @unchecked Send
     }
 }
 
+private struct PrefixModelRequest: Equatable {
+    let port: Int
+    let prefix: String
+}
+
 private final class StubProxyModelClient: ProxyModelListing, @unchecked Sendable {
     private let models: [String]
+    private let modelsByPrefix: [String: [String]]
     private let lock = NSLock()
     private var _ports: [Int] = []
+    private var _prefixRequests: [PrefixModelRequest] = []
     private var _baseModelsCallCount = 0
     private var _codexBaseModelsCallCount = 0
 
@@ -1634,8 +1709,18 @@ private final class StubProxyModelClient: ProxyModelListing, @unchecked Sendable
         lock.withLock { _codexBaseModelsCallCount }
     }
 
+    var prefixRequests: [PrefixModelRequest] {
+        lock.withLock { _prefixRequests }
+    }
+
     init(models: [String]) {
         self.models = models
+        self.modelsByPrefix = [:]
+    }
+
+    init(modelsByPrefix: [String: [String]]) {
+        self.models = []
+        self.modelsByPrefix = modelsByPrefix
     }
 
     func baseModels(port: Int) async throws -> [String] {
@@ -1652,6 +1737,14 @@ private final class StubProxyModelClient: ProxyModelListing, @unchecked Sendable
             _codexBaseModelsCallCount += 1
         }
         return models
+    }
+
+    func codexBaseModels(port: Int, modelPrefix: String) async throws -> [String] {
+        lock.withLock {
+            _prefixRequests.append(PrefixModelRequest(port: port, prefix: modelPrefix))
+            _codexBaseModelsCallCount += 1
+        }
+        return modelsByPrefix[modelPrefix] ?? models
     }
 }
 

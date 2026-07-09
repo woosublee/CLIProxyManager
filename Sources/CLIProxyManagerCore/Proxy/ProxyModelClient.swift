@@ -27,11 +27,13 @@ public struct ProxyModelClient: Sendable {
     public func codexBaseModels(port: Int, modelPrefix: String) async throws -> [String] {
         let prefix = modelPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prefix.isEmpty else { return try await codexBaseModels(port: port) }
-        let models = try await sortedModels(port: port)
-            .filter(isCodexModel)
-            .map(\.id)
-            .filter { $0.hasPrefix("\(prefix)/") }
-            .map { String($0.dropFirst(prefix.count + 1)) }
+        let models = try await sortedModels(port: port).compactMap { model -> String? in
+            guard let identifier = modelIdentifier(model.id, withoutRoutingPrefix: prefix),
+                  isCodexModelID(identifier, ownedBy: model.ownedBy) else {
+                return nil
+            }
+            return identifier
+        }
         return uniqueBaseModels(from: models)
     }
 
@@ -59,18 +61,28 @@ public struct ProxyModelClient: Sendable {
         return result
     }
 
+    private func modelIdentifier(_ identifier: String, withoutRoutingPrefix prefix: String) -> String? {
+        let routePrefix = "\(prefix)/"
+        guard identifier.hasPrefix(routePrefix) else { return nil }
+        return String(identifier.dropFirst(routePrefix.count))
+    }
+
     private func baseModelName(_ identifier: String) -> String {
         guard let parenIndex = identifier.firstIndex(of: "(") else { return identifier }
         return String(identifier[..<parenIndex])
     }
 
     private func isCodexModel(_ model: ModelsResponse.Model) -> Bool {
-        if let ownedBy = model.ownedBy?.trimmingCharacters(in: .whitespacesAndNewlines),
+        isCodexModelID(model.id, ownedBy: model.ownedBy)
+    }
+
+    private func isCodexModelID(_ id: String, ownedBy: String?) -> Bool {
+        if let ownedBy = ownedBy?.trimmingCharacters(in: .whitespacesAndNewlines),
            ownedBy.isEmpty == false {
             return ownedBy.caseInsensitiveCompare("openai") == .orderedSame
         }
 
-        let id = model.id.lowercased()
+        let id = id.lowercased()
         return id.hasPrefix("gpt-")
             || id.hasPrefix("codex-")
             || id.hasPrefix("o1")

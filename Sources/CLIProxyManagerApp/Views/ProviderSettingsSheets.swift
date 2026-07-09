@@ -548,12 +548,13 @@ struct CodexProviderSettingsSheet: View {
     @State private var saveErrorMessage: String?
     @State private var commandNameCheckState: CommandNameCheckState = .checking
     @State private var confirmRemove: Bool = false
+    @State private var scopedAvailableModels: [String]
     let providerID: ProviderRowState.ID
     let connectionDetail: String
     let isConnected: Bool
     let availableModels: [String]
     let modelLoadingState: CodexModelLoadingState
-    let refreshModels: () -> Void
+    let refreshModels: () async throws -> [String]
     let onDisconnect: () -> Void
     let checkCommandName: (String) async -> CommandNameAvailability
     var onCancel: () -> Void = {}
@@ -569,7 +570,7 @@ struct CodexProviderSettingsSheet: View {
         isConnected: Bool,
         availableModels: [String],
         modelLoadingState: CodexModelLoadingState,
-        refreshModels: @escaping () -> Void,
+        refreshModels: @escaping () async throws -> [String],
         onDisconnect: @escaping () -> Void,
         checkCommandName: @escaping (String) async -> CommandNameAvailability,
         onCancel: @escaping () -> Void = {},
@@ -585,6 +586,7 @@ struct CodexProviderSettingsSheet: View {
         _sonnet = State(initialValue: initialCodex.sonnet)
         _haiku = State(initialValue: initialCodex.haiku)
         _dangerousPermissionsEnabled = State(initialValue: initialState.dangerousPermissionsEnabled)
+        _scopedAvailableModels = State(initialValue: availableModels)
         self.providerID = providerID
         self.connectionDetail = connectionDetail
         self.isConnected = isConnected
@@ -641,7 +643,7 @@ struct CodexProviderSettingsSheet: View {
                     GroupTitle(text: "Routing")
                     Spacer()
                     Button {
-                        refreshModels()
+                        Task { await reloadModels() }
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "arrow.clockwise")
@@ -661,7 +663,7 @@ struct CodexProviderSettingsSheet: View {
                         opus: $opus,
                         sonnet: $sonnet,
                         haiku: $haiku,
-                        availableModels: availableModels
+                        availableModels: scopedAvailableModels
                     )
                 }
             }
@@ -721,13 +723,12 @@ struct CodexProviderSettingsSheet: View {
             Text("The auth profile will be deleted from CLIProxyAPI. You can reconnect at any time.")
         }
         .task {
-            if availableModels.isEmpty {
-                refreshModels()
-            }
+            await reloadModels()
             applyInitialDefaultsIfNeeded()
         }
         .onChange(of: availableModels) { models in
-            applyDefaultModel(from: models)
+            scopedAvailableModels = models
+            applyDefaultModel(from: scopedAvailableModels)
             applyInitialDefaultsIfNeeded()
         }
     }
@@ -746,6 +747,15 @@ struct CodexProviderSettingsSheet: View {
             commandNameCheckState = .available
         case .unavailable(let message):
             commandNameCheckState = .unavailable(message)
+        }
+    }
+
+    private func reloadModels() async {
+        do {
+            scopedAvailableModels = try await refreshModels()
+            applyDefaultModel(from: scopedAvailableModels)
+        } catch {
+            scopedAvailableModels = availableModels
         }
     }
 

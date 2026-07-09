@@ -43,6 +43,7 @@ private struct RoundRobinProviderSettingsCard: View {
     let provider: AuthProfileType
     @State private var state: RoundRobinSettingsState
     @State private var commandNameCheckState: CommandNameAvailability = .available
+    @State private var codexModels: [String] = []
 
     init(viewModel: DashboardViewModel, provider: AuthProfileType) {
         self.viewModel = viewModel
@@ -66,6 +67,9 @@ private struct RoundRobinProviderSettingsCard: View {
         .glassCard(cornerRadius: 10, opacity: 0.04)
         .task(id: state.profile.commandName) {
             await updateCommandAvailability()
+        }
+        .task(id: state.profile.includedAuthProfileIDs.joined(separator: "\u{1f}") ) {
+            await updateCodexModels()
         }
     }
 
@@ -147,7 +151,7 @@ private struct RoundRobinProviderSettingsCard: View {
             .foregroundStyle(.secondary)
 
         if provider == .codex {
-            CodexRoundRobinRoleFields(profile: $state.profile, availableModels: viewModel.availableCodexModels)
+            CodexRoundRobinRoleFields(profile: $state.profile, availableModels: codexModels)
         }
     }
 
@@ -190,8 +194,19 @@ private struct RoundRobinProviderSettingsCard: View {
                     state.profile.includedAuthProfileIDs.removeAll { $0 == option.id }
                 }
                 state = viewModel.roundRobinSettings(updating: state.profile)
+                Task { await updateCodexModels() }
             }
         )
+    }
+
+    private func updateCodexModels() async {
+        guard provider == .codex else { return }
+        await viewModel.refreshCodexModels()
+        do {
+            codexModels = try await viewModel.codexModels(forRoundRobinProfile: state.profile)
+        } catch {
+            codexModels = []
+        }
     }
 
     private func updateCommandAvailability() async {
