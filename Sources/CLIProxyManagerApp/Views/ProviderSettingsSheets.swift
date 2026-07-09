@@ -10,6 +10,29 @@ enum ProviderSettingsSheetMetrics {
     static let footerActionButtonControlSize = ControlSize.regular
 }
 
+enum CodexProviderModelOptions {
+    static func modelsAfterGlobalAvailableModelsChange(currentScopedModels: [String], globalAvailableModels _: [String]) -> [String] {
+        currentScopedModels
+    }
+}
+
+enum CodexProviderModelLoadingPresentation {
+    static func isRefreshDisabled(modelLoadingState: CodexModelLoadingState, isReloading: Bool) -> Bool {
+        modelLoadingState.isLoading || isReloading
+    }
+
+    static func message(modelLoadingState: CodexModelLoadingState, isReloading: Bool) -> String? {
+        if isReloading {
+            return CodexModelLoadingState.loadingModels.message
+        }
+        return modelLoadingState.message
+    }
+
+    static func isError(modelLoadingState: CodexModelLoadingState, isReloading: Bool) -> Bool {
+        isReloading ? false : modelLoadingState.isError
+    }
+}
+
 private struct AccountSheetChrome<Content: View, Footer: View>: View {
     let providerID: ProviderRowState.ID
     var providerType: AuthProfileType? = nil
@@ -549,6 +572,7 @@ struct CodexProviderSettingsSheet: View {
     @State private var commandNameCheckState: CommandNameCheckState = .checking
     @State private var confirmRemove: Bool = false
     @State private var scopedAvailableModels: [String]
+    @State private var isReloading: Bool = false
     let providerID: ProviderRowState.ID
     let connectionDetail: String
     let isConnected: Bool
@@ -652,11 +676,11 @@ struct CodexProviderSettingsSheet: View {
                         .font(.system(size: 11))
                     }
                     .buttonStyle(.borderless)
-                    .disabled(modelLoadingState.isLoading)
+                    .disabled(CodexProviderModelLoadingPresentation.isRefreshDisabled(modelLoadingState: modelLoadingState, isReloading: isReloading))
                 }
-                Text(modelLoadingState.message ?? "Map each Claude model tier to a GPT model, reasoning, and context window.")
+                Text(CodexProviderModelLoadingPresentation.message(modelLoadingState: modelLoadingState, isReloading: isReloading) ?? "Map each Claude model tier to a GPT model, reasoning, and context window.")
                     .font(.system(size: 11.5))
-                    .foregroundStyle(modelLoadingState.isError ? BrandPalette.statusError : .secondary)
+                    .foregroundStyle(CodexProviderModelLoadingPresentation.isError(modelLoadingState: modelLoadingState, isReloading: isReloading) ? BrandPalette.statusError : .secondary)
 
                 GroupCard {
                     CodexRoleRoutingFields(
@@ -726,8 +750,11 @@ struct CodexProviderSettingsSheet: View {
             await reloadModels()
             applyInitialDefaultsIfNeeded()
         }
-        .onChange(of: availableModels) { models in
-            scopedAvailableModels = models
+        .onChange(of: availableModels) { _, models in
+            scopedAvailableModels = CodexProviderModelOptions.modelsAfterGlobalAvailableModelsChange(
+                currentScopedModels: scopedAvailableModels,
+                globalAvailableModels: models
+            )
             applyDefaultModel(from: scopedAvailableModels)
             applyInitialDefaultsIfNeeded()
         }
@@ -751,6 +778,8 @@ struct CodexProviderSettingsSheet: View {
     }
 
     private func reloadModels() async {
+        isReloading = true
+        defer { isReloading = false }
         do {
             scopedAvailableModels = try await refreshModels()
             applyDefaultModel(from: scopedAvailableModels)

@@ -63,7 +63,7 @@ public struct ProxyModelClient: Sendable {
 
     private func modelIdentifier(_ identifier: String, withoutRoutingPrefix prefix: String) -> String? {
         let routePrefix = "\(prefix)/"
-        guard identifier.hasPrefix(routePrefix) else { return nil }
+        guard identifier.lowercased().hasPrefix(routePrefix.lowercased()) else { return nil }
         return String(identifier.dropFirst(routePrefix.count))
     }
 

@@ -117,6 +117,26 @@ final class ProxyModelClientTests: XCTestCase {
         XCTAssertEqual(models, ["gpt-5.6", "gpt-5.5"])
     }
 
+    func testCodexBaseModelsWithModelPrefixMatchesPrefixCaseInsensitively() async throws {
+        let data = Data(
+            #"""
+            {
+              "data": [
+                {"id":"Codex-Work/gpt-5.6","created":500},
+                {"id":"CODEX-PERSONAL/gpt-5.5","created":400},
+                {"id":"codex-work/gpt-5.5(xhigh)","created":300}
+              ]
+            }
+            """#.utf8
+        )
+        let httpClient = StubHTTPClient(result: .success(data))
+        let client = ProxyModelClient(httpClient: httpClient)
+
+        let models = try await client.codexBaseModels(port: 18_317, modelPrefix: "codex-work")
+
+        XCTAssertEqual(models, ["gpt-5.6", "gpt-5.5"])
+    }
+
     func testCodexBaseModelsPreservesNamespacedOpenAIModelIDs() async throws {
         let data = Data(
             #"""
