@@ -29,6 +29,54 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
         #endif
     }
 
+    func testDefaultHelperCommandUsesBundledHelperInsideAppBundleWhenAvailable() {
+        let executableURL = URL(fileURLWithPath: "/Applications/CLIProxyManager.app/Contents/MacOS/CLIProxyManager")
+
+        let helperCommand = AutomaticShellInstallService.resolvedDefaultHelperCommand(
+            currentExecutableURL: executableURL,
+            fileExists: { $0 == "/Applications/CLIProxyManager.app/Contents/Helpers/cliproxy-manager" }
+        )
+
+        XCTAssertEqual(helperCommand, "/Applications/CLIProxyManager.app/Contents/Helpers/cliproxy-manager")
+    }
+
+    func testDefaultHelperCommandMatchesAppBundleExtensionCaseInsensitively() {
+        let executableURL = URL(fileURLWithPath: "/Applications/CLIProxyManager.APP/Contents/MacOS/CLIProxyManager")
+
+        let helperCommand = AutomaticShellInstallService.resolvedDefaultHelperCommand(
+            currentExecutableURL: executableURL,
+            fileExists: { $0 == "/Applications/CLIProxyManager.APP/Contents/Helpers/cliproxy-manager" }
+        )
+
+        XCTAssertEqual(helperCommand, "/Applications/CLIProxyManager.APP/Contents/Helpers/cliproxy-manager")
+    }
+
+    func testDefaultHelperCommandIgnoresNonAppBundleHelperCandidate() {
+        let executableURL = URL(fileURLWithPath: "/Volumes/CLIProxyManager/CLIProxyManager/Contents/MacOS/CLIProxyManager")
+
+        let helperCommand = AutomaticShellInstallService.resolvedDefaultHelperCommand(
+            currentExecutableURL: executableURL,
+            fileExists: { $0 == "/Volumes/CLIProxyManager/CLIProxyManager/Contents/Helpers/cliproxy-manager" }
+        )
+
+        XCTAssertEqual(helperCommand, "/usr/local/bin/cliproxy-manager")
+    }
+
+    func testDebugDefaultHelperCommandPrefersHelperBesideCurrentExecutableOverParentHelperCandidate() {
+        #if DEBUG
+        let executableURL = URL(fileURLWithPath: "/build/debug/CLIProxyManager")
+
+        let helperCommand = AutomaticShellInstallService.resolvedDefaultHelperCommand(
+            currentExecutableURL: executableURL,
+            fileExists: {
+                $0 == "/build/debug/cliproxy-manager" || $0 == "/build/Helpers/cliproxy-manager"
+            }
+        )
+
+        XCTAssertEqual(helperCommand, "/build/debug/cliproxy-manager")
+        #endif
+    }
+
     func testViewModelCreatesEmptyShellFunctionsFileOnInitialization() {
         let installer = StubShellInstaller()
         let automaticInstaller = AutomaticShellInstallService(
