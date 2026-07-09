@@ -910,6 +910,34 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
+    func codexModels(for provider: ProviderRowState.ID) async throws -> [String] {
+        guard let commandProfile = config.oauthCommandProfiles.first(where: { $0.id == provider.rawValue }) else {
+            return availableCodexModels
+        }
+        let prefix = commandProfile.modelPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prefix.isEmpty else { return availableCodexModels }
+        return try await modelClient.codexBaseModels(port: config.port, modelPrefix: prefix)
+    }
+
+    func codexModels(forRoundRobinProfile profile: AppConfig.RoundRobinProfile) async throws -> [String] {
+        let prefixes = roundRobinModelPrefixes(for: profile)
+        guard let firstPrefix = prefixes.first else { return availableCodexModels }
+        var commonModels = try await modelClient.codexBaseModels(port: config.port, modelPrefix: firstPrefix)
+        for prefix in prefixes.dropFirst() {
+            let models = try await modelClient.codexBaseModels(port: config.port, modelPrefix: prefix)
+            let modelSet = Set(models)
+            commonModels = commonModels.filter { modelSet.contains($0) }
+        }
+        return commonModels
+    }
+
+    private func roundRobinModelPrefixes(for profile: AppConfig.RoundRobinProfile) -> [String] {
+        let commandProfilesByAuthID = commandProfilesByAuthID(in: config)
+        return profile.includedAuthProfileIDs.compactMap { authProfileID in
+            commandProfilesByAuthID[authProfileID]?.modelPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
+        }.filter { !$0.isEmpty }
+    }
+
     private func handleCodexModelLoadingFailure(_ error: Error? = nil) {
         availableCodexModels = []
         let fallbackMessage = "Codex is connected, but the app could not load models through the local proxy server. Start the server and refresh, or enter a model manually."
