@@ -40,6 +40,17 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
         XCTAssertEqual(helperCommand, "/Applications/CLIProxyManager.app/Contents/Helpers/cliproxy-manager")
     }
 
+    func testDefaultHelperCommandMatchesAppBundleExtensionCaseInsensitively() {
+        let executableURL = URL(fileURLWithPath: "/Applications/CLIProxyManager.APP/Contents/MacOS/CLIProxyManager")
+
+        let helperCommand = AutomaticShellInstallService.resolvedDefaultHelperCommand(
+            currentExecutableURL: executableURL,
+            fileExists: { $0 == "/Applications/CLIProxyManager.APP/Contents/Helpers/cliproxy-manager" }
+        )
+
+        XCTAssertEqual(helperCommand, "/Applications/CLIProxyManager.APP/Contents/Helpers/cliproxy-manager")
+    }
+
     func testDefaultHelperCommandIgnoresNonAppBundleHelperCandidate() {
         let executableURL = URL(fileURLWithPath: "/Volumes/CLIProxyManager/CLIProxyManager/Contents/MacOS/CLIProxyManager")
 

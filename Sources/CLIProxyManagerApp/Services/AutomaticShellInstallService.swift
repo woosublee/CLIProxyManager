@@ -52,7 +52,7 @@ struct AutomaticShellInstallService: Sendable {
             let appBundleURL = contentsDirectory.deletingLastPathComponent()
             if macOSDirectory.lastPathComponent == "MacOS",
                contentsDirectory.lastPathComponent == "Contents",
-               appBundleURL.pathExtension == "app" {
+               appBundleURL.pathExtension.lowercased() == "app" {
                 let appBundleHelperPath = contentsDirectory
                     .appendingPathComponent("Helpers")
                     .appendingPathComponent("cliproxy-manager")
