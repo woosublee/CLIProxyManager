@@ -1,15 +1,39 @@
+import Darwin
 import Foundation
 
 public enum CLIProxyManagerCommandError: Error, Equatable, CustomStringConvertible {
     case usage
     case emptySecret(String)
+    case prerequisite(String)
+    case operation(String)
 
     public var description: String {
         switch self {
         case .usage:
-            "Usage: cliproxy-manager secret <get|set|delete> claude-api-key | cliproxy-manager routing next <round-robin-profile-id>"
+            """
+            Usage:
+              cpm status [--json]
+              cpm start | stop | restart
+              cpm logs [--lines <N>] [-f]
+              cpm app status | start | stop | restart
+              cpm secret get|set|delete claude-api-key
+              cpm routing next <round-robin-profile-id>
+            """
         case .emptySecret(let key):
             "Secret value cannot be empty: \(key)"
+        case .prerequisite(let message), .operation(let message):
+            message
+        }
+    }
+
+    public var exitCode: CLICommandExitCode {
+        switch self {
+        case .usage, .emptySecret:
+            .usage
+        case .prerequisite:
+            .prerequisite
+        case .operation:
+            .failure
         }
     }
 }
@@ -20,7 +44,14 @@ public struct CLIProxyManagerCommand: Sendable {
     private let authProfileStore: AuthProfileStore
     private let stateSelector: any RoundRobinStateSelecting
     private let input: @Sendable () -> String
-    private let output: @Sendable (String) -> Void
+    private let output: any CLICommandOutputWriting
+    private let proxyRuntime: any ProxyRuntimeServicing
+    private let appLifecycle: any AppLifecycleControlling
+    private let logService: any ProxyLogServicing
+    private let statusReporter: any StatusReporting
+    private let proxyUpdater: any ProxyUpdating
+    private let appUpdater: any AppUpdating
+    private let currentUID: @Sendable () -> uid_t
 
     public init(
         secretStore: any SecretStore = KeychainSecretStore(),
@@ -31,7 +62,7 @@ public struct CLIProxyManagerCommand: Sendable {
             let data = FileHandle.standardInput.readDataToEndOfFile()
             return String(data: data, encoding: .utf8) ?? ""
         },
-        output: @escaping @Sendable (String) -> Void = { print($0) }
+        output: any CLICommandOutputWriting = TerminalCommandOutput()
     ) {
         self.secretStore = secretStore
         self.configStore = configStore
@@ -39,9 +70,50 @@ public struct CLIProxyManagerCommand: Sendable {
         self.stateSelector = stateSelector
         self.input = input
         self.output = output
+        self.proxyRuntime = ProxyRuntimeService()
+        self.appLifecycle = AppLifecycleService()
+        self.logService = ProxyLogService()
+        self.statusReporter = StatusService()
+        self.proxyUpdater = ProxyUpdateService()
+        self.appUpdater = AppUpdateService()
+        self.currentUID = { geteuid() }
     }
 
-    public func run(arguments: [String]) throws {
+    init(
+        secretStore: any SecretStore = KeychainSecretStore(),
+        configStore: AppConfigStore = AppConfigStore(),
+        authProfileStore: AuthProfileStore = AuthProfileStore(),
+        stateSelector: any RoundRobinStateSelecting = RoundRobinStateStore(),
+        input: @escaping @Sendable () -> String = {
+            let data = FileHandle.standardInput.readDataToEndOfFile()
+            return String(data: data, encoding: .utf8) ?? ""
+        },
+        output: any CLICommandOutputWriting = TerminalCommandOutput(),
+        proxyRuntime: any ProxyRuntimeServicing,
+        appLifecycle: any AppLifecycleControlling,
+        logService: any ProxyLogServicing,
+        statusReporter: any StatusReporting,
+        proxyUpdater: any ProxyUpdating = ProxyUpdateService(),
+        appUpdater: any AppUpdating = AppUpdateService(),
+        currentUID: @escaping @Sendable () -> uid_t = { geteuid() }
+    ) {
+        self.secretStore = secretStore
+        self.configStore = configStore
+        self.authProfileStore = authProfileStore
+        self.stateSelector = stateSelector
+        self.input = input
+        self.output = output
+        self.proxyRuntime = proxyRuntime
+        self.appLifecycle = appLifecycle
+        self.logService = logService
+        self.statusReporter = statusReporter
+        self.proxyUpdater = proxyUpdater
+        self.appUpdater = appUpdater
+        self.currentUID = currentUID
+    }
+
+    public func run(arguments: [String]) async throws {
+        // Legacy commands
         if arguments.count == 3, arguments[0] == "secret" {
             try runSecret(arguments: arguments)
             return
@@ -50,8 +122,264 @@ public struct CLIProxyManagerCommand: Sendable {
             try runRoutingNext(profileID: arguments[2])
             return
         }
-        throw CLIProxyManagerCommandError.usage
+
+        switch arguments.first {
+        case "status":
+            try await runStatus(arguments: arguments)
+        case "start":
+            guard arguments.count == 1 else { throw CLIProxyManagerCommandError.usage }
+            try requireNonRoot()
+            let result = try await proxyRuntime.start()
+            output.writeStdout("Proxy started on port \(result.port).\n")
+        case "stop":
+            guard arguments.count == 1 else { throw CLIProxyManagerCommandError.usage }
+            try requireNonRoot()
+            _ = try await proxyRuntime.stop()
+            output.writeStdout("Proxy stopped.\n")
+        case "restart":
+            guard arguments.count == 1 else { throw CLIProxyManagerCommandError.usage }
+            try requireNonRoot()
+            let result = try await proxyRuntime.restart()
+            output.writeStdout("Proxy restarted on port \(result.port).\n")
+        case "logs":
+            try await runLogs(arguments: arguments)
+        case "app":
+            try await runApp(arguments: arguments)
+        case "update":
+            try await runUpdate(arguments: arguments)
+        default:
+            throw CLIProxyManagerCommandError.usage
+        }
     }
+
+    // MARK: - Runtime subcommands
+
+    private func runStatus(arguments: [String]) async throws {
+        var useJSON = false
+        var i = arguments.index(after: arguments.startIndex)
+        while i < arguments.endIndex {
+            let arg = arguments[i]
+            i = arguments.index(after: i)
+            switch arg {
+            case "--json":
+                guard !useJSON else { throw CLIProxyManagerCommandError.usage }
+                useJSON = true
+            default:
+                throw CLIProxyManagerCommandError.usage
+            }
+        }
+        let cpmStatus = try await statusReporter.status()
+        if useJSON {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = .sortedKeys
+            let data = try encoder.encode(cpmStatus)
+            output.writeStdout(String(data: data, encoding: .utf8)! + "\n")
+        } else {
+            let app = cpmStatus.app
+            let helper = cpmStatus.helper
+            let proxy = cpmStatus.proxy
+            let versionSuffix = app.version.map { ", v\($0)" } ?? ""
+            output.writeStdout("App: installed=\(app.installed), running=\(app.running)\(versionSuffix)\n")
+            output.writeStdout("Helper: \(helper.path) (\(helper.installed ? "installed" : "not installed"))\n")
+            let activeVersionSuffix = proxy.activeVersion.map { ", version=\($0)" } ?? ""
+            output.writeStdout("Proxy: port=\(proxy.port), running=\(proxy.running)\(activeVersionSuffix)\n")
+        }
+    }
+
+    private func runLogs(arguments: [String]) async throws {
+        var lineCount = 200
+        var follow = false
+        var seenLines = false
+        var idx = 1
+        while idx < arguments.count {
+            let arg = arguments[idx]
+            switch arg {
+            case "-f":
+                guard !follow else { throw CLIProxyManagerCommandError.usage }
+                follow = true
+            case "--lines":
+                guard !seenLines else { throw CLIProxyManagerCommandError.usage }
+                idx += 1
+                guard idx < arguments.count, let n = Int(arguments[idx]), n > 0 else {
+                    throw CLIProxyManagerCommandError.usage
+                }
+                lineCount = n
+                seenLines = true
+            default:
+                throw CLIProxyManagerCommandError.usage
+            }
+            idx += 1
+        }
+        if follow {
+            try logService.follow()
+        } else {
+            let snapshot = try logService.readLastLines(lineCount)
+            output.writeStdout(snapshot.text)
+        }
+    }
+
+    private func runApp(arguments: [String]) async throws {
+        guard arguments.count == 2 else { throw CLIProxyManagerCommandError.usage }
+        switch arguments[1] {
+        case "status":
+            let status = try await appLifecycle.status()
+            let versionSuffix = status.version.map { ", v\($0)" } ?? ""
+            output.writeStdout("App: installed=\(status.installed), running=\(status.running)\(versionSuffix)\n")
+        case "start":
+            try requireNonRoot()
+            _ = try await appLifecycle.start()
+            output.writeStdout("App started.\n")
+        case "stop":
+            try requireNonRoot()
+            _ = try await appLifecycle.stop()
+            output.writeStdout("App stopped.\n")
+        case "restart":
+            try requireNonRoot()
+            _ = try await appLifecycle.restart()
+            output.writeStdout("App restarted.\n")
+        default:
+            throw CLIProxyManagerCommandError.usage
+        }
+    }
+
+    private func runUpdate(arguments: [String]) async throws {
+        guard arguments.count >= 2 else { throw CLIProxyManagerCommandError.usage }
+        let verb = arguments[1]
+        guard ["check", "stage", "apply"].contains(verb) else {
+            throw CLIProxyManagerCommandError.usage
+        }
+
+        let remaining = Array(arguments.dropFirst(2))
+        let hasYes = remaining.contains("--yes")
+        let targets = remaining.filter { $0 != "--yes" }
+
+        guard targets.count <= 1 else { throw CLIProxyManagerCommandError.usage }
+        if hasYes && verb != "apply" { throw CLIProxyManagerCommandError.usage }
+
+        let target = targets.first ?? "all"
+        guard ["proxy", "app", "all"].contains(target) else {
+            throw CLIProxyManagerCommandError.usage
+        }
+
+        let runProxy = (target == "proxy" || target == "all")
+        let runApp = (target == "app" || target == "all")
+
+        switch verb {
+        case "check":
+            if runApp {
+                let result = try await appUpdater.check()
+                output.writeStdout("App: \(appCheckDescription(result))\n")
+            }
+            if runProxy {
+                let result = try await proxyUpdater.check()
+                output.writeStdout("Proxy: \(proxyCheckDescription(result))\n")
+            }
+
+        case "stage":
+            if runApp {
+                let result = try await appUpdater.stage()
+                output.writeStdout("App: \(appStageDescription(result))\n")
+            }
+            if runProxy {
+                let result = try await proxyUpdater.stage()
+                output.writeStdout("Proxy: \(proxyStageDescription(result))\n")
+            }
+
+        case "apply":
+            if !hasYes {
+                guard output.isInteractive else { throw CLIProxyManagerCommandError.usage }
+                let prompt: String
+                switch target {
+                case "proxy": prompt = "Apply staged CLIProxyAPI update?"
+                case "app":   prompt = "Apply staged CLIProxyManager update?"
+                default:      prompt = "Apply all staged updates?"
+                }
+                guard output.confirm(prompt) else { return }
+            }
+            if target == "all" {
+                var appError: Error?
+                var proxyError: Error?
+                do {
+                    let result = try await appUpdater.apply()
+                    output.writeStdout("App: Applied CLIProxyManager \(result.version).\n")
+                } catch let err as CLIProxyManagerCommandError where isNoStageError(err, for: "app") {
+                    output.writeStdout("App: No staged update.\n")
+                } catch {
+                    appError = error
+                    output.writeStderr("App: \(error.localizedDescription)\n")
+                }
+                do {
+                    let result = try await proxyUpdater.apply()
+                    if result.restartedProxy {
+                        output.writeStdout("Proxy: Applied CLIProxyAPI \(result.version) and restarted.\n")
+                    } else {
+                        output.writeStdout("Proxy: Applied CLIProxyAPI \(result.version); proxy remains stopped.\n")
+                    }
+                } catch let err as CLIProxyManagerCommandError where isNoStageError(err, for: "proxy") {
+                    output.writeStdout("Proxy: No staged update.\n")
+                } catch {
+                    proxyError = error
+                    output.writeStderr("Proxy: \(error.localizedDescription)\n")
+                }
+                if let err = appError ?? proxyError { throw err }
+            } else if target == "app" {
+                let result = try await appUpdater.apply()
+                output.writeStdout("Applied CLIProxyManager \(result.version).\n")
+            } else {
+                let result = try await proxyUpdater.apply()
+                if result.restartedProxy {
+                    output.writeStdout("Applied CLIProxyAPI \(result.version) and restarted the proxy.\n")
+                } else {
+                    output.writeStdout("Applied CLIProxyAPI \(result.version); the proxy remains stopped.\n")
+                }
+            }
+        default:
+            throw CLIProxyManagerCommandError.usage
+        }
+    }
+
+    private func appCheckDescription(_ result: AppUpdateCheckResult) -> String {
+        switch result {
+        case .upToDate(let v): return "CLIProxyManager is up to date\(v.map { " at \($0)" } ?? "")."
+        case .available(let v, let r): return "Update available: \(v ?? "none") → \(r.version)."
+        case .pending(_, let s): return "CLIProxyManager \(s.version) is staged."
+        }
+    }
+
+    private func proxyCheckDescription(_ result: ProxyUpdateCheckResult) -> String {
+        switch result {
+        case .upToDate(let v): return "CLIProxyAPI is up to date\(v.map { " at \($0)" } ?? "")."
+        case .available(let v, let r): return "Update available: \(v ?? "none") → \(r.version)."
+        case .pending(_, let p): return "CLIProxyAPI \(p.version) is staged."
+        }
+    }
+
+    private func appStageDescription(_ result: AppUpdateStageResult) -> String {
+        result.staged ? "CLIProxyManager \(result.version) is staged." : "CLIProxyManager \(result.version) is already staged."
+    }
+
+    private func proxyStageDescription(_ result: ProxyUpdateStageResult) -> String {
+        result.staged ? "CLIProxyAPI \(result.version) is staged." : "CLIProxyAPI \(result.version) is already staged."
+    }
+
+    private func isNoStageError(_ error: CLIProxyManagerCommandError, for _: String) -> Bool {
+        if case .prerequisite(let msg) = error {
+            return msg.contains("No staged")
+        }
+        return false
+    }
+
+    // MARK: - Root check
+
+    private func requireNonRoot() throws {
+        guard currentUID() != 0 else {
+            throw CLIProxyManagerCommandError.prerequisite(
+                "cpm must run as the macOS user that owns ~/.cliproxy-manager; do not use sudo."
+            )
+        }
+    }
+
+    // MARK: - Legacy commands
 
     private func runSecret(arguments: [String]) throws {
         guard let key = SecretKey(rawValue: arguments[2]) else {
@@ -59,7 +387,7 @@ public struct CLIProxyManagerCommand: Sendable {
         }
         switch arguments[1] {
         case "get":
-            output(try secretStore.get(key))
+            output.writeStdout("\(try secretStore.get(key))\n")
         case "set":
             let value = input().trimmingCharacters(in: .whitespacesAndNewlines)
             guard !value.isEmpty else {
@@ -77,6 +405,6 @@ public struct CLIProxyManagerCommand: Sendable {
         let config = try configStore.load()
         let authProfiles = try authProfileStore.profiles()
         let service = RoundRobinSelectionService(stateSelector: stateSelector)
-        output(try service.shellEnvironmentAssignments(profileID: profileID, config: config, authProfiles: authProfiles))
+        output.writeStdout("\(try service.shellEnvironmentAssignments(profileID: profileID, config: config, authProfiles: authProfiles))\n")
     }
 }

@@ -152,6 +152,13 @@ final class ReleaseWorkflowTests: XCTestCase {
         assert("- name: Sign DMG", appearsBefore: "- name: Generate Sparkle appcast", in: workflow)
         assert("- name: Generate Sparkle appcast", appearsBefore: "- name: Create tag", in: workflow)
         assert("- name: Create tag", appearsBefore: "- name: Create Release", in: workflow)
+
+        XCTAssertTrue(makefile.contains("CPM_EXECUTABLE = $(SWIFT_BUILD_DIR)/cpm"))
+        XCTAssertTrue(makefile.contains("BUNDLED_CPM := $(HELPERS_DIR)/cpm"))
+        XCTAssertTrue(makefile.contains("Contents/Helpers/cpm"))
+        XCTAssertTrue(makefile.contains("Contents/Helpers/cliproxy-manager"))
+        XCTAssertTrue(makefile.contains("/usr/local/bin/cpm"))
+        XCTAssertTrue(makefile.contains("/usr/local/bin/cliproxy-manager"))
     }
 
     func testVerifyDMGScriptReturnsFailureStatusAfterRetries() throws {

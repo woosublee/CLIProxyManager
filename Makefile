@@ -21,7 +21,9 @@ HELPERS_DIR := $(CONTENTS_DIR)/Helpers
 FRAMEWORKS_DIR := $(CONTENTS_DIR)/Frameworks
 SWIFT_BUILD_DIR = $(shell swift build -c $(CONFIGURATION) --show-bin-path)
 APP_EXECUTABLE = $(SWIFT_BUILD_DIR)/$(APP_NAME)
+CPM_EXECUTABLE = $(SWIFT_BUILD_DIR)/cpm
 HELPER_EXECUTABLE = $(SWIFT_BUILD_DIR)/cliproxy-manager
+BUNDLED_CPM := $(HELPERS_DIR)/cpm
 BUNDLED_HELPER := $(HELPERS_DIR)/cliproxy-manager
 BUNDLED_ICON := $(RESOURCES_DIR)/$(ICON_FILE)
 BUNDLED_SPARKLE_FRAMEWORK := $(FRAMEWORKS_DIR)/Sparkle.framework
@@ -44,10 +46,12 @@ print-build-tag:
 
 swift-build:
 	swift build -c $(CONFIGURATION) --product $(APP_NAME)
+	swift build -c $(CONFIGURATION) --product cpm
 	swift build -c $(CONFIGURATION) --product cliproxy-manager
 
 bundle: swift-build $(INFO_PLIST) $(ENTITLEMENTS) $(ICON_FILE)
 	test -x "$(APP_EXECUTABLE)" || { echo "Missing executable: $(APP_EXECUTABLE)"; exit 1; }
+	test -x "$(CPM_EXECUTABLE)" || { echo "Missing executable: $(CPM_EXECUTABLE)"; exit 1; }
 	test -x "$(HELPER_EXECUTABLE)" || { echo "Missing executable: $(HELPER_EXECUTABLE)"; exit 1; }
 	test -f "$(ICON_FILE)" || { echo "Missing icon: $(ICON_FILE)"; exit 1; }
 	rm -rf "$(APP_BUNDLE)"
@@ -57,6 +61,7 @@ bundle: swift-build $(INFO_PLIST) $(ENTITLEMENTS) $(ICON_FILE)
 	if ! otool -l "$(MACOS_DIR)/$(APP_NAME)" | grep -F "@executable_path/../Frameworks" >/dev/null; then \
 		install_name_tool -add_rpath "@executable_path/../Frameworks" "$(MACOS_DIR)/$(APP_NAME)"; \
 	fi
+	ditto --norsrc --noextattr "$(CPM_EXECUTABLE)" "$(BUNDLED_CPM)"
 	ditto --norsrc --noextattr "$(HELPER_EXECUTABLE)" "$(BUNDLED_HELPER)"
 	ditto --norsrc --noextattr "$(ICON_FILE)" "$(BUNDLED_ICON)"
 	ditto --norsrc --noextattr "$(SPARKLE_FRAMEWORK)" "$(BUNDLED_SPARKLE_FRAMEWORK)"
@@ -74,7 +79,7 @@ bundle: swift-build $(INFO_PLIST) $(ENTITLEMENTS) $(ICON_FILE)
 		fi; \
 	done
 	chmod -R u+w "$(APP_BUNDLE)"
-	chmod +x "$(MACOS_DIR)/$(APP_NAME)" "$(BUNDLED_HELPER)" "$(BUNDLED_SPARKLE_FRAMEWORK)/Autoupdate"
+	chmod +x "$(MACOS_DIR)/$(APP_NAME)" "$(BUNDLED_CPM)" "$(BUNDLED_HELPER)" "$(BUNDLED_SPARKLE_FRAMEWORK)/Autoupdate"
 	xattr -r -c "$(APP_BUNDLE)"
 	xattr -d com.apple.FinderInfo "$(APP_BUNDLE)" 2>/dev/null || true
 	@echo "Bundled $(APP_BUNDLE)"
@@ -96,6 +101,11 @@ sign: bundle
 		codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/Versions/Current/Autoupdate"; \
 	fi; \
 	codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" "$$STAGED_APP/Contents/Frameworks/Sparkle.framework"; \
+	codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" "$$STAGED_APP/Contents/Helpers/cpm" || { \
+		status=$$?; \
+		echo "cpm helper codesign failed. Override the signing identity with: make CODESIGN_IDENTITY=\"Your Signing Identity\""; \
+		exit $$status; \
+	}; \
 	codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" "$$STAGED_APP/Contents/Helpers/cliproxy-manager" || { \
 		status=$$?; \
 		echo "helper codesign failed. Override the signing identity with: make CODESIGN_IDENTITY=\"Your Signing Identity\""; \
@@ -127,6 +137,7 @@ verify: sign
 	codesign --verify --deep --strict --verbose=2 "$$VERIFY_APP"; \
 	test -f "$$VERIFY_APP/Contents/Resources/$(ICON_FILE)" || { echo "Missing bundled icon: $$VERIFY_APP/Contents/Resources/$(ICON_FILE)"; exit 1; }; \
 	plutil -extract CFBundleIconFile raw "$$VERIFY_APP/Contents/Info.plist" | grep -Fx "$(ICON_NAME)" >/dev/null || { echo "Missing CFBundleIconFile: $(ICON_NAME)"; exit 1; }; \
+	test -x "$$VERIFY_APP/Contents/Helpers/cpm" || { echo "Missing bundled helper: $$VERIFY_APP/Contents/Helpers/cpm"; exit 1; }; \
 	test -x "$$VERIFY_APP/Contents/Helpers/cliproxy-manager" || { echo "Missing bundled helper: $$VERIFY_APP/Contents/Helpers/cliproxy-manager"; exit 1; }; \
 	test -d "$$VERIFY_APP/Contents/Frameworks/Sparkle.framework" || { echo "Missing Sparkle.framework"; exit 1; }; \
 	test -x "$$VERIFY_APP/Contents/Frameworks/Sparkle.framework/Autoupdate" || { echo "Missing Sparkle Autoupdate"; exit 1; }; \
@@ -136,48 +147,59 @@ verify: sign
 
 install-helper: sign
 	mkdir -p /usr/local/bin
+	ditto --norsrc --noextattr "$(BUNDLED_CPM)" "/usr/local/bin/cpm"
+	chmod +x "/usr/local/bin/cpm"
 	ditto --norsrc --noextattr "$(BUNDLED_HELPER)" "/usr/local/bin/cliproxy-manager"
 	chmod +x "/usr/local/bin/cliproxy-manager"
-	@echo "Installed helper to /usr/local/bin/cliproxy-manager"
+	@echo "Installed helpers to /usr/local/bin/cpm and /usr/local/bin/cliproxy-manager"
 
 install: sign
 	@set -e; \
 	INSTALL_PATH="/Applications/$(APP_NAME).app"; \
-	HELPER_PATH="/usr/local/bin/cliproxy-manager"; \
-	HELPER_DIR=$$(dirname "$$HELPER_PATH"); \
+	CPM_PATH="/usr/local/bin/cpm"; \
+	LEGACY_HELPER_PATH="/usr/local/bin/cliproxy-manager"; \
+	HELPER_DIR=$$(dirname "$$CPM_PATH"); \
 	APP_STAGING="/Applications/.$(APP_NAME).app.staging"; \
 	APP_PREVIOUS="/Applications/.$(APP_NAME).app.previous"; \
-	HELPER_STAGING="$$HELPER_DIR/.cliproxy-manager.staging"; \
-	HELPER_PREVIOUS="$$HELPER_DIR/.cliproxy-manager.previous"; \
-	cleanup_staging() { rm -rf "$$APP_STAGING" "$$HELPER_STAGING"; }; \
+	CPM_STAGING="$$HELPER_DIR/.cpm.staging"; \
+	CPM_PREVIOUS="$$HELPER_DIR/.cpm.previous"; \
+	LEGACY_STAGING="$$HELPER_DIR/.cliproxy-manager.staging"; \
+	LEGACY_PREVIOUS="$$HELPER_DIR/.cliproxy-manager.previous"; \
+	cleanup_staging() { rm -rf "$$APP_STAGING" "$$CPM_STAGING" "$$LEGACY_STAGING"; }; \
 	rollback() { \
 		status=$$?; \
-		echo "Install failed; rolling back app and helper." >&2; \
+		echo "Install failed; rolling back app and helpers." >&2; \
 		rm -rf "$$INSTALL_PATH"; \
 		if [ -d "$$APP_PREVIOUS" ]; then mv "$$APP_PREVIOUS" "$$INSTALL_PATH" || true; fi; \
-		rm -f "$$HELPER_PATH"; \
-		if [ -e "$$HELPER_PREVIOUS" ]; then mv "$$HELPER_PREVIOUS" "$$HELPER_PATH" || true; fi; \
+		rm -f "$$CPM_PATH"; \
+		if [ -e "$$CPM_PREVIOUS" ]; then mv "$$CPM_PREVIOUS" "$$CPM_PATH" || true; fi; \
+		rm -f "$$LEGACY_HELPER_PATH"; \
+		if [ -e "$$LEGACY_PREVIOUS" ]; then mv "$$LEGACY_PREVIOUS" "$$LEGACY_HELPER_PATH" || true; fi; \
 		cleanup_staging; \
 		exit $$status; \
 	}; \
-	rm -rf "$$APP_STAGING" "$$APP_PREVIOUS" "$$HELPER_STAGING" "$$HELPER_PREVIOUS"; \
+	rm -rf "$$APP_STAGING" "$$APP_PREVIOUS" "$$CPM_STAGING" "$$CPM_PREVIOUS" "$$LEGACY_STAGING" "$$LEGACY_PREVIOUS"; \
 	if ! mkdir -p "$$HELPER_DIR" || \
 	   ! ditto --norsrc --noextattr "$(APP_BUNDLE)" "$$APP_STAGING" || \
-	   ! ditto --norsrc --noextattr "$(BUNDLED_HELPER)" "$$HELPER_STAGING" || \
-	   ! chmod +x "$$HELPER_STAGING"; then \
-		echo "Install failed during staging; existing app and helper were left unchanged." >&2; \
+	   ! ditto --norsrc --noextattr "$(BUNDLED_CPM)" "$$CPM_STAGING" || \
+	   ! chmod +x "$$CPM_STAGING" || \
+	   ! ditto --norsrc --noextattr "$(BUNDLED_HELPER)" "$$LEGACY_STAGING" || \
+	   ! chmod +x "$$LEGACY_STAGING"; then \
+		echo "Install failed during staging; existing app and helpers were left unchanged." >&2; \
 		cleanup_staging; \
 		exit 1; \
 	fi; \
 	trap rollback ERR; \
 	if [ -d "$$INSTALL_PATH" ]; then mv "$$INSTALL_PATH" "$$APP_PREVIOUS"; fi; \
-	if [ -e "$$HELPER_PATH" ]; then mv "$$HELPER_PATH" "$$HELPER_PREVIOUS"; fi; \
+	if [ -e "$$CPM_PATH" ]; then mv "$$CPM_PATH" "$$CPM_PREVIOUS"; fi; \
+	if [ -e "$$LEGACY_HELPER_PATH" ]; then mv "$$LEGACY_HELPER_PATH" "$$LEGACY_PREVIOUS"; fi; \
 	mv "$$APP_STAGING" "$$INSTALL_PATH"; \
-	mv "$$HELPER_STAGING" "$$HELPER_PATH"; \
+	mv "$$CPM_STAGING" "$$CPM_PATH"; \
+	mv "$$LEGACY_STAGING" "$$LEGACY_HELPER_PATH"; \
 	trap - ERR; \
-	rm -rf "$$APP_PREVIOUS" "$$HELPER_PREVIOUS"; \
+	rm -rf "$$APP_PREVIOUS" "$$CPM_PREVIOUS" "$$LEGACY_PREVIOUS"; \
 	echo "Installed $$INSTALL_PATH"; \
-	echo "Installed helper to $$HELPER_PATH"
+	echo "Installed helpers to $$CPM_PATH and $$LEGACY_HELPER_PATH"
 
 run: sign
 	open "$(APP_BUNDLE)"

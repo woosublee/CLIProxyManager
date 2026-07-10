@@ -439,6 +439,20 @@ final class ShellFunctionRendererTests: XCTestCase {
         XCTAssertTrue(script.contains("if ! anthropic_auth_token=\"$( '/Applications/CLI Proxy/cliproxy-manager'\\''s bin' secret get claude-api-key )\"; then"))
     }
 
+    func testStoppedProxyMessagePointsToCpmStartInsteadOfRequiringGUI() throws {
+        var config = configuredCommands()
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "a", provider: .codex, authProfileID: "a.json", commandName: "cca", modelPrefix: "a"),
+            AppConfig.OAuthCommandProfile(id: "b", provider: .codex, authProfileID: "b.json", commandName: "ccb", modelPrefix: "b")
+        ]
+        config.roundRobinProfiles = [
+            AppConfig.RoundRobinProfile(id: "rr", provider: .codex, isEnabled: true, commandName: "ccrr", includedAuthProfileIDs: ["a.json", "b.json"])
+        ]
+        let script = try ShellFunctionRenderer(config: config, helperCommand: "/usr/local/bin/cpm").render()
+        XCTAssertTrue(script.contains("cpm start"))
+        XCTAssertFalse(script.contains("Open CLIProxyManager"))
+    }
+
     func testDefaultGeneratedScriptPassesZshSyntaxCheck() throws {
         let script = try ShellFunctionRenderer(
             config: configuredCommands(),

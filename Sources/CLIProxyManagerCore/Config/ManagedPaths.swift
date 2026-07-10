@@ -35,6 +35,10 @@ public struct ManagedPaths: Equatable, Sendable {
         rootDirectory.appendingPathComponent("auth", isDirectory: true)
     }
 
+    public var proxyLogsDirectory: URL {
+        authDirectory.appendingPathComponent("logs", isDirectory: true)
+    }
+
     public var clipProxyConfigFile: URL {
         clipProxyDirectory.appendingPathComponent("config.yaml")
     }
@@ -61,6 +65,18 @@ public struct ManagedPaths: Equatable, Sendable {
 
     public var clipProxyUpdateStateFile: URL {
         clipProxyDirectory.appendingPathComponent("update-state.json")
+    }
+
+    public var appUpdatesDirectory: URL {
+        rootDirectory.appendingPathComponent("updates/app", isDirectory: true)
+    }
+
+    public func appUpdateDirectory(build: Int) -> URL {
+        appUpdatesDirectory.appendingPathComponent(String(build), isDirectory: true)
+    }
+
+    public func appUpdateManifest(build: Int) -> URL {
+        appUpdateDirectory(build: build).appendingPathComponent("manifest.json")
     }
 
     public static func defaultRootDirectory() -> URL {

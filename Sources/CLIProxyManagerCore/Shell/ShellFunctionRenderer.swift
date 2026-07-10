@@ -225,7 +225,7 @@ public struct ShellFunctionRenderer: Sendable {
         \(commandName)() {
           local routing_env
           if ! routing_env="$(\(shellSingleQuoted(helperCommand)) routing next \(shellSingleQuoted(profile.id)))"; then
-            echo "Cannot select a \(providerName) account for round-robin. Open CLIProxyManager to check routing settings."
+            echo "Cannot select a \(providerName) account for round-robin. Start it with cpm start, then retry."
             return 1
           fi
 

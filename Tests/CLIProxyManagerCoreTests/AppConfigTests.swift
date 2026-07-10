@@ -428,4 +428,10 @@ final class AppConfigTests: XCTestCase {
             root.appendingPathComponent("cliproxyapi").appendingPathComponent("cliproxyapi")
         )
     }
+
+    func testManagedPathsUseAuthLogsForProxyRuntimeLogs() {
+        let root = URL(fileURLWithPath: "/tmp/managed", isDirectory: true)
+        let paths = ManagedPaths(rootDirectory: root)
+        XCTAssertEqual(paths.proxyLogsDirectory, root.appendingPathComponent("auth/logs", isDirectory: true))
+    }
 }

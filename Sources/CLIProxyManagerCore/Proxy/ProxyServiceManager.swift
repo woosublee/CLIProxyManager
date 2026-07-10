@@ -232,6 +232,8 @@ public enum ProxyServiceError: Error, Equatable {
     case launchFailed(String)
 }
 
+extension ProxyServiceManager: ProxyServiceControlling {}
+
 public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
     private let paths: ManagedPaths
     private let bundledBinaryURL: URL?

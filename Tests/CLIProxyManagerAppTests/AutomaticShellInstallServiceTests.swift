@@ -22,10 +22,10 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
 
         let helperCommand = AutomaticShellInstallService.resolvedDefaultHelperCommand(
             currentExecutableURL: executableURL,
-            fileExists: { $0 == "/build/debug/cliproxy-manager" }
+            fileExists: { $0 == "/build/debug/cpm" }
         )
 
-        XCTAssertEqual(helperCommand, "/build/debug/cliproxy-manager")
+        XCTAssertEqual(helperCommand, "/build/debug/cpm")
         #endif
     }
 
@@ -34,10 +34,10 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
 
         let helperCommand = AutomaticShellInstallService.resolvedDefaultHelperCommand(
             currentExecutableURL: executableURL,
-            fileExists: { $0 == "/Applications/CLIProxyManager.app/Contents/Helpers/cliproxy-manager" }
+            fileExists: { $0 == "/Applications/CLIProxyManager.app/Contents/Helpers/cpm" }
         )
 
-        XCTAssertEqual(helperCommand, "/Applications/CLIProxyManager.app/Contents/Helpers/cliproxy-manager")
+        XCTAssertEqual(helperCommand, "/Applications/CLIProxyManager.app/Contents/Helpers/cpm")
     }
 
     func testDefaultHelperCommandMatchesAppBundleExtensionCaseInsensitively() {
@@ -45,21 +45,40 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
 
         let helperCommand = AutomaticShellInstallService.resolvedDefaultHelperCommand(
             currentExecutableURL: executableURL,
-            fileExists: { $0 == "/Applications/CLIProxyManager.APP/Contents/Helpers/cliproxy-manager" }
+            fileExists: { $0 == "/Applications/CLIProxyManager.APP/Contents/Helpers/cpm" }
         )
 
-        XCTAssertEqual(helperCommand, "/Applications/CLIProxyManager.APP/Contents/Helpers/cliproxy-manager")
+        XCTAssertEqual(helperCommand, "/Applications/CLIProxyManager.APP/Contents/Helpers/cpm")
     }
 
     func testDefaultHelperCommandIgnoresNonAppBundleHelperCandidate() {
         let executableURL = URL(fileURLWithPath: "/Volumes/CLIProxyManager/CLIProxyManager/Contents/MacOS/CLIProxyManager")
 
+        // Neither /usr/local/bin/cpm nor any bundle path matches → falls back to cliproxy-manager
         let helperCommand = AutomaticShellInstallService.resolvedDefaultHelperCommand(
             currentExecutableURL: executableURL,
-            fileExists: { $0 == "/Volumes/CLIProxyManager/CLIProxyManager/Contents/Helpers/cliproxy-manager" }
+            fileExists: { $0 == "/Volumes/CLIProxyManager/CLIProxyManager/Contents/Helpers/cpm" }
         )
 
         XCTAssertEqual(helperCommand, "/usr/local/bin/cliproxy-manager")
+    }
+
+    func testDefaultHelperCommandFallsBackToLegacyWhenCpmNotInstalled() {
+        let helperCommand = AutomaticShellInstallService.resolvedDefaultHelperCommand(
+            currentExecutableURL: nil,
+            fileExists: { $0 == "/usr/local/bin/cliproxy-manager" }
+        )
+
+        XCTAssertEqual(helperCommand, "/usr/local/bin/cliproxy-manager")
+    }
+
+    func testDefaultHelperCommandPrefersCpmWhenBothExternalHelpersArePresent() {
+        let helperCommand = AutomaticShellInstallService.resolvedDefaultHelperCommand(
+            currentExecutableURL: nil,
+            fileExists: { $0 == "/usr/local/bin/cpm" || $0 == "/usr/local/bin/cliproxy-manager" }
+        )
+
+        XCTAssertEqual(helperCommand, "/usr/local/bin/cpm")
     }
 
     func testDebugDefaultHelperCommandPrefersHelperBesideCurrentExecutableOverParentHelperCandidate() {
@@ -69,11 +88,11 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
         let helperCommand = AutomaticShellInstallService.resolvedDefaultHelperCommand(
             currentExecutableURL: executableURL,
             fileExists: {
-                $0 == "/build/debug/cliproxy-manager" || $0 == "/build/Helpers/cliproxy-manager"
+                $0 == "/build/debug/cpm" || $0 == "/build/Helpers/cpm"
             }
         )
 
-        XCTAssertEqual(helperCommand, "/build/debug/cliproxy-manager")
+        XCTAssertEqual(helperCommand, "/build/debug/cpm")
         #endif
     }
 

@@ -66,6 +66,57 @@ When the user accepts a CLIProxyAPI binary update, the app downloads `CLIProxyAP
 
 `ccapi` is installed only when a Claude API key exists in the macOS Keychain.
 
+## SSH and headless management
+
+`cpm start` controls only the local CLIProxyAPI proxy process. It does not open the GUI app and does not require a display session. It requires SSH access as the same non-root macOS account that owns `~/.cliproxy-manager`.
+
+```zsh
+cpm status
+cpm start
+cpm logs -f
+cpm restart
+cpm stop
+
+cpm app status
+cpm app start
+cpm app stop
+```
+
+The GUI app is optional — all proxy lifecycle operations work from an SSH session.
+
+### First `cpm` installation
+
+Install a release containing `cpm` once using the normal DMG install flow. Earlier releases only contain `cliproxy-manager`, so they cannot install `cpm` by themselves.
+
+### Headless updates
+
+```zsh
+cpm update check
+cpm update stage
+cpm update apply
+# Automation after inspecting staged versions:
+cpm update apply --yes
+```
+
+Or target individual components:
+
+```zsh
+cpm update check proxy
+cpm update stage proxy
+cpm update apply proxy
+cpm update check app
+cpm update stage app
+cpm update apply app
+```
+
+Key guarantees:
+- `stage` verifies the appcast Ed25519 signature, artifact size, mounted app identity/version, code signature, and both helpers before changing any installed file.
+- `apply` updates `/Applications/CLIProxyManager.app`, `/usr/local/bin/cpm`, and `/usr/local/bin/cliproxy-manager` together or restores the previous three paths if replacement fails.
+- `cpm` must run as the same non-root macOS user that installed the app; `sudo cpm` is rejected and leaves the stage intact.
+- GUI restart is best effort after successful app replacement; GUI absence does not prevent proxy or update management.
+- `cpm update apply proxy` and app updates are independent; app update does not downgrade active CLIProxyAPI.
+- Proxy binary update: `apply` preserves whether the proxy was running before the update.
+
 ## Shell functions
 
 CLIProxyManager generates shell functions instead of aliases so each command can set the right environment only for that invocation.

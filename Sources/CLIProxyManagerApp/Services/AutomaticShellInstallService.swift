@@ -38,13 +38,11 @@ struct AutomaticShellInstallService: Sendable {
     ) -> String {
         if let currentExecutableURL {
             #if DEBUG
-            let debugHelperPath = currentExecutableURL
-                .deletingLastPathComponent()
-                .appendingPathComponent("cliproxy-manager")
-                .path
-            if fileExists(debugHelperPath) {
-                return debugHelperPath
-            }
+            // Prefer cpm, fall back to cliproxy-manager for pre-bootstrap installs
+            let debugCpmPath = currentExecutableURL.deletingLastPathComponent().appendingPathComponent("cpm").path
+            if fileExists(debugCpmPath) { return debugCpmPath }
+            let debugLegacyPath = currentExecutableURL.deletingLastPathComponent().appendingPathComponent("cliproxy-manager").path
+            if fileExists(debugLegacyPath) { return debugLegacyPath }
             #endif
 
             let macOSDirectory = currentExecutableURL.deletingLastPathComponent()
@@ -53,15 +51,15 @@ struct AutomaticShellInstallService: Sendable {
             if macOSDirectory.lastPathComponent == "MacOS",
                contentsDirectory.lastPathComponent == "Contents",
                appBundleURL.pathExtension.lowercased() == "app" {
-                let appBundleHelperPath = contentsDirectory
-                    .appendingPathComponent("Helpers")
-                    .appendingPathComponent("cliproxy-manager")
-                    .path
-                if fileExists(appBundleHelperPath) {
-                    return appBundleHelperPath
-                }
+                let helpersDir = contentsDirectory.appendingPathComponent("Helpers")
+                let cpmPath = helpersDir.appendingPathComponent("cpm").path
+                if fileExists(cpmPath) { return cpmPath }
+                let legacyPath = helpersDir.appendingPathComponent("cliproxy-manager").path
+                if fileExists(legacyPath) { return legacyPath }
             }
         }
+        // Prefer cpm if installed; fall back to cliproxy-manager for pre-bootstrap installs
+        if fileExists("/usr/local/bin/cpm") { return "/usr/local/bin/cpm" }
         return "/usr/local/bin/cliproxy-manager"
     }
 
