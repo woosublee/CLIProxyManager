@@ -66,6 +66,24 @@ When the user accepts a CLIProxyAPI binary update, the app downloads `CLIProxyAP
 
 `ccapi` is installed only when a Claude API key exists in the macOS Keychain.
 
+## SSH and headless management
+
+`cpm start` controls only the local CLIProxyAPI proxy process. It does not open the GUI app and does not require a display session. It requires SSH access as the same non-root macOS account that owns `~/.cliproxy-manager`.
+
+```zsh
+cpm status
+cpm start
+cpm logs -f
+cpm restart
+cpm stop
+
+cpm app status
+cpm app start
+cpm app stop
+```
+
+The GUI app is optional — all proxy lifecycle operations work from an SSH session.
+
 ## Shell functions
 
 CLIProxyManager generates shell functions instead of aliases so each command can set the right environment only for that invocation.
