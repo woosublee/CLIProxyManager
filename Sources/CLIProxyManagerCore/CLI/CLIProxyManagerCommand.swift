@@ -3,6 +3,8 @@ import Foundation
 public enum CLIProxyManagerCommandError: Error, Equatable, CustomStringConvertible {
     case usage
     case emptySecret(String)
+    case prerequisite(String)
+    case operation(String)
 
     public var description: String {
         switch self {
@@ -10,6 +12,19 @@ public enum CLIProxyManagerCommandError: Error, Equatable, CustomStringConvertib
             "Usage: cliproxy-manager secret <get|set|delete> claude-api-key | cliproxy-manager routing next <round-robin-profile-id>"
         case .emptySecret(let key):
             "Secret value cannot be empty: \(key)"
+        case .prerequisite(let message), .operation(let message):
+            message
+        }
+    }
+
+    public var exitCode: CLICommandExitCode {
+        switch self {
+        case .usage, .emptySecret:
+            .usage
+        case .prerequisite:
+            .prerequisite
+        case .operation:
+            .failure
         }
     }
 }
@@ -20,7 +35,7 @@ public struct CLIProxyManagerCommand: Sendable {
     private let authProfileStore: AuthProfileStore
     private let stateSelector: any RoundRobinStateSelecting
     private let input: @Sendable () -> String
-    private let output: @Sendable (String) -> Void
+    private let output: any CLICommandOutputWriting
 
     public init(
         secretStore: any SecretStore = KeychainSecretStore(),
@@ -31,7 +46,7 @@ public struct CLIProxyManagerCommand: Sendable {
             let data = FileHandle.standardInput.readDataToEndOfFile()
             return String(data: data, encoding: .utf8) ?? ""
         },
-        output: @escaping @Sendable (String) -> Void = { print($0) }
+        output: any CLICommandOutputWriting = TerminalCommandOutput()
     ) {
         self.secretStore = secretStore
         self.configStore = configStore
@@ -41,7 +56,7 @@ public struct CLIProxyManagerCommand: Sendable {
         self.output = output
     }
 
-    public func run(arguments: [String]) throws {
+    public func run(arguments: [String]) async throws {
         if arguments.count == 3, arguments[0] == "secret" {
             try runSecret(arguments: arguments)
             return
@@ -59,7 +74,7 @@ public struct CLIProxyManagerCommand: Sendable {
         }
         switch arguments[1] {
         case "get":
-            output(try secretStore.get(key))
+            output.writeStdout("\(try secretStore.get(key))\n")
         case "set":
             let value = input().trimmingCharacters(in: .whitespacesAndNewlines)
             guard !value.isEmpty else {
@@ -77,6 +92,6 @@ public struct CLIProxyManagerCommand: Sendable {
         let config = try configStore.load()
         let authProfiles = try authProfileStore.profiles()
         let service = RoundRobinSelectionService(stateSelector: stateSelector)
-        output(try service.shellEnvironmentAssignments(profileID: profileID, config: config, authProfiles: authProfiles))
+        output.writeStdout("\(try service.shellEnvironmentAssignments(profileID: profileID, config: config, authProfiles: authProfiles))\n")
     }
 }

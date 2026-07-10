@@ -2,19 +2,19 @@ import XCTest
 @testable import CLIProxyManagerCore
 
 final class CLIProxyManagerCommandTests: XCTestCase {
-    func testSecretGetStillPrintsSecret() throws {
-        let output = OutputCollector()
+    func testSecretGetStillPrintsSecret() async throws {
+        let output = OutputDouble(isInteractive: false)
         let command = CLIProxyManagerCommand(
             secretStore: InMemorySecretStore(values: [.claudeAPIKey: "secret-value"]),
-            output: { @Sendable line in output.append(line) }
+            output: output
         )
 
-        try command.run(arguments: ["secret", "get", "claude-api-key"])
+        try await command.run(arguments: ["secret", "get", "claude-api-key"])
 
-        XCTAssertEqual(output.value, "secret-value\n")
+        XCTAssertEqual(output.stdout, ["secret-value\n"])
     }
 
-    func testRoutingNextPrintsShellAssignments() throws {
+    func testRoutingNextPrintsShellAssignments() async throws {
         let sandbox = try makeSandbox()
         let configStore = AppConfigStore(paths: ManagedPaths(rootDirectory: sandbox))
         var config = AppConfig.default
@@ -30,25 +30,27 @@ final class CLIProxyManagerCommandTests: XCTestCase {
         try FileManager.default.createDirectory(at: authDirectory, withIntermediateDirectories: true)
         try Data(#"{"type":"codex","prefix":"codex-a","disabled":false}"#.utf8).write(to: authDirectory.appendingPathComponent("codex-a.json"))
         try Data(#"{"type":"codex","prefix":"codex-b","disabled":false}"#.utf8).write(to: authDirectory.appendingPathComponent("codex-b.json"))
-        let output = OutputCollector()
+        let output = OutputDouble(isInteractive: false)
         let command = CLIProxyManagerCommand(
             secretStore: InMemorySecretStore(),
             configStore: configStore,
             authProfileStore: AuthProfileStore(authDirectory: authDirectory),
             stateSelector: RoundRobinStateStore(stateFile: sandbox.appendingPathComponent("round-robin-state.json")),
-            output: { @Sendable line in output.append(line) }
+            output: output
         )
 
-        try command.run(arguments: ["routing", "next", "codex-default"])
+        try await command.run(arguments: ["routing", "next", "codex-default"])
 
-        XCTAssertTrue(output.value.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='codex-a/gpt-5.5(xhigh)'"))
-        XCTAssertTrue(output.value.contains("CLIPROXY_ROUND_ROBIN_PROFILE='codex-a.json'"))
+        XCTAssertEqual(output.stdout.count, 1)
+        XCTAssertTrue(output.stdout[0].hasSuffix("\n"))
+        XCTAssertTrue(output.stdout[0].contains("ANTHROPIC_DEFAULT_OPUS_MODEL='codex-a/gpt-5.5(xhigh)'"))
+        XCTAssertTrue(output.stdout[0].contains("CLIPROXY_ROUND_ROBIN_PROFILE='codex-a.json'"))
     }
 
-    func testUnknownArgumentsThrowUsage() {
-        let command = CLIProxyManagerCommand(secretStore: InMemorySecretStore())
+    func testUnknownArgumentsStillThrowUsage() async {
+        let command = CLIProxyManagerCommand(output: OutputDouble(isInteractive: false))
 
-        XCTAssertThrowsError(try command.run(arguments: ["routing"])) { error in
+        await XCTAssertThrowsErrorAsync(try await command.run(arguments: ["unknown"])) { error in
             XCTAssertEqual(error as? CLIProxyManagerCommandError, .usage)
         }
     }
@@ -63,19 +65,28 @@ final class CLIProxyManagerCommandTests: XCTestCase {
     }
 }
 
-private final class OutputCollector: @unchecked Sendable {
-    private let lock = NSLock()
-    private var storage = ""
+private final class OutputDouble: CLICommandOutputWriting, @unchecked Sendable {
+    let isInteractive: Bool
+    private(set) var stdout: [String] = []
+    private(set) var stderr: [String] = []
 
-    var value: String {
-        lock.lock()
-        defer { lock.unlock() }
-        return storage
-    }
+    init(isInteractive: Bool) { self.isInteractive = isInteractive }
 
-    func append(_ line: String) {
-        lock.lock()
-        storage += line + "\n"
-        lock.unlock()
+    func writeStdout(_ text: String) { stdout.append(text) }
+    func writeStderr(_ text: String) { stderr.append(text) }
+    func confirm(_: String) -> Bool { false }
+}
+
+private func XCTAssertThrowsErrorAsync<T>(
+    _ expression: @autoclosure () async throws -> T,
+    _ errorHandler: (Error) -> Void = { _ in },
+    file: StaticString = #filePath,
+    line: UInt = #line
+) async {
+    do {
+        _ = try await expression()
+        XCTFail("Expected error to be thrown", file: file, line: line)
+    } catch {
+        errorHandler(error)
     }
 }

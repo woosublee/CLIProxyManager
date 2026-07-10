@@ -7,6 +7,7 @@ let package = Package(
     products: [
         .executable(name: "CLIProxyManager", targets: ["CLIProxyManagerApp"]),
         .executable(name: "cliproxy-manager", targets: ["CLIProxyManagerCLI"]),
+        .executable(name: "cpm", targets: ["CPMCLI"]),
         .library(name: "CLIProxyManagerCore", targets: ["CLIProxyManagerCore"])
     ],
     dependencies: [
@@ -39,6 +40,11 @@ let package = Package(
             name: "CLIProxyManagerCLI",
             dependencies: ["CLIProxyManagerCore"],
             path: "Sources/CLIProxyManagerCLI"
+        ),
+        .executableTarget(
+            name: "CPMCLI",
+            dependencies: ["CLIProxyManagerCore"],
+            path: "Sources/CPMCLI"
         ),
         .testTarget(
             name: "CLIProxyManagerCoreTests",
