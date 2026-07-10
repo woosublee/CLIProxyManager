@@ -55,6 +55,97 @@ final class CLIProxyManagerCommandTests: XCTestCase {
         }
     }
 
+    func testStartDispatchesOnlyToProxyRuntime() async throws {
+        let services = RuntimeServicesDouble()
+        let command = makeRuntimeCommand(services: services)
+
+        try await command.run(arguments: ["start"])
+
+        XCTAssertEqual(services.calls, [.proxyStart])
+    }
+
+    func testAppStartDispatchesOnlyToAppLifecycle() async throws {
+        let services = RuntimeServicesDouble()
+        let command = makeRuntimeCommand(services: services)
+
+        try await command.run(arguments: ["app", "start"])
+
+        XCTAssertEqual(services.calls, [.appStart])
+    }
+
+    func testStatusJSONWritesValidJSONToStdout() async throws {
+        let output = OutputDouble(isInteractive: false)
+        let command = makeRuntimeCommand(output: output, services: RuntimeServicesDouble())
+
+        try await command.run(arguments: ["status", "--json"])
+
+        XCTAssertNoThrow(try JSONSerialization.jsonObject(with: Data(output.stdout.joined().utf8)))
+        XCTAssertTrue(output.stderr.isEmpty)
+    }
+
+    func testRootUserIsRejectedBeforeStart() async throws {
+        let services = RuntimeServicesDouble()
+        let command = makeRuntimeCommand(services: services, uid: 0)
+
+        await XCTAssertThrowsErrorAsync(try await command.run(arguments: ["start"])) { error in
+            XCTAssertEqual(error as? CLIProxyManagerCommandError, .prerequisite(
+                "cpm must run as the macOS user that owns ~/.cliproxy-manager; do not use sudo."
+            ))
+        }
+        XCTAssertTrue(services.calls.isEmpty)
+    }
+
+    func testRootUserIsPermittedForStatus() async throws {
+        let output = OutputDouble(isInteractive: false)
+        let command = makeRuntimeCommand(output: output, services: RuntimeServicesDouble(), uid: 0)
+
+        try await command.run(arguments: ["status"])
+
+        XCTAssertFalse(output.stdout.isEmpty)
+    }
+
+    func testStopDispatchesToProxyRuntime() async throws {
+        let services = RuntimeServicesDouble()
+        let command = makeRuntimeCommand(services: services)
+
+        try await command.run(arguments: ["stop"])
+
+        XCTAssertEqual(services.calls, [.proxyStop])
+    }
+
+    func testRestartDispatchesToProxyRuntime() async throws {
+        let services = RuntimeServicesDouble()
+        let command = makeRuntimeCommand(services: services)
+
+        try await command.run(arguments: ["restart"])
+
+        XCTAssertEqual(services.calls, [.proxyRestart])
+    }
+
+    func testLogsWithDuplicateFlagThrowsUsage() async {
+        let command = makeRuntimeCommand(services: RuntimeServicesDouble())
+
+        await XCTAssertThrowsErrorAsync(try await command.run(arguments: ["logs", "-f", "-f"])) { error in
+            XCTAssertEqual(error as? CLIProxyManagerCommandError, .usage)
+        }
+    }
+
+    private func makeRuntimeCommand(
+        output: OutputDouble = OutputDouble(isInteractive: false),
+        services: RuntimeServicesDouble,
+        uid: uid_t = 501
+    ) -> CLIProxyManagerCommand {
+        CLIProxyManagerCommand(
+            secretStore: InMemorySecretStore(),
+            output: output,
+            proxyRuntime: services,
+            appLifecycle: services,
+            logService: services,
+            statusReporter: services,
+            currentUID: { uid }
+        )
+    }
+
     private func makeSandbox() throws -> URL {
         let sandbox = FileManager.default.temporaryDirectory
             .appendingPathComponent("CLIProxyManagerTests")
@@ -88,5 +179,51 @@ private func XCTAssertThrowsErrorAsync<T>(
         XCTFail("Expected error to be thrown", file: file, line: line)
     } catch {
         errorHandler(error)
+    }
+}
+
+private final class RuntimeServicesDouble: ProxyRuntimeServicing, AppLifecycleControlling, ProxyLogServicing, StatusReporting, @unchecked Sendable {
+    enum Call: Equatable {
+        case proxyStart, proxyStop, proxyRestart, proxyStatus
+        case appStart, appStop, appRestart, appStatus
+        case logsRead, logsFollow
+        case statusReport
+    }
+
+    private(set) var calls: [Call] = []
+    let lock = NSLock()
+
+    private func record(_ call: Call) { lock.withLock { calls.append(call) } }
+
+    private let proxyStatusResult = ProxyRuntimeStatus(port: 8317, running: false, health: ProxyHealthSummary(title: "OK", message: "OK"), activeVersion: nil, pendingVersion: nil)
+    private let appStatusResult = AppLifecycleStatus(installed: true, running: false, path: nil, version: nil, build: nil)
+
+    // ProxyRuntimeServicing
+    func status() async throws -> ProxyRuntimeStatus { record(.proxyStatus); return proxyStatusResult }
+    func start() async throws -> ProxyRuntimeStatus { record(.proxyStart); return proxyStatusResult }
+    func stop() async throws -> ProxyRuntimeStatus { record(.proxyStop); return proxyStatusResult }
+    func restart() async throws -> ProxyRuntimeStatus { record(.proxyRestart); return proxyStatusResult }
+
+    // AppLifecycleControlling
+    func status() async throws -> AppLifecycleStatus { record(.appStatus); return appStatusResult }
+    func start() async throws -> AppLifecycleStatus { record(.appStart); return appStatusResult }
+    func stop() async throws -> AppLifecycleStatus { record(.appStop); return appStatusResult }
+    func restart() async throws -> AppLifecycleStatus { record(.appRestart); return appStatusResult }
+
+    // ProxyLogServicing
+    func readLastLines(_ lineCount: Int) throws -> ProxyLogSnapshot {
+        record(.logsRead)
+        return ProxyLogSnapshot(fileURL: URL(fileURLWithPath: "/tmp/main.log"), text: "")
+    }
+    func follow() throws { record(.logsFollow) }
+
+    // StatusReporting
+    func status() async throws -> CPMStatus {
+        record(.statusReport)
+        return CPMStatus(
+            app: CPMStatus.App(installed: true, path: nil, version: nil, build: nil, running: false, stagedVersion: nil),
+            helper: CPMStatus.Helper(path: "/usr/local/bin/cpm", installed: false, matchesBundled: false),
+            proxy: CPMStatus.Proxy(port: 8317, running: false, activeVersion: nil, pendingVersion: nil, stagedVersion: nil, logsPath: "/tmp/logs")
+        )
     }
 }

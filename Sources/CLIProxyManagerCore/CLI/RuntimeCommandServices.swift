@@ -99,15 +99,83 @@ public protocol AppProcessInspecting: Sendable {
     func isRunning(bundleIdentifier: String) async -> Bool
 }
 
+// MARK: - Helper inspection
+
+public struct HelperStatus: Equatable, Sendable {
+    public let path: String
+    public let installed: Bool
+    public let matchesBundled: Bool
+
+    public init(path: String, installed: Bool, matchesBundled: Bool) {
+        self.path = path
+        self.installed = installed
+        self.matchesBundled = matchesBundled
+    }
+}
+
+public protocol HelperInspecting: Sendable {
+    func inspect() -> HelperStatus
+}
+
 // MARK: - Status reporting
 
 public struct CPMStatus: Codable, Equatable, Sendable {
-    public let proxy: ProxyRuntimeStatus
-    public let app: AppLifecycleStatus
+    public let app: App
+    public let helper: Helper
+    public let proxy: Proxy
 
-    public init(proxy: ProxyRuntimeStatus, app: AppLifecycleStatus) {
-        self.proxy = proxy
+    public init(app: App, helper: Helper, proxy: Proxy) {
         self.app = app
+        self.helper = helper
+        self.proxy = proxy
+    }
+
+    public struct App: Codable, Equatable, Sendable {
+        public let installed: Bool
+        public let path: String?
+        public let version: String?
+        public let build: String?
+        public let running: Bool
+        public let stagedVersion: String?
+
+        public init(installed: Bool, path: String?, version: String?, build: String?, running: Bool, stagedVersion: String?) {
+            self.installed = installed
+            self.path = path
+            self.version = version
+            self.build = build
+            self.running = running
+            self.stagedVersion = stagedVersion
+        }
+    }
+
+    public struct Helper: Codable, Equatable, Sendable {
+        public let path: String
+        public let installed: Bool
+        public let matchesBundled: Bool
+
+        public init(path: String, installed: Bool, matchesBundled: Bool) {
+            self.path = path
+            self.installed = installed
+            self.matchesBundled = matchesBundled
+        }
+    }
+
+    public struct Proxy: Codable, Equatable, Sendable {
+        public let port: Int
+        public let running: Bool
+        public let activeVersion: String?
+        public let pendingVersion: String?
+        public let stagedVersion: String?
+        public let logsPath: String
+
+        public init(port: Int, running: Bool, activeVersion: String?, pendingVersion: String?, stagedVersion: String?, logsPath: String) {
+            self.port = port
+            self.running = running
+            self.activeVersion = activeVersion
+            self.pendingVersion = pendingVersion
+            self.stagedVersion = stagedVersion
+            self.logsPath = logsPath
+        }
     }
 }
 
