@@ -69,3 +69,48 @@ public struct ProxyLogSnapshot: Equatable, Sendable {
 public protocol LogFollowing: Sendable {
     func follow(fileURL: URL) throws
 }
+
+// MARK: - App lifecycle
+
+public struct AppLifecycleStatus: Codable, Equatable, Sendable {
+    public let installed: Bool
+    public let running: Bool
+    public let path: String?
+    public let version: String?
+    public let build: String?
+
+    public init(installed: Bool, running: Bool, path: String?, version: String?, build: String?) {
+        self.installed = installed
+        self.running = running
+        self.path = path
+        self.version = version
+        self.build = build
+    }
+}
+
+public protocol AppLifecycleControlling: Sendable {
+    func status() async throws -> AppLifecycleStatus
+    func start() async throws -> AppLifecycleStatus
+    func stop() async throws -> AppLifecycleStatus
+    func restart() async throws -> AppLifecycleStatus
+}
+
+public protocol AppProcessInspecting: Sendable {
+    func isRunning(bundleIdentifier: String) async -> Bool
+}
+
+// MARK: - Status reporting
+
+public struct CPMStatus: Codable, Equatable, Sendable {
+    public let proxy: ProxyRuntimeStatus
+    public let app: AppLifecycleStatus
+
+    public init(proxy: ProxyRuntimeStatus, app: AppLifecycleStatus) {
+        self.proxy = proxy
+        self.app = app
+    }
+}
+
+public protocol StatusReporting: Sendable {
+    func status() async throws -> CPMStatus
+}
