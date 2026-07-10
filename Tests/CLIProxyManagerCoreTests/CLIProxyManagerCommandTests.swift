@@ -47,6 +47,47 @@ final class CLIProxyManagerCommandTests: XCTestCase {
         XCTAssertTrue(output.stdout[0].contains("CLIPROXY_ROUND_ROBIN_PROFILE='codex-a.json'"))
     }
 
+    func testQuotaKeyStatusAndSetDoNotPrintKey() async throws {
+        let sandbox = try makeSandbox()
+        let configStore = AppConfigStore(paths: ManagedPaths(rootDirectory: sandbox))
+        try configStore.save(.default)
+        let output = OutputDouble(isInteractive: false)
+        let keyStore = CommandManagementKeyStore()
+        let services = RuntimeServicesDouble()
+        let command = CLIProxyManagerCommand(
+            secretStore: InMemorySecretStore(),
+            configStore: configStore,
+            authProfileStore: AuthProfileStore(authDirectory: sandbox.appendingPathComponent("auth", isDirectory: true)),
+            input: { "management-key-value\n" },
+            output: output,
+            proxyRuntime: services,
+            appLifecycle: services,
+            logService: services,
+            statusReporter: services,
+            subscriptionUsageKeyStore: keyStore
+        )
+
+        try await command.run(arguments: ["quota", "key", "set", "--stdin"])
+        try await command.run(arguments: ["quota", "key", "status"])
+
+        XCTAssertEqual(output.stdout, ["Management key stored.\n", "configured=true\n"])
+        XCTAssertFalse(output.stdout.joined().contains("management-key-value"))
+        XCTAssertTrue(try configStore.load().subscriptionUsage.isEnabled)
+        XCTAssertEqual(services.calls, [.proxyStatus])
+    }
+
+    func testQuotaKeyGetIsRejected() async {
+        let command = CLIProxyManagerCommand(
+            secretStore: InMemorySecretStore(),
+            output: OutputDouble(isInteractive: false),
+            subscriptionUsageKeyStore: CommandManagementKeyStore()
+        )
+
+        await XCTAssertThrowsErrorAsync(try await command.run(arguments: ["quota", "key", "get"])) { error in
+            XCTAssertEqual(error as? CLIProxyManagerCommandError, .usage)
+        }
+    }
+
     func testUnknownArgumentsStillThrowUsage() async {
         let command = CLIProxyManagerCommand(output: OutputDouble(isInteractive: false))
 
@@ -154,6 +195,14 @@ final class CLIProxyManagerCommandTests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at: sandbox) }
         return sandbox
     }
+}
+
+private final class CommandManagementKeyStore: SubscriptionUsageManagementKeyConfiguring, @unchecked Sendable {
+    private var key: String?
+
+    func isConfigured() -> Bool { key != nil }
+    func setManagementKey(_ value: String) throws { key = value }
+    func deleteManagementKey() throws { key = nil }
 }
 
 private final class OutputDouble: CLICommandOutputWriting, @unchecked Sendable {

@@ -18,6 +18,7 @@ final class AppConfigStoreTests: XCTestCase {
         XCTAssertEqual(config.ccodex.sonnet, AppConfig.CodexRole(model: "gpt-5.5", reasoning: .medium, contextWindow: .auto))
         XCTAssertEqual(config.ccodex.haiku, AppConfig.CodexRole(model: "gpt-5.5", reasoning: .low, contextWindow: .auto))
         XCTAssertEqual(config.roundRobinProfiles, [])
+        XCTAssertFalse(config.subscriptionUsage.isEnabled)
     }
 
     func testStoreReturnsDefaultWhenConfigFileDoesNotExist() throws {
@@ -27,6 +28,29 @@ final class AppConfigStoreTests: XCTestCase {
         let config = try store.load()
 
         XCTAssertEqual(config, .default)
+    }
+
+    func testLegacyConfigWithoutSubscriptionUsageDefaultsToDisabled() throws {
+        let legacyJSON = #"""
+        {
+          "port": 18317,
+          "commands": {"cc":"","ccapi":"","ccodex":""},
+          "ccapi": {"model":"claude-opus-4-8"},
+          "ccodex": {
+            "opus": {"model":"gpt-5.5","reasoning":"xhigh","contextWindow":"auto"},
+            "sonnet": {"model":"gpt-5.5","reasoning":"medium","contextWindow":"auto"},
+            "haiku": {"model":"gpt-5.5","reasoning":"low","contextWindow":"auto"}
+          },
+          "includeDangerouslySkipPermissions": false,
+          "startAtLogin": false,
+          "showDockIcon": true,
+          "showMenuBarIcon": true
+        }
+        """#
+
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data(legacyJSON.utf8))
+
+        XCTAssertFalse(config.subscriptionUsage.isEnabled)
     }
 
     func testStoreSavesAndLoadsConfig() throws {

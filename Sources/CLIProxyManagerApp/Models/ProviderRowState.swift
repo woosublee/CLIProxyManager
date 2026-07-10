@@ -41,6 +41,7 @@ struct ProviderRowState: Identifiable, Equatable {
     let isConnected: Bool
     let isErrored: Bool
     let accountDetailHidden: Bool
+    let subscriptionUsageState: AccountSubscriptionUsageState
 
     init(
         id: ID,
@@ -54,7 +55,8 @@ struct ProviderRowState: Identifiable, Equatable {
         connectionDetail: String,
         isConnected: Bool,
         isErrored: Bool = false,
-        accountDetailHidden: Bool = true
+        accountDetailHidden: Bool = true,
+        subscriptionUsageState: AccountSubscriptionUsageState = .disabled
     ) {
         self.id = id
         self.providerType = providerType ?? Self.inferredProviderType(from: id)
@@ -68,6 +70,7 @@ struct ProviderRowState: Identifiable, Equatable {
         self.isConnected = isConnected
         self.isErrored = isErrored
         self.accountDetailHidden = accountDetailHidden
+        self.subscriptionUsageState = subscriptionUsageState
     }
 
     var displayTitle: String {

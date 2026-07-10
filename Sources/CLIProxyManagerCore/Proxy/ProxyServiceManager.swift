@@ -242,6 +242,8 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
     private let launcher: any ProcessLaunching
     private let launchctl: any LaunchctlManaging
     private let fileManager: FileManager
+    private let managementKeyProvider: @Sendable () -> String?
+    private let subscriptionUsageEnabledProvider: @Sendable () -> Bool
     private let processState = LockedProcessState()
     private let lifecycleLock = NSLock()
 
@@ -250,7 +252,9 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         bundledBinaryURL: URL? = nil,
         bundledManifestURL: URL? = nil,
         launcher: any ProcessLaunching = ProcessLauncher(),
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        managementKeyProvider: (@Sendable () -> String?)? = nil,
+        subscriptionUsageEnabledProvider: (@Sendable () -> Bool)? = nil
     ) {
         self.init(
             paths: paths,
@@ -258,7 +262,11 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
             bundledManifestURL: bundledManifestURL,
             launcher: launcher,
             launchctl: LaunchctlRunner(),
-            fileManager: fileManager
+            fileManager: fileManager,
+            managementKeyProvider: managementKeyProvider ?? { try? SubscriptionUsageManagementKeyStore().managementKey() },
+            subscriptionUsageEnabledProvider: subscriptionUsageEnabledProvider ?? {
+                (try? AppConfigStore(paths: paths).load().subscriptionUsage.isEnabled) ?? false
+            }
         )
     }
 
@@ -268,7 +276,9 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         bundledManifestURL: URL? = nil,
         launcher: any ProcessLaunching = ProcessLauncher(),
         launchctl: any LaunchctlManaging,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        managementKeyProvider: (@Sendable () -> String?)? = nil,
+        subscriptionUsageEnabledProvider: (@Sendable () -> Bool)? = nil
     ) {
         self.paths = paths
         self.bundledBinaryURL = bundledBinaryURL
@@ -277,6 +287,10 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         self.launcher = launcher
         self.launchctl = launchctl
         self.fileManager = fileManager
+        self.managementKeyProvider = managementKeyProvider ?? { try? SubscriptionUsageManagementKeyStore().managementKey() }
+        self.subscriptionUsageEnabledProvider = subscriptionUsageEnabledProvider ?? {
+            (try? AppConfigStore(paths: paths).load().subscriptionUsage.isEnabled) ?? false
+        }
     }
 
     public func prepare(port: Int) throws {
@@ -312,7 +326,31 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         do {
             try installBundledBinaryIfNeeded()
             try fileManager.createDirectory(at: paths.authDirectory, withIntermediateDirectories: true)
-            try config(for: port).write(to: paths.clipProxyConfigFile, atomically: true, encoding: .utf8)
+            let temporaryConfigURL = paths.clipProxyConfigFile
+                .deletingLastPathComponent()
+                .appendingPathComponent(".config-\(UUID().uuidString).yaml")
+            let configData = Data(config(for: port).utf8)
+            guard fileManager.createFile(
+                atPath: temporaryConfigURL.path,
+                contents: configData,
+                attributes: [.posixPermissions: 0o600]
+            ) else {
+                throw ProxyServiceError.writeFailed("Failed to create proxy config")
+            }
+            defer { try? fileManager.removeItem(at: temporaryConfigURL) }
+            var isDirectory: ObjCBool = false
+            let hasExistingConfig = fileManager.fileExists(
+                atPath: paths.clipProxyConfigFile.path,
+                isDirectory: &isDirectory
+            )
+            if hasExistingConfig && isDirectory.boolValue {
+                throw ProxyServiceError.writeFailed("Proxy config path is a directory")
+            }
+            if hasExistingConfig {
+                _ = try fileManager.replaceItemAt(paths.clipProxyConfigFile, withItemAt: temporaryConfigURL)
+            } else {
+                try fileManager.moveItem(at: temporaryConfigURL, to: paths.clipProxyConfigFile)
+            }
         } catch let error as ProxyServiceError {
             throw error
         } catch {
@@ -467,13 +505,25 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
     }
 
     private func config(for port: Int) -> String {
-        """
+        let managementConfiguration: String
+        if subscriptionUsageEnabledProvider(),
+           let key = managementKeyProvider()?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !key.isEmpty {
+            managementConfiguration = """
+            remote-management:
+              secret-key: \(yamlDoubleQuoted(key))
+            """
+        } else {
+            managementConfiguration = ""
+        }
+        return """
         port: \(port)
         auth-dir: \(yamlDoubleQuoted(paths.authDirectory.path))
         logging-to-file: true
         debug: false
         api-keys:
           - sk-dummy
+        \(managementConfiguration)
         """
     }
 

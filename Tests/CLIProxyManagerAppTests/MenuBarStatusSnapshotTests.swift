@@ -42,6 +42,41 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
         XCTAssertEqual(snapshot.connectedProviders.map { $0.connectionDetail }, ["claude@example.com", "codex@example.com"])
     }
 
+    func testSnapshotCarriesAvailableSubscriptionUsageAndPrivacyState() {
+        let snapshot = MenuBarStatusSnapshot(
+            serverStatus: DiagnosticStatus(severity: .ready, title: "CLIProxyAPI Running", message: "Ready"),
+            providers: [
+                ProviderRowState(
+                    id: .claude,
+                    name: "Claude OAuth",
+                    nickname: "",
+                    functionName: "ccm",
+                    connectionTitle: "Connected",
+                    connectionDetail: "claude@example.com",
+                    isConnected: true,
+                    accountDetailHidden: false,
+                    subscriptionUsageState: .available(
+                        SubscriptionUsageSnapshot(
+                            profileID: "claude.json",
+                            provider: .claude,
+                            windows: [UsageWindow(id: "five_hour", label: "5h", usedPercent: 52, resetAt: nil)],
+                            fetchedAt: Date(timeIntervalSince1970: 0)
+                        )
+                    )
+                )
+            ]
+        )
+
+        guard let provider = snapshot.connectedProviders.first else {
+            return XCTFail("Expected connected provider")
+        }
+        XCTAssertFalse(provider.accountDetailHidden)
+        guard case let .available(usage) = provider.subscriptionUsageState else {
+            return XCTFail("Expected subscription usage")
+        }
+        XCTAssertEqual(usage.windows.map(\.id), ["five_hour"])
+    }
+
     func testSnapshotShowsEmptyMessageWhenNoProviderIsConnected() {
         let snapshot = MenuBarStatusSnapshot(
             serverStatus: DiagnosticStatus(
