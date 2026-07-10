@@ -35,6 +35,10 @@ public struct ManagedPaths: Equatable, Sendable {
         rootDirectory.appendingPathComponent("auth", isDirectory: true)
     }
 
+    public var proxyLogsDirectory: URL {
+        authDirectory.appendingPathComponent("logs", isDirectory: true)
+    }
+
     public var clipProxyConfigFile: URL {
         clipProxyDirectory.appendingPathComponent("config.yaml")
     }

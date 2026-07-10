@@ -249,7 +249,7 @@ final class DashboardViewModel: ObservableObject {
 
     func revealLogsInFinder() {
         #if canImport(AppKit)
-        let url = ManagedPaths().logsDirectory
+        let url = ManagedPaths().proxyLogsDirectory
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         NSWorkspace.shared.open(url)
         #endif
