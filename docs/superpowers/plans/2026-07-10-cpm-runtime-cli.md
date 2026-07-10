@@ -274,7 +274,7 @@ git commit -m "feat: add cpm command boundary" -m "Co-Authored-By: Claude <norep
 - Produces: `public protocol AppBundleLocating: Sendable { func locateInstalledApp() throws -> ManagedAppBundle }`.
 - Produces: `public struct ProxyRuntimeStatus: Codable, Equatable, Sendable` with `port`, `running`, `health`, `activeVersion`, `pendingVersion`.
 - Produces: `public protocol ProxyRuntimeServicing: Sendable { func status() async throws -> ProxyRuntimeStatus; func start() async throws -> ProxyRuntimeStatus; func stop() async throws -> ProxyRuntimeStatus; func restart() async throws -> ProxyRuntimeStatus }`.
-- Produces: `public struct ProxyRuntimeService: ProxyRuntimeServicing`.
+- Produces: `public struct ProxyRuntimeService: ProxyRuntimeServicing`, constructed with `AppBundleLocating` and `proxyServiceFactory: @Sendable (URL?, URL?) -> any ProxyServiceControlling`.
 - Consumes: `ManagedPaths`, `AppConfigStore`, `ProxyServiceManager`, `ProxyHealthClient`, `CLIProxyAPIBinaryStore`.
 
 - [ ] **Step 1: Write failing bundle-location tests using only a temporary app fixture**
@@ -357,7 +357,8 @@ func testStartUsesConfiguredPortAndBundleResources() async throws {
     let proxy = ProxyServiceDouble()
     let service = ProxyRuntimeService(
         configLoader: { try AppConfigStore(paths: paths).load() },
-        proxyService: proxy,
+        bundleLocator: BundleLocatorDouble(bundle: try makeAppBundle(version: "0.1.12", build: "15")),
+        proxyServiceFactory: { _, _ in proxy },
         healthClient: HealthClientDouble(status: .ready),
         binaryStore: CLIProxyAPIBinaryStore(paths: paths)
     )
@@ -397,7 +398,7 @@ extension ProxyServiceManager: ProxyServiceControlling {}
 
 Implement `ProxyRuntimeService` so every status reads the current config port and calls `ProxyHealthClient.status(port:)`. Convert `DiagnosticStatus.severity == .ready` to `running == true`; preserve the health title/message in a Codable `ProxyHealthSummary`. Read active and pending manifests through `CLIProxyAPIBinaryStore` and expose their version strings or `nil`.
 
-For `start` and `restart`, resolve bundle proxy URLs via `AppBundleLocating` before calling the manager so a fresh install has a verified bundled baseline. For `stop`, do not require the app bundle; a managed binary/config may still be stopped after the app has been removed.
+For `start` and `restart`, resolve bundle proxy URLs via `AppBundleLocating`, create a `ProxyServiceControlling` using `proxyServiceFactory(bundle.proxyBinaryURL, bundle.proxyManifestURL)`, and call it with the configured port. The default factory must construct `ProxyServiceManager(paths:bundledBinaryURL:bundledManifestURL:)`, so a fresh install has a verified bundled baseline. For `stop`, call a factory-created manager with `nil` bundle URLs and do not require the app bundle; a managed binary/config may still be stopped after the app has been removed.
 
 - [ ] **Step 6: Run focused and existing lifecycle tests**
 
@@ -773,7 +774,17 @@ public struct CPMStatus: Codable, Equatable, Sendable {
 
 For this plan, `stagedVersion` is always `nil`; the update plans populate it without changing the JSON shape. `HelperInspector` reports `/usr/local/bin/cpm` as not installed until the app/helper plan packages it. Once a bundled `cpm` helper exists, it compares SHA-256 and file size only when both are regular files. It never compares or prints file contents.
 
-- [ ] **Step 4: Add exact grammar branches to the dispatcher**
+- [ ] **Step 4: Reject root before every mutating runtime command**
+
+Add `public struct CurrentUserChecking: Sendable` or an equivalent injected `@Sendable () -> uid_t` dependency to `CLIProxyManagerCommand`; its default must return `geteuid()`. Before dispatching `start`, `stop`, `restart`, `app start`, `app stop`, or `app restart`, require a nonzero effective uid. On uid `0`, throw exactly:
+
+```swift
+.prerequisite("cpm must run as the macOS user that owns ~/.cliproxy-manager; do not use sudo.")
+```
+
+Do not apply this check to `status`, `logs`, `secret get`, or `routing next`. Add one command test that a root-injected dispatcher rejects `start` without invoking its `ProxyRuntimeServicing` double, and another that permits `status` under the same injected uid.
+
+- [ ] **Step 5: Add exact grammar branches to the dispatcher**
 
 After the legacy branches, parse only these valid runtime forms:
 
@@ -805,7 +816,7 @@ App restarted.
 
 `logs` writes only the selected log text to stdout; `logs -f` delegates to the follower and does not append a success banner. `status --json` encodes with `.sortedKeys` and appends exactly one newline. Text `status` prints one `App:`, one `Helper:`, and one `Proxy:` summary line without paths to auth files or secret values.
 
-- [ ] **Step 5: Run command and service tests**
+- [ ] **Step 6: Run command and service tests**
 
 ```bash
 swift test --filter StatusServiceTests
@@ -815,7 +826,7 @@ swift test
 
 Expected: PASS. The full suite validates that existing secret/routing commands remain intact while the new lifecycle grammar compiles and dispatches correctly.
 
-- [ ] **Step 6: Commit the working SSH runtime CLI**
+- [ ] **Step 7: Commit the working SSH runtime CLI**
 
 ```bash
 git add Sources/CLIProxyManagerCore/CLI/CLIProxyManagerCommand.swift Sources/CLIProxyManagerCore/CLI/RuntimeCommandServices.swift Sources/CLIProxyManagerCore/Runtime/StatusService.swift Tests/CLIProxyManagerCoreTests/StatusServiceTests.swift Tests/CLIProxyManagerCoreTests/CLIProxyManagerCommandTests.swift
