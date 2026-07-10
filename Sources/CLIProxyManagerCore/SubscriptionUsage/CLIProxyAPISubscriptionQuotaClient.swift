@@ -336,7 +336,12 @@ public struct CLIProxyAPISubscriptionQuotaClient: SubscriptionQuotaFetching {
         }
         if let string = value as? String {
             let formatter = ISO8601DateFormatter()
-            guard let date = formatter.date(from: string) else {
+            if let date = formatter.date(from: string) {
+                return date
+            }
+            let fractionalFormatter = ISO8601DateFormatter()
+            fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            guard let date = fractionalFormatter.date(from: string) else {
                 throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "Invalid reset date"))
             }
             return date

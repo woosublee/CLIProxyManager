@@ -326,8 +326,31 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         do {
             try installBundledBinaryIfNeeded()
             try fileManager.createDirectory(at: paths.authDirectory, withIntermediateDirectories: true)
-            try config(for: port).write(to: paths.clipProxyConfigFile, atomically: true, encoding: .utf8)
-            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: paths.clipProxyConfigFile.path)
+            let temporaryConfigURL = paths.clipProxyConfigFile
+                .deletingLastPathComponent()
+                .appendingPathComponent(".config-\(UUID().uuidString).yaml")
+            let configData = Data(config(for: port).utf8)
+            guard fileManager.createFile(
+                atPath: temporaryConfigURL.path,
+                contents: configData,
+                attributes: [.posixPermissions: 0o600]
+            ) else {
+                throw ProxyServiceError.writeFailed("Failed to create proxy config")
+            }
+            defer { try? fileManager.removeItem(at: temporaryConfigURL) }
+            var isDirectory: ObjCBool = false
+            let hasExistingConfig = fileManager.fileExists(
+                atPath: paths.clipProxyConfigFile.path,
+                isDirectory: &isDirectory
+            )
+            if hasExistingConfig && isDirectory.boolValue {
+                throw ProxyServiceError.writeFailed("Proxy config path is a directory")
+            }
+            if hasExistingConfig {
+                _ = try fileManager.replaceItemAt(paths.clipProxyConfigFile, withItemAt: temporaryConfigURL)
+            } else {
+                try fileManager.moveItem(at: temporaryConfigURL, to: paths.clipProxyConfigFile)
+            }
         } catch let error as ProxyServiceError {
             throw error
         } catch {

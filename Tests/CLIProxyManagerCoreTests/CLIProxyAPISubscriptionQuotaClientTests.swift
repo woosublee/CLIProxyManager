@@ -5,7 +5,7 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
     func testClaudeUsageUsesFixedLoopbackManagementRequestsAndParsesWindows() async throws {
         let transport = StubSubscriptionUsageTransport(responses: [
             .success(.init(data: Data(#"{"files":[{"name":"claude-work.json","provider":"claude","auth_index":"claude-index","status":"ready","disabled":false}]}"#.utf8), statusCode: 200)),
-            .success(.init(data: Data(#"{"status_code":200,"body":"{\"five_hour\":{\"utilization\":52.5,\"resets_at\":\"2026-07-10T14:30:00Z\"},\"seven_day\":{\"utilization\":31,\"resets_at\":\"2026-07-14T00:00:00Z\"}}"}"#.utf8), statusCode: 200))
+            .success(.init(data: Data(#"{"status_code":200,"body":"{\"five_hour\":{\"utilization\":52.5,\"resets_at\":\"2026-07-10T14:30:00.123Z\"},\"seven_day\":{\"utilization\":31,\"resets_at\":\"2026-07-14T00:00:00Z\"}}"}"#.utf8), statusCode: 200))
         ])
         let client = CLIProxyAPISubscriptionQuotaClient(
             keyStore: StubManagementKeyStore(key: "management-secret"),
@@ -21,6 +21,7 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         }
         XCTAssertEqual(snapshot.windows.map(\.id), ["five_hour", "seven_day"])
         XCTAssertEqual(snapshot.windows.map(\.usedPercent), [52.5, 31])
+        XCTAssertEqual(snapshot.windows.first?.resetAt, Date(timeIntervalSince1970: 1_783_693_800.123))
         XCTAssertEqual(transport.requests.map { $0.url?.absoluteString }, [
             "http://127.0.0.1:18317/v0/management/auth-files",
             "http://127.0.0.1:18317/v0/management/api-call"

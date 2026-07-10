@@ -302,7 +302,7 @@ final class DashboardViewModel: ObservableObject {
             Task { [weak self] in await self?.restartServer() }
         }
         if enabled {
-            Task { await refreshSubscriptionUsage() }
+            Task { [weak self] in await self?.refreshSubscriptionUsage() }
         } else {
             subscriptionUsagePollingTask?.cancel()
             subscriptionUsagePollingTask = nil
@@ -371,6 +371,8 @@ final class DashboardViewModel: ObservableObject {
             let report = await quotaClient.fetchUsage(port: port, profiles: profiles)
             guard !Task.isCancelled,
                   let self,
+                  self.config.subscriptionUsage.isEnabled,
+                  self.subscriptionUsageKeyStore.isConfigured(),
                   self.subscriptionUsageRefreshGeneration == generation else {
                 return
             }
