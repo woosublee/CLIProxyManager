@@ -8,6 +8,9 @@ do {
 } catch let error as CLIProxyManagerCommandError {
     output.writeStderr("\(error.description)\n")
     exit(error.exitCode.rawValue)
+} catch let error as SecretStoreError {
+    output.writeStderr("\(error.description)\n")
+    exit(CLICommandExitCode.failure.rawValue)
 } catch {
     output.writeStderr("\(error.localizedDescription)\n")
     exit(CLICommandExitCode.failure.rawValue)

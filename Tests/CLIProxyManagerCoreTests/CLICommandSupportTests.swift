@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 @testable import CLIProxyManagerCore
 
@@ -23,6 +24,31 @@ final class CLICommandSupportTests: XCTestCase {
         output.writeStderr("failed\n")
         XCTAssertEqual(output.stdout, ["ready\n"])
         XCTAssertEqual(output.stderr, ["failed\n"])
+    }
+
+    func testExecutableEntryPointsPreserveSecretStoreErrorDiagnostics() throws {
+        let expectedCatch = """
+        } catch let error as SecretStoreError {
+            output.writeStderr("\\(error.description)\\n")
+            exit(CLICommandExitCode.failure.rawValue)
+        } catch {
+        """
+
+        for path in [
+            "Sources/CLIProxyManagerCLI/main.swift",
+            "Sources/CPMCLI/main.swift"
+        ] {
+            let source = try String(contentsOf: repositoryRoot().appendingPathComponent(path), encoding: .utf8)
+            XCTAssertTrue(source.contains(expectedCatch), "\(path) must preserve SecretStoreError diagnostics and map them to failure.")
+        }
+    }
+
+    private func repositoryRoot() -> URL {
+        var url = URL(fileURLWithPath: #filePath)
+        for _ in 0..<3 {
+            url.deleteLastPathComponent()
+        }
+        return url
     }
 }
 
