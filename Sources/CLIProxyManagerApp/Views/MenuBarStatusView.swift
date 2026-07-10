@@ -1,3 +1,4 @@
+import CLIProxyManagerCore
 import SwiftUI
 
 struct MenuBarStatusView: View {
@@ -51,6 +52,9 @@ struct MenuBarStatusView: View {
         }
         .padding(.vertical, 5)
         .frame(width: AppWindowMetrics.menuBarWidth)
+        .task {
+            await viewModel.refresh()
+        }
     }
 
     private func dismissing(_ action: @escaping () -> Void) -> () -> Void {
@@ -142,11 +146,63 @@ private struct MenuBarAccountRow: View {
                     .font(.system(size: 10.5, design: .monospaced))
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
+
+                subscriptionUsage
             }
             Spacer(minLength: 4)
             StatusLED(state: .running, size: 8, pulse: false)
         }
         .padding(.vertical, 2)
+    }
+
+    @ViewBuilder
+    private var subscriptionUsage: some View {
+        switch provider.subscriptionUsageState {
+        case .disabled, .managementKeyNotConfigured:
+            EmptyView()
+        case .loading:
+            Text("Checking subscription usage…")
+                .font(.system(size: 10.5))
+                .foregroundStyle(.tertiary)
+        case .unavailable(let issue):
+            Text("Usage unavailable — \(issue.message)")
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+        case .available(let snapshot):
+            if provider.accountDetailHidden {
+                Text("Subscription usage hidden")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.tertiary)
+                    .accessibilityLabel("Subscription usage hidden")
+            } else {
+                VStack(alignment: .leading, spacing: 1) {
+                    ForEach(snapshot.windows) { window in
+                        Text(windowText(window))
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .accessibilityLabel(accessibilityText(window))
+                    }
+                }
+            }
+        }
+    }
+
+    private func windowText(_ window: UsageWindow) -> String {
+        let used = Int(window.usedPercent.rounded())
+        guard let resetAt = window.resetAt else {
+            return "\(window.label)  \(used)% used"
+        }
+        return "\(window.label)  \(used)% used · \(resetAt.formatted(.dateTime.month(.abbreviated).day().hour().minute()))"
+    }
+
+    private func accessibilityText(_ window: UsageWindow) -> String {
+        let used = Int(window.usedPercent.rounded())
+        guard let resetAt = window.resetAt else {
+            return "\(window.label), \(used) percent used"
+        }
+        return "\(window.label), \(used) percent used, resets \(resetAt.formatted(date: .abbreviated, time: .shortened))"
     }
 }
 

@@ -54,6 +54,27 @@ final class ProxyServiceManagerTests: XCTestCase {
         ])
     }
 
+    func testStartAddsManagementSecretOnlyWhenConfigured() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let manager = ProxyServiceManager(
+            paths: paths,
+            launcher: FakeProcessLauncher(),
+            managementKeyProvider: { "management-key" },
+            subscriptionUsageEnabledProvider: { true }
+        )
+
+        try await manager.start(port: 8317)
+
+        let config = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
+        XCTAssertTrue(config.contains("remote-management:"))
+        XCTAssertTrue(config.contains("secret-key: \"management-key\""))
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: paths.clipProxyConfigFile.path)
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+    }
+
     func testStartEscapesControlCharactersInYAMLAuthDirectory() async throws {
         let sandbox = try makeSandbox()
         let root = sandbox.appendingPathComponent("managed\nroot\twith\rcontrol")

@@ -18,6 +18,8 @@ public enum CLIProxyManagerCommandError: Error, Equatable, CustomStringConvertib
               cpm app status | start | stop | restart
               cpm secret get|set|delete claude-api-key
               cpm routing next <round-robin-profile-id>
+              cpm quota [--json]
+              cpm quota key status [--json] | set --stdin | delete
             """
         case .emptySecret(let key):
             "Secret value cannot be empty: \(key)"
@@ -51,6 +53,8 @@ public struct CLIProxyManagerCommand: Sendable {
     private let statusReporter: any StatusReporting
     private let proxyUpdater: any ProxyUpdating
     private let appUpdater: any AppUpdating
+    private let subscriptionQuotaClient: any SubscriptionQuotaFetching
+    private let subscriptionUsageKeyStore: any SubscriptionUsageManagementKeyConfiguring
     private let currentUID: @Sendable () -> uid_t
 
     public init(
@@ -62,7 +66,9 @@ public struct CLIProxyManagerCommand: Sendable {
             let data = FileHandle.standardInput.readDataToEndOfFile()
             return String(data: data, encoding: .utf8) ?? ""
         },
-        output: any CLICommandOutputWriting = TerminalCommandOutput()
+        output: any CLICommandOutputWriting = TerminalCommandOutput(),
+        subscriptionQuotaClient: any SubscriptionQuotaFetching = CLIProxyAPISubscriptionQuotaClient(),
+        subscriptionUsageKeyStore: any SubscriptionUsageManagementKeyConfiguring = SubscriptionUsageManagementKeyStore()
     ) {
         self.secretStore = secretStore
         self.configStore = configStore
@@ -76,6 +82,8 @@ public struct CLIProxyManagerCommand: Sendable {
         self.statusReporter = StatusService()
         self.proxyUpdater = ProxyUpdateService()
         self.appUpdater = AppUpdateService()
+        self.subscriptionQuotaClient = subscriptionQuotaClient
+        self.subscriptionUsageKeyStore = subscriptionUsageKeyStore
         self.currentUID = { geteuid() }
     }
 
@@ -95,6 +103,8 @@ public struct CLIProxyManagerCommand: Sendable {
         statusReporter: any StatusReporting,
         proxyUpdater: any ProxyUpdating = ProxyUpdateService(),
         appUpdater: any AppUpdating = AppUpdateService(),
+        subscriptionQuotaClient: any SubscriptionQuotaFetching = CLIProxyAPISubscriptionQuotaClient(),
+        subscriptionUsageKeyStore: any SubscriptionUsageManagementKeyConfiguring = SubscriptionUsageManagementKeyStore(),
         currentUID: @escaping @Sendable () -> uid_t = { geteuid() }
     ) {
         self.secretStore = secretStore
@@ -109,6 +119,8 @@ public struct CLIProxyManagerCommand: Sendable {
         self.statusReporter = statusReporter
         self.proxyUpdater = proxyUpdater
         self.appUpdater = appUpdater
+        self.subscriptionQuotaClient = subscriptionQuotaClient
+        self.subscriptionUsageKeyStore = subscriptionUsageKeyStore
         self.currentUID = currentUID
     }
 
@@ -147,6 +159,8 @@ public struct CLIProxyManagerCommand: Sendable {
             try await runApp(arguments: arguments)
         case "update":
             try await runUpdate(arguments: arguments)
+        case "quota":
+            try await runQuota(arguments: arguments)
         default:
             throw CLIProxyManagerCommandError.usage
         }
@@ -338,6 +352,112 @@ public struct CLIProxyManagerCommand: Sendable {
         }
     }
 
+    private func runQuota(arguments: [String]) async throws {
+        let remaining = Array(arguments.dropFirst())
+        if remaining.first == "key" {
+            try await runQuotaKey(arguments: Array(remaining.dropFirst()))
+            return
+        }
+
+        let useJSON: Bool
+        switch remaining {
+        case []:
+            useJSON = false
+        case ["--json"]:
+            useJSON = true
+        default:
+            throw CLIProxyManagerCommandError.usage
+        }
+
+        let config = try configStore.load()
+        let profiles = try authProfileStore.profiles()
+        let report: SubscriptionUsageReport
+        if config.subscriptionUsage.isEnabled {
+            report = await subscriptionQuotaClient.fetchUsage(port: config.port, profiles: profiles)
+        } else {
+            report = SubscriptionUsageReport(
+                statesByProfileID: Dictionary(uniqueKeysWithValues: profiles.map { ($0.id, .disabled) }),
+                fetchedAt: Date()
+            )
+        }
+
+        if useJSON {
+            let records = profiles.map { profile in
+                QuotaCLIRecord(
+                    profileID: profile.id,
+                    provider: profile.type,
+                    state: report.statesByProfileID[profile.id] ?? .disabled
+                )
+            }
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            encoder.dateEncodingStrategy = .iso8601
+            let data = try encoder.encode(QuotaCLIOutput(fetchedAt: report.fetchedAt, accounts: records))
+            output.writeStdout(String(decoding: data, as: UTF8.self) + "\n")
+            return
+        }
+
+        for profile in profiles {
+            let state = report.statesByProfileID[profile.id] ?? .disabled
+            output.writeStdout("\(profile.type.rawValue.capitalized) \(profile.id): \(quotaText(for: state))\n")
+        }
+    }
+
+    private func runQuotaKey(arguments: [String]) async throws {
+        switch arguments {
+        case ["status"]:
+            output.writeStdout("configured=\(subscriptionUsageKeyStore.isConfigured())\n")
+        case ["status", "--json"]:
+            let data = try JSONEncoder().encode(QuotaKeyStatus(configured: subscriptionUsageKeyStore.isConfigured()))
+            output.writeStdout(String(decoding: data, as: UTF8.self) + "\n")
+        case ["set", "--stdin"]:
+            guard !output.isInteractive else { throw CLIProxyManagerCommandError.usage }
+            let value = input().trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !value.isEmpty else { throw CLIProxyManagerCommandError.emptySecret("subscription-usage-management-key") }
+            try subscriptionUsageKeyStore.setManagementKey(value)
+            try enableSubscriptionUsage()
+            try await restartProxyIfRunning()
+            output.writeStdout("Management key stored.\n")
+        case ["delete"]:
+            try subscriptionUsageKeyStore.deleteManagementKey()
+            try await restartProxyIfRunning()
+            output.writeStdout("Management key removed.\n")
+        default:
+            throw CLIProxyManagerCommandError.usage
+        }
+    }
+
+    private func enableSubscriptionUsage() throws {
+        var config = try configStore.load()
+        guard !config.subscriptionUsage.isEnabled else { return }
+        config.subscriptionUsage.isEnabled = true
+        try configStore.save(config)
+    }
+
+    private func restartProxyIfRunning() async throws {
+        let status = try await proxyRuntime.status()
+        guard status.running else { return }
+        _ = try await proxyRuntime.restart()
+    }
+
+    private func quotaText(for state: AccountSubscriptionUsageState) -> String {
+        switch state {
+        case .disabled:
+            "usage monitoring is disabled"
+        case .managementKeyNotConfigured:
+            "management key is not configured"
+        case .loading:
+            "checking subscription usage"
+        case .unavailable(let issue):
+            "usage unavailable — \(issue.message)"
+        case .available(let snapshot):
+            snapshot.windows.map { window in
+                let reset = window.resetAt.map { " · resets \($0.formatted(date: .abbreviated, time: .shortened))" } ?? ""
+                return "\(window.label) \(Int(window.usedPercent.rounded()))% used\(reset)"
+            }.joined(separator: ", ")
+        }
+    }
+
     private func appCheckDescription(_ result: AppUpdateCheckResult) -> String {
         switch result {
         case .upToDate(let v): return "CLIProxyManager is up to date\(v.map { " at \($0)" } ?? "")."
@@ -367,6 +487,52 @@ public struct CLIProxyManagerCommand: Sendable {
             return msg.contains("No staged")
         }
         return false
+    }
+
+    // MARK: - Quota output
+
+    private struct QuotaCLIOutput: Codable {
+        let fetchedAt: Date
+        let accounts: [QuotaCLIRecord]
+    }
+
+    private struct QuotaCLIRecord: Codable {
+        let profileID: String
+        let provider: AuthProfileType
+        let status: String
+        let issue: SubscriptionUsageIssue?
+        let windows: [UsageWindow]
+
+        init(profileID: String, provider: AuthProfileType, state: AccountSubscriptionUsageState) {
+            self.profileID = profileID
+            self.provider = provider
+            switch state {
+            case .disabled:
+                status = "disabled"
+                issue = nil
+                windows = []
+            case .managementKeyNotConfigured:
+                status = "management_key_not_configured"
+                issue = nil
+                windows = []
+            case .loading:
+                status = "loading"
+                issue = nil
+                windows = []
+            case .available(let snapshot):
+                status = "available"
+                issue = nil
+                windows = snapshot.windows
+            case .unavailable(let value):
+                status = "unavailable"
+                issue = value
+                windows = []
+            }
+        }
+    }
+
+    private struct QuotaKeyStatus: Codable {
+        let configured: Bool
     }
 
     // MARK: - Root check

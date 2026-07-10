@@ -84,6 +84,22 @@ cpm app stop
 
 The GUI app is optional — all proxy lifecycle operations work from an SSH session.
 
+### Experimental subscription usage
+
+CLIProxyManager can show Claude and Codex OAuth subscription usage in each account row of the menu bar. Enable **Subscription Usage (Experimental)** in Server Settings and save the CLIProxyAPI management key in the Keychain. The app never reads, displays, or exports OAuth tokens.
+
+For headless setup and display-only reporting:
+
+```zsh
+# Store the management key without echoing it back.
+printf '%s' "$MANAGEMENT_KEY" | cpm quota key set --stdin
+cpm quota key status
+cpm quota
+cpm quota --json
+```
+
+`cpm quota` reports normalized account/window states only; it does not modify routing, provider availability, credentials, or subscription limits. `cpm quota key get` is intentionally unsupported. Usage refreshes every five minutes while the local proxy is ready; transient failures back off up to fifteen minutes.
+
 ### First `cpm` installation
 
 Install a release containing `cpm` once using the normal DMG install flow. Earlier releases only contain `cliproxy-manager`, so they cannot install `cpm` by themselves.

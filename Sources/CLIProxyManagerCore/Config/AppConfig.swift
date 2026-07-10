@@ -188,6 +188,23 @@ public struct AppConfig: Codable, Equatable, Sendable {
         }
     }
 
+    public struct SubscriptionUsage: Codable, Equatable, Sendable {
+        public var isEnabled: Bool
+
+        public init(isEnabled: Bool = false) {
+            self.isEnabled = isEnabled
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case isEnabled
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            self.isEnabled = try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
+        }
+    }
+
     public struct AccountPrivacy: Codable, Equatable, Sendable {
         public var claudeHidden: Bool
         public var codexHidden: Bool
@@ -220,6 +237,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var appearance: AppearanceMode
     public var nicknames: Nicknames
     public var accountPrivacy: AccountPrivacy
+    public var subscriptionUsage: SubscriptionUsage
     public var oauthCommandProfiles: [OAuthCommandProfile]
     public var roundRobinProfiles: [RoundRobinProfile]
     public var bindAddress: String
@@ -240,6 +258,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         appearance: AppearanceMode = .system,
         nicknames: Nicknames = Nicknames(),
         accountPrivacy: AccountPrivacy = AccountPrivacy(),
+        subscriptionUsage: SubscriptionUsage = SubscriptionUsage(),
         oauthCommandProfiles: [OAuthCommandProfile] = [],
         roundRobinProfiles: [RoundRobinProfile] = [],
         bindAddress: String = "127.0.0.1",
@@ -259,6 +278,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         self.appearance = appearance
         self.nicknames = nicknames
         self.accountPrivacy = accountPrivacy
+        self.subscriptionUsage = subscriptionUsage
         self.oauthCommandProfiles = oauthCommandProfiles
         self.roundRobinProfiles = roundRobinProfiles
         self.bindAddress = bindAddress
@@ -275,6 +295,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         case appearance
         case nicknames
         case accountPrivacy
+        case subscriptionUsage
         case oauthCommandProfiles
         case roundRobinProfiles
         case bindAddress, autostartServer, roundRobinEnabled
@@ -295,6 +316,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         self.appearance = try c.decodeIfPresent(AppearanceMode.self, forKey: .appearance) ?? .system
         self.nicknames = try c.decodeIfPresent(Nicknames.self, forKey: .nicknames) ?? Nicknames()
         self.accountPrivacy = try c.decodeIfPresent(AccountPrivacy.self, forKey: .accountPrivacy) ?? AccountPrivacy()
+        self.subscriptionUsage = try c.decodeIfPresent(SubscriptionUsage.self, forKey: .subscriptionUsage) ?? SubscriptionUsage()
         self.oauthCommandProfiles = try c.decodeIfPresent([OAuthCommandProfile].self, forKey: .oauthCommandProfiles) ?? []
         self.roundRobinProfiles = try c.decodeIfPresent([RoundRobinProfile].self, forKey: .roundRobinProfiles) ?? []
         self.bindAddress = try c.decodeIfPresent(String.self, forKey: .bindAddress) ?? "127.0.0.1"

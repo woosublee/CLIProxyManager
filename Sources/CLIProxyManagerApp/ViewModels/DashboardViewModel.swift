@@ -129,6 +129,7 @@ final class DashboardViewModel: ObservableObject {
     }
     @Published var optionRows: [DashboardOptionRow] = []
     @Published var providerRows: [ProviderRowState] = []
+    @Published private(set) var subscriptionUsageStates: [String: AccountSubscriptionUsageState] = [:]
 
     private let configStore: any AppConfigStoring
     private let shellInstaller: any ShellFunctionInstalling
@@ -141,6 +142,8 @@ final class DashboardViewModel: ObservableObject {
     private let claudeConnector: ClaudeConnector
     private let loginItemService: any LoginItemControlling
     private let appAppearanceService: any AppAppearanceApplying
+    private let subscriptionQuotaClient: any SubscriptionQuotaFetching
+    private let subscriptionUsageKeyStore: any SubscriptionUsageManagementKeyConfiguring
     private let serverStatusRetryDelayNanoseconds: UInt64
     private let settingsMessageAutoClearDelayNanoseconds: UInt64
     private var authProfiles: [AuthProfile] = []
@@ -150,6 +153,10 @@ final class DashboardViewModel: ObservableObject {
     private var lastClaudeStatus: DiagnosticStatus?
     private var lastCodexStatus: DiagnosticStatus?
     private var lastPersistedConfig: AppConfig
+    private var subscriptionUsagePollingTask: Task<Void, Never>?
+    private var subscriptionUsageRefreshTask: Task<Void, Never>?
+    private var subscriptionUsageRefreshGeneration = 0
+    private var subscriptionUsageRetryDelayNanoseconds: UInt64 = 60_000_000_000
 
     init(
         config: AppConfig? = nil,
@@ -164,6 +171,8 @@ final class DashboardViewModel: ObservableObject {
         claudeConnector: ClaudeConnector = ClaudeConnector(),
         loginItemService: any LoginItemControlling = LoginItemService(),
         appAppearanceService: any AppAppearanceApplying = AppAppearanceService(),
+        subscriptionQuotaClient: any SubscriptionQuotaFetching = CLIProxyAPISubscriptionQuotaClient(),
+        subscriptionUsageKeyStore: any SubscriptionUsageManagementKeyConfiguring = SubscriptionUsageManagementKeyStore(),
         serverStatusRetryDelayNanoseconds: UInt64 = 500_000_000,
         settingsMessageAutoClearDelayNanoseconds: UInt64 = 3_000_000_000
     ) {
@@ -179,6 +188,8 @@ final class DashboardViewModel: ObservableObject {
         self.claudeConnector = claudeConnector
         self.loginItemService = loginItemService
         self.appAppearanceService = appAppearanceService
+        self.subscriptionQuotaClient = subscriptionQuotaClient
+        self.subscriptionUsageKeyStore = subscriptionUsageKeyStore
         self.serverStatusRetryDelayNanoseconds = serverStatusRetryDelayNanoseconds
         self.settingsMessageAutoClearDelayNanoseconds = settingsMessageAutoClearDelayNanoseconds
         let persistedConfig = Self.availableConfig(config ?? ((try? configStore.load()) ?? .default))
@@ -280,6 +291,145 @@ final class DashboardViewModel: ObservableObject {
         let updatedServerStatus = passiveRefreshPresentationStatus(from: rawServerStatus)
         let claudeStatus = await claudeConnector.status()
         updateStatuses(serverStatus: updatedServerStatus, claudeStatus: claudeStatus)
+        await refreshSubscriptionUsage()
+    }
+
+    func saveSubscriptionUsageEnabled(_ enabled: Bool) throws {
+        var updatedConfig = config
+        updatedConfig.subscriptionUsage.isEnabled = enabled
+        try saveConfig(updatedConfig)
+        if serverControlState.isRunning {
+            Task { [weak self] in await self?.restartServer() }
+        }
+        if enabled {
+            Task { await refreshSubscriptionUsage() }
+        } else {
+            subscriptionUsagePollingTask?.cancel()
+            subscriptionUsagePollingTask = nil
+            setSubscriptionUsageStates(.disabled)
+        }
+    }
+
+    func subscriptionUsageManagementKeyIsConfigured() -> Bool {
+        subscriptionUsageKeyStore.isConfigured()
+    }
+
+    func saveSubscriptionUsageManagementKey(_ value: String) throws {
+        try subscriptionUsageKeyStore.setManagementKey(value)
+        if !config.subscriptionUsage.isEnabled {
+            var updatedConfig = config
+            updatedConfig.subscriptionUsage.isEnabled = true
+            try saveConfig(updatedConfig)
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            if self.serverControlState.isRunning {
+                await self.restartServer()
+            }
+            if self.config.subscriptionUsage.isEnabled {
+                await self.refreshSubscriptionUsage()
+            }
+        }
+    }
+
+    func deleteSubscriptionUsageManagementKey() throws {
+        try subscriptionUsageKeyStore.deleteManagementKey()
+        setSubscriptionUsageStates(.managementKeyNotConfigured)
+        subscriptionUsagePollingTask?.cancel()
+        subscriptionUsagePollingTask = nil
+        Task { [weak self] in
+            guard let self, self.serverControlState.isRunning else { return }
+            await self.restartServer()
+        }
+    }
+
+    func refreshSubscriptionUsage() async {
+        subscriptionUsageRefreshTask?.cancel()
+        subscriptionUsageRefreshGeneration += 1
+        let generation = subscriptionUsageRefreshGeneration
+
+        guard config.subscriptionUsage.isEnabled else {
+            setSubscriptionUsageStates(.disabled)
+            return
+        }
+        guard subscriptionUsageKeyStore.isConfigured() else {
+            setSubscriptionUsageStates(.managementKeyNotConfigured)
+            return
+        }
+        guard serverStatus.severity == .ready else {
+            setSubscriptionUsageStates(.unavailable(.proxyUnavailable))
+            subscriptionUsagePollingTask?.cancel()
+            subscriptionUsagePollingTask = nil
+            return
+        }
+
+        setSubscriptionUsageStates(.loading)
+        let profiles = authProfiles
+        let port = config.port
+        let quotaClient = subscriptionQuotaClient
+        let refreshTask = Task { [weak self] in
+            let report = await quotaClient.fetchUsage(port: port, profiles: profiles)
+            guard !Task.isCancelled,
+                  let self,
+                  self.subscriptionUsageRefreshGeneration == generation else {
+                return
+            }
+            self.subscriptionUsageStates = report.statesByProfileID
+            self.rebuildProviderRows(claudeStatus: self.lastClaudeStatus, codexStatus: self.lastCodexStatus)
+            self.scheduleSubscriptionUsagePollingIfNeeded()
+        }
+        subscriptionUsageRefreshTask = refreshTask
+        await refreshTask.value
+    }
+
+    private func setSubscriptionUsageStates(_ state: AccountSubscriptionUsageState) {
+        subscriptionUsageStates = Dictionary(uniqueKeysWithValues: authProfiles.map { ($0.id, state) })
+        rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
+    }
+
+    private func scheduleSubscriptionUsagePollingIfNeeded() {
+        subscriptionUsagePollingTask?.cancel()
+        guard config.subscriptionUsage.isEnabled,
+              subscriptionUsageKeyStore.isConfigured(),
+              serverStatus.severity == .ready else {
+            return
+        }
+
+        let hasRefreshableAccount = subscriptionUsageStates.values.contains { state in
+            switch state {
+            case .available, .loading:
+                true
+            case .unavailable(let issue):
+                !issue.stopsPolling
+            case .disabled, .managementKeyNotConfigured:
+                false
+            }
+        }
+        guard hasRefreshableAccount else { return }
+
+        let hasRetriableFailure = subscriptionUsageStates.values.contains { state in
+            if case let .unavailable(issue) = state {
+                return !issue.stopsPolling
+            }
+            return false
+        }
+        let delay: UInt64
+        if hasRetriableFailure {
+            delay = subscriptionUsageRetryDelayNanoseconds
+            subscriptionUsageRetryDelayNanoseconds = min(subscriptionUsageRetryDelayNanoseconds * 2, 900_000_000_000)
+        } else {
+            delay = 300_000_000_000
+            subscriptionUsageRetryDelayNanoseconds = 60_000_000_000
+        }
+
+        subscriptionUsagePollingTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: delay)
+            } catch {
+                return
+            }
+            await self?.refreshSubscriptionUsage()
+        }
     }
 
     /// Called once on app launch. Auto-starts the server if the user opted in.
@@ -1486,6 +1636,10 @@ final class DashboardViewModel: ObservableObject {
         return .available(count: selectedOptions.count)
     }
 
+    private var defaultSubscriptionUsageState: AccountSubscriptionUsageState {
+        config.subscriptionUsage.isEnabled ? .managementKeyNotConfigured : .disabled
+    }
+
     private func rebuildProviderRows(claudeStatus: DiagnosticStatus?, codexStatus: DiagnosticStatus?) {
         let authProfilesByID = Dictionary(uniqueKeysWithValues: authProfiles.map { ($0.id, $0) })
         if config.oauthCommandProfiles.isEmpty {
@@ -1517,7 +1671,8 @@ final class DashboardViewModel: ObservableObject {
                     connectionDetail: profileDetail(profile: enabledProfile ?? authProfile, fallback: fallback),
                     isConnected: enabledProfile != nil,
                     isErrored: isProviderErrored(providerType: authProfile.type, enabledProfile: enabledProfile, diagnosticStatus: diagnosticStatus),
-                    accountDetailHidden: authProfile.type == .codex ? config.accountPrivacy.codexHidden : config.accountPrivacy.claudeHidden
+                    accountDetailHidden: authProfile.type == .codex ? config.accountPrivacy.codexHidden : config.accountPrivacy.claudeHidden,
+                    subscriptionUsageState: subscriptionUsageStates[authProfile.id] ?? defaultSubscriptionUsageState
                 )
             }
             return
@@ -1545,7 +1700,8 @@ final class DashboardViewModel: ObservableObject {
                 ),
                 isConnected: enabledProfile != nil,
                 isErrored: isProviderErrored(providerType: commandProfile.provider, enabledProfile: enabledProfile, diagnosticStatus: diagnosticStatus),
-                accountDetailHidden: commandProfile.accountDetailHidden
+                accountDetailHidden: commandProfile.accountDetailHidden,
+                subscriptionUsageState: subscriptionUsageStates[authProfile.id] ?? defaultSubscriptionUsageState
             )
         }
     }

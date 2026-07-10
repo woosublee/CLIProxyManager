@@ -6,6 +6,8 @@ struct MenuBarConnectedProvider: Equatable, Identifiable {
     let displayName: String    // Account identifier — email when known, else provider name
     let functionName: String
     let connectionDetail: String
+    let accountDetailHidden: Bool
+    let subscriptionUsageState: AccountSubscriptionUsageState
 }
 
 struct MenuBarStatusSnapshot: Equatable {
@@ -48,7 +50,9 @@ struct MenuBarStatusSnapshot: Equatable {
                     name: provider.name,
                     displayName: provider.displayTitle,
                     functionName: provider.functionName,
-                    connectionDetail: provider.connectionDetail
+                    connectionDetail: provider.connectionDetail,
+                    accountDetailHidden: provider.accountDetailHidden,
+                    subscriptionUsageState: provider.subscriptionUsageState
                 )
             }
         erroredCount = providers.filter(\.isErrored).count
