@@ -84,17 +84,38 @@ cpm app stop
 
 The GUI app is optional — all proxy lifecycle operations work from an SSH session.
 
-### Proxy binary updates
+### First `cpm` installation
+
+Install a release containing `cpm` once using the normal DMG install flow. Earlier releases only contain `cliproxy-manager`, so they cannot install `cpm` by themselves.
+
+### Headless updates
+
+```zsh
+cpm update check
+cpm update stage
+cpm update apply
+# Automation after inspecting staged versions:
+cpm update apply --yes
+```
+
+Or target individual components:
 
 ```zsh
 cpm update check proxy
 cpm update stage proxy
 cpm update apply proxy
-# For automation only after reviewing the staged version:
-cpm update apply proxy --yes
+cpm update check app
+cpm update stage app
+cpm update apply app
 ```
 
-`stage` validates the upstream `checksums.txt` SHA-256 and the extracted CLIProxyAPI version before touching the active binary. `apply` restores the proxy to its prior running state: if it was running before the apply, it restarts and confirms readiness; if it was stopped, it remains stopped.
+Key guarantees:
+- `stage` verifies the appcast Ed25519 signature, artifact size, mounted app identity/version, code signature, and both helpers before changing any installed file.
+- `apply` updates `/Applications/CLIProxyManager.app`, `/usr/local/bin/cpm`, and `/usr/local/bin/cliproxy-manager` together or restores the previous three paths if replacement fails.
+- `cpm` must run as the same non-root macOS user that installed the app; `sudo cpm` is rejected and leaves the stage intact.
+- GUI restart is best effort after successful app replacement; GUI absence does not prevent proxy or update management.
+- `cpm update apply proxy` and app updates are independent; app update does not downgrade active CLIProxyAPI.
+- Proxy binary update: `apply` preserves whether the proxy was running before the update.
 
 ## Shell functions
 
