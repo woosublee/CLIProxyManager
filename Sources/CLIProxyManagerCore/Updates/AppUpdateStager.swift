@@ -49,10 +49,19 @@ public struct HdiutilMountedDMGInspector: MountedDMGInspecting, Sendable {
         guard attachResult.exitCode == 0 else {
             throw CLIProxyManagerCommandError.operation("Failed to mount app update DMG: \(attachResult.stderr)")
         }
-        defer {
-            Task { await runner.run("/usr/bin/hdiutil", ["detach", mountPoint.path]) }
-        }
 
+        // Always detach whether inspection succeeds or fails.
+        do {
+            let result = try await inspectMountedDMG(at: mountPoint, release: release, fm: fm)
+            _ = await runner.run("/usr/bin/hdiutil", ["detach", mountPoint.path])
+            return result
+        } catch {
+            _ = await runner.run("/usr/bin/hdiutil", ["detach", mountPoint.path])
+            throw error
+        }
+    }
+
+    private func inspectMountedDMG(at mountPoint: URL, release: AppUpdateRelease, fm: FileManager) async throws -> MountedAppBundle {
         let appURL = mountPoint.appendingPathComponent("CLIProxyManager.app")
         guard let bundle = Bundle(url: appURL),
               let identifier = bundle.bundleIdentifier,
