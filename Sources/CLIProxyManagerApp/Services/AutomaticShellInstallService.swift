@@ -40,7 +40,7 @@ struct AutomaticShellInstallService: Sendable {
             #if DEBUG
             let debugHelperPath = currentExecutableURL
                 .deletingLastPathComponent()
-                .appendingPathComponent("cliproxy-manager")
+                .appendingPathComponent("cpm")
                 .path
             if fileExists(debugHelperPath) {
                 return debugHelperPath
@@ -55,14 +55,14 @@ struct AutomaticShellInstallService: Sendable {
                appBundleURL.pathExtension.lowercased() == "app" {
                 let appBundleHelperPath = contentsDirectory
                     .appendingPathComponent("Helpers")
-                    .appendingPathComponent("cliproxy-manager")
+                    .appendingPathComponent("cpm")
                     .path
                 if fileExists(appBundleHelperPath) {
                     return appBundleHelperPath
                 }
             }
         }
-        return "/usr/local/bin/cliproxy-manager"
+        return "/usr/local/bin/cpm"
     }
 
     func apply(config: AppConfig, helperCommand: String? = nil, enabledFunctions: EnabledFunctions = .allOAuth) throws {
