@@ -1,5 +1,7 @@
 import Foundation
 
+extension ProxyRuntimeService: ProxyRuntimeUpdating {}
+
 public struct ProxyRuntimeService: ProxyRuntimeServicing, Sendable {
     private let configLoader: @Sendable () throws -> AppConfig
     private let bundleLocator: any AppBundleLocating

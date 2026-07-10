@@ -84,6 +84,18 @@ cpm app stop
 
 The GUI app is optional — all proxy lifecycle operations work from an SSH session.
 
+### Proxy binary updates
+
+```zsh
+cpm update check proxy
+cpm update stage proxy
+cpm update apply proxy
+# For automation only after reviewing the staged version:
+cpm update apply proxy --yes
+```
+
+`stage` validates the upstream `checksums.txt` SHA-256 and the extracted CLIProxyAPI version before touching the active binary. `apply` restores the proxy to its prior running state: if it was running before the apply, it restarts and confirms readiness; if it was stopped, it remains stopped.
+
 ## Shell functions
 
 CLIProxyManager generates shell functions instead of aliases so each command can set the right environment only for that invocation.

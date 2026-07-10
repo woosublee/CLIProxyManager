@@ -20,6 +20,9 @@ public struct ProxyHealthSummary: Codable, Equatable, Sendable {
         self.title = title
         self.message = message
     }
+
+    public static let ready = ProxyHealthSummary(title: "Running", message: "Ready")
+    public static let stopped = ProxyHealthSummary(title: "Stopped", message: "Not running")
 }
 
 public struct ProxyRuntimeStatus: Codable, Equatable, Sendable {
@@ -181,4 +184,12 @@ public struct CPMStatus: Codable, Equatable, Sendable {
 
 public protocol StatusReporting: Sendable {
     func status() async throws -> CPMStatus
+}
+
+// MARK: - Proxy update
+
+public protocol ProxyUpdating: Sendable {
+    func check() async throws -> ProxyUpdateCheckResult
+    func stage() async throws -> ProxyUpdateStageResult
+    func apply() async throws -> ProxyUpdateApplyResult
 }

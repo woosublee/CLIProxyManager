@@ -49,6 +49,7 @@ public struct CLIProxyManagerCommand: Sendable {
     private let appLifecycle: any AppLifecycleControlling
     private let logService: any ProxyLogServicing
     private let statusReporter: any StatusReporting
+    private let proxyUpdater: any ProxyUpdating
     private let currentUID: @Sendable () -> uid_t
 
     public init(
@@ -72,6 +73,7 @@ public struct CLIProxyManagerCommand: Sendable {
         self.appLifecycle = AppLifecycleService()
         self.logService = ProxyLogService()
         self.statusReporter = StatusService()
+        self.proxyUpdater = ProxyUpdateService()
         self.currentUID = { geteuid() }
     }
 
@@ -89,6 +91,7 @@ public struct CLIProxyManagerCommand: Sendable {
         appLifecycle: any AppLifecycleControlling,
         logService: any ProxyLogServicing,
         statusReporter: any StatusReporting,
+        proxyUpdater: any ProxyUpdating = ProxyUpdateService(),
         currentUID: @escaping @Sendable () -> uid_t = { geteuid() }
     ) {
         self.secretStore = secretStore
@@ -101,6 +104,7 @@ public struct CLIProxyManagerCommand: Sendable {
         self.appLifecycle = appLifecycle
         self.logService = logService
         self.statusReporter = statusReporter
+        self.proxyUpdater = proxyUpdater
         self.currentUID = currentUID
     }
 
@@ -137,6 +141,8 @@ public struct CLIProxyManagerCommand: Sendable {
             try await runLogs(arguments: arguments)
         case "app":
             try await runApp(arguments: arguments)
+        case "update":
+            try await runUpdate(arguments: arguments)
         default:
             throw CLIProxyManagerCommandError.usage
         }
@@ -227,6 +233,58 @@ public struct CLIProxyManagerCommand: Sendable {
             try requireNonRoot()
             _ = try await appLifecycle.restart()
             output.writeStdout("App restarted.\n")
+        default:
+            throw CLIProxyManagerCommandError.usage
+        }
+    }
+
+    private func runUpdate(arguments: [String]) async throws {
+        guard arguments.count >= 3, arguments[1] == "proxy" || (arguments.count >= 2) else {
+            throw CLIProxyManagerCommandError.usage
+        }
+        guard arguments.count >= 3 else { throw CLIProxyManagerCommandError.usage }
+        let verb = arguments[1]
+        let target = arguments[2]
+        guard target == "proxy" else { throw CLIProxyManagerCommandError.usage }
+        let hasYes = arguments.dropFirst(3).contains("--yes")
+        let extraArgs = arguments.dropFirst(3).filter { $0 != "--yes" }
+        guard extraArgs.isEmpty else { throw CLIProxyManagerCommandError.usage }
+
+        switch verb {
+        case "check":
+            guard !hasYes else { throw CLIProxyManagerCommandError.usage }
+            let result = try await proxyUpdater.check()
+            switch result {
+            case .upToDate(let current):
+                let v = current ?? "unknown"
+                output.writeStdout("CLIProxyAPI is up to date at \(v).\n")
+            case .available(let current, let release):
+                let from = current ?? "none"
+                output.writeStdout("CLIProxyAPI update available: \(from) → \(release.version).\n")
+            case .pending(_, let pending):
+                output.writeStdout("CLIProxyAPI \(pending.version) is staged.\n")
+            }
+        case "stage":
+            guard !hasYes else { throw CLIProxyManagerCommandError.usage }
+            let result = try await proxyUpdater.stage()
+            if result.staged {
+                output.writeStdout("CLIProxyAPI \(result.version) is staged.\n")
+            } else {
+                output.writeStdout("CLIProxyAPI \(result.version) is already staged.\n")
+            }
+        case "apply":
+            if !hasYes {
+                guard output.isInteractive else {
+                    throw CLIProxyManagerCommandError.usage
+                }
+                guard output.confirm("Apply staged CLIProxyAPI update?") else { return }
+            }
+            let result = try await proxyUpdater.apply()
+            if result.restartedProxy {
+                output.writeStdout("Applied CLIProxyAPI \(result.version) and restarted the proxy.\n")
+            } else {
+                output.writeStdout("Applied CLIProxyAPI \(result.version); the proxy remains stopped.\n")
+            }
         default:
             throw CLIProxyManagerCommandError.usage
         }
