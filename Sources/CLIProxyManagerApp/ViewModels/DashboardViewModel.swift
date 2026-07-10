@@ -5,14 +5,6 @@ import Foundation
 import AppKit
 #endif
 
-protocol ProxyServiceControlling: Sendable {
-    func start(port: Int) async throws
-    func stop() async throws
-    func restart(port: Int) async throws
-}
-
-extension ProxyServiceManager: ProxyServiceControlling {}
-
 protocol AppConfigStoring: Sendable {
     func load() throws -> AppConfig
     func save(_ config: AppConfig) throws
