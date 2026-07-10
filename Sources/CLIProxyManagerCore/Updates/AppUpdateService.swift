@@ -109,11 +109,15 @@ public struct AppUpdateService: AppUpdating, Sendable {
     }
 
     private static func loadPublicKey() -> String {
-        if let url = Bundle.main.url(forResource: "Info", withExtension: "plist"),
-           let plist = NSDictionary(contentsOf: url),
-           let key = plist["SUPublicEDKey"] as? String {
+        // When cpm runs as a CLI tool, Bundle.main is not the app bundle.
+        // Read SUPublicEDKey from the installed app's Info.plist instead.
+        if let bundle = try? AppBundleLocator().locateInstalledApp(),
+           let appBundle = Bundle(url: bundle.appURL),
+           let key = appBundle.object(forInfoDictionaryKey: "SUPublicEDKey") as? String,
+           !key.isEmpty {
             return key
         }
-        return ""
+        // Fallback: running inside the app bundle itself
+        return Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") as? String ?? ""
     }
 }
