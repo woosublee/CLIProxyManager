@@ -68,18 +68,32 @@ When the user accepts a CLIProxyAPI binary update, the app downloads `CLIProxyAP
 
 ## SSH and headless management
 
-`cpm start` controls only the local CLIProxyAPI proxy process. It does not open the GUI app and does not require a display session. It requires SSH access as the same non-root macOS account that owns `~/.cliproxy-manager`.
+GUI 없이 SSH에서도 프록시와 앱을 완전히 제어할 수 있습니다. 동일한 비-root macOS 계정으로 SSH 접속하면 됩니다.
+
+```
+cpm --help   # 전체 명령어 목록
+```
+
+### 프록시 제어
 
 ```zsh
-cpm status
-cpm start
-cpm logs -f
-cpm restart
-cpm stop
+cpm status           # 프록시·앱·helper 상태 출력
+cpm status --json    # JSON 형식으로 출력
+cpm start            # CLIProxyAPI 프록시 시작
+cpm stop             # 프록시 중지
+cpm restart          # 프록시 재시작
+cpm logs             # 최근 로그 200줄 출력
+cpm logs --lines 50  # 최근 50줄 출력
+cpm logs -f          # 실시간 로그 스트리밍
+```
 
-cpm app status
-cpm app start
-cpm app stop
+### 앱 lifecycle
+
+```zsh
+cpm app status   # GUI 앱 실행 여부 확인
+cpm app start    # GUI 앱 실행
+cpm app stop     # GUI 앱 종료
+cpm app restart  # GUI 앱 재시작
 ```
 
 The GUI app is optional — all proxy lifecycle operations work from an SSH session.
@@ -88,23 +102,21 @@ The GUI app is optional — all proxy lifecycle operations work from an SSH sess
 
 Install a release containing `cpm` once using the normal DMG install flow. Earlier releases only contain `cliproxy-manager`, so they cannot install `cpm` by themselves.
 
-### Headless updates
+### 업데이트
 
 ```zsh
-cpm update check
-cpm update stage
-cpm update apply
-# Automation after inspecting staged versions:
-cpm update apply --yes
-```
+# 전체 (앱 + 프록시 바이너리) 업데이트
+cpm update check          # 업데이트 가용 여부 확인
+cpm update stage          # 다운로드 및 서명 검증
+cpm update apply          # 적용 (TTY 확인 요청)
+cpm update apply --yes    # 확인 생략 (자동화용)
 
-Or target individual components:
-
-```zsh
-cpm update check proxy
+# 개별 타겟
+cpm update check proxy    # 프록시 바이너리만 확인
 cpm update stage proxy
 cpm update apply proxy
-cpm update check app
+
+cpm update check app      # 앱 + helper만 확인
 cpm update stage app
 cpm update apply app
 ```

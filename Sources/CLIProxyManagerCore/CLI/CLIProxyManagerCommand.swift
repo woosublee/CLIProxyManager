@@ -16,6 +16,9 @@ public enum CLIProxyManagerCommandError: Error, Equatable, CustomStringConvertib
               cpm start | stop | restart
               cpm logs [--lines <N>] [-f]
               cpm app status | start | stop | restart
+              cpm update check [app | proxy | all]
+              cpm update stage [app | proxy | all]
+              cpm update apply [app | proxy | all] [--yes]
               cpm secret get|set|delete claude-api-key
               cpm routing next <round-robin-profile-id>
             """
@@ -113,6 +116,11 @@ public struct CLIProxyManagerCommand: Sendable {
     }
 
     public func run(arguments: [String]) async throws {
+        if arguments.first == "--help" || arguments.first == "-h" || arguments.isEmpty {
+            output.writeStdout("\(CLIProxyManagerCommandError.usage.description)\n")
+            return
+        }
+
         // Legacy commands
         if arguments.count == 3, arguments[0] == "secret" {
             try runSecret(arguments: arguments)
