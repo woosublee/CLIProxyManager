@@ -50,6 +50,7 @@ public struct CLIProxyManagerCommand: Sendable {
     private let logService: any ProxyLogServicing
     private let statusReporter: any StatusReporting
     private let proxyUpdater: any ProxyUpdating
+    private let appUpdater: any AppUpdating
     private let currentUID: @Sendable () -> uid_t
 
     public init(
@@ -74,6 +75,7 @@ public struct CLIProxyManagerCommand: Sendable {
         self.logService = ProxyLogService()
         self.statusReporter = StatusService()
         self.proxyUpdater = ProxyUpdateService()
+        self.appUpdater = AppUpdateService()
         self.currentUID = { geteuid() }
     }
 
@@ -92,6 +94,7 @@ public struct CLIProxyManagerCommand: Sendable {
         logService: any ProxyLogServicing,
         statusReporter: any StatusReporting,
         proxyUpdater: any ProxyUpdating = ProxyUpdateService(),
+        appUpdater: any AppUpdating = AppUpdateService(),
         currentUID: @escaping @Sendable () -> uid_t = { geteuid() }
     ) {
         self.secretStore = secretStore
@@ -105,6 +108,7 @@ public struct CLIProxyManagerCommand: Sendable {
         self.logService = logService
         self.statusReporter = statusReporter
         self.proxyUpdater = proxyUpdater
+        self.appUpdater = appUpdater
         self.currentUID = currentUID
     }
 
@@ -239,55 +243,130 @@ public struct CLIProxyManagerCommand: Sendable {
     }
 
     private func runUpdate(arguments: [String]) async throws {
-        guard arguments.count >= 3, arguments[1] == "proxy" || (arguments.count >= 2) else {
+        guard arguments.count >= 2 else { throw CLIProxyManagerCommandError.usage }
+        let verb = arguments[1]
+        guard ["check", "stage", "apply"].contains(verb) else {
             throw CLIProxyManagerCommandError.usage
         }
-        guard arguments.count >= 3 else { throw CLIProxyManagerCommandError.usage }
-        let verb = arguments[1]
-        let target = arguments[2]
-        guard target == "proxy" else { throw CLIProxyManagerCommandError.usage }
-        let hasYes = arguments.dropFirst(3).contains("--yes")
-        let extraArgs = arguments.dropFirst(3).filter { $0 != "--yes" }
-        guard extraArgs.isEmpty else { throw CLIProxyManagerCommandError.usage }
+
+        let remaining = Array(arguments.dropFirst(2))
+        let hasYes = remaining.contains("--yes")
+        let targets = remaining.filter { $0 != "--yes" }
+
+        guard targets.count <= 1 else { throw CLIProxyManagerCommandError.usage }
+        if hasYes && verb != "apply" { throw CLIProxyManagerCommandError.usage }
+
+        let target = targets.first ?? "all"
+        guard ["proxy", "app", "all"].contains(target) else {
+            throw CLIProxyManagerCommandError.usage
+        }
+
+        let runProxy = (target == "proxy" || target == "all")
+        let runApp = (target == "app" || target == "all")
 
         switch verb {
         case "check":
-            guard !hasYes else { throw CLIProxyManagerCommandError.usage }
-            let result = try await proxyUpdater.check()
-            switch result {
-            case .upToDate(let current):
-                let v = current ?? "unknown"
-                output.writeStdout("CLIProxyAPI is up to date at \(v).\n")
-            case .available(let current, let release):
-                let from = current ?? "none"
-                output.writeStdout("CLIProxyAPI update available: \(from) → \(release.version).\n")
-            case .pending(_, let pending):
-                output.writeStdout("CLIProxyAPI \(pending.version) is staged.\n")
+            if runApp {
+                let result = try await appUpdater.check()
+                output.writeStdout("App: \(appCheckDescription(result))\n")
             }
+            if runProxy {
+                let result = try await proxyUpdater.check()
+                output.writeStdout("Proxy: \(proxyCheckDescription(result))\n")
+            }
+
         case "stage":
-            guard !hasYes else { throw CLIProxyManagerCommandError.usage }
-            let result = try await proxyUpdater.stage()
-            if result.staged {
-                output.writeStdout("CLIProxyAPI \(result.version) is staged.\n")
-            } else {
-                output.writeStdout("CLIProxyAPI \(result.version) is already staged.\n")
+            if runApp {
+                let result = try await appUpdater.stage()
+                output.writeStdout("App: \(appStageDescription(result))\n")
             }
+            if runProxy {
+                let result = try await proxyUpdater.stage()
+                output.writeStdout("Proxy: \(proxyStageDescription(result))\n")
+            }
+
         case "apply":
             if !hasYes {
-                guard output.isInteractive else {
-                    throw CLIProxyManagerCommandError.usage
+                guard output.isInteractive else { throw CLIProxyManagerCommandError.usage }
+                let prompt: String
+                switch target {
+                case "proxy": prompt = "Apply staged CLIProxyAPI update?"
+                case "app":   prompt = "Apply staged CLIProxyManager update?"
+                default:      prompt = "Apply all staged updates?"
                 }
-                guard output.confirm("Apply staged CLIProxyAPI update?") else { return }
+                guard output.confirm(prompt) else { return }
             }
-            let result = try await proxyUpdater.apply()
-            if result.restartedProxy {
-                output.writeStdout("Applied CLIProxyAPI \(result.version) and restarted the proxy.\n")
+            if target == "all" {
+                var appError: Error?
+                var proxyError: Error?
+                do {
+                    let result = try await appUpdater.apply()
+                    output.writeStdout("App: Applied CLIProxyManager \(result.version).\n")
+                } catch let err as CLIProxyManagerCommandError where isNoStageError(err, for: "app") {
+                    output.writeStdout("App: No staged update.\n")
+                } catch {
+                    appError = error
+                    output.writeStderr("App: \(error.localizedDescription)\n")
+                }
+                do {
+                    let result = try await proxyUpdater.apply()
+                    if result.restartedProxy {
+                        output.writeStdout("Proxy: Applied CLIProxyAPI \(result.version) and restarted.\n")
+                    } else {
+                        output.writeStdout("Proxy: Applied CLIProxyAPI \(result.version); proxy remains stopped.\n")
+                    }
+                } catch let err as CLIProxyManagerCommandError where isNoStageError(err, for: "proxy") {
+                    output.writeStdout("Proxy: No staged update.\n")
+                } catch {
+                    proxyError = error
+                    output.writeStderr("Proxy: \(error.localizedDescription)\n")
+                }
+                if let err = appError ?? proxyError { throw err }
+            } else if target == "app" {
+                let result = try await appUpdater.apply()
+                output.writeStdout("Applied CLIProxyManager \(result.version).\n")
             } else {
-                output.writeStdout("Applied CLIProxyAPI \(result.version); the proxy remains stopped.\n")
+                let result = try await proxyUpdater.apply()
+                if result.restartedProxy {
+                    output.writeStdout("Applied CLIProxyAPI \(result.version) and restarted the proxy.\n")
+                } else {
+                    output.writeStdout("Applied CLIProxyAPI \(result.version); the proxy remains stopped.\n")
+                }
             }
         default:
             throw CLIProxyManagerCommandError.usage
         }
+    }
+
+    private func appCheckDescription(_ result: AppUpdateCheckResult) -> String {
+        switch result {
+        case .upToDate(let v): return "CLIProxyManager is up to date\(v.map { " at \($0)" } ?? "")."
+        case .available(let v, let r): return "Update available: \(v ?? "none") → \(r.version)."
+        case .pending(_, let s): return "CLIProxyManager \(s.version) is staged."
+        }
+    }
+
+    private func proxyCheckDescription(_ result: ProxyUpdateCheckResult) -> String {
+        switch result {
+        case .upToDate(let v): return "CLIProxyAPI is up to date\(v.map { " at \($0)" } ?? "")."
+        case .available(let v, let r): return "Update available: \(v ?? "none") → \(r.version)."
+        case .pending(_, let p): return "CLIProxyAPI \(p.version) is staged."
+        }
+    }
+
+    private func appStageDescription(_ result: AppUpdateStageResult) -> String {
+        result.staged ? "CLIProxyManager \(result.version) is staged." : "CLIProxyManager \(result.version) is already staged."
+    }
+
+    private func proxyStageDescription(_ result: ProxyUpdateStageResult) -> String {
+        result.staged ? "CLIProxyAPI \(result.version) is staged." : "CLIProxyAPI \(result.version) is already staged."
+    }
+
+    private func isNoStageError(_ error: CLIProxyManagerCommandError, for _: String) -> Bool {
+        if case .prerequisite(let msg) = error {
+            return msg.contains("No staged")
+        }
+        return false
     }
 
     // MARK: - Root check

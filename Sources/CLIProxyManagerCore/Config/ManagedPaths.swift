@@ -67,6 +67,18 @@ public struct ManagedPaths: Equatable, Sendable {
         clipProxyDirectory.appendingPathComponent("update-state.json")
     }
 
+    public var appUpdatesDirectory: URL {
+        rootDirectory.appendingPathComponent("updates/app", isDirectory: true)
+    }
+
+    public func appUpdateDirectory(build: Int) -> URL {
+        appUpdatesDirectory.appendingPathComponent(String(build), isDirectory: true)
+    }
+
+    public func appUpdateManifest(build: Int) -> URL {
+        appUpdateDirectory(build: build).appendingPathComponent("manifest.json")
+    }
+
     public static func defaultRootDirectory() -> URL {
         let productionRoot = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".cliproxy-manager", isDirectory: true)

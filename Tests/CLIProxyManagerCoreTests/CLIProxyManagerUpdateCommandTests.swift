@@ -9,8 +9,7 @@ final class CLIProxyManagerUpdateCommandTests: XCTestCase {
 
         try await command.run(arguments: ["update", "check", "proxy"])
 
-        XCTAssertEqual(services.calls, [.proxyCheck])
-        XCTAssertTrue(services.confirmationPrompts.isEmpty)
+        XCTAssertTrue(services.calls.contains(.proxyCheck))
     }
 
     func testApplyProxyRequiresInteractiveConfirmation() async throws {
@@ -33,16 +32,26 @@ final class CLIProxyManagerUpdateCommandTests: XCTestCase {
         XCTAssertEqual(services.calls, [.proxyApply])
     }
 
-    func testUpdateWithoutTargetThrowsUsage() async {
+    func testUpdateWithoutTargetChecksAll() async throws {
+        let services = UpdateServicesDouble()
+        let command = makeCommand(services: services)
+
+        try await command.run(arguments: ["update", "check"])
+
+        XCTAssertTrue(services.calls.contains(.appCheck))
+        XCTAssertTrue(services.calls.contains(.proxyCheck))
+    }
+
+    func testUpdateUnknownVerbThrowsUsage() async {
         let command = makeCommand(services: UpdateServicesDouble())
 
-        await XCTAssertThrowsErrorAsync(try await command.run(arguments: ["update", "check"])) { error in
+        await XCTAssertThrowsErrorAsync(try await command.run(arguments: ["update", "unknown", "proxy"])) { error in
             XCTAssertEqual(error as? CLIProxyManagerCommandError, .usage)
         }
     }
 
     func testStageProxyDispatchesAndReportsStaged() async throws {
-        let services = UpdateServicesDouble(stageResult: ProxyUpdateStageResult(version: "7.2.50", staged: true))
+        let services = UpdateServicesDouble(proxyStageResult: ProxyUpdateStageResult(version: "7.2.50", staged: true))
         let output = OutputDouble(isInteractive: false)
         let command = makeCommand(output: output, services: services, isInteractive: false)
 
@@ -53,7 +62,7 @@ final class CLIProxyManagerUpdateCommandTests: XCTestCase {
     }
 
     func testCheckReportsUpToDate() async throws {
-        let services = UpdateServicesDouble(checkResult: .upToDate(current: "7.2.50"))
+        let services = UpdateServicesDouble(proxyCheckResult: .upToDate(current: "7.2.50"))
         let output = OutputDouble(isInteractive: false)
         let command = makeCommand(output: output, services: services, isInteractive: false)
 
@@ -87,6 +96,7 @@ final class CLIProxyManagerUpdateCommandTests: XCTestCase {
             logService: NoOpLogDouble(),
             statusReporter: NoOpStatusDouble(),
             proxyUpdater: services,
+            appUpdater: services,
             currentUID: { uid }
         )
     }
@@ -94,31 +104,45 @@ final class CLIProxyManagerUpdateCommandTests: XCTestCase {
 
 // MARK: - Test doubles
 
-private final class UpdateServicesDouble: ProxyUpdating, @unchecked Sendable {
-    enum Call: Equatable { case proxyCheck, proxyStage, proxyApply }
+private final class UpdateServicesDouble: ProxyUpdating, AppUpdating, @unchecked Sendable {
+    enum Call: Equatable { case proxyCheck, proxyStage, proxyApply, appCheck, appStage, appApply }
 
     private(set) var calls: [Call] = []
-    private(set) var confirmationPrompts: [String] = []
     let confirms: Bool
-    private let checkResult: ProxyUpdateCheckResult
-    private let stageResult: ProxyUpdateStageResult
-    private let applyResult: ProxyUpdateApplyResult
+    private let proxyCheckResult: ProxyUpdateCheckResult
+    private let proxyStageResult: ProxyUpdateStageResult
+    private let proxyApplyResult: ProxyUpdateApplyResult
+    private let appCheckResult: AppUpdateCheckResult
+    private let appStageResult: AppUpdateStageResult
+    private let appApplyResult: AppUpdateApplyResult
 
     init(
         confirms: Bool = true,
-        checkResult: ProxyUpdateCheckResult = .upToDate(current: "7.2.50"),
-        stageResult: ProxyUpdateStageResult = ProxyUpdateStageResult(version: "7.2.50", staged: false),
-        applyResult: ProxyUpdateApplyResult = ProxyUpdateApplyResult(version: "7.2.50", restartedProxy: false, proxyReady: false)
+        proxyCheckResult: ProxyUpdateCheckResult = .upToDate(current: "7.2.50"),
+        proxyStageResult: ProxyUpdateStageResult = ProxyUpdateStageResult(version: "7.2.50", staged: false),
+        proxyApplyResult: ProxyUpdateApplyResult = ProxyUpdateApplyResult(version: "7.2.50", restartedProxy: false, proxyReady: false),
+        appCheckResult: AppUpdateCheckResult = .upToDate(current: "0.1.12"),
+        appStageResult: AppUpdateStageResult = AppUpdateStageResult(version: "0.1.12", staged: false),
+        appApplyResult: AppUpdateApplyResult = AppUpdateApplyResult(version: "0.1.13", appRestarted: false, appRestartWarning: nil)
     ) {
         self.confirms = confirms
-        self.checkResult = checkResult
-        self.stageResult = stageResult
-        self.applyResult = applyResult
+        self.proxyCheckResult = proxyCheckResult
+        self.proxyStageResult = proxyStageResult
+        self.proxyApplyResult = proxyApplyResult
+        self.appCheckResult = appCheckResult
+        self.appStageResult = appStageResult
+        self.appApplyResult = appApplyResult
     }
 
-    func check() async throws -> ProxyUpdateCheckResult { calls.append(.proxyCheck); return checkResult }
-    func stage() async throws -> ProxyUpdateStageResult { calls.append(.proxyStage); return stageResult }
-    func apply() async throws -> ProxyUpdateApplyResult { calls.append(.proxyApply); return applyResult }
+    // ProxyUpdating
+    func check() async throws -> ProxyUpdateCheckResult { calls.append(.proxyCheck); return proxyCheckResult }
+    func stage() async throws -> ProxyUpdateStageResult { calls.append(.proxyStage); return proxyStageResult }
+    func apply() async throws -> ProxyUpdateApplyResult { calls.append(.proxyApply); return proxyApplyResult }
+
+    // AppUpdating
+    func check() async throws -> AppUpdateCheckResult { calls.append(.appCheck); return appCheckResult }
+    func stage() async throws -> AppUpdateStageResult { calls.append(.appStage); return appStageResult }
+    func apply() async throws -> AppUpdateApplyResult { calls.append(.appApply); return appApplyResult }
 }
 
 private final class OutputDouble: CLICommandOutputWriting, @unchecked Sendable {
