@@ -1840,24 +1840,263 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.serverStatus.title, "Failed to restart CLIProxyAPI")
     }
 
+    func testMenuRefreshDoesNotStartSubscriptionUsageFetch() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        let profile = AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
+        let quotaClient = RecordingSubscriptionQuotaClient(reports: [availableUsageReport(for: profile)])
+        let sleeper = SubscriptionUsageSleepRecorder()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyStoreDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [profile],
+            quotaClient: quotaClient,
+            subscriptionUsageSleep: { delay in try await sleeper.sleep(delay) }
+        )
+
+        await viewModel.refresh()
+
+        let fetchCallCount = await quotaClient.fetchCallCount()
+        XCTAssertEqual(fetchCallCount, 0)
+    }
+
+    func testStartingReadyProxyStartsInitialSubscriptionUsageFetch() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        let profile = AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
+        let quotaClient = RecordingSubscriptionQuotaClient(reports: [availableUsageReport(for: profile)])
+        let sleeper = SubscriptionUsageSleepRecorder()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyStoreDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [profile],
+            quotaClient: quotaClient,
+            subscriptionUsageSleep: { delay in try await sleeper.sleep(delay) }
+        )
+
+        await viewModel.startServer()
+
+        let fetchCallCount = await quotaClient.fetchCallCount()
+        XCTAssertEqual(fetchCallCount, 1)
+    }
+
+    func testSubscriptionUsageRefreshCoalescesConcurrentCallsIntoOneFetch() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        let profile = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
+        let quotaClient = SuspendedSubscriptionQuotaClient()
+        let sleeper = SubscriptionUsageSleepRecorder()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyStoreDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [profile],
+            quotaClient: quotaClient,
+            subscriptionUsageSleep: { delay in try await sleeper.sleep(delay) }
+        )
+        viewModel.serverStatus = readyStatus()
+
+        let firstRefresh = Task { await viewModel.refreshSubscriptionUsage() }
+        await waitForUsageFetches(quotaClient, expectedCount: 1)
+        let secondRefresh = Task { await viewModel.refreshSubscriptionUsage() }
+        await Task.yield()
+
+        let fetchCallCount = await quotaClient.fetchCallCount()
+        XCTAssertEqual(fetchCallCount, 1)
+
+        await quotaClient.resolveAll(with: availableUsageReport(for: profile))
+        await firstRefresh.value
+        await secondRefresh.value
+    }
+
+    func testSuccessfulUsageRefreshSchedulesFiveMinutePoll() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        let profile = AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
+        let quotaClient = RecordingSubscriptionQuotaClient(reports: [availableUsageReport(for: profile)])
+        let sleeper = SubscriptionUsageSleepRecorder()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyStoreDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [profile],
+            quotaClient: quotaClient,
+            subscriptionUsageSleep: { delay in try await sleeper.sleep(delay) }
+        )
+        viewModel.serverStatus = readyStatus()
+
+        await viewModel.refreshSubscriptionUsage()
+        await waitForUsageSleeps(sleeper, expectedCount: 1)
+
+        let delays = await sleeper.delays()
+        XCTAssertEqual(delays, [300_000_000_000])
+    }
+
+    func testTransientUsageFailureDoublesRetryDelayUpToFifteenMinutes() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        let profile = AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
+        let transientReport = SubscriptionUsageReport(
+            statesByProfileID: [profile.id: .unavailable(.transientFailure)],
+            fetchedAt: Date(timeIntervalSince1970: 0)
+        )
+        let quotaClient = RecordingSubscriptionQuotaClient(reports: Array(repeating: transientReport, count: 5))
+        let sleeper = SubscriptionUsageSleepRecorder()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyStoreDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [profile],
+            quotaClient: quotaClient,
+            subscriptionUsageSleep: { delay in try await sleeper.sleep(delay) }
+        )
+        viewModel.serverStatus = readyStatus()
+
+        for expectedCount in 1...5 {
+            await viewModel.refreshSubscriptionUsage()
+            await waitForUsageSleeps(sleeper, expectedCount: expectedCount)
+        }
+
+        let delays = await sleeper.delays()
+        XCTAssertEqual(
+            delays,
+            [60_000_000_000, 120_000_000_000, 240_000_000_000, 480_000_000_000, 900_000_000_000]
+        )
+    }
+
+    func testNonRetriableProfileIsNotFetchedAgainWhileOtherProfilesContinuePolling() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        let claude = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
+        let codex = AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
+        let initialReport = SubscriptionUsageReport(
+            statesByProfileID: [
+                claude.id: .unavailable(.credentialExpired),
+                codex.id: availableUsageState(for: codex)
+            ],
+            fetchedAt: Date(timeIntervalSince1970: 0)
+        )
+        let subsequentReport = SubscriptionUsageReport(
+            statesByProfileID: [codex.id: availableUsageState(for: codex)],
+            fetchedAt: Date(timeIntervalSince1970: 60)
+        )
+        let quotaClient = RecordingSubscriptionQuotaClient(reports: [initialReport, subsequentReport])
+        let sleeper = SubscriptionUsageSleepRecorder()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyStoreDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [claude, codex],
+            quotaClient: quotaClient,
+            subscriptionUsageSleep: { delay in try await sleeper.sleep(delay) }
+        )
+        viewModel.serverStatus = readyStatus()
+
+        await viewModel.refreshSubscriptionUsage()
+        XCTAssertEqual(viewModel.subscriptionUsageStates[claude.id], .unavailable(.credentialExpired))
+        await viewModel.refreshSubscriptionUsage()
+
+        let requestedProfileIDs = await quotaClient.requestedProfileIDs()
+        XCTAssertEqual(requestedProfileIDs, [[claude.id, codex.id], [codex.id]])
+    }
+
+    func testDisablingSubscriptionUsageInvalidatesInFlightRefreshResult() async throws {
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        let profile = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
+        let keyStore = SubscriptionUsageManagementKeyStoreDouble(isConfiguredValue: true)
+        let quotaClient = SuspendedSubscriptionQuotaClient()
+        let sleeper = SubscriptionUsageSleepRecorder()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: keyStore,
+            proxyService: StubProxyServiceStarter(),
+            profiles: [profile],
+            quotaClient: quotaClient,
+            subscriptionUsageSleep: { delay in try await sleeper.sleep(delay) }
+        )
+        viewModel.serverStatus = readyStatus()
+
+        let refresh = Task { await viewModel.refreshSubscriptionUsage() }
+        await waitForUsageFetches(quotaClient, expectedCount: 1)
+        try viewModel.saveSubscriptionUsageEnabled(false)
+        await quotaClient.resolveAll(with: availableUsageReport(for: profile))
+        await refresh.value
+
+        XCTAssertEqual(viewModel.subscriptionUsageStates[profile.id], .disabled)
+    }
+
     private func subscriptionUsageViewModel(
         config: AppConfig,
         configStore: StubConfigStore,
         keyStore: SubscriptionUsageManagementKeyStoreDouble,
-        proxyService: StubProxyServiceStarter
+        proxyService: StubProxyServiceStarter,
+        profiles: [AuthProfile] = [],
+        quotaClient: any SubscriptionQuotaFetching = StubSubscriptionQuotaClient(),
+        subscriptionUsageSleep: @escaping @Sendable (UInt64) async throws -> Void = { delay in
+            try await Task.sleep(nanoseconds: delay)
+        }
     ) -> DashboardViewModel {
         DashboardViewModel(
             config: config,
             configStore: configStore,
             shellInstaller: StubShellInstaller(),
-            authProfileStore: StubAuthProfileStore(profiles: []),
+            authProfileStore: StubAuthProfileStore(profiles: profiles),
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
             proxyService: proxyService,
             claudeConnector: connectedClaudeConnector(),
-            subscriptionQuotaClient: StubSubscriptionQuotaClient(),
-            subscriptionUsageKeyStore: keyStore
+            subscriptionQuotaClient: quotaClient,
+            subscriptionUsageKeyStore: keyStore,
+            subscriptionUsageSleep: subscriptionUsageSleep
         )
+    }
+
+    private func readyStatus() -> DiagnosticStatus {
+        DiagnosticStatus(severity: .ready, title: "CLIProxyAPI Running", message: "Ready")
+    }
+
+    private func availableUsageState(for profile: AuthProfile) -> AccountSubscriptionUsageState {
+        .available(
+            SubscriptionUsageSnapshot(
+                profileID: profile.id,
+                provider: profile.type,
+                windows: [UsageWindow(id: "primary", label: "Primary", usedPercent: 25, resetAt: nil)],
+                fetchedAt: Date(timeIntervalSince1970: 0)
+            )
+        )
+    }
+
+    private func availableUsageReport(for profile: AuthProfile) -> SubscriptionUsageReport {
+        SubscriptionUsageReport(
+            statesByProfileID: [profile.id: availableUsageState(for: profile)],
+            fetchedAt: Date(timeIntervalSince1970: 0)
+        )
+    }
+
+    private func waitForUsageFetches(_ quotaClient: SuspendedSubscriptionQuotaClient, expectedCount: Int) async {
+        for _ in 0..<100 {
+            if await quotaClient.fetchCallCount() >= expectedCount { return }
+            await Task.yield()
+        }
+        XCTFail("Expected subscription usage fetch.")
+    }
+
+    private func waitForUsageSleeps(_ sleeper: SubscriptionUsageSleepRecorder, expectedCount: Int) async {
+        for _ in 0..<100 {
+            if await sleeper.delays().count >= expectedCount { return }
+            await Task.yield()
+        }
+        XCTFail("Expected subscription usage polling delay.")
     }
 
     private func waitForRestart(_ proxyService: StubProxyServiceStarter, expectedCount: Int = 1) async {
@@ -1883,6 +2122,58 @@ private struct StubSubscriptionQuotaClient: SubscriptionQuotaFetching {
     func fetchUsage(port: Int, profiles: [AuthProfile]) async -> SubscriptionUsageReport {
         SubscriptionUsageReport(statesByProfileID: [:], fetchedAt: Date())
     }
+}
+
+private actor RecordingSubscriptionQuotaClient: SubscriptionQuotaFetching {
+    private var reports: [SubscriptionUsageReport]
+    private var callCount = 0
+    private var profileIDs: [[String]] = []
+
+    init(reports: [SubscriptionUsageReport]) {
+        self.reports = reports
+    }
+
+    func fetchUsage(port: Int, profiles: [AuthProfile]) async -> SubscriptionUsageReport {
+        callCount += 1
+        profileIDs.append(profiles.map(\.id))
+        return reports.removeFirst()
+    }
+
+    func fetchCallCount() -> Int { callCount }
+    func requestedProfileIDs() -> [[String]] { profileIDs }
+}
+
+private actor SuspendedSubscriptionQuotaClient: SubscriptionQuotaFetching {
+    private var continuations: [CheckedContinuation<SubscriptionUsageReport, Never>] = []
+    private var callCount = 0
+
+    func fetchUsage(port: Int, profiles: [AuthProfile]) async -> SubscriptionUsageReport {
+        callCount += 1
+        return await withCheckedContinuation { continuation in
+            continuations.append(continuation)
+        }
+    }
+
+    func fetchCallCount() -> Int { callCount }
+
+    func resolveAll(with report: SubscriptionUsageReport) {
+        let pending = continuations
+        continuations.removeAll()
+        for continuation in pending {
+            continuation.resume(returning: report)
+        }
+    }
+}
+
+private actor SubscriptionUsageSleepRecorder {
+    private var recordedDelays: [UInt64] = []
+
+    func sleep(_ delay: UInt64) async throws {
+        recordedDelays.append(delay)
+        throw CancellationError()
+    }
+
+    func delays() -> [UInt64] { recordedDelays }
 }
 
 private final class SubscriptionUsageManagementKeyStoreDouble: SubscriptionUsageManagementKeyConfiguring, @unchecked Sendable {

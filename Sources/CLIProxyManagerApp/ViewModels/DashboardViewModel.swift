@@ -144,6 +144,7 @@ final class DashboardViewModel: ObservableObject {
     private let appAppearanceService: any AppAppearanceApplying
     private let subscriptionQuotaClient: any SubscriptionQuotaFetching
     private let subscriptionUsageKeyStore: any SubscriptionUsageManagementKeyConfiguring
+    private let subscriptionUsageSleep: @Sendable (UInt64) async throws -> Void
     private let serverStatusRetryDelayNanoseconds: UInt64
     private let settingsMessageAutoClearDelayNanoseconds: UInt64
     private var authProfiles: [AuthProfile] = []
@@ -173,6 +174,9 @@ final class DashboardViewModel: ObservableObject {
         appAppearanceService: any AppAppearanceApplying = AppAppearanceService(),
         subscriptionQuotaClient: any SubscriptionQuotaFetching = CLIProxyAPISubscriptionQuotaClient(),
         subscriptionUsageKeyStore: any SubscriptionUsageManagementKeyConfiguring = SubscriptionUsageManagementKeyStore(),
+        subscriptionUsageSleep: @escaping @Sendable (UInt64) async throws -> Void = { delay in
+            try await Task.sleep(nanoseconds: delay)
+        },
         serverStatusRetryDelayNanoseconds: UInt64 = 500_000_000,
         settingsMessageAutoClearDelayNanoseconds: UInt64 = 3_000_000_000
     ) {
@@ -190,6 +194,7 @@ final class DashboardViewModel: ObservableObject {
         self.appAppearanceService = appAppearanceService
         self.subscriptionQuotaClient = subscriptionQuotaClient
         self.subscriptionUsageKeyStore = subscriptionUsageKeyStore
+        self.subscriptionUsageSleep = subscriptionUsageSleep
         self.serverStatusRetryDelayNanoseconds = serverStatusRetryDelayNanoseconds
         self.settingsMessageAutoClearDelayNanoseconds = settingsMessageAutoClearDelayNanoseconds
         let persistedConfig = Self.availableConfig(config ?? ((try? configStore.load()) ?? .default))
@@ -301,7 +306,6 @@ final class DashboardViewModel: ObservableObject {
         let updatedServerStatus = passiveRefreshPresentationStatus(from: rawServerStatus)
         let claudeStatus = await claudeConnector.status()
         updateStatuses(serverStatus: updatedServerStatus, claudeStatus: claudeStatus)
-        await refreshSubscriptionUsage()
     }
 
     func saveSubscriptionUsageEnabled(_ enabled: Bool) throws {
@@ -368,10 +372,7 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func refreshSubscriptionUsage() async {
-        subscriptionUsageRefreshTask?.cancel()
-        subscriptionUsageRefreshGeneration += 1
-        let generation = subscriptionUsageRefreshGeneration
-
+        guard subscriptionUsageRefreshTask == nil else { return }
         guard config.subscriptionUsage.isEnabled else {
             setSubscriptionUsageStates(.disabled)
             return
@@ -382,13 +383,19 @@ final class DashboardViewModel: ObservableObject {
         }
         guard serverStatus.severity == .ready else {
             setSubscriptionUsageStates(.unavailable(.proxyUnavailable))
+            return
+        }
+
+        let profiles = refreshableSubscriptionUsageProfiles()
+        guard !profiles.isEmpty else {
             subscriptionUsagePollingTask?.cancel()
             subscriptionUsagePollingTask = nil
             return
         }
 
-        setSubscriptionUsageStates(.loading)
-        let profiles = authProfiles
+        subscriptionUsageRefreshGeneration += 1
+        let generation = subscriptionUsageRefreshGeneration
+        setSubscriptionUsageStates(.loading, profileIDs: Set(profiles.map(\.id)))
         let port = config.port
         let quotaClient = subscriptionQuotaClient
         let refreshTask = Task { [weak self] in
@@ -400,16 +407,47 @@ final class DashboardViewModel: ObservableObject {
                   self.subscriptionUsageRefreshGeneration == generation else {
                 return
             }
-            self.subscriptionUsageStates = report.statesByProfileID
+            self.applySubscriptionUsageReport(report, for: profiles)
             self.rebuildProviderRows(claudeStatus: self.lastClaudeStatus, codexStatus: self.lastCodexStatus)
             self.scheduleSubscriptionUsagePollingIfNeeded()
         }
         subscriptionUsageRefreshTask = refreshTask
         await refreshTask.value
+        if subscriptionUsageRefreshGeneration == generation {
+            subscriptionUsageRefreshTask = nil
+        }
     }
 
-    private func setSubscriptionUsageStates(_ state: AccountSubscriptionUsageState) {
-        subscriptionUsageStates = Dictionary(uniqueKeysWithValues: authProfiles.map { ($0.id, state) })
+    private func applySubscriptionUsageReport(
+        _ report: SubscriptionUsageReport,
+        for profiles: [AuthProfile]
+    ) {
+        for profile in profiles {
+            if let state = report.statesByProfileID[profile.id] {
+                subscriptionUsageStates[profile.id] = state
+            } else {
+                subscriptionUsageStates[profile.id] = .unavailable(.transientFailure)
+            }
+        }
+    }
+
+    private func refreshableSubscriptionUsageProfiles() -> [AuthProfile] {
+        authProfiles.filter { profile in
+            guard case let .unavailable(issue)? = subscriptionUsageStates[profile.id] else {
+                return true
+            }
+            return !issue.stopsPolling
+        }
+    }
+
+    private func setSubscriptionUsageStates(
+        _ state: AccountSubscriptionUsageState,
+        profileIDs: Set<String>? = nil
+    ) {
+        let targetProfileIDs = profileIDs ?? Set(authProfiles.map(\.id))
+        for profileID in targetProfileIDs {
+            subscriptionUsageStates[profileID] = state
+        }
         rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
     }
 
@@ -448,9 +486,10 @@ final class DashboardViewModel: ObservableObject {
             subscriptionUsageRetryDelayNanoseconds = 60_000_000_000
         }
 
+        let sleep = subscriptionUsageSleep
         subscriptionUsagePollingTask = Task { [weak self] in
             do {
-                try await Task.sleep(nanoseconds: delay)
+                try await sleep(delay)
             } catch {
                 return
             }
@@ -1758,6 +1797,9 @@ final class DashboardViewModel: ObservableObject {
             try await action()
             if waitForReady {
                 await refreshUntilServerIsReady()
+                if serverStatus.severity == .ready {
+                    await refreshSubscriptionUsage()
+                }
             } else {
                 await refresh()
             }
