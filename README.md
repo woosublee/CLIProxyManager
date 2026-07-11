@@ -2,10 +2,12 @@
 
 [English](README.en.md)
 
-<p align="center">
-  <img src="docs/assets/readme-main-window.png" alt="CLIProxyManager 다중 계정 대시보드" width="300">
-  <img src="docs/assets/readme-usage-hud.png" alt="Claude와 Codex 계정 한도를 보여 주는 구독 사용량 HUD" width="300">
-</p>
+<table>
+  <tr>
+    <td><img src="docs/assets/readme-main-window.png" alt="CLIProxyManager 다중 계정 대시보드" width="300"></td>
+    <td><img src="docs/assets/readme-usage-hud.png" alt="Claude와 Codex 계정 한도를 보여 주는 구독 사용량 HUD" width="300"></td>
+  </tr>
+</table>
 
 CLIProxyManager는 여러 Claude·Codex OAuth 계정과 로컬 CLIProxyAPI 서버를 macOS 메뉴바에서 관리하는 앱입니다. 계정마다 별도 명령어를 만들고, 어떤 계정으로 Claude Code를 실행할지 쉽게 전환할 수 있습니다.
 
