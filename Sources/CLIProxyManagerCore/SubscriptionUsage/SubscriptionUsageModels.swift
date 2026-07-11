@@ -109,6 +109,7 @@ public protocol SubscriptionQuotaFetching: Sendable {
 
 public protocol SubscriptionUsageManagementKeyConfiguring: Sendable {
     func isConfigured() -> Bool
+    func createManagementKeyIfNeeded() throws -> Bool
     func setManagementKey(_ value: String) throws
     func deleteManagementKey() throws
 }

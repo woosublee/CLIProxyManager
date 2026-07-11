@@ -13,6 +13,21 @@ public struct SubscriptionUsageManagementKeyStore: SubscriptionUsageManagementKe
         (try? managementKey()).map { !$0.isEmpty } ?? false
     }
 
+    public func createManagementKeyIfNeeded() throws -> Bool {
+        guard !isConfigured() else { return false }
+        var bytes = [UInt8](repeating: 0, count: 32)
+        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
+            throw SecretStoreError.writeFailed(account)
+        }
+        let key = Data(bytes)
+            .base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        try setManagementKey(key)
+        return true
+    }
+
     public func setManagementKey(_ value: String) throws {
         let normalizedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedValue.isEmpty else {

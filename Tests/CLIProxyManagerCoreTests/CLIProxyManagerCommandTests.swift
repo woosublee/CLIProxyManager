@@ -201,6 +201,11 @@ private final class CommandManagementKeyStore: SubscriptionUsageManagementKeyCon
     private var key: String?
 
     func isConfigured() -> Bool { key != nil }
+    func createManagementKeyIfNeeded() throws -> Bool {
+        guard key == nil else { return false }
+        key = "generated-management-key"
+        return true
+    }
     func setManagementKey(_ value: String) throws { key = value }
     func deleteManagementKey() throws { key = nil }
 }
