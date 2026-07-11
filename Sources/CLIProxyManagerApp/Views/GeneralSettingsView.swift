@@ -4,6 +4,17 @@ import SwiftUI
 struct GeneralSettingsView: View {
     @ObservedObject var viewModel: DashboardViewModel
 
+    private func usageOverlayBinding<Value>(_ keyPath: WritableKeyPath<AppConfig.UsageOverlay, Value>) -> Binding<Value> {
+        Binding(
+            get: { viewModel.config.usageOverlay[keyPath: keyPath] },
+            set: { value in
+                var usageOverlay = viewModel.config.usageOverlay
+                usageOverlay[keyPath: keyPath] = value
+                viewModel.saveSetting { try viewModel.saveUsageOverlay(usageOverlay) }
+            }
+        )
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsGroup(title: "Appearance") {
@@ -39,6 +50,23 @@ struct GeneralSettingsView: View {
                     Toggle("", isOn: .constant(false))
                     .labelsHidden()
                     .toggleStyle(SettingsToggleStyle())
+                }
+            }
+
+            SettingsGroup(title: "Usage Overlay") {
+                SettingsRow(label: "Show usage window", description: "Keep subscription usage visible in a separate window.") {
+                    Toggle("", isOn: usageOverlayBinding(\.isVisible))
+                        .labelsHidden()
+                        .toggleStyle(SettingsToggleStyle())
+                }
+                SettingsRow(label: "Always on top", description: "Keep the usage window above other windows.", isEnabled: viewModel.config.usageOverlay.isVisible) {
+                    Toggle("", isOn: usageOverlayBinding(\.alwaysOnTop))
+                        .labelsHidden()
+                        .toggleStyle(SettingsToggleStyle())
+                }
+                SettingsRow(label: "Background opacity", description: "Adjust the usage window background transparency.", isEnabled: viewModel.config.usageOverlay.isVisible) {
+                    Slider(value: usageOverlayBinding(\.backgroundOpacity), in: 0.2...1, step: 0.05)
+                        .frame(width: 136)
                 }
             }
         }

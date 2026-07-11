@@ -102,6 +102,25 @@ final class AppAppearanceServiceTests: XCTestCase {
         XCTAssertEqual(store.savedConfigs.last?.showMenuBarIcon, false)
     }
 
+    func testUsageOverlaySettingsPersistAsOnePreferenceGroup() throws {
+        let store = StubConfigStore(config: .default)
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector(),
+            loginItemService: StubLoginItemService(),
+            appAppearanceService: StubAppAppearanceService()
+        )
+
+        try viewModel.saveUsageOverlay(
+            .init(isVisible: true, alwaysOnTop: true, backgroundOpacity: 0.45)
+        )
+
+        XCTAssertEqual(store.savedConfigs.last?.usageOverlay, .init(isVisible: true, alwaysOnTop: true, backgroundOpacity: 0.45))
+        XCTAssertEqual(viewModel.config.usageOverlay, .init(isVisible: true, alwaysOnTop: true, backgroundOpacity: 0.45))
+    }
+
     func testCannotHideBothDockAndMenuBarIcons() throws {
         var config = AppConfig.default
         config.showDockIcon = false

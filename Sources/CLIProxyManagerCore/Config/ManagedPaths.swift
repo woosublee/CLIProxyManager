@@ -23,6 +23,10 @@ public struct ManagedPaths: Equatable, Sendable {
         rootDirectory.appendingPathComponent("subscription-usage-management-key.json")
     }
 
+    public var subscriptionUsageSnapshotCacheFile: URL {
+        rootDirectory.appendingPathComponent("subscription-usage-snapshots.json")
+    }
+
     public var logsDirectory: URL {
         rootDirectory.appendingPathComponent("logs")
     }

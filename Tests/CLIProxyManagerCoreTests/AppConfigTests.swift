@@ -22,6 +22,9 @@ final class AppConfigTests: XCTestCase {
         XCTAssertTrue(config.showDockIcon)
         XCTAssertTrue(config.showMenuBarIcon)
         XCTAssertFalse(config.showNotifications)
+        XCTAssertFalse(config.usageOverlay.isVisible)
+        XCTAssertFalse(config.usageOverlay.alwaysOnTop)
+        XCTAssertEqual(config.usageOverlay.backgroundOpacity, 0.9)
         XCTAssertFalse(config.roundRobinEnabled)
         XCTAssertEqual(config.roundRobinProfiles, [])
     }
@@ -420,6 +423,10 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(
             paths.subscriptionUsageManagementKeyFile,
             root.appendingPathComponent("subscription-usage-management-key.json")
+        )
+        XCTAssertEqual(
+            paths.subscriptionUsageSnapshotCacheFile,
+            root.appendingPathComponent("subscription-usage-snapshots.json")
         )
         XCTAssertEqual(paths.logsDirectory, root.appendingPathComponent("logs"))
         XCTAssertEqual(paths.clipProxyDirectory, root.appendingPathComponent("cliproxyapi"))

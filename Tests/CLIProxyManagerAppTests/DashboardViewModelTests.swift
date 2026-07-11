@@ -2189,6 +2189,95 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(totalFetches, 2)
     }
 
+    func testAutomaticUsageRefreshKeepsExistingUsageUntilSuccessfulReplacement() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        let profile = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
+        let initialState = availableUsageState(for: profile)
+        let refreshedState: AccountSubscriptionUsageState = .available(
+            SubscriptionUsageSnapshot(
+                profileID: profile.id,
+                provider: .claude,
+                windows: [UsageWindow(id: "five_hour", label: "5h", usedPercent: 30, resetAt: nil)],
+                fetchedAt: Date(timeIntervalSince1970: 60)
+            )
+        )
+        let quotaClient = SuspendedSubscriptionQuotaClient(reportsBeforeSuspension: [
+            SubscriptionUsageReport(statesByProfileID: [profile.id: initialState], fetchedAt: Date(timeIntervalSince1970: 0))
+        ])
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [profile],
+            quotaClient: quotaClient
+        )
+        viewModel.serverStatus = readyStatus()
+
+        await viewModel.refreshSubscriptionUsage()
+        let refresh = Task { await viewModel.refreshSubscriptionUsage() }
+        await waitForUsageFetches(quotaClient, expectedCount: 2)
+
+        XCTAssertEqual(viewModel.subscriptionUsageStates[profile.id], initialState)
+
+        await quotaClient.resolveAll(with: SubscriptionUsageReport(
+            statesByProfileID: [profile.id: refreshedState],
+            fetchedAt: Date(timeIntervalSince1970: 60)
+        ))
+        await refresh.value
+
+        XCTAssertEqual(viewModel.subscriptionUsageStates[profile.id], refreshedState)
+    }
+
+    func testAutomaticUsageRefreshKeepsExistingUsageAfterTransientFailure() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        let profile = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
+        let initialState = availableUsageState(for: profile)
+        let quotaClient = RecordingSubscriptionQuotaClient(reports: [
+            SubscriptionUsageReport(statesByProfileID: [profile.id: initialState], fetchedAt: Date(timeIntervalSince1970: 0)),
+            SubscriptionUsageReport(statesByProfileID: [profile.id: .unavailable(.transientFailure)], fetchedAt: Date(timeIntervalSince1970: 60))
+        ])
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [profile],
+            quotaClient: quotaClient
+        )
+        viewModel.serverStatus = readyStatus()
+
+        await viewModel.refreshSubscriptionUsage()
+        await viewModel.refreshSubscriptionUsage()
+
+        XCTAssertEqual(viewModel.subscriptionUsageStates[profile.id], initialState)
+    }
+
+    func testInitializationRestoresLastSuccessfulUsageBeforeNextRefresh() {
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        let profile = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
+        let snapshot = SubscriptionUsageSnapshot(
+            profileID: profile.id,
+            provider: .claude,
+            windows: [UsageWindow(id: "five_hour", label: "5h", usedPercent: 0, resetAt: nil)],
+            fetchedAt: Date(timeIntervalSince1970: 60)
+        )
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [profile],
+            subscriptionUsageSnapshotCache: SubscriptionUsageSnapshotCacheDouble(snapshots: [profile.id: snapshot])
+        )
+
+        XCTAssertEqual(viewModel.subscriptionUsageStates[profile.id], .available(snapshot))
+        XCTAssertEqual(viewModel.lastSuccessfulSubscriptionUsageRefreshAt, snapshot.fetchedAt)
+    }
+
     func testManualUsageRefreshKeepsExistingUsageUntilSuccessfulReplacement() async {
         var config = AppConfig.default
         config.subscriptionUsage.isEnabled = true
@@ -2510,6 +2599,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         proxyService: StubProxyServiceStarter,
         profiles: [AuthProfile] = [],
         quotaClient: any SubscriptionQuotaFetching = StubSubscriptionQuotaClient(),
+        subscriptionUsageSnapshotCache: any SubscriptionUsageSnapshotCaching = SubscriptionUsageSnapshotCacheDouble(),
         subscriptionUsageSleep: @escaping @Sendable (UInt64) async throws -> Void = { delay in
             try await Task.sleep(nanoseconds: delay)
         }
@@ -2525,6 +2615,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             claudeConnector: connectedClaudeConnector(),
             subscriptionQuotaClient: quotaClient,
             subscriptionUsageKeyStore: keyStore,
+            subscriptionUsageSnapshotCache: subscriptionUsageSnapshotCache,
             subscriptionUsageSleep: subscriptionUsageSleep
         )
     }
@@ -2653,6 +2744,18 @@ private actor SubscriptionUsageSleepRecorder {
     }
 
     func delays() -> [UInt64] { recordedDelays }
+}
+
+private final class SubscriptionUsageSnapshotCacheDouble: SubscriptionUsageSnapshotCaching, @unchecked Sendable {
+    private var snapshots: [String: SubscriptionUsageSnapshot]
+
+    init(snapshots: [String: SubscriptionUsageSnapshot] = [:]) {
+        self.snapshots = snapshots
+    }
+
+    func load() -> [String: SubscriptionUsageSnapshot] { snapshots }
+    func save(_ snapshots: [String: SubscriptionUsageSnapshot]) throws { self.snapshots = snapshots }
+    func clear() throws { snapshots = [:] }
 }
 
 private final class SubscriptionUsageManagementKeyDouble: SubscriptionUsageManagementKeyConfiguring, @unchecked Sendable {

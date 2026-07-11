@@ -29,10 +29,19 @@ func subscriptionUsageProgressTone(for usedPercent: Double) -> SubscriptionUsage
     }
 }
 
+func subscriptionUsageDisplayLabel(for window: UsageWindow) -> String {
+    switch window.id {
+    case "primary": "5h"
+    case "secondary": "7d"
+    default: window.label
+    }
+}
+
 func subscriptionUsageAccessibilityLabel(for window: UsageWindow) -> String {
     let used = Int(window.usedPercent.rounded())
+    let label = subscriptionUsageDisplayLabel(for: window)
     guard let resetAt = window.resetAt else {
-        return "\(window.label), \(used) percent used"
+        return "\(label), \(used) percent used"
     }
-    return "\(window.label), \(used) percent used, resets \(resetAt.formatted(date: .abbreviated, time: .shortened))"
+    return "\(label), \(used) percent used, resets \(resetAt.formatted(date: .abbreviated, time: .shortened))"
 }

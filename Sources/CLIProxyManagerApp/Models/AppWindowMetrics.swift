@@ -6,4 +6,6 @@ enum AppWindowMetrics {
     static let settingsWidth: CGFloat = 720
     static let settingsHeight: CGFloat = 500
     static let menuBarWidth: CGFloat = 248
+    static let usageOverlayWidth: CGFloat = 300
+    static let usageOverlayHeight: CGFloat = 260
 }
