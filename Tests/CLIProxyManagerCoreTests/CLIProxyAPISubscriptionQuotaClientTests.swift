@@ -59,6 +59,53 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         XCTAssertEqual(body["url"] as? String, "https://chatgpt.com/backend-api/wham/usage")
     }
 
+    func testManagementAuthorizationFailureMapsToManagementKeyRejected() async {
+        let transport = StubSubscriptionUsageTransport(responses: [
+            .success(.init(data: Data("{}".utf8), statusCode: 401))
+        ])
+        let client = CLIProxyAPISubscriptionQuotaClient(
+            keyStore: StubManagementKeyStore(key: "management-secret"),
+            transport: transport
+        )
+        let profile = AuthProfile(fileName: "claude.json", type: .claude, email: nil, accountID: nil, expired: nil, disabled: false)
+
+        let report = await client.fetchUsage(port: 18_317, profiles: [profile])
+
+        XCTAssertEqual(report.statesByProfileID[profile.id], .unavailable(.managementKeyRejected))
+    }
+
+    func testClaudeProviderUnauthorizedResponseMapsToCredentialExpired() async {
+        let transport = StubSubscriptionUsageTransport(responses: [
+            .success(.init(data: Data(#"{"files":[{"name":"claude.json","provider":"claude","auth_index":"claude-index","status":"ready","disabled":false}]}"#.utf8), statusCode: 200)),
+            .success(.init(data: Data(#"{"status_code":401,"body":"{}"}"#.utf8), statusCode: 200))
+        ])
+        let client = CLIProxyAPISubscriptionQuotaClient(
+            keyStore: StubManagementKeyStore(key: "management-secret"),
+            transport: transport
+        )
+        let profile = AuthProfile(fileName: "claude.json", type: .claude, email: nil, accountID: nil, expired: nil, disabled: false)
+
+        let report = await client.fetchUsage(port: 18_317, profiles: [profile])
+
+        XCTAssertEqual(report.statesByProfileID[profile.id], .unavailable(.credentialExpired))
+    }
+
+    func testClaudeMalformedUsagePayloadMapsToSchemaMismatch() async {
+        let transport = StubSubscriptionUsageTransport(responses: [
+            .success(.init(data: Data(#"{"files":[{"name":"claude.json","provider":"claude","auth_index":"claude-index","status":"ready","disabled":false}]}"#.utf8), statusCode: 200)),
+            .success(.init(data: Data(#"{"status_code":200,"body":"{\"five_hour\":{\"utilization\":\"not-a-number\"}}"}"#.utf8), statusCode: 200))
+        ])
+        let client = CLIProxyAPISubscriptionQuotaClient(
+            keyStore: StubManagementKeyStore(key: "management-secret"),
+            transport: transport
+        )
+        let profile = AuthProfile(fileName: "claude.json", type: .claude, email: nil, accountID: nil, expired: nil, disabled: false)
+
+        let report = await client.fetchUsage(port: 18_317, profiles: [profile])
+
+        XCTAssertEqual(report.statesByProfileID[profile.id], .unavailable(.schemaMismatch))
+    }
+
     func testMissingManagementKeyDoesNotSendNetworkRequests() async {
         let transport = StubSubscriptionUsageTransport(responses: [])
         let client = CLIProxyAPISubscriptionQuotaClient(keyStore: StubManagementKeyStore(key: nil), transport: transport)
@@ -121,11 +168,11 @@ private final class StubSubscriptionUsageTransport: SubscriptionUsageHTTPTranspo
     }
 
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        lock.lock()
-        requests.append(request)
-        let result = responseIndex < responses.count ? responses[responseIndex] : .failure(URLError(.badServerResponse))
-        responseIndex += 1
-        lock.unlock()
+        let result = lock.withLock { () -> Result<Response, Error> in
+            requests.append(request)
+            defer { responseIndex += 1 }
+            return responseIndex < responses.count ? responses[responseIndex] : .failure(URLError(.badServerResponse))
+        }
         let response = try result.get()
         return (response.data, HTTPURLResponse(url: request.url!, statusCode: response.statusCode, httpVersion: nil, headerFields: nil)!)
     }
