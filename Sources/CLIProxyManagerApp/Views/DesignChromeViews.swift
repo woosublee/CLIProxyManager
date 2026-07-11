@@ -8,6 +8,7 @@ enum BrandPalette {
     static let codex = Color(red: 0.10, green: 0.10, blue: 0.10)       // #1A1A1A
     static let accent = Color(red: 0.0, green: 0.478, blue: 1.0)        // #007AFF
     static let statusRunning = Color(red: 0.188, green: 0.820, blue: 0.345) // #30D158
+    static let statusWarning = Color(red: 1.0, green: 0.624, blue: 0.039)   // #FF9F0A
     static let statusError = Color(red: 1.0, green: 0.271, blue: 0.227)     // #FF453A
 }
 
@@ -52,7 +53,7 @@ struct StatusLED: View {
                 .frame(width: size, height: size)
         }
         .onAppear { updatePulsePhase(for: state) }
-        .onChange(of: state) { updatePulsePhase(for: $0) }
+        .onChange(of: state) { _, newState in updatePulsePhase(for: newState) }
     }
 
     private func updatePulsePhase(for state: State) {

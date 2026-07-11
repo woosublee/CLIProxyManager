@@ -135,13 +135,17 @@ private struct MenuBarAccountRow: View {
     let provider: MenuBarConnectedProvider
 
     var body: some View {
-        HStack(spacing: 9) {
+        HStack(alignment: .top, spacing: 9) {
             ProviderAvatar(providerID: provider.id, size: 22)
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(provider.displayName)
                     .font(.system(size: 12.5, weight: .semibold))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                Text(provider.connectionDetail)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .layoutPriority(1)
                 Text(verbatim: "$ \(provider.functionName)")
                     .font(.system(size: 10.5, design: .monospaced))
                     .foregroundStyle(.tertiary)
@@ -149,10 +153,11 @@ private struct MenuBarAccountRow: View {
 
                 subscriptionUsage
             }
-            Spacer(minLength: 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
             StatusLED(state: .running, size: 8, pulse: false)
+                .padding(.top, 3)
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 4)
     }
 
     @ViewBuilder
@@ -176,33 +181,36 @@ private struct MenuBarAccountRow: View {
                     .foregroundStyle(.tertiary)
                     .accessibilityLabel("Subscription usage hidden")
             } else {
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: 4) {
                     ForEach(snapshot.windows) { window in
-                        Text(windowText(window))
-                            .font(.system(size: 10.5, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .accessibilityLabel(accessibilityText(window))
+                        usageWindow(window)
                     }
                 }
             }
         }
     }
 
-    private func windowText(_ window: UsageWindow) -> String {
-        let used = Int(window.usedPercent.rounded())
-        guard let resetAt = window.resetAt else {
-            return "\(window.label)  \(used)% used"
-        }
-        return "\(window.label)  \(used)% used · \(resetAt.formatted(.dateTime.month(.abbreviated).day().hour().minute()))"
-    }
+    private func usageWindow(_ window: UsageWindow) -> some View {
+        let percent = min(max(window.usedPercent, 0), 100)
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 7) {
+                Text(window.label)
+                    .frame(width: 52, alignment: .leading)
+                ProgressView(value: percent, total: 100)
+                    .tint(subscriptionUsageProgressTone(for: percent).color)
+                    .accessibilityLabel(subscriptionUsageAccessibilityLabel(for: window))
+                Text("\(Int(percent.rounded()))%")
+                    .frame(width: 34, alignment: .trailing)
+            }
+            .font(.system(size: 10.5, design: .monospaced))
 
-    private func accessibilityText(_ window: UsageWindow) -> String {
-        let used = Int(window.usedPercent.rounded())
-        guard let resetAt = window.resetAt else {
-            return "\(window.label), \(used) percent used"
+            if let resetAt = window.resetAt {
+                Text("Next reset: \(resetAt.formatted(date: .abbreviated, time: .shortened))")
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(.tertiary)
+                    .padding(.leading, 59)
+            }
         }
-        return "\(window.label), \(used) percent used, resets \(resetAt.formatted(date: .abbreviated, time: .shortened))"
     }
 }
 

@@ -77,6 +77,30 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
         XCTAssertEqual(usage.windows.map(\.id), ["five_hour"])
     }
 
+    func testUsageProgressToneThresholds() {
+        XCTAssertEqual(subscriptionUsageProgressTone(for: 0), .normal)
+        XCTAssertEqual(subscriptionUsageProgressTone(for: 49.9), .normal)
+        XCTAssertEqual(subscriptionUsageProgressTone(for: 50), .warning)
+        XCTAssertEqual(subscriptionUsageProgressTone(for: 79.9), .warning)
+        XCTAssertEqual(subscriptionUsageProgressTone(for: 80), .critical)
+        XCTAssertEqual(subscriptionUsageProgressTone(for: 100), .critical)
+    }
+
+    func testUsageProgressAccessibilityLabelIncludesUsageAndResetTime() {
+        let window = UsageWindow(
+            id: "five_hour",
+            label: "5h",
+            usedPercent: 52,
+            resetAt: Date(timeIntervalSince1970: 0)
+        )
+
+        let label = subscriptionUsageAccessibilityLabel(for: window)
+
+        XCTAssertTrue(label.contains("5h"))
+        XCTAssertTrue(label.contains("52"))
+        XCTAssertTrue(label.contains("resets"))
+    }
+
     func testSnapshotShowsEmptyMessageWhenNoProviderIsConnected() {
         let snapshot = MenuBarStatusSnapshot(
             serverStatus: DiagnosticStatus(
