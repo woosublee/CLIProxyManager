@@ -75,6 +75,43 @@ final class ProxyServiceManagerTests: XCTestCase {
         XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
     }
 
+    func testStartOmitsManagementSecretWhenSubscriptionUsageIsDisabledEvenIfAKeyExists() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let manager = ProxyServiceManager(
+            paths: paths,
+            launcher: FakeProcessLauncher(),
+            managementKeyProvider: { "stored-management-key" },
+            subscriptionUsageEnabledProvider: { false }
+        )
+
+        try await manager.start(port: 8317)
+
+        let config = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
+        XCTAssertFalse(config.contains("remote-management:"))
+        XCTAssertFalse(config.contains("secret-key:"))
+        let attributes = try FileManager.default.attributesOfItem(atPath: paths.clipProxyConfigFile.path)
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+    }
+
+    func testStartOmitsManagementSecretWhenConfiguredKeyIsBlank() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let manager = ProxyServiceManager(
+            paths: paths,
+            launcher: FakeProcessLauncher(),
+            managementKeyProvider: { " \n " },
+            subscriptionUsageEnabledProvider: { true }
+        )
+
+        try await manager.start(port: 8317)
+
+        let config = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
+        XCTAssertFalse(config.contains("remote-management:"))
+    }
+
     func testStartEscapesControlCharactersInYAMLAuthDirectory() async throws {
         let sandbox = try makeSandbox()
         let root = sandbox.appendingPathComponent("managed\nroot\twith\rcontrol")
