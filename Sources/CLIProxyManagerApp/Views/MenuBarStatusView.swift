@@ -194,8 +194,6 @@ private struct MenuBarAccountRow: View {
         let percent = min(max(window.usedPercent, 0), 100)
         return VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 7) {
-                Text(window.label)
-                    .frame(width: 52, alignment: .leading)
                 ProgressView(value: percent, total: 100)
                     .tint(subscriptionUsageProgressTone(for: percent).color)
                     .accessibilityLabel(subscriptionUsageAccessibilityLabel(for: window))
@@ -208,7 +206,6 @@ private struct MenuBarAccountRow: View {
                 Text("Next reset: \(resetAt.formatted(date: .abbreviated, time: .shortened))")
                     .font(.system(size: 9.5))
                     .foregroundStyle(.tertiary)
-                    .padding(.leading, 59)
             }
         }
     }

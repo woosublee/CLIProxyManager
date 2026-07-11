@@ -100,7 +100,9 @@ The GUI app is optional — all proxy lifecycle operations work from an SSH sess
 
 ### Experimental subscription usage
 
-CLIProxyManager can show Claude and Codex OAuth subscription usage in each account row of the menu bar. Enable **Subscription Usage (Experimental)** in Server Settings and save the CLIProxyAPI management key in the Keychain. The app never reads, displays, or exports OAuth tokens.
+CLIProxyManager can show Claude and Codex OAuth subscription usage in each account row of the menu bar. Enable **Subscription Usage (Experimental)** in Server Settings; the app creates the local CLIProxyAPI management key in Keychain automatically. Turning the setting off removes that Keychain item and removes the proxy management configuration. The app never reads, displays, or exports OAuth tokens.
+
+For headless automation, you may explicitly store and delete the local management key with `cpm quota key`; the GUI does not require manual key input.
 
 For headless setup and display-only reporting:
 
