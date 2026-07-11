@@ -291,11 +291,12 @@ final class DashboardViewModel: ObservableObject {
         updatedConfig.nicknames = config.nicknames
         updatedConfig.includeDangerouslySkipPermissions = config.includeDangerouslySkipPermissions
         do {
-            if config.subscriptionUsage.isEnabled || subscriptionUsageKeyStore.isConfigured() {
+            let shouldDeleteManagementKey = config.subscriptionUsage.isEnabled || subscriptionUsageKeyStore.isConfigured()
+            try saveConfig(updatedConfig)
+            if shouldDeleteManagementKey {
                 cancelSubscriptionUsageWork()
                 try subscriptionUsageKeyStore.deleteManagementKey()
             }
-            try saveConfig(updatedConfig)
             setSubscriptionUsageStates(.disabled)
             appAppearanceService.apply(showDockIcon: updatedConfig.showDockIcon)
             appAppearanceService.apply(appearance: updatedConfig.appearance)
@@ -341,11 +342,11 @@ final class DashboardViewModel: ObservableObject {
                 throw error
             }
         } else {
-            cancelSubscriptionUsageWork()
-            try subscriptionUsageKeyStore.deleteManagementKey()
             var updatedConfig = config
             updatedConfig.subscriptionUsage.isEnabled = false
             try saveConfig(updatedConfig)
+            cancelSubscriptionUsageWork()
+            try subscriptionUsageKeyStore.deleteManagementKey()
             setSubscriptionUsageStates(.disabled)
         }
 
