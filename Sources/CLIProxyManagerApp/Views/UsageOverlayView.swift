@@ -105,7 +105,7 @@ private struct UsageOverlayAccountView: View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 6) {
                 ProviderAvatar(providerID: provider.id, size: 20)
-                Text(provider.menuBarDisplayName)
+                Text(provider.usageOverlayDisplayName)
                     .font(.system(size: 12.5, weight: .semibold))
                 Spacer()
                 Text(verbatim: "$ \(provider.functionName)")

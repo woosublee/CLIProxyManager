@@ -13,6 +13,10 @@ struct MenuBarConnectedProvider: Equatable, Identifiable {
         accountDetailHidden ? name : displayName
     }
 
+    var usageOverlayDisplayName: String {
+        displayName
+    }
+
     var menuBarConnectionDetail: String? {
         accountDetailHidden ? nil : connectionDetail
     }

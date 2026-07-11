@@ -104,6 +104,7 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
 
         let provider = try! XCTUnwrap(snapshot.connectedProviders.first)
         XCTAssertEqual(provider.menuBarDisplayName, "Claude OAuth")
+        XCTAssertEqual(provider.usageOverlayDisplayName, "Personal")
         XCTAssertNil(provider.menuBarConnectionDetail)
         guard case let .available(usage) = provider.subscriptionUsageState else {
             return XCTFail("Expected available subscription usage")
