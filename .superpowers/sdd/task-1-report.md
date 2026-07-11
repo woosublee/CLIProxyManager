@@ -56,3 +56,56 @@ swift test
 ## Concerns
 
 - 전체 테스트 실행에는 기존 Swift 6 concurrency 관련 경고가 남아 있습니다. 이번 변경 범위의 경고가 아니며, 테스트는 모두 성공했습니다.
+
+## Follow-up: Concurrent Creation Race Fix
+
+### 구현
+
+- `createManagementKeyIfNeeded()`의 check-then-create 경로를 원자적인 `SecItemAdd`로 변경했습니다.
+- `SecItemAdd`가 `errSecDuplicateItem`을 반환하면 다른 caller가 이미 key를 만든 정상 경쟁 상태로 처리하여 `false`를 반환합니다. 그 외 실패는 기존처럼 `SecretStoreError.writeFailed(account)`으로 처리합니다.
+- 생성 경로도 기존과 동일한 `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` 접근성 속성을 직접 지정합니다.
+- 실제 Keychain의 같은 격리 service에 동시에 접근하는 두 store를 사용하는 회귀 테스트를 추가했습니다. 두 caller가 모두 오류 없이 완료하고, 정확히 하나만 `true`를 반환하는지 검증합니다.
+
+### RED/GREEN 증거
+
+RED 명령:
+
+```sh
+swift test --filter SubscriptionUsageManagementKeyStoreTests
+```
+
+RED 결과: 실패(예상). 두 caller 동시 생성 테스트에서 한 caller가 duplicate Keychain 항목을 `writeFailed`로 처리해 `XCTAssertTrue`가 실패했습니다.
+
+GREEN 명령:
+
+```sh
+swift test --filter SubscriptionUsageManagementKeyStoreTests
+```
+
+GREEN 결과: 성공. 4개 테스트, 0 failures. 동시 생성 test가 duplicate 경쟁을 오류 없이 완료하고 정확히 한 caller만 생성자로 보고함을 확인했습니다.
+
+### Follow-up Focused Tests
+
+명령:
+
+```sh
+swift test --filter 'SubscriptionUsageManagementKeyStoreTests|CLIProxyAPISubscriptionQuotaClientTests|CLIProxyManagerCommandTests'
+```
+
+결과: 성공. 21개 테스트, 0 failures. key 또는 OAuth 비밀 값은 출력에 노출되지 않았습니다.
+
+### Follow-up Full Test
+
+명령:
+
+```sh
+swift test
+```
+
+결과: 성공. 528개 테스트, 0 failures, 약 23초.
+
+### Follow-up Self-review
+
+- 생성 API는 더 이상 기존 값을 갱신하지 않습니다. 사전 존재 검사는 빠른 경로이고, `SecItemAdd`의 duplicate 결과가 생성 여부의 원자적 판정입니다.
+- 테스트는 실제 Keychain을 고유 service로 격리해 정확한 duplicate add 경쟁 경로를 재현합니다.
+- 오류와 assertion message에 생성된 키 내용은 포함하지 않습니다.

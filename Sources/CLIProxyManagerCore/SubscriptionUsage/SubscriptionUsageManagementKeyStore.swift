@@ -24,8 +24,17 @@ public struct SubscriptionUsageManagementKeyStore: SubscriptionUsageManagementKe
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
-        try setManagementKey(key)
-        return true
+        var addQuery = baseQuery()
+        addQuery[kSecValueData as String] = Data(key.utf8)
+        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        switch SecItemAdd(addQuery as CFDictionary, nil) {
+        case errSecSuccess:
+            return true
+        case errSecDuplicateItem:
+            return false
+        default:
+            throw SecretStoreError.writeFailed(account)
+        }
     }
 
     public func setManagementKey(_ value: String) throws {
