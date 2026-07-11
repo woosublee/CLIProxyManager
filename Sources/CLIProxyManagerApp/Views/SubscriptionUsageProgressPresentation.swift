@@ -30,11 +30,24 @@ func subscriptionUsageProgressTone(for usedPercent: Double) -> SubscriptionUsage
 }
 
 func subscriptionUsageDisplayLabel(for window: UsageWindow) -> String {
-    switch window.id {
-    case "primary": "5h"
-    case "secondary": "7d"
-    default: window.label
+    guard let seconds = window.limitWindowSeconds else {
+        switch window.id {
+        case "primary": return "5h"
+        case "secondary": return "7d"
+        default: return window.label
+        }
     }
+
+    if seconds >= 2_419_200 {
+        return "1mo"
+    }
+    if seconds >= 86_400, seconds.truncatingRemainder(dividingBy: 86_400) == 0 {
+        return "\(Int(seconds / 86_400))d"
+    }
+    if seconds >= 3_600, seconds.truncatingRemainder(dividingBy: 3_600) == 0 {
+        return "\(Int(seconds / 3_600))h"
+    }
+    return window.label
 }
 
 func subscriptionUsageAccessibilityLabel(for window: UsageWindow) -> String {

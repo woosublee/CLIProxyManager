@@ -105,5 +105,6 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
 
         XCTAssertFalse(controller.windowShouldClose(panel))
         XCTAssertFalse(panel.isVisible)
+        XCTAssertFalse(controller.isVisible)
     }
 }

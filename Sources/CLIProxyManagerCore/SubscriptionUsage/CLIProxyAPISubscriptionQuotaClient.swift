@@ -329,7 +329,13 @@ public struct CLIProxyAPISubscriptionQuotaClient: SubscriptionQuotaFetching {
             guard let usage = number(raw["used_percent"]), (0...100).contains(usage) else {
                 throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "Invalid Codex usage"))
             }
-            return UsageWindow(id: id, label: label, usedPercent: usage, resetAt: try resetDate(raw["reset_at"]))
+            return UsageWindow(
+                id: id,
+                label: label,
+                usedPercent: usage,
+                resetAt: try resetDate(raw["reset_at"]),
+                limitWindowSeconds: number(raw["limit_window_seconds"])
+            )
         }
         guard !windows.isEmpty else { throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "No Codex windows")) }
         return windows

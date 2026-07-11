@@ -213,7 +213,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         public init(isVisible: Bool = false, alwaysOnTop: Bool = false, backgroundOpacity: Double = 0.9) {
             self.isVisible = isVisible
             self.alwaysOnTop = alwaysOnTop
-            self.backgroundOpacity = backgroundOpacity
+            self.backgroundOpacity = min(max(backgroundOpacity, 0.2), 1)
         }
 
         private enum CodingKeys: String, CodingKey {

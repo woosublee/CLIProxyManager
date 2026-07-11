@@ -246,10 +246,14 @@ final class DashboardViewModel: ObservableObject {
         appAppearanceService.apply(showDockIcon: updatedConfig.showDockIcon)
     }
 
+    func previewUsageOverlayBackgroundOpacity(_ opacity: Double) {
+        config.usageOverlay.backgroundOpacity = min(max(opacity, 0.2), 1)
+    }
+
     func saveUsageOverlay(_ usageOverlay: AppConfig.UsageOverlay) throws {
         var updatedConfig = config
         updatedConfig.usageOverlay = usageOverlay
-        try saveConfig(updatedConfig)
+        try savePrivacyOnlyConfig(updatedConfig)
     }
 
     func saveShowNotifications(_ enabled: Bool) throws {
@@ -503,19 +507,24 @@ final class DashboardViewModel: ObservableObject {
         for profiles: [AuthProfile],
         preservingAvailableStates previousStates: [String: AccountSubscriptionUsageState]? = nil
     ) {
+        var didUpdateStates = false
         for profile in profiles {
             let state = report.statesByProfileID[profile.id] ?? .unavailable(.transientFailure)
             if case .available = previousStates?[profile.id],
-               case .unavailable = state {
+               case let .unavailable(issue) = state,
+               !issue.stopsPolling {
                 continue
             }
             subscriptionUsageStates[profile.id] = state
+            didUpdateStates = true
         }
         if report.statesByProfileID.values.contains(where: {
             if case .available = $0 { return true }
             return false
         }) {
             lastSuccessfulSubscriptionUsageRefreshAt = Date()
+        }
+        if didUpdateStates {
             persistSuccessfulSubscriptionUsageSnapshots()
         }
     }

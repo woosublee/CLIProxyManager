@@ -34,6 +34,7 @@ final class WindowBridgeView: NSView {
     }
 }
 
+@MainActor
 final class UsageOverlayWindowConfigurator {
     func configure(window: NSWindow?, alwaysOnTop: Bool) {
         guard let window else { return }

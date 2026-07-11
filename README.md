@@ -1,8 +1,11 @@
 # CLIProxyManager
 
-<p align="center">
-  <img src="docs/assets/readme-main-window.jpeg" alt="CLIProxyManager multi-account dashboard" width="600">
-</p>
+<table>
+  <tr>
+    <td><img src="docs/assets/readme-main-window.jpeg" alt="CLIProxyManager multi-account dashboard" width="600"></td>
+    <td><img src="docs/assets/readme-usage-hud.jpeg" alt="Subscription usage HUD showing Claude and Codex account limits" width="300"></td>
+  </tr>
+</table>
 
 CLIProxyManager is a macOS menu bar app for managing a local CLIProxyAPI server, multiple OAuth accounts, and the shell functions you use to launch Claude Code through them.
 

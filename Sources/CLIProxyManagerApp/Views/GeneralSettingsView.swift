@@ -15,6 +15,13 @@ struct GeneralSettingsView: View {
         )
     }
 
+    private var usageOverlayOpacityBinding: Binding<Double> {
+        Binding(
+            get: { viewModel.config.usageOverlay.backgroundOpacity },
+            set: { viewModel.previewUsageOverlayBackgroundOpacity($0) }
+        )
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsGroup(title: "Appearance") {
@@ -65,8 +72,18 @@ struct GeneralSettingsView: View {
                         .toggleStyle(SettingsToggleStyle())
                 }
                 SettingsRow(label: "Background opacity", description: "Adjust the usage window background transparency.", isEnabled: viewModel.config.usageOverlay.isVisible) {
-                    Slider(value: usageOverlayBinding(\.backgroundOpacity), in: 0.2...1, step: 0.05)
-                        .frame(width: 136)
+                    Slider(
+                        value: usageOverlayOpacityBinding,
+                        in: 0.2...1,
+                        step: 0.05,
+                        onEditingChanged: { isEditing in
+                            guard !isEditing else { return }
+                            viewModel.saveSetting {
+                                try viewModel.saveUsageOverlay(viewModel.config.usageOverlay)
+                            }
+                        }
+                    )
+                    .frame(width: 136)
                 }
             }
         }

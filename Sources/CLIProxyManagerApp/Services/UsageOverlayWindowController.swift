@@ -97,6 +97,10 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         restoreSavedFrameIfUsable()
         panel.makeKeyAndOrderFront(nil)
         isVisible = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let contentView = self.panel.contentView else { return }
+            self.updateContentSize(contentView.fittingSize)
+        }
     }
 
     func update(_ preferences: AppConfig.UsageOverlay) {
@@ -119,7 +123,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        sender.orderOut(nil)
+        hideForCurrentSession()
         return false
     }
 }

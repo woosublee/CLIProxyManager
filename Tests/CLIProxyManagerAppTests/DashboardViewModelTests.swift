@@ -2255,6 +2255,34 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.subscriptionUsageStates[profile.id], initialState)
     }
 
+    func testAutomaticUsageRefreshReplacesExistingUsageAfterTerminalFailure() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        let profile = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
+        let initialState = availableUsageState(for: profile)
+        let quotaClient = RecordingSubscriptionQuotaClient(reports: [
+            SubscriptionUsageReport(statesByProfileID: [profile.id: initialState], fetchedAt: Date(timeIntervalSince1970: 0)),
+            SubscriptionUsageReport(statesByProfileID: [profile.id: .unavailable(.credentialExpired)], fetchedAt: Date(timeIntervalSince1970: 60))
+        ])
+        let cache = SubscriptionUsageSnapshotCacheDouble()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [profile],
+            quotaClient: quotaClient,
+            subscriptionUsageSnapshotCache: cache
+        )
+        viewModel.serverStatus = readyStatus()
+
+        await viewModel.refreshSubscriptionUsage()
+        await viewModel.refreshSubscriptionUsage()
+
+        XCTAssertEqual(viewModel.subscriptionUsageStates[profile.id], .unavailable(.credentialExpired))
+        XCTAssertTrue(cache.load().isEmpty)
+    }
+
     func testInitializationRestoresLastSuccessfulUsageBeforeNextRefresh() {
         var config = AppConfig.default
         config.subscriptionUsage.isEnabled = true

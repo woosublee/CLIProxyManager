@@ -29,6 +29,17 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(config.roundRobinProfiles, [])
     }
 
+    func testUsageOverlayInitializerClampsBackgroundOpacity() {
+        XCTAssertEqual(
+            AppConfig.UsageOverlay(backgroundOpacity: 0.1).backgroundOpacity,
+            0.2
+        )
+        XCTAssertEqual(
+            AppConfig.UsageOverlay(backgroundOpacity: 1.1).backgroundOpacity,
+            1
+        )
+    }
+
     func testDecodedConfigPreservesSavedCommandNamesAndClaudeAPIModel() throws {
         let data = Data(#"""
         {

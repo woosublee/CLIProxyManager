@@ -4,6 +4,7 @@ import SwiftUI
 struct UsageOverlayView: View {
     @ObservedObject var viewModel: DashboardViewModel
     var onClose: () -> Void = {}
+    @State private var refreshStatusReferenceDate = Date()
 
     private var providers: [MenuBarConnectedProvider] {
         MenuBarStatusSnapshot(
@@ -40,6 +41,12 @@ struct UsageOverlayView: View {
         .gesture(WindowDragGesture())
         .allowsWindowActivationEvents(true)
         .task { await viewModel.refresh() }
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(60))
+                refreshStatusReferenceDate = Date()
+            }
+        }
     }
 
     private var header: some View {
@@ -86,7 +93,7 @@ struct UsageOverlayView: View {
         guard let refreshedAt = viewModel.lastSuccessfulSubscriptionUsageRefreshAt else {
             return "NOT YET REFRESHED"
         }
-        let minutes = max(0, Int(Date().timeIntervalSince(refreshedAt) / 60))
+        let minutes = max(0, Int(refreshStatusReferenceDate.timeIntervalSince(refreshedAt) / 60))
         return minutes == 0 ? "UPDATED NOW" : "UPDATED \(minutes)M AGO"
     }
 }
