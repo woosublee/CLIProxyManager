@@ -72,6 +72,8 @@ GUI 없이 SSH에서도 프록시와 앱을 완전히 제어할 수 있습니다
 cpm --help   # 전체 명령어 목록
 ```
 
+앱 설치 후 **Settings → General → Command Line**에서 **Install cpm**을 선택하세요. 앱은 `cpm` 설치·갱신·삭제를 선택했을 때만 macOS 관리자 인증을 요청합니다. 앱 업데이트로 CLI 명령이 추가되면 같은 화면에서 **Update cpm**을 선택하세요.
+
 ### 프록시 제어
 
 ```zsh
@@ -118,7 +120,7 @@ cpm quota --json
 
 ### First `cpm` installation
 
-Install a release containing `cpm` once using the normal DMG install flow. Earlier releases only contain `cliproxy-manager`, so they cannot install `cpm` by themselves.
+Install a release containing `cpm` with the normal DMG flow, then open **Settings → General → Command Line** and choose **Install cpm**. Earlier releases only contain `cliproxy-manager`, so they cannot install `cpm` by themselves.
 
 ### 업데이트
 

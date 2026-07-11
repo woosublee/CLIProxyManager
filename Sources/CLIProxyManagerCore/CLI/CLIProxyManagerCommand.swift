@@ -405,9 +405,19 @@ public struct CLIProxyManagerCommand: Sendable {
             return
         }
 
-        for profile in profiles {
-            let state = report.statesByProfileID[profile.id] ?? .disabled
-            output.writeStdout("\(profile.type.rawValue.capitalized) \(profile.id): \(quotaText(for: state))\n")
+        let accounts = quotaTextAccounts(config: config, profiles: profiles)
+        guard !accounts.isEmpty else {
+            output.writeStdout("No connected accounts\n")
+            return
+        }
+
+        for (index, account) in accounts.enumerated() {
+            if index > 0 {
+                output.writeStdout("\n")
+            }
+            let state = report.statesByProfileID[account.profile.id] ?? .disabled
+            output.writeStdout("\(account.title)  $ \(account.commandName)\n")
+            writeQuotaText(state: state, provider: account.profile.type)
         }
     }
 
@@ -448,22 +458,81 @@ public struct CLIProxyManagerCommand: Sendable {
         _ = try await proxyRuntime.restart()
     }
 
-    private func quotaText(for state: AccountSubscriptionUsageState) -> String {
+    private struct QuotaTextAccount {
+        let profile: AuthProfile
+        let title: String
+        let commandName: String
+    }
+
+    private func quotaTextAccounts(config: AppConfig, profiles: [AuthProfile]) -> [QuotaTextAccount] {
+        if config.oauthCommandProfiles.isEmpty {
+            return profiles.compactMap { profile in
+                guard !profile.disabled else { return nil }
+                let commandName = (profile.type == .claude ? config.commands.cc : config.commands.ccodex)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !commandName.isEmpty else { return nil }
+                let nickname = (profile.type == .claude ? config.nicknames.cc : config.nicknames.ccodex)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let providerTitle = profile.type == .claude ? "Claude OAuth" : "Codex OAuth"
+                return QuotaTextAccount(profile: profile, title: nickname.isEmpty ? providerTitle : nickname, commandName: commandName)
+            }
+        }
+
+        let profilesByID = Dictionary(uniqueKeysWithValues: profiles.map { ($0.id, $0) })
+        return config.oauthCommandProfiles.compactMap { commandProfile in
+            guard commandProfile.isEnabled,
+                  let profile = profilesByID[commandProfile.authProfileID],
+                  !profile.disabled else { return nil }
+            let commandName = commandProfile.commandName.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !commandName.isEmpty else { return nil }
+            let nickname = commandProfile.nickname.trimmingCharacters(in: .whitespacesAndNewlines)
+            let providerTitle = commandProfile.provider == .claude ? "Claude OAuth" : "Codex OAuth"
+            return QuotaTextAccount(profile: profile, title: nickname.isEmpty ? providerTitle : nickname, commandName: commandName)
+        }
+    }
+
+    private func writeQuotaText(state: AccountSubscriptionUsageState, provider: AuthProfileType) {
         switch state {
         case .disabled:
-            "usage monitoring is disabled"
+            output.writeStdout("  Subscription usage is disabled.\n")
         case .managementKeyNotConfigured:
-            "management key is not configured"
+            output.writeStdout("  Management key is not configured.\n")
         case .loading:
-            "checking subscription usage"
+            output.writeStdout("  Checking subscription usage…\n")
         case .unavailable(let issue):
-            "usage unavailable — \(issue.message)"
+            output.writeStdout("  Usage unavailable — \(issue.message)\n")
         case .available(let snapshot):
-            snapshot.windows.map { window in
-                let reset = window.resetAt.map { " · resets \($0.formatted(date: .abbreviated, time: .shortened))" } ?? ""
-                return "\(window.label) \(Int(window.usedPercent.rounded()))% used\(reset)"
-            }.joined(separator: ", ")
+            guard !snapshot.windows.isEmpty else {
+                output.writeStdout("  Usage details unavailable\n")
+                return
+            }
+            for window in snapshot.windows {
+                let percent = Int(min(max(window.usedPercent, 0), 100).rounded())
+                let label = quotaWindowLabel(window, provider: provider)
+                let displayLabel = label.count < 4
+                    ? label.padding(toLength: 4, withPad: " ", startingAt: 0)
+                    : label
+                output.writeStdout("  \(displayLabel) \(quotaProgressBar(usedPercent: window.usedPercent)) \(String(format: "%3d", percent))%\n")
+                if let resetAt = window.resetAt {
+                    output.writeStdout("       Next reset: \(resetAt.formatted(date: .abbreviated, time: .shortened))\n")
+                }
+            }
         }
+    }
+
+    private func quotaWindowLabel(_ window: UsageWindow, provider: AuthProfileType) -> String {
+        guard provider == .codex else { return window.label }
+        switch window.id {
+        case "primary": return "5h"
+        case "secondary": return "7d"
+        default: return window.label
+        }
+    }
+
+    private func quotaProgressBar(usedPercent: Double) -> String {
+        let percent = min(max(usedPercent, 0), 100)
+        let filled = min(10, max(0, Int((percent / 10).rounded())))
+        return String(repeating: "█", count: filled) + String(repeating: "░", count: 10 - filled)
     }
 
     private func appCheckDescription(_ result: AppUpdateCheckResult) -> String {

@@ -2503,6 +2503,47 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.subscriptionUsageStates[profile.id], .disabled)
     }
 
+    func testInstallOrUpdateCPMRefreshesStatusAfterSuccessfulInstall() async {
+        let cpm = CPMInstallationDouble(
+            status: .notInstalled,
+            statusAfterInstall: .installedCurrent(version: "0.1.13")
+        )
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector(),
+            cpmInstallationService: cpm
+        )
+
+        await viewModel.installOrUpdateCPM()
+
+        XCTAssertEqual(cpm.actions, [.install])
+        XCTAssertEqual(viewModel.cpmInstallationStatus, .installedCurrent(version: "0.1.13"))
+        XCTAssertEqual(viewModel.settingsMessage, "cpm installed.")
+    }
+
+    func testRemoveCPMShowsServiceErrorWithoutChangingStatus() async {
+        let cpm = CPMInstallationDouble(status: .unmanaged, removeError: .unmanagedTarget)
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector(),
+            cpmInstallationService: cpm
+        )
+
+        await viewModel.removeCPM()
+
+        XCTAssertEqual(cpm.actions, [.remove])
+        XCTAssertEqual(viewModel.cpmInstallationStatus, .unmanaged)
+        XCTAssertEqual(viewModel.settingsMessage, "The existing /usr/local/bin/cpm was not installed by CLIProxyManager.")
+    }
+
     private func subscriptionUsageViewModel(
         config: AppConfig,
         configStore: StubConfigStore,
@@ -2583,6 +2624,48 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: ""),
             ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: "")
         ], count: 4).flatMap { $0 }))
+    }
+}
+
+private final class CPMInstallationDouble: CPMInstallationManaging {
+    enum Action: Equatable {
+        case install
+        case remove
+    }
+
+    private var currentStatus: CPMInstallationStatus
+    private let statusAfterInstall: CPMInstallationStatus?
+    private let statusAfterRemove: CPMInstallationStatus?
+    private let installError: CPMInstallationError?
+    private let removeError: CPMInstallationError?
+    private(set) var actions: [Action] = []
+
+    init(
+        status: CPMInstallationStatus,
+        statusAfterInstall: CPMInstallationStatus? = nil,
+        statusAfterRemove: CPMInstallationStatus? = nil,
+        installError: CPMInstallationError? = nil,
+        removeError: CPMInstallationError? = nil
+    ) {
+        currentStatus = status
+        self.statusAfterInstall = statusAfterInstall
+        self.statusAfterRemove = statusAfterRemove
+        self.installError = installError
+        self.removeError = removeError
+    }
+
+    func status() -> CPMInstallationStatus { currentStatus }
+
+    func installOrUpdate() async throws {
+        actions.append(.install)
+        if let installError { throw installError }
+        if let statusAfterInstall { currentStatus = statusAfterInstall }
+    }
+
+    func remove() async throws {
+        actions.append(.remove)
+        if let removeError { throw removeError }
+        if let statusAfterRemove { currentStatus = statusAfterRemove }
     }
 }
 
