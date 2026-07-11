@@ -130,6 +130,14 @@ final class DashboardViewModel: ObservableObject {
     @Published var optionRows: [DashboardOptionRow] = []
     @Published var providerRows: [ProviderRowState] = []
     @Published private(set) var subscriptionUsageStates: [String: AccountSubscriptionUsageState] = [:]
+    @Published private(set) var isSubscriptionUsageRefreshInProgress = false
+    @Published private(set) var lastSuccessfulSubscriptionUsageRefreshAt: Date?
+
+    var canRefreshSubscriptionUsage: Bool {
+        config.subscriptionUsage.isEnabled
+            && subscriptionUsageKeyStore.isConfigured()
+            && serverStatus.severity == .ready
+    }
 
     private let configStore: any AppConfigStoring
     private let shellInstaller: any ShellFunctionInstalling
@@ -144,6 +152,7 @@ final class DashboardViewModel: ObservableObject {
     private let appAppearanceService: any AppAppearanceApplying
     private let subscriptionQuotaClient: any SubscriptionQuotaFetching
     private let subscriptionUsageKeyStore: any SubscriptionUsageManagementKeyConfiguring
+    private let subscriptionUsageSleep: @Sendable (UInt64) async throws -> Void
     private let serverStatusRetryDelayNanoseconds: UInt64
     private let settingsMessageAutoClearDelayNanoseconds: UInt64
     private var authProfiles: [AuthProfile] = []
@@ -155,6 +164,7 @@ final class DashboardViewModel: ObservableObject {
     private var lastPersistedConfig: AppConfig
     private var subscriptionUsagePollingTask: Task<Void, Never>?
     private var subscriptionUsageRefreshTask: Task<Void, Never>?
+    private var pendingForcedSubscriptionUsageRefresh = false
     private var subscriptionUsageRefreshGeneration = 0
     private var subscriptionUsageRetryDelayNanoseconds: UInt64 = 60_000_000_000
 
@@ -172,7 +182,10 @@ final class DashboardViewModel: ObservableObject {
         loginItemService: any LoginItemControlling = LoginItemService(),
         appAppearanceService: any AppAppearanceApplying = AppAppearanceService(),
         subscriptionQuotaClient: any SubscriptionQuotaFetching = CLIProxyAPISubscriptionQuotaClient(),
-        subscriptionUsageKeyStore: any SubscriptionUsageManagementKeyConfiguring = SubscriptionUsageManagementKeyStore(),
+        subscriptionUsageKeyStore: any SubscriptionUsageManagementKeyConfiguring = SubscriptionUsageManagementKeyFileStore(),
+        subscriptionUsageSleep: @escaping @Sendable (UInt64) async throws -> Void = { delay in
+            try await Task.sleep(nanoseconds: delay)
+        },
         serverStatusRetryDelayNanoseconds: UInt64 = 500_000_000,
         settingsMessageAutoClearDelayNanoseconds: UInt64 = 3_000_000_000
     ) {
@@ -190,6 +203,7 @@ final class DashboardViewModel: ObservableObject {
         self.appAppearanceService = appAppearanceService
         self.subscriptionQuotaClient = subscriptionQuotaClient
         self.subscriptionUsageKeyStore = subscriptionUsageKeyStore
+        self.subscriptionUsageSleep = subscriptionUsageSleep
         self.serverStatusRetryDelayNanoseconds = serverStatusRetryDelayNanoseconds
         self.settingsMessageAutoClearDelayNanoseconds = settingsMessageAutoClearDelayNanoseconds
         let persistedConfig = Self.availableConfig(config ?? ((try? configStore.load()) ?? .default))
@@ -277,13 +291,34 @@ final class DashboardViewModel: ObservableObject {
         updatedConfig.nicknames = config.nicknames
         updatedConfig.includeDangerouslySkipPermissions = config.includeDangerouslySkipPermissions
         do {
+            let shouldDeleteManagementKey = config.subscriptionUsage.isEnabled || subscriptionUsageKeyStore.isConfigured()
             try saveConfig(updatedConfig)
+            if shouldDeleteManagementKey {
+                cancelSubscriptionUsageWork()
+                try subscriptionUsageKeyStore.deleteManagementKey()
+            }
+            setSubscriptionUsageStates(.disabled)
             appAppearanceService.apply(showDockIcon: updatedConfig.showDockIcon)
             appAppearanceService.apply(appearance: updatedConfig.appearance)
             settingsMessage = "Settings reset to defaults."
+            if serverControlState.isRunning {
+                Task { [weak self] in
+                    await self?.restartServer()
+                }
+            }
         } catch {
             settingsMessage = "Reset failed: \(error.localizedDescription)"
         }
+    }
+
+    func startApplication() async {
+        await refresh()
+        await prepareSubscriptionUsage()
+        await performAutostartIfEnabled()
+    }
+
+    func openMainWindow() async {
+        await refresh()
     }
 
     func refresh() async {
@@ -291,63 +326,80 @@ final class DashboardViewModel: ObservableObject {
         let updatedServerStatus = passiveRefreshPresentationStatus(from: rawServerStatus)
         let claudeStatus = await claudeConnector.status()
         updateStatuses(serverStatus: updatedServerStatus, claudeStatus: claudeStatus)
-        await refreshSubscriptionUsage()
     }
 
     func saveSubscriptionUsageEnabled(_ enabled: Bool) throws {
-        var updatedConfig = config
-        updatedConfig.subscriptionUsage.isEnabled = enabled
-        try saveConfig(updatedConfig)
-        if serverControlState.isRunning {
-            Task { [weak self] in await self?.restartServer() }
-        }
         if enabled {
-            Task { [weak self] in await self?.refreshSubscriptionUsage() }
-        } else {
-            subscriptionUsagePollingTask?.cancel()
-            subscriptionUsagePollingTask = nil
-            setSubscriptionUsageStates(.disabled)
-        }
-    }
-
-    func subscriptionUsageManagementKeyIsConfigured() -> Bool {
-        subscriptionUsageKeyStore.isConfigured()
-    }
-
-    func saveSubscriptionUsageManagementKey(_ value: String) throws {
-        try subscriptionUsageKeyStore.setManagementKey(value)
-        if !config.subscriptionUsage.isEnabled {
+            let createdKey = try subscriptionUsageKeyStore.createManagementKeyIfNeeded()
             var updatedConfig = config
             updatedConfig.subscriptionUsage.isEnabled = true
+            do {
+                try saveConfig(updatedConfig)
+            } catch {
+                if createdKey {
+                    try? subscriptionUsageKeyStore.deleteManagementKey()
+                }
+                throw error
+            }
+        } else {
+            var updatedConfig = config
+            updatedConfig.subscriptionUsage.isEnabled = false
             try saveConfig(updatedConfig)
+            cancelSubscriptionUsageWork()
+            try subscriptionUsageKeyStore.deleteManagementKey()
+            setSubscriptionUsageStates(.disabled)
         }
+
         Task { [weak self] in
             guard let self else { return }
             if self.serverControlState.isRunning {
                 await self.restartServer()
-            }
-            if self.config.subscriptionUsage.isEnabled {
+            } else {
                 await self.refreshSubscriptionUsage()
             }
         }
     }
 
-    func deleteSubscriptionUsageManagementKey() throws {
-        try subscriptionUsageKeyStore.deleteManagementKey()
-        setSubscriptionUsageStates(.managementKeyNotConfigured)
-        subscriptionUsagePollingTask?.cancel()
-        subscriptionUsagePollingTask = nil
-        Task { [weak self] in
-            guard let self, self.serverControlState.isRunning else { return }
-            await self.restartServer()
+    func prepareSubscriptionUsage() async {
+        do {
+            if config.subscriptionUsage.isEnabled {
+                let createdKey = try subscriptionUsageKeyStore.createManagementKeyIfNeeded()
+                if createdKey, serverControlState.isRunning {
+                    await restartServer()
+                    return
+                }
+            } else if subscriptionUsageKeyStore.isConfigured() {
+                try subscriptionUsageKeyStore.deleteManagementKey()
+                if serverControlState.isRunning {
+                    await restartServer()
+                    return
+                }
+            }
+        } catch {
+            settingsMessage = "Subscription usage setup failed: \(error.localizedDescription)"
+            return
         }
+        await refreshSubscriptionUsage()
     }
 
-    func refreshSubscriptionUsage() async {
-        subscriptionUsageRefreshTask?.cancel()
+    private func cancelSubscriptionUsageWork() {
         subscriptionUsageRefreshGeneration += 1
-        let generation = subscriptionUsageRefreshGeneration
+        subscriptionUsageRefreshTask?.cancel()
+        subscriptionUsageRefreshTask = nil
+        pendingForcedSubscriptionUsageRefresh = false
+        isSubscriptionUsageRefreshInProgress = false
+        subscriptionUsagePollingTask?.cancel()
+        subscriptionUsagePollingTask = nil
+        subscriptionUsageRetryDelayNanoseconds = 60_000_000_000
+    }
 
+    func refreshSubscriptionUsage(force: Bool = false) async {
+        if subscriptionUsageRefreshTask != nil {
+            if force {
+                pendingForcedSubscriptionUsageRefresh = true
+            }
+            return
+        }
         guard config.subscriptionUsage.isEnabled else {
             setSubscriptionUsageStates(.disabled)
             return
@@ -357,14 +409,25 @@ final class DashboardViewModel: ObservableObject {
             return
         }
         guard serverStatus.severity == .ready else {
-            setSubscriptionUsageStates(.unavailable(.proxyUnavailable))
+            return
+        }
+
+        let profiles = force
+            ? authProfiles.filter(isSubscriptionUsageEnabled(for:))
+            : refreshableSubscriptionUsageProfiles()
+        guard !profiles.isEmpty else {
             subscriptionUsagePollingTask?.cancel()
             subscriptionUsagePollingTask = nil
             return
         }
 
-        setSubscriptionUsageStates(.loading)
-        let profiles = authProfiles
+        subscriptionUsageRefreshGeneration += 1
+        let generation = subscriptionUsageRefreshGeneration
+        isSubscriptionUsageRefreshInProgress = true
+        let previousStates = subscriptionUsageStates
+        if !force {
+            setSubscriptionUsageStates(.loading, profileIDs: Set(profiles.map(\.id)))
+        }
         let port = config.port
         let quotaClient = subscriptionQuotaClient
         let refreshTask = Task { [weak self] in
@@ -376,16 +439,66 @@ final class DashboardViewModel: ObservableObject {
                   self.subscriptionUsageRefreshGeneration == generation else {
                 return
             }
-            self.subscriptionUsageStates = report.statesByProfileID
+            self.applySubscriptionUsageReport(report, for: profiles, preservingAvailableStates: force ? previousStates : nil)
             self.rebuildProviderRows(claudeStatus: self.lastClaudeStatus, codexStatus: self.lastCodexStatus)
             self.scheduleSubscriptionUsagePollingIfNeeded()
         }
         subscriptionUsageRefreshTask = refreshTask
         await refreshTask.value
+        if subscriptionUsageRefreshGeneration == generation {
+            subscriptionUsageRefreshTask = nil
+            isSubscriptionUsageRefreshInProgress = false
+            if pendingForcedSubscriptionUsageRefresh {
+                pendingForcedSubscriptionUsageRefresh = false
+                await refreshSubscriptionUsage(force: true)
+            }
+        }
     }
 
-    private func setSubscriptionUsageStates(_ state: AccountSubscriptionUsageState) {
-        subscriptionUsageStates = Dictionary(uniqueKeysWithValues: authProfiles.map { ($0.id, state) })
+    private func applySubscriptionUsageReport(
+        _ report: SubscriptionUsageReport,
+        for profiles: [AuthProfile],
+        preservingAvailableStates previousStates: [String: AccountSubscriptionUsageState]? = nil
+    ) {
+        for profile in profiles {
+            let state = report.statesByProfileID[profile.id] ?? .unavailable(.transientFailure)
+            if case .available = previousStates?[profile.id],
+               case .unavailable = state {
+                continue
+            }
+            subscriptionUsageStates[profile.id] = state
+        }
+        if report.statesByProfileID.values.contains(where: {
+            if case .available = $0 { return true }
+            return false
+        }) {
+            lastSuccessfulSubscriptionUsageRefreshAt = Date()
+        }
+    }
+
+    private func refreshableSubscriptionUsageProfiles() -> [AuthProfile] {
+        authProfiles.filter { profile in
+            guard isSubscriptionUsageEnabled(for: profile) else { return false }
+            guard case let .unavailable(issue)? = subscriptionUsageStates[profile.id] else {
+                return true
+            }
+            return !issue.stopsPolling
+        }
+    }
+
+    private func isSubscriptionUsageEnabled(for profile: AuthProfile) -> Bool {
+        guard !profile.disabled else { return false }
+        return config.oauthCommandProfiles.first(where: { $0.authProfileID == profile.id })?.isEnabled ?? true
+    }
+
+    private func setSubscriptionUsageStates(
+        _ state: AccountSubscriptionUsageState,
+        profileIDs: Set<String>? = nil
+    ) {
+        let targetProfileIDs = profileIDs ?? Set(authProfiles.map(\.id))
+        for profileID in targetProfileIDs {
+            subscriptionUsageStates[profileID] = state
+        }
         rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
     }
 
@@ -397,19 +510,22 @@ final class DashboardViewModel: ObservableObject {
             return
         }
 
-        let hasRefreshableAccount = subscriptionUsageStates.values.contains { state in
+        let enabledProfileIDs = Set(authProfiles.filter(isSubscriptionUsageEnabled(for:)).map(\.id))
+        let hasRefreshableAccount = subscriptionUsageStates.contains { profileID, state in
+            guard enabledProfileIDs.contains(profileID) else { return false }
             switch state {
             case .available, .loading:
-                true
+                return true
             case .unavailable(let issue):
-                !issue.stopsPolling
+                return !issue.stopsPolling
             case .disabled, .managementKeyNotConfigured:
-                false
+                return false
             }
         }
         guard hasRefreshableAccount else { return }
 
-        let hasRetriableFailure = subscriptionUsageStates.values.contains { state in
+        let hasRetriableFailure = subscriptionUsageStates.contains { profileID, state in
+            guard enabledProfileIDs.contains(profileID) else { return false }
             if case let .unavailable(issue) = state {
                 return !issue.stopsPolling
             }
@@ -424,9 +540,10 @@ final class DashboardViewModel: ObservableObject {
             subscriptionUsageRetryDelayNanoseconds = 60_000_000_000
         }
 
+        let sleep = subscriptionUsageSleep
         subscriptionUsagePollingTask = Task { [weak self] in
             do {
-                try await Task.sleep(nanoseconds: delay)
+                try await sleep(delay)
             } catch {
                 return
             }
@@ -654,6 +771,19 @@ final class DashboardViewModel: ObservableObject {
     }
 
     @discardableResult
+    private func setAuthProfileDisabled(_ disabled: Bool, for provider: ProviderRowState.ID) throws -> Bool {
+        let providerType = oauthProviderType(for: provider)
+        if let authProfileID = authProfileID(for: provider) {
+            let updated = try authProfileStore.setDisabled(disabled, id: authProfileID)
+            if updated || !allowsLegacyProviderWideAuthFallback(for: provider) {
+                return updated
+            }
+        }
+        guard allowsLegacyProviderWideAuthFallback(for: provider) else { return false }
+        return try authProfileStore.setDisabled(disabled, for: providerType) > 0
+    }
+
+    @discardableResult
     private func removeAuthProfile(for provider: ProviderRowState.ID) throws -> Bool {
         let providerType = oauthProviderType(for: provider)
         if let authProfileID = authProfileID(for: provider) {
@@ -666,18 +796,6 @@ final class DashboardViewModel: ObservableObject {
         return try authProfileStore.delete(for: providerType) > 0
     }
 
-    @discardableResult
-    private func disableAuthProfile(for provider: ProviderRowState.ID) throws -> Bool {
-        let providerType = oauthProviderType(for: provider)
-        if let authProfileID = authProfileID(for: provider) {
-            let disabled = try authProfileStore.setDisabled(true, id: authProfileID)
-            if disabled || !allowsLegacyProviderWideAuthFallback(for: provider) {
-                return disabled
-            }
-        }
-        guard allowsLegacyProviderWideAuthFallback(for: provider) else { return false }
-        return try authProfileStore.setDisabled(true, for: providerType) > 0
-    }
 
     func removeInitialProvider(_ provider: ProviderRowState.ID) {
         do {
@@ -709,22 +827,52 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
-    func disconnectProvider(_ provider: ProviderRowState.ID) {
+    func setProviderEnabled(_ provider: ProviderRowState.ID, enabled: Bool) {
         let providerName = oauthProviderName(oauthProviderType(for: provider))
+        cancelSubscriptionUsageWork()
+        let priorConfig = config
+        let priorAuthDisabled = authProfiles.first { $0.id == authProfileID(for: provider) }?.disabled
 
         do {
-            let disabled = try disableAuthProfile(for: provider)
-            refreshProfiles()
-            if !disabled {
+            let authUpdated = try setAuthProfileDisabled(!enabled, for: provider)
+            guard authUpdated else {
+                refreshProfiles()
+                scheduleSubscriptionUsagePollingIfNeeded()
                 settingsMessage = "\(providerName) auth file was not found."
-            } else {
-                try saveConfig(config, validateShellFunctions: true)
-                settingsMessage = "\(providerName) connection was disabled. The auth file was not deleted."
+                return
             }
-        } catch {
+            authProfiles = (try? authProfileStore.profiles()) ?? authProfiles
+
+            var updatedConfig = config
+            if let index = updatedConfig.oauthCommandProfiles.firstIndex(where: { $0.id == provider.rawValue }) {
+                updatedConfig.oauthCommandProfiles[index].isEnabled = enabled
+            }
+            try saveConfig(
+                updatedConfig,
+                validateShellFunctions: true,
+                preservingUnavailableRoundRobinProfiles: true
+            )
             refreshProfiles()
-            settingsMessage = "\(providerName) connection disable failed: \(error.localizedDescription)"
+            scheduleSubscriptionUsagePollingIfNeeded()
+            settingsMessage = enabled
+                ? "\(providerName) account was enabled."
+                : "\(providerName) account was disabled. The auth file was not deleted."
+        } catch {
+            config = priorConfig
+            cards = ProfileCard.makeDefaultCards(config: priorConfig)
+            if let priorAuthDisabled {
+                _ = try? setAuthProfileDisabled(priorAuthDisabled, for: provider)
+                authProfiles = (try? authProfileStore.profiles()) ?? authProfiles
+                try? applyShellInstallForCurrentProfiles()
+            }
+            refreshProfiles()
+            scheduleSubscriptionUsagePollingIfNeeded()
+            settingsMessage = "\(providerName) account \(enabled ? "enable" : "disable") failed: \(error.localizedDescription)"
         }
+    }
+
+    func disconnectProvider(_ provider: ProviderRowState.ID) {
+        setProviderEnabled(provider, enabled: false)
     }
 
     func addProvider() {
@@ -1387,9 +1535,13 @@ final class DashboardViewModel: ObservableObject {
     private func saveConfig(
         _ updatedConfig: AppConfig,
         validateShellFunctions: Bool = false,
-        shellProfileValidationNames: [String]? = nil
+        shellProfileValidationNames: [String]? = nil,
+        preservingUnavailableRoundRobinProfiles: Bool = false
     ) throws {
-        let updatedConfig = Self.persistedConfig(removingUnavailableRoundRobinProfiles(from: updatedConfig))
+        let persistedConfig = preservingUnavailableRoundRobinProfiles
+            ? updatedConfig
+            : removingUnavailableRoundRobinProfiles(from: updatedConfig)
+        let updatedConfig = Self.persistedConfig(persistedConfig)
         if validateShellFunctions {
             let activeNames = activeFunctionNames(in: updatedConfig)
             try ShellCommandNameValidator.validate(activeNames)
@@ -1521,7 +1673,7 @@ final class DashboardViewModel: ObservableObject {
         let oauthNames = renderableOAuthCommandProfiles(in: config)
             .map { normalizeCommandName($0.commandName) }
         let roundRobinNames = config.roundRobinProfiles
-            .filter { $0.isEnabled }
+            .filter(\.isEnabled)
             .map { normalizeCommandName($0.commandName) }
         return (oauthNames + roundRobinNames).filter { !$0.isEmpty }
     }
@@ -1556,6 +1708,7 @@ final class DashboardViewModel: ObservableObject {
             guard let authProfile = authProfilesByID[authProfileID],
                   authProfile.type == profile.provider,
                   !authProfile.disabled,
+                  commandProfilesByAuthID[authProfileID]?.isEnabled != false,
                   let prefix = routingPrefix(authProfile: authProfile, commandProfile: commandProfilesByAuthID[authProfileID]),
                   !prefix.isEmpty else {
                 return
@@ -1648,7 +1801,8 @@ final class DashboardViewModel: ObservableObject {
             var usedIDs: Set<String> = []
             var firstProviderSeen: Set<AuthProfileType> = []
             providerRows = authProfiles.map { authProfile in
-                let enabledProfile = authProfile.disabled ? nil : authProfile
+                let isDisabled = authProfile.disabled
+                let enabledProfile = isDisabled ? nil : authProfile
                 let diagnosticStatus = authProfile.type == .codex ? codexStatus : claudeStatus
                 let fallback = authProfile.type == .codex
                     ? diagnosticStatus?.message ?? "Connect the bundled CLIProxyAPI Codex OAuth profile."
@@ -1669,9 +1823,10 @@ final class DashboardViewModel: ObservableObject {
                     name: authProfile.type == .codex ? "Codex OAuth" : "Claude OAuth",
                     nickname: authProfile.type == .codex ? config.nicknames.ccodex : config.nicknames.cc,
                     functionName: authProfile.type == .codex ? config.commands.ccodex : config.commands.cc,
-                    connectionTitle: enabledProfile == nil ? "Needs connection" : "Connected",
+                    connectionTitle: isDisabled ? "Disabled" : "Connected",
                     connectionDetail: profileDetail(profile: enabledProfile ?? authProfile, fallback: fallback),
                     isConnected: enabledProfile != nil,
+                    isDisabled: isDisabled,
                     isErrored: isProviderErrored(providerType: authProfile.type, enabledProfile: enabledProfile, diagnosticStatus: diagnosticStatus),
                     accountDetailHidden: authProfile.type == .codex ? config.accountPrivacy.codexHidden : config.accountPrivacy.claudeHidden,
                     subscriptionUsageState: subscriptionUsageStates[authProfile.id] ?? defaultSubscriptionUsageState
@@ -1682,7 +1837,8 @@ final class DashboardViewModel: ObservableObject {
 
         providerRows = config.oauthCommandProfiles.compactMap { commandProfile in
             guard let authProfile = authProfilesByID[commandProfile.authProfileID] else { return nil }
-            let enabledProfile = authProfile.disabled ? nil : authProfile
+            let isDisabled = authProfile.disabled || !commandProfile.isEnabled
+            let enabledProfile = isDisabled ? nil : authProfile
             let diagnosticStatus = commandProfile.provider == .codex ? codexStatus : claudeStatus
             let fallback = commandProfile.provider == .codex
                 ? diagnosticStatus?.message ?? "Connect the bundled CLIProxyAPI Codex OAuth profile."
@@ -1695,12 +1851,13 @@ final class DashboardViewModel: ObservableObject {
                 name: commandProfile.provider == .codex ? "Codex OAuth" : "Claude OAuth",
                 nickname: commandProfile.nickname,
                 functionName: commandProfile.commandName,
-                connectionTitle: enabledProfile == nil ? "Needs connection" : "Connected",
+                connectionTitle: isDisabled ? "Disabled" : "Connected",
                 connectionDetail: profileDetail(
                     profile: enabledProfile ?? authProfile,
                     fallback: fallback
                 ),
                 isConnected: enabledProfile != nil,
+                isDisabled: isDisabled,
                 isErrored: isProviderErrored(providerType: commandProfile.provider, enabledProfile: enabledProfile, diagnosticStatus: diagnosticStatus),
                 accountDetailHidden: commandProfile.accountDetailHidden,
                 subscriptionUsageState: subscriptionUsageStates[authProfile.id] ?? defaultSubscriptionUsageState
@@ -1734,6 +1891,9 @@ final class DashboardViewModel: ObservableObject {
             try await action()
             if waitForReady {
                 await refreshUntilServerIsReady()
+                if serverStatus.severity == .ready {
+                    await refreshSubscriptionUsage()
+                }
             } else {
                 await refresh()
             }

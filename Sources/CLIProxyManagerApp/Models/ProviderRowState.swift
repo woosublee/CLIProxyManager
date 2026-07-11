@@ -39,6 +39,7 @@ struct ProviderRowState: Identifiable, Equatable {
     let connectionTitle: String
     let connectionDetail: String
     let isConnected: Bool
+    let isDisabled: Bool
     let isErrored: Bool
     let accountDetailHidden: Bool
     let subscriptionUsageState: AccountSubscriptionUsageState
@@ -54,6 +55,7 @@ struct ProviderRowState: Identifiable, Equatable {
         connectionTitle: String,
         connectionDetail: String,
         isConnected: Bool,
+        isDisabled: Bool = false,
         isErrored: Bool = false,
         accountDetailHidden: Bool = true,
         subscriptionUsageState: AccountSubscriptionUsageState = .disabled
@@ -68,6 +70,7 @@ struct ProviderRowState: Identifiable, Equatable {
         self.connectionTitle = connectionTitle
         self.connectionDetail = connectionDetail
         self.isConnected = isConnected
+        self.isDisabled = isDisabled
         self.isErrored = isErrored
         self.accountDetailHidden = accountDetailHidden
         self.subscriptionUsageState = subscriptionUsageState

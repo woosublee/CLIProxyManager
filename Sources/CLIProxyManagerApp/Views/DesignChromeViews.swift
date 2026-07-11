@@ -8,6 +8,7 @@ enum BrandPalette {
     static let codex = Color(red: 0.10, green: 0.10, blue: 0.10)       // #1A1A1A
     static let accent = Color(red: 0.0, green: 0.478, blue: 1.0)        // #007AFF
     static let statusRunning = Color(red: 0.188, green: 0.820, blue: 0.345) // #30D158
+    static let statusWarning = Color(red: 1.0, green: 0.624, blue: 0.039)   // #FF9F0A
     static let statusError = Color(red: 1.0, green: 0.271, blue: 0.227)     // #FF453A
 }
 
@@ -36,23 +37,25 @@ struct StatusLED: View {
     @SwiftUI.State private var pulsePhase: Bool = false
 
     var body: some View {
-        ZStack {
-            if state == .running, pulse {
-                Circle()
-                    .fill(BrandPalette.statusRunning.opacity(pulsePhase ? 0.18 : 0.45))
-                    .frame(width: size + (pulsePhase ? 12 : 6), height: size + (pulsePhase ? 12 : 6))
-                    .animation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true), value: pulsePhase)
-            } else if state == .error, pulse {
-                Circle()
-                    .fill(BrandPalette.statusError.opacity(0.35))
-                    .frame(width: size + 6, height: size + 6)
+        Circle()
+            .fill(color)
+            .frame(width: size, height: size)
+            .background {
+                if state == .running, pulse {
+                    Circle()
+                        .fill(BrandPalette.statusRunning)
+                        .opacity(pulsePhase ? 0.18 : 0.45)
+                        .frame(width: size + 12, height: size + 12)
+                        .scaleEffect(pulsePhase ? 1 : (size + 6) / (size + 12))
+                        .animation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true), value: pulsePhase)
+                } else if state == .error, pulse {
+                    Circle()
+                        .fill(BrandPalette.statusError.opacity(0.35))
+                        .frame(width: size + 6, height: size + 6)
+                }
             }
-            Circle()
-                .fill(color)
-                .frame(width: size, height: size)
-        }
-        .onAppear { updatePulsePhase(for: state) }
-        .onChange(of: state) { updatePulsePhase(for: $0) }
+            .onAppear { updatePulsePhase(for: state) }
+            .onChange(of: state) { _, newState in updatePulsePhase(for: newState) }
     }
 
     private func updatePulsePhase(for state: State) {

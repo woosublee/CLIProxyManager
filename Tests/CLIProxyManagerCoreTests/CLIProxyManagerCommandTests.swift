@@ -47,12 +47,13 @@ final class CLIProxyManagerCommandTests: XCTestCase {
         XCTAssertTrue(output.stdout[0].contains("CLIPROXY_ROUND_ROBIN_PROFILE='codex-a.json'"))
     }
 
-    func testQuotaKeyStatusAndSetDoNotPrintKey() async throws {
+    func testQuotaKeySetStatusAndDeleteUseInjectedLocalFileWithoutPrintingKey() async throws {
         let sandbox = try makeSandbox()
-        let configStore = AppConfigStore(paths: ManagedPaths(rootDirectory: sandbox))
+        let paths = ManagedPaths(rootDirectory: sandbox)
+        let configStore = AppConfigStore(paths: paths)
         try configStore.save(.default)
         let output = OutputDouble(isInteractive: false)
-        let keyStore = CommandManagementKeyStore()
+        let keyStore = SubscriptionUsageManagementKeyFileStore(paths: paths)
         let services = RuntimeServicesDouble()
         let command = CLIProxyManagerCommand(
             secretStore: InMemorySecretStore(),
@@ -69,11 +70,17 @@ final class CLIProxyManagerCommandTests: XCTestCase {
 
         try await command.run(arguments: ["quota", "key", "set", "--stdin"])
         try await command.run(arguments: ["quota", "key", "status"])
+        try await command.run(arguments: ["quota", "key", "delete"])
+        try await command.run(arguments: ["quota", "key", "status"])
 
-        XCTAssertEqual(output.stdout, ["Management key stored.\n", "configured=true\n"])
+        XCTAssertEqual(
+            output.stdout,
+            ["Management key stored.\n", "configured=true\n", "Management key removed.\n", "configured=false\n"]
+        )
         XCTAssertFalse(output.stdout.joined().contains("management-key-value"))
         XCTAssertTrue(try configStore.load().subscriptionUsage.isEnabled)
-        XCTAssertEqual(services.calls, [.proxyStatus])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.subscriptionUsageManagementKeyFile.path))
+        XCTAssertEqual(services.calls, [.proxyStatus, .proxyStatus])
     }
 
     func testQuotaKeyGetIsRejected() async {
@@ -201,6 +208,11 @@ private final class CommandManagementKeyStore: SubscriptionUsageManagementKeyCon
     private var key: String?
 
     func isConfigured() -> Bool { key != nil }
+    func createManagementKeyIfNeeded() throws -> Bool {
+        guard key == nil else { return false }
+        key = "generated-management-key"
+        return true
+    }
     func setManagementKey(_ value: String) throws { key = value }
     func deleteManagementKey() throws { key = nil }
 }

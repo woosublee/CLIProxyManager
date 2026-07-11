@@ -1382,7 +1382,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.providerRows.first { $0.authProfileID == "claude-personal.json" }?.isConnected, true)
     }
 
-    func testDisconnectExplicitCommandProfileDeletesRoundRobinWhenLessThanTwoAccountsRemain() {
+    func testDisconnectExplicitCommandProfilePreservesRoundRobinConfigurationForReenable() {
         var config = AppConfig.default
         config.oauthCommandProfiles = [
             AppConfig.OAuthCommandProfile(id: "codex-work", provider: .codex, authProfileID: "codex-work.json", commandName: "ccwork", modelPrefix: "codex-work"),
@@ -1414,8 +1414,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
 
         viewModel.disconnectProvider(ProviderRowState.ID(rawValue: "codex-work"))
 
-        XCTAssertEqual(store.savedConfigs.last?.roundRobinProfiles, [])
-        XCTAssertEqual(viewModel.config.roundRobinProfiles, [])
+        XCTAssertEqual(store.savedConfigs.last?.roundRobinProfiles, config.roundRobinProfiles)
+        XCTAssertEqual(viewModel.config.roundRobinProfiles, config.roundRobinProfiles)
         XCTAssertFalse(installer.installedFunctionNames.contains("ccodex"))
     }
 

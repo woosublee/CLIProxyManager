@@ -85,7 +85,7 @@ public enum AccountSubscriptionUsageState: Equatable, Sendable {
 
     public var shouldDisplayInMenuBar: Bool {
         switch self {
-        case .disabled, .managementKeyNotConfigured:
+        case .disabled, .managementKeyNotConfigured, .unavailable(.proxyUnavailable):
             false
         case .loading, .available, .unavailable:
             true
@@ -109,6 +109,7 @@ public protocol SubscriptionQuotaFetching: Sendable {
 
 public protocol SubscriptionUsageManagementKeyConfiguring: Sendable {
     func isConfigured() -> Bool
+    func createManagementKeyIfNeeded() throws -> Bool
     func setManagementKey(_ value: String) throws
     func deleteManagementKey() throws
 }

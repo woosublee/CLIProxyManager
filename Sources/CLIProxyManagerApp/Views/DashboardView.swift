@@ -69,7 +69,7 @@ struct DashboardView: View {
                             },
                             settings: { activeSheet = .providerSettings(account.id, isInitialSetup: false) },
                             toggleAccountDetailVisibility: { viewModel.toggleAccountDetailVisibility(account.id) },
-                            disconnect: { viewModel.disconnectProvider(account.id) },
+                            setEnabled: { enabled in viewModel.setProviderEnabled(account.id, enabled: enabled) },
                             remove: { viewModel.removeProvider(account.id) }
                         )
                     }
@@ -89,8 +89,7 @@ struct DashboardView: View {
             footer
         }
         .task {
-            await viewModel.refresh()
-            await viewModel.performAutostartIfEnabled()
+            await viewModel.openMainWindow()
             let automaticCheckResult = await cliProxyAPIUpdateService.checkAutomaticallyOnLaunch()
             switch automaticCheckResult {
             case .availableUpdate:
@@ -370,34 +369,34 @@ private struct ServerHeroView: View {
                 .disabled(isTransitioning)
             }
 
-            if isRunning {
-                Button(action: copyEndpoint) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "globe")
-                            .font(.system(size: 11, weight: .medium))
-                            .frame(width: 12, height: 12, alignment: .center)
-                        Text(verbatim: "http://localhost:\(port)")
-                            .font(.system(size: 11.5, design: .monospaced))
-                        Spacer(minLength: 4)
-                        Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                            .font(.system(size: 11, weight: .medium))
-                            .frame(width: 12, height: 12, alignment: .center)
-                            .foregroundStyle(copied ? BrandPalette.statusRunning : .secondary)
-                    }
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 8)
-                    .frame(height: 26)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(Color.primary.opacity(0.04))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
-                    )
+            Button(action: copyEndpoint) {
+                HStack(spacing: 6) {
+                    Image(systemName: "globe")
+                        .font(.system(size: 11, weight: .medium))
+                        .frame(width: 12, height: 12, alignment: .center)
+                    Text(verbatim: "http://localhost:\(port)")
+                        .font(.system(size: 11.5, design: .monospaced))
+                    Spacer(minLength: 4)
+                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                        .font(.system(size: 11, weight: .medium))
+                        .frame(width: 12, height: 12, alignment: .center)
+                        .foregroundStyle(copied ? BrandPalette.statusRunning : .secondary)
                 }
-                .buttonStyle(.plain)
-            } else if !isTransitioning, !statusMessage.isEmpty {
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .frame(height: 26)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color.primary.opacity(0.04))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
+                )
+            }
+            .buttonStyle(.plain)
+
+            if !isRunning, !isTransitioning, !statusMessage.isEmpty {
                 Text(statusMessage)
                     .font(.caption)
                     .foregroundStyle(isErrorState ? BrandPalette.statusError : .secondary)
@@ -465,7 +464,7 @@ private struct ProviderAccountCardView: View {
     let connect: () -> Void
     let settings: () -> Void
     let toggleAccountDetailVisibility: () -> Void
-    let disconnect: () -> Void
+    let setEnabled: (Bool) -> Void
     let remove: () -> Void
     @State private var hovering: Bool = false
     @State private var confirmRemove: Bool = false
@@ -475,11 +474,13 @@ private struct ProviderAccountCardView: View {
             ProviderAvatar(providerID: account.id, providerType: account.providerType)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(account.title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .lineLimit(1)
-
-                SlugPill(slug: account.commandName)
+                HStack(spacing: 6) {
+                    Text(account.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1)
+                    SlugPill(slug: account.commandName)
+                    Spacer(minLength: 0)
+                }
 
                 accountDetailRow
                     .padding(.top, 2)
@@ -510,20 +511,29 @@ private struct ProviderAccountCardView: View {
     }
 
     private var accountDetailAccessibilityLabel: String {
-        if account.isAccountDetailHidden && account.showsAccountPrivacyToggle {
+        if account.status == .connected,
+           account.isAccountDetailHidden,
+           account.showsAccountPrivacyToggle {
             return "Account detail hidden"
         }
-        return account.status == .connected ? account.detail : "Disconnected"
+        switch account.status {
+        case .connected:
+            return account.detail
+        case .disabled:
+            return "Disabled"
+        case .disconnected:
+            return "Disconnected"
+        }
     }
 
     private var accountDetailRow: some View {
         HStack(spacing: 6) {
             StatusLED(state: account.status == .connected ? .running : .stopped, size: 6, pulse: false)
-            Text(account.status == .connected ? account.detail : "Disconnected")
+            Text(account.status == .connected ? account.detail : account.status == .disabled ? "Disabled" : "Disconnected")
                 .font(.system(size: 11))
                 .foregroundStyle(account.status == .connected ? .secondary : .tertiary)
                 .lineLimit(1)
-                .blur(radius: account.isAccountDetailHidden && account.showsAccountPrivacyToggle ? 4 : 0)
+                .blur(radius: account.status == .connected && account.isAccountDetailHidden && account.showsAccountPrivacyToggle ? 4 : 0)
                 .animation(.easeInOut(duration: 0.16), value: account.isAccountDetailHidden)
                 .accessibilityLabel(accountDetailAccessibilityLabel)
 
@@ -555,9 +565,42 @@ private struct ProviderAccountCardView: View {
 
                 Menu {
                     Button {
-                        disconnect()
+                        setEnabled(false)
                     } label: {
-                        Label("Disconnect", systemImage: "power")
+                        Label("Disable account", systemImage: "power")
+                    }
+                    Divider()
+                    Button(role: .destructive) {
+                        confirmRemove = true
+                    } label: {
+                        Label("Remove account", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(width: 26, height: 26)
+                        .foregroundStyle(.secondary)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .frame(width: 26, height: 26)
+            }
+        } else if account.status == .disabled {
+            HStack(spacing: 4) {
+                Button(action: settings) {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(width: 26, height: 26)
+                        .foregroundStyle(.secondary)
+                        .opacity(hovering ? 1.0 : 0.55)
+                }
+                .buttonStyle(.plain)
+
+                Menu {
+                    Button {
+                        setEnabled(true)
+                    } label: {
+                        Label("Enable account", systemImage: "power")
                     }
                     Divider()
                     Button(role: .destructive) {

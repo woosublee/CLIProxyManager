@@ -263,7 +263,7 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
             launcher: launcher,
             launchctl: LaunchctlRunner(),
             fileManager: fileManager,
-            managementKeyProvider: managementKeyProvider ?? { try? SubscriptionUsageManagementKeyStore().managementKey() },
+            managementKeyProvider: managementKeyProvider ?? { try? SubscriptionUsageManagementKeyFileStore(paths: paths).managementKey() },
             subscriptionUsageEnabledProvider: subscriptionUsageEnabledProvider ?? {
                 (try? AppConfigStore(paths: paths).load().subscriptionUsage.isEnabled) ?? false
             }
@@ -287,7 +287,7 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         self.launcher = launcher
         self.launchctl = launchctl
         self.fileManager = fileManager
-        self.managementKeyProvider = managementKeyProvider ?? { try? SubscriptionUsageManagementKeyStore().managementKey() }
+        self.managementKeyProvider = managementKeyProvider ?? { try? SubscriptionUsageManagementKeyFileStore(paths: paths).managementKey() }
         self.subscriptionUsageEnabledProvider = subscriptionUsageEnabledProvider ?? {
             (try? AppConfigStore(paths: paths).load().subscriptionUsage.isEnabled) ?? false
         }

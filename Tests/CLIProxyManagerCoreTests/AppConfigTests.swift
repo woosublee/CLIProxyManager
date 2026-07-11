@@ -417,6 +417,10 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(paths.rootDirectory, root)
         XCTAssertEqual(paths.functionsFile, root.appendingPathComponent("functions.zsh"))
         XCTAssertEqual(paths.configFile, root.appendingPathComponent("config.json"))
+        XCTAssertEqual(
+            paths.subscriptionUsageManagementKeyFile,
+            root.appendingPathComponent("subscription-usage-management-key.json")
+        )
         XCTAssertEqual(paths.logsDirectory, root.appendingPathComponent("logs"))
         XCTAssertEqual(paths.clipProxyDirectory, root.appendingPathComponent("cliproxyapi"))
         XCTAssertEqual(

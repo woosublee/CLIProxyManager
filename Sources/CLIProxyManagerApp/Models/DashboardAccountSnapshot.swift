@@ -3,6 +3,7 @@ import CLIProxyManagerCore
 struct DashboardAccountSnapshot: Equatable, Identifiable {
     enum Status: Equatable {
         case connected
+        case disabled
         case disconnected
     }
 
@@ -18,6 +19,10 @@ struct DashboardAccountSnapshot: Equatable, Identifiable {
     let isAccountDetailHidden: Bool
     let showsAccountPrivacyToggle: Bool
 
+    var headerCommandSlug: String {
+        commandSlug
+    }
+
     var accountPrivacyToggleAccessibilityLabel: String {
         isAccountDetailHidden ? "Show account detail" : "Hide account detail"
     }
@@ -29,10 +34,16 @@ struct DashboardAccountSnapshot: Equatable, Identifiable {
         commandName = provider.functionName
         commandSlug = "$ \(provider.functionName)"
         detail = provider.connectionDetail
-        status = provider.isConnected ? .connected : .disconnected
-        primaryActionTitle = provider.isConnected ? "Settings" : "Connect"
-        showsMoreMenu = provider.isConnected
+        if provider.isDisabled {
+            status = .disabled
+        } else if provider.isConnected {
+            status = .connected
+        } else {
+            status = .disconnected
+        }
+        primaryActionTitle = status == .disconnected ? "Connect" : "Settings"
+        showsMoreMenu = status != .disconnected
         isAccountDetailHidden = provider.accountDetailHidden
-        showsAccountPrivacyToggle = provider.isConnected
+        showsAccountPrivacyToggle = status != .disconnected
     }
 }

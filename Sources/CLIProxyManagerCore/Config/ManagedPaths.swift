@@ -19,6 +19,10 @@ public struct ManagedPaths: Equatable, Sendable {
         rootDirectory.appendingPathComponent("round-robin-state.json")
     }
 
+    public var subscriptionUsageManagementKeyFile: URL {
+        rootDirectory.appendingPathComponent("subscription-usage-management-key.json")
+    }
+
     public var logsDirectory: URL {
         rootDirectory.appendingPathComponent("logs")
     }
