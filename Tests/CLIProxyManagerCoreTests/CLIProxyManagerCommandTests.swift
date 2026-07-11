@@ -95,6 +95,143 @@ final class CLIProxyManagerCommandTests: XCTestCase {
         }
     }
 
+    func testQuotaTextUsesNicknameCommandAndNormalizedCodexWindows() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox)
+        let configStore = AppConfigStore(paths: paths)
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        config.oauthCommandProfiles = [
+            .init(id: "claude-work", provider: .claude, authProfileID: "claude.json", commandName: "cc", nickname: "Work Claude"),
+            .init(id: "codex-personal", provider: .codex, authProfileID: "codex.json", commandName: "cdx")
+        ]
+        try configStore.save(config)
+
+        let authDirectory = sandbox.appendingPathComponent("auth", isDirectory: true)
+        try FileManager.default.createDirectory(at: authDirectory, withIntermediateDirectories: true)
+        try Data(#"{"type":"claude","disabled":false}"#.utf8).write(to: authDirectory.appendingPathComponent("claude.json"))
+        try Data(#"{"type":"codex","disabled":false}"#.utf8).write(to: authDirectory.appendingPathComponent("codex.json"))
+
+        let output = OutputDouble(isInteractive: false)
+        let services = RuntimeServicesDouble()
+        let command = CLIProxyManagerCommand(
+            secretStore: InMemorySecretStore(),
+            configStore: configStore,
+            authProfileStore: AuthProfileStore(authDirectory: authDirectory),
+            output: output,
+            proxyRuntime: services,
+            appLifecycle: services,
+            logService: services,
+            statusReporter: services,
+            subscriptionQuotaClient: FixedSubscriptionQuotaClient(states: [
+                "claude.json": .available(.init(profileID: "claude.json", provider: .claude, windows: [
+                    .init(id: "five_hour", label: "5h", usedPercent: 0, resetAt: nil),
+                    .init(id: "seven_day", label: "7d", usedPercent: 1, resetAt: nil)
+                ], fetchedAt: Date(timeIntervalSince1970: 0))),
+                "codex.json": .available(.init(profileID: "codex.json", provider: .codex, windows: [
+                    .init(id: "primary", label: "Primary", usedPercent: 15, resetAt: nil),
+                    .init(id: "secondary", label: "Secondary", usedPercent: 9, resetAt: nil)
+                ], fetchedAt: Date(timeIntervalSince1970: 0)))
+            ])
+        )
+
+        try await command.run(arguments: ["quota"])
+
+        XCTAssertEqual(output.stdout.joined(), """
+        Work Claude  $ cc
+          5h   ░░░░░░░░░░   0%
+          7d   ░░░░░░░░░░   1%
+
+        Codex OAuth  $ cdx
+          5h   ██░░░░░░░░  15%
+          7d   █░░░░░░░░░   9%
+
+        """)
+        XCTAssertFalse(output.stdout.joined().contains("claude.json"))
+        XCTAssertFalse(output.stdout.joined().contains("Primary"))
+        XCTAssertFalse(output.stdout.joined().contains("Secondary"))
+    }
+
+    func testQuotaTextPreservesLongWindowLabel() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox)
+        let configStore = AppConfigStore(paths: paths)
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        config.oauthCommandProfiles = [
+            .init(id: "claude-monthly", provider: .claude, authProfileID: "claude.json", commandName: "cc")
+        ]
+        try configStore.save(config)
+
+        let authDirectory = sandbox.appendingPathComponent("auth", isDirectory: true)
+        try FileManager.default.createDirectory(at: authDirectory, withIntermediateDirectories: true)
+        try Data(#"{"type":"claude","disabled":false}"#.utf8).write(to: authDirectory.appendingPathComponent("claude.json"))
+
+        let output = OutputDouble(isInteractive: false)
+        let services = RuntimeServicesDouble()
+        let command = CLIProxyManagerCommand(
+            secretStore: InMemorySecretStore(),
+            configStore: configStore,
+            authProfileStore: AuthProfileStore(authDirectory: authDirectory),
+            output: output,
+            proxyRuntime: services,
+            appLifecycle: services,
+            logService: services,
+            statusReporter: services,
+            subscriptionQuotaClient: FixedSubscriptionQuotaClient(states: [
+                "claude.json": .available(.init(profileID: "claude.json", provider: .claude, windows: [
+                    .init(id: "monthly", label: "Monthly", usedPercent: 10, resetAt: nil)
+                ], fetchedAt: Date(timeIntervalSince1970: 0)))
+            ])
+        )
+
+        try await command.run(arguments: ["quota"])
+
+        XCTAssertTrue(output.stdout.joined().contains("  Monthly █"), output.stdout.joined())
+        XCTAssertFalse(output.stdout.joined().contains("  Mont █"))
+    }
+
+    func testQuotaJSONKeepsProfileIDAndRawWindowLabels() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox)
+        let configStore = AppConfigStore(paths: paths)
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        try configStore.save(config)
+
+        let authDirectory = sandbox.appendingPathComponent("auth", isDirectory: true)
+        try FileManager.default.createDirectory(at: authDirectory, withIntermediateDirectories: true)
+        try Data(#"{"type":"codex","disabled":false}"#.utf8).write(to: authDirectory.appendingPathComponent("codex.json"))
+
+        let output = OutputDouble(isInteractive: false)
+        let services = RuntimeServicesDouble()
+        let command = CLIProxyManagerCommand(
+            secretStore: InMemorySecretStore(),
+            configStore: configStore,
+            authProfileStore: AuthProfileStore(authDirectory: authDirectory),
+            output: output,
+            proxyRuntime: services,
+            appLifecycle: services,
+            logService: services,
+            statusReporter: services,
+            subscriptionQuotaClient: FixedSubscriptionQuotaClient(states: [
+                "codex.json": .available(.init(profileID: "codex.json", provider: .codex, windows: [
+                    .init(id: "primary", label: "Primary", usedPercent: 15, resetAt: nil),
+                    .init(id: "secondary", label: "Secondary", usedPercent: 9, resetAt: nil)
+                ], fetchedAt: Date(timeIntervalSince1970: 0)))
+            ])
+        )
+
+        try await command.run(arguments: ["quota", "--json"])
+
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(output.stdout.joined().utf8)) as? [String: Any])
+        let accounts = try XCTUnwrap(json["accounts"] as? [[String: Any]])
+        let account = try XCTUnwrap(accounts.first)
+        XCTAssertEqual(account["profileID"] as? String, "codex.json")
+        let windows = try XCTUnwrap(account["windows"] as? [[String: Any]])
+        XCTAssertEqual(windows.map { $0["label"] as? String }, ["Primary", "Secondary"])
+    }
+
     func testUnknownArgumentsStillThrowUsage() async {
         let command = CLIProxyManagerCommand(output: OutputDouble(isInteractive: false))
 
@@ -201,6 +338,14 @@ final class CLIProxyManagerCommandTests: XCTestCase {
         try FileManager.default.createDirectory(at: sandbox, withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: sandbox) }
         return sandbox
+    }
+}
+
+private struct FixedSubscriptionQuotaClient: SubscriptionQuotaFetching {
+    let states: [String: AccountSubscriptionUsageState]
+
+    func fetchUsage(port: Int, profiles: [AuthProfile]) async -> SubscriptionUsageReport {
+        SubscriptionUsageReport(statesByProfileID: states, fetchedAt: Date(timeIntervalSince1970: 0))
     }
 }
 

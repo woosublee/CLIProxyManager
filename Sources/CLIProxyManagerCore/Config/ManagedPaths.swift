@@ -27,6 +27,10 @@ public struct ManagedPaths: Equatable, Sendable {
         rootDirectory.appendingPathComponent("subscription-usage-snapshots.json")
     }
 
+    public var cpmInstallationRecordFile: URL {
+        rootDirectory.appendingPathComponent("cpm-installation.json")
+    }
+
     public var logsDirectory: URL {
         rootDirectory.appendingPathComponent("logs")
     }

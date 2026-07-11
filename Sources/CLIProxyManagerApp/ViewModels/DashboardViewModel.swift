@@ -132,6 +132,8 @@ final class DashboardViewModel: ObservableObject {
     @Published private(set) var subscriptionUsageStates: [String: AccountSubscriptionUsageState] = [:]
     @Published private(set) var isSubscriptionUsageRefreshInProgress = false
     @Published private(set) var lastSuccessfulSubscriptionUsageRefreshAt: Date?
+    @Published private(set) var cpmInstallationStatus: CPMInstallationStatus
+    @Published private(set) var isCPMInstallationActionInProgress = false
 
     var canRefreshSubscriptionUsage: Bool {
         config.subscriptionUsage.isEnabled
@@ -153,6 +155,7 @@ final class DashboardViewModel: ObservableObject {
     private let subscriptionQuotaClient: any SubscriptionQuotaFetching
     private let subscriptionUsageKeyStore: any SubscriptionUsageManagementKeyConfiguring
     private let subscriptionUsageSnapshotCache: any SubscriptionUsageSnapshotCaching
+    private let cpmInstallationService: any CPMInstallationManaging
     private let subscriptionUsageSleep: @Sendable (UInt64) async throws -> Void
     private let serverStatusRetryDelayNanoseconds: UInt64
     private let settingsMessageAutoClearDelayNanoseconds: UInt64
@@ -185,6 +188,7 @@ final class DashboardViewModel: ObservableObject {
         subscriptionQuotaClient: any SubscriptionQuotaFetching = CLIProxyAPISubscriptionQuotaClient(),
         subscriptionUsageKeyStore: any SubscriptionUsageManagementKeyConfiguring = SubscriptionUsageManagementKeyFileStore(),
         subscriptionUsageSnapshotCache: any SubscriptionUsageSnapshotCaching = SubscriptionUsageSnapshotCacheFileStore(),
+        cpmInstallationService: (any CPMInstallationManaging)? = nil,
         subscriptionUsageSleep: @escaping @Sendable (UInt64) async throws -> Void = { delay in
             try await Task.sleep(nanoseconds: delay)
         },
@@ -206,6 +210,9 @@ final class DashboardViewModel: ObservableObject {
         self.subscriptionQuotaClient = subscriptionQuotaClient
         self.subscriptionUsageKeyStore = subscriptionUsageKeyStore
         self.subscriptionUsageSnapshotCache = subscriptionUsageSnapshotCache
+        let resolvedCPMInstallationService = cpmInstallationService ?? CPMInstallationService()
+        self.cpmInstallationService = resolvedCPMInstallationService
+        self.cpmInstallationStatus = resolvedCPMInstallationService.status()
         self.subscriptionUsageSleep = subscriptionUsageSleep
         self.serverStatusRetryDelayNanoseconds = serverStatusRetryDelayNanoseconds
         self.settingsMessageAutoClearDelayNanoseconds = settingsMessageAutoClearDelayNanoseconds
@@ -1213,6 +1220,38 @@ final class DashboardViewModel: ObservableObject {
         try automaticShellInstallService.apply(config: config, helperCommand: helperCommand, enabledFunctions: enabledShellFunctions())
         settingsMessage = "Installation complete. Open a new terminal or run source ~/.zshrc."
         rebuildOptionRows()
+    }
+
+    func refreshCPMInstallationStatus() {
+        cpmInstallationStatus = cpmInstallationService.status()
+    }
+
+    func installOrUpdateCPM() async {
+        guard !isCPMInstallationActionInProgress else { return }
+        isCPMInstallationActionInProgress = true
+        defer { isCPMInstallationActionInProgress = false }
+        do {
+            try await cpmInstallationService.installOrUpdate()
+            refreshCPMInstallationStatus()
+            settingsMessage = "cpm installed."
+        } catch {
+            refreshCPMInstallationStatus()
+            settingsMessage = error.localizedDescription
+        }
+    }
+
+    func removeCPM() async {
+        guard !isCPMInstallationActionInProgress else { return }
+        isCPMInstallationActionInProgress = true
+        defer { isCPMInstallationActionInProgress = false }
+        do {
+            try await cpmInstallationService.remove()
+            refreshCPMInstallationStatus()
+            settingsMessage = "cpm removed."
+        } catch {
+            refreshCPMInstallationStatus()
+            settingsMessage = error.localizedDescription
+        }
     }
 
     @discardableResult

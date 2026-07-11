@@ -3,6 +3,7 @@ import SwiftUI
 
 struct GeneralSettingsView: View {
     @ObservedObject var viewModel: DashboardViewModel
+    @State private var confirmRemoveCPM = false
 
     private func usageOverlayBinding<Value>(_ keyPath: WritableKeyPath<AppConfig.UsageOverlay, Value>) -> Binding<Value> {
         Binding(
@@ -86,9 +87,64 @@ struct GeneralSettingsView: View {
                     .frame(width: 136)
                 }
             }
+
+            SettingsGroup(title: "Command Line") {
+                SettingsRow(label: "cpm", description: cpmDescription) {
+                    if viewModel.isCPMInstallationActionInProgress {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        switch viewModel.cpmInstallationStatus {
+                        case .notInstalled:
+                            Button("Install cpm") {
+                                Task { await viewModel.installOrUpdateCPM() }
+                            }
+                            .controlSize(.small)
+                        case .installedCurrent, .installedOutdated:
+                            HStack(spacing: 8) {
+                                Button("Update cpm") {
+                                    Task { await viewModel.installOrUpdateCPM() }
+                                }
+                                Button("Remove cpm…", role: .destructive) {
+                                    confirmRemoveCPM = true
+                                }
+                            }
+                            .controlSize(.small)
+                        case .unmanaged:
+                            EmptyView()
+                        }
+                    }
+                }
+            }
         }
         .padding(.horizontal, 32)
         .padding(.vertical, 28)
+        .onAppear { viewModel.refreshCPMInstallationStatus() }
+        .confirmationDialog(
+            "Remove cpm?",
+            isPresented: $confirmRemoveCPM,
+            titleVisibility: .visible
+        ) {
+            Button("Remove cpm", role: .destructive) {
+                Task { await viewModel.removeCPM() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes only /usr/local/bin/cpm. Your app, accounts, proxy, and shell functions are unchanged.")
+        }
+    }
+
+    private var cpmDescription: String {
+        switch viewModel.cpmInstallationStatus {
+        case .notInstalled:
+            "Install cpm so it is available in Terminal and SSH sessions."
+        case .installedCurrent(let version):
+            "Installed at /usr/local/bin/cpm (version \(version))."
+        case .installedOutdated(let installedVersion, let availableVersion):
+            "Installed version \(installedVersion); app includes \(availableVersion)."
+        case .unmanaged:
+            "An existing cpm file is managed outside CLIProxyManager."
+        }
     }
 }
 
