@@ -152,6 +152,51 @@ final class CLIProxyManagerCommandTests: XCTestCase {
         XCTAssertFalse(output.stdout.joined().contains("Secondary"))
     }
 
+    func testQuotaTextUsesReportedTeamWindowPeriod() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox)
+        let configStore = AppConfigStore(paths: paths)
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        config.oauthCommandProfiles = [
+            .init(id: "codex-team", provider: .codex, authProfileID: "codex.json", commandName: "cdx")
+        ]
+        try configStore.save(config)
+
+        let authDirectory = sandbox.appendingPathComponent("auth", isDirectory: true)
+        try FileManager.default.createDirectory(at: authDirectory, withIntermediateDirectories: true)
+        try Data(#"{"type":"codex","disabled":false}"#.utf8).write(to: authDirectory.appendingPathComponent("codex.json"))
+
+        let output = OutputDouble(isInteractive: false)
+        let services = RuntimeServicesDouble()
+        let command = CLIProxyManagerCommand(
+            secretStore: InMemorySecretStore(),
+            configStore: configStore,
+            authProfileStore: AuthProfileStore(authDirectory: authDirectory),
+            output: output,
+            proxyRuntime: services,
+            appLifecycle: services,
+            logService: services,
+            statusReporter: services,
+            subscriptionQuotaClient: FixedSubscriptionQuotaClient(states: [
+                "codex.json": .available(.init(profileID: "codex.json", provider: .codex, windows: [
+                    .init(
+                        id: "primary",
+                        label: "Primary",
+                        usedPercent: 0,
+                        resetAt: nil,
+                        limitWindowSeconds: 2_628_000
+                    )
+                ], fetchedAt: Date(timeIntervalSince1970: 0)))
+            ])
+        )
+
+        try await command.run(arguments: ["quota"])
+
+        XCTAssertTrue(output.stdout.joined().contains("  1mo  ░░░░░░░░░░   0%"), output.stdout.joined())
+        XCTAssertFalse(output.stdout.joined().contains("  5h"), output.stdout.joined())
+    }
+
     func testQuotaTextPreservesLongWindowLabel() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox)

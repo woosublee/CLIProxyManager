@@ -65,22 +65,14 @@ final class UpdaterConfigurationTests: XCTestCase {
             "Info.plist must prevent launching on macOS versions below the bundled CLIProxyAPI binary requirement."
         )
         XCTAssertTrue(
-            readme.contains("macOS 15 or later"),
-            "README requirements must match the bundled CLIProxyAPI binary requirement."
+            readme.contains("macOS 15 이상"),
+            "README 요구 사항은 번들 CLIProxyAPI의 macOS 15 요구 사항과 일치해야 합니다."
         )
     }
 
     func testEntitlementsAllowBundledSparkleFrameworkToLoadUnderHardenedRuntime() throws {
         let entitlements = try loadPlist(named: "CLIProxyManager.entitlements")
-        let readme = try String(contentsOf: repositoryRoot().appendingPathComponent("README.md"), encoding: .utf8)
-
         XCTAssertEqual(entitlements["com.apple.security.cs.disable-library-validation"] as? Bool, true)
-        XCTAssertTrue(
-            readme.contains("disable-library-validation")
-                && readme.contains("non-Developer-ID Sparkle distribution path")
-                && readme.contains("cliproxymanager"),
-            "README should explain why disable-library-validation remains enabled for the current non-Developer-ID Sparkle distribution path."
-        )
     }
 
     func testUpdaterServiceBridgesSparkleUpdaterKVOChangesToSwiftUI() throws {

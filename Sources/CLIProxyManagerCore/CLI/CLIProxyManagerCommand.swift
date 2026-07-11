@@ -522,11 +522,24 @@ public struct CLIProxyManagerCommand: Sendable {
 
     private func quotaWindowLabel(_ window: UsageWindow, provider: AuthProfileType) -> String {
         guard provider == .codex else { return window.label }
-        switch window.id {
-        case "primary": return "5h"
-        case "secondary": return "7d"
-        default: return window.label
+        guard let seconds = window.limitWindowSeconds else {
+            switch window.id {
+            case "primary": return "5h"
+            case "secondary": return "7d"
+            default: return window.label
+            }
         }
+
+        if seconds >= 2_419_200 {
+            return "1mo"
+        }
+        if seconds >= 86_400, seconds.truncatingRemainder(dividingBy: 86_400) == 0 {
+            return "\(Int(seconds / 86_400))d"
+        }
+        if seconds >= 3_600, seconds.truncatingRemainder(dividingBy: 3_600) == 0 {
+            return "\(Int(seconds / 3_600))h"
+        }
+        return window.label
     }
 
     private func quotaProgressBar(usedPercent: Double) -> String {

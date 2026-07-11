@@ -89,23 +89,28 @@ struct GeneralSettingsView: View {
             }
 
             SettingsGroup(title: "Command Line") {
-                SettingsRow(label: "cpm", description: cpmDescription) {
+                SettingsRow(label: "cpm Command Line Tool", description: cpmDescription) {
                     if viewModel.isCPMInstallationActionInProgress {
                         ProgressView()
                             .controlSize(.small)
                     } else {
                         switch viewModel.cpmInstallationStatus {
                         case .notInstalled:
-                            Button("Install cpm") {
+                            Button("Install") {
                                 Task { await viewModel.installOrUpdateCPM() }
                             }
                             .controlSize(.small)
-                        case .installedCurrent, .installedOutdated:
+                        case .installedCurrent:
+                            Button("Remove…", role: .destructive) {
+                                confirmRemoveCPM = true
+                            }
+                            .controlSize(.small)
+                        case .installedOutdated:
                             HStack(spacing: 8) {
-                                Button("Update cpm") {
+                                Button("Update") {
                                     Task { await viewModel.installOrUpdateCPM() }
                                 }
-                                Button("Remove cpm…", role: .destructive) {
+                                Button("Remove…", role: .destructive) {
                                     confirmRemoveCPM = true
                                 }
                             }
