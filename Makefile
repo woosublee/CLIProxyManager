@@ -1,7 +1,7 @@
 APP_NAME ?= CLIProxyManager
 BUNDLE_ID ?= com.woosublee.CLIProxyManager
-VERSION ?= 0.1.15
-BUILD_NUMBER ?= 18
+VERSION ?= 0.1.16
+BUILD_NUMBER ?= 19
 BUILD_DIR ?= build
 CONFIGURATION ?= release
 LOCAL_CODESIGN_IDENTITY ?= cliproxymanager
