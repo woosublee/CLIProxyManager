@@ -34,6 +34,24 @@ final class WindowBridgeView: NSView {
     }
 }
 
+@MainActor
+final class UsageOverlayWindowConfigurator {
+    func configure(window: NSWindow?, alwaysOnTop: Bool) {
+        guard let window else { return }
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.level = alwaysOnTop ? .floating : .normal
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.standardWindowButton(.closeButton)?.isHidden = true
+        window.standardWindowButton(.miniaturizeButton)?.isHidden = true
+        window.standardWindowButton(.zoomButton)?.isHidden = true
+        window.isMovableByWindowBackground = true
+        window.hasShadow = true
+        window.setFrameAutosaveName("usage-overlay")
+    }
+}
+
 final class MenuBarWindowConfigurator {
     private var isResizing = false
     private var resizeScheduled = false

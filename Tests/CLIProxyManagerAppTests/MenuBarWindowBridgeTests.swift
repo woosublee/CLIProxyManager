@@ -24,11 +24,26 @@ final class MenuBarWindowBridgeTests: XCTestCase {
         XCTAssertEqual(window.contentView?.frame.height, 120)
     }
 
+    func testUsageOverlayConfiguratorMakesBackgroundTransparentAndAppliesTopLevel() {
+        let window = makeWindow(fittingHeight: 120)
+        let configurator = UsageOverlayWindowConfigurator()
+
+        configurator.configure(window: window, alwaysOnTop: true)
+
+        XCTAssertFalse(window.isOpaque)
+        XCTAssertEqual(window.backgroundColor, .clear)
+        XCTAssertEqual(window.level, .floating)
+        XCTAssertTrue(window.titlebarAppearsTransparent)
+        XCTAssertTrue(window.standardWindowButton(.closeButton)?.isHidden == true)
+        XCTAssertTrue(window.standardWindowButton(.miniaturizeButton)?.isHidden == true)
+        XCTAssertTrue(window.standardWindowButton(.zoomButton)?.isHidden == true)
+    }
+
     private func makeWindow(fittingHeight: CGFloat) -> NSWindow {
         let contentView = FixedFittingSizeView(fittingSize: NSSize(width: 290, height: fittingHeight))
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 290, height: 420),
-            styleMask: [.titled],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )

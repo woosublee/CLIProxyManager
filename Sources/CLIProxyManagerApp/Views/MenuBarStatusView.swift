@@ -5,6 +5,8 @@ struct MenuBarStatusView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var viewModel: DashboardViewModel
     let openMain: () -> Void
+    let isUsageOverlayVisible: Bool
+    let toggleUsageOverlay: () -> Void
     let openSettings: () -> Void
     let quit: () -> Void
     @State private var refreshAgeReferenceDate = Date()
@@ -64,6 +66,13 @@ struct MenuBarStatusView: View {
 
             menuSeparator
 
+            if viewModel.config.usageOverlay.isVisible {
+                MenuItemRow(
+                    icon: isUsageOverlayVisible ? "rectangle.on.rectangle" : "rectangle",
+                    label: isUsageOverlayVisible ? "Hide usage HUD" : "Show usage HUD",
+                    action: dismissing(toggleUsageOverlay)
+                )
+            }
             MenuItemRow(icon: "macwindow", label: "Open CLIProxyManager", action: dismissing(openMain))
             MenuItemRow(icon: "gearshape", label: "Preferences…", shortcut: "⌘,", action: dismissing(openSettings))
 
@@ -232,10 +241,13 @@ private struct MenuBarAccountRow: View {
         let percent = min(max(window.usedPercent, 0), 100)
         return VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 7) {
+                Text(subscriptionUsageDisplayLabel(for: window))
+                    .frame(width: 24, alignment: .leading)
+                    .foregroundStyle(.secondary)
                 ProgressView(value: percent, total: 100)
                     .tint(subscriptionUsageProgressTone(for: percent).color)
                     .accessibilityLabel(subscriptionUsageAccessibilityLabel(for: window))
-                    .frame(minWidth: 96, maxWidth: .infinity)
+                    .frame(minWidth: 72, maxWidth: .infinity)
                     .layoutPriority(1)
                 Text("\(Int(percent.rounded()))%")
                     .frame(width: 34, alignment: .trailing)

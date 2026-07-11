@@ -23,6 +23,10 @@ public struct ManagedPaths: Equatable, Sendable {
         rootDirectory.appendingPathComponent("subscription-usage-management-key.json")
     }
 
+    public var subscriptionUsageSnapshotCacheFile: URL {
+        rootDirectory.appendingPathComponent("subscription-usage-snapshots.json")
+    }
+
     public var cpmInstallationRecordFile: URL {
         rootDirectory.appendingPathComponent("cpm-installation.json")
     }

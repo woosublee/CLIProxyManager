@@ -154,6 +154,7 @@ final class DashboardViewModel: ObservableObject {
     private let appAppearanceService: any AppAppearanceApplying
     private let subscriptionQuotaClient: any SubscriptionQuotaFetching
     private let subscriptionUsageKeyStore: any SubscriptionUsageManagementKeyConfiguring
+    private let subscriptionUsageSnapshotCache: any SubscriptionUsageSnapshotCaching
     private let cpmInstallationService: any CPMInstallationManaging
     private let subscriptionUsageSleep: @Sendable (UInt64) async throws -> Void
     private let serverStatusRetryDelayNanoseconds: UInt64
@@ -186,6 +187,7 @@ final class DashboardViewModel: ObservableObject {
         appAppearanceService: any AppAppearanceApplying = AppAppearanceService(),
         subscriptionQuotaClient: any SubscriptionQuotaFetching = CLIProxyAPISubscriptionQuotaClient(),
         subscriptionUsageKeyStore: any SubscriptionUsageManagementKeyConfiguring = SubscriptionUsageManagementKeyFileStore(),
+        subscriptionUsageSnapshotCache: any SubscriptionUsageSnapshotCaching = SubscriptionUsageSnapshotCacheFileStore(),
         cpmInstallationService: (any CPMInstallationManaging)? = nil,
         subscriptionUsageSleep: @escaping @Sendable (UInt64) async throws -> Void = { delay in
             try await Task.sleep(nanoseconds: delay)
@@ -207,6 +209,7 @@ final class DashboardViewModel: ObservableObject {
         self.appAppearanceService = appAppearanceService
         self.subscriptionQuotaClient = subscriptionQuotaClient
         self.subscriptionUsageKeyStore = subscriptionUsageKeyStore
+        self.subscriptionUsageSnapshotCache = subscriptionUsageSnapshotCache
         let resolvedCPMInstallationService = cpmInstallationService ?? CPMInstallationService()
         self.cpmInstallationService = resolvedCPMInstallationService
         self.cpmInstallationStatus = resolvedCPMInstallationService.status()
@@ -225,6 +228,7 @@ final class DashboardViewModel: ObservableObject {
             title: "Needs check",
             message: "Server status has not been checked yet."
         )
+        restoreSubscriptionUsageSnapshots()
         reconcileAuthProfilePrefixes()
         refreshProfiles()
         rebuildOptionRows()
@@ -247,6 +251,16 @@ final class DashboardViewModel: ObservableObject {
         if menuBarOnly { updatedConfig.showMenuBarIcon = true }
         try saveConfig(updatedConfig)
         appAppearanceService.apply(showDockIcon: updatedConfig.showDockIcon)
+    }
+
+    func previewUsageOverlayBackgroundOpacity(_ opacity: Double) {
+        config.usageOverlay.backgroundOpacity = min(max(opacity, 0.2), 1)
+    }
+
+    func saveUsageOverlay(_ usageOverlay: AppConfig.UsageOverlay) throws {
+        var updatedConfig = config
+        updatedConfig.usageOverlay = usageOverlay
+        try savePrivacyOnlyConfig(updatedConfig)
     }
 
     func saveShowNotifications(_ enabled: Bool) throws {
@@ -305,6 +319,7 @@ final class DashboardViewModel: ObservableObject {
                 try subscriptionUsageKeyStore.deleteManagementKey()
             }
             setSubscriptionUsageStates(.disabled)
+            clearSubscriptionUsageSnapshots()
             appAppearanceService.apply(showDockIcon: updatedConfig.showDockIcon)
             appAppearanceService.apply(appearance: updatedConfig.appearance)
             settingsMessage = "Settings reset to defaults."
@@ -355,6 +370,7 @@ final class DashboardViewModel: ObservableObject {
             cancelSubscriptionUsageWork()
             try subscriptionUsageKeyStore.deleteManagementKey()
             setSubscriptionUsageStates(.disabled)
+            clearSubscriptionUsageSnapshots()
         }
 
         Task { [weak self] in
@@ -387,6 +403,31 @@ final class DashboardViewModel: ObservableObject {
             return
         }
         await refreshSubscriptionUsage()
+    }
+
+    private func restoreSubscriptionUsageSnapshots() {
+        guard config.subscriptionUsage.isEnabled else { return }
+        let enabledProfileIDs = Set(authProfiles.filter(isSubscriptionUsageEnabled(for:)).map(\.id))
+        let snapshots = subscriptionUsageSnapshotCache.load().filter { enabledProfileIDs.contains($0.key) }
+        guard !snapshots.isEmpty else { return }
+
+        for snapshot in snapshots.values {
+            subscriptionUsageStates[snapshot.profileID] = .available(snapshot)
+        }
+        lastSuccessfulSubscriptionUsageRefreshAt = snapshots.values.map(\.fetchedAt).max()
+    }
+
+    private func persistSuccessfulSubscriptionUsageSnapshots() {
+        let snapshots = subscriptionUsageStates.reduce(into: [String: SubscriptionUsageSnapshot]()) { result, entry in
+            if case let .available(snapshot) = entry.value {
+                result[entry.key] = snapshot
+            }
+        }
+        try? subscriptionUsageSnapshotCache.save(snapshots)
+    }
+
+    private func clearSubscriptionUsageSnapshots() {
+        try? subscriptionUsageSnapshotCache.clear()
     }
 
     private func cancelSubscriptionUsageWork() {
@@ -433,7 +474,13 @@ final class DashboardViewModel: ObservableObject {
         isSubscriptionUsageRefreshInProgress = true
         let previousStates = subscriptionUsageStates
         if !force {
-            setSubscriptionUsageStates(.loading, profileIDs: Set(profiles.map(\.id)))
+            let unavailableProfileIDs = Set(profiles.compactMap { profile -> String? in
+                if case .available = previousStates[profile.id] { return nil }
+                return profile.id
+            })
+            if !unavailableProfileIDs.isEmpty {
+                setSubscriptionUsageStates(.loading, profileIDs: unavailableProfileIDs)
+            }
         }
         let port = config.port
         let quotaClient = subscriptionQuotaClient
@@ -446,7 +493,7 @@ final class DashboardViewModel: ObservableObject {
                   self.subscriptionUsageRefreshGeneration == generation else {
                 return
             }
-            self.applySubscriptionUsageReport(report, for: profiles, preservingAvailableStates: force ? previousStates : nil)
+            self.applySubscriptionUsageReport(report, for: profiles, preservingAvailableStates: previousStates)
             self.rebuildProviderRows(claudeStatus: self.lastClaudeStatus, codexStatus: self.lastCodexStatus)
             self.scheduleSubscriptionUsagePollingIfNeeded()
         }
@@ -467,19 +514,25 @@ final class DashboardViewModel: ObservableObject {
         for profiles: [AuthProfile],
         preservingAvailableStates previousStates: [String: AccountSubscriptionUsageState]? = nil
     ) {
+        var didUpdateStates = false
         for profile in profiles {
             let state = report.statesByProfileID[profile.id] ?? .unavailable(.transientFailure)
             if case .available = previousStates?[profile.id],
-               case .unavailable = state {
+               case let .unavailable(issue) = state,
+               !issue.stopsPolling {
                 continue
             }
             subscriptionUsageStates[profile.id] = state
+            didUpdateStates = true
         }
         if report.statesByProfileID.values.contains(where: {
             if case .available = $0 { return true }
             return false
         }) {
             lastSuccessfulSubscriptionUsageRefreshAt = Date()
+        }
+        if didUpdateStates {
+            persistSuccessfulSubscriptionUsageSnapshots()
         }
     }
 
@@ -613,6 +666,9 @@ final class DashboardViewModel: ObservableObject {
     func refreshProfiles() {
         authProfiles = (try? authProfileStore.profiles()) ?? []
         reconcileConfigWithAuthProfiles()
+        let enabledProfileIDs = Set(authProfiles.filter(isSubscriptionUsageEnabled(for:)).map(\.id))
+        subscriptionUsageStates = subscriptionUsageStates.filter { enabledProfileIDs.contains($0.key) }
+        persistSuccessfulSubscriptionUsageSnapshots()
         rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
     }
 

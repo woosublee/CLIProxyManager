@@ -7,11 +7,15 @@ struct CLIProxyManagerApp: App {
     @StateObject private var quitCoordinator: QuitCoordinator
     @StateObject private var updaterService: UpdaterService
     @StateObject private var cliProxyAPIUpdateService: CLIProxyAPIUpdateService
+    @StateObject private var usageOverlayWindowController: UsageOverlayWindowController
 
     init() {
         let config = LaunchAppearanceBootstrapper().applySavedDockVisibility()
         let viewModel = DashboardViewModel(config: config)
         _viewModel = StateObject(wrappedValue: viewModel)
+        _usageOverlayWindowController = StateObject(
+            wrappedValue: UsageOverlayWindowController(viewModel: viewModel)
+        )
         Task {
             await viewModel.startApplication()
         }
@@ -48,6 +52,7 @@ struct CLIProxyManagerApp: App {
         .windowStyle(.titleBar)
         .defaultSize(width: AppWindowMetrics.settingsWidth, height: AppWindowMetrics.settingsHeight)
         .windowResizability(.contentSize)
+
         .commands {
             CommandGroup(replacing: .appSettings) {
                 Button("Settings…") {
@@ -74,6 +79,14 @@ struct CLIProxyManagerApp: App {
                 viewModel: viewModel,
                 openMain: {
                     appWindowController.openMain()
+                },
+                isUsageOverlayVisible: usageOverlayWindowController.isVisible,
+                toggleUsageOverlay: {
+                    if usageOverlayWindowController.isVisible {
+                        usageOverlayWindowController.hideForCurrentSession()
+                    } else {
+                        usageOverlayWindowController.showForCurrentSession(using: viewModel.config.usageOverlay)
+                    }
                 },
                 openSettings: {
                     appWindowController.openSettings()

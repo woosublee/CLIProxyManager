@@ -5,6 +5,24 @@ struct GeneralSettingsView: View {
     @ObservedObject var viewModel: DashboardViewModel
     @State private var confirmRemoveCPM = false
 
+    private func usageOverlayBinding<Value>(_ keyPath: WritableKeyPath<AppConfig.UsageOverlay, Value>) -> Binding<Value> {
+        Binding(
+            get: { viewModel.config.usageOverlay[keyPath: keyPath] },
+            set: { value in
+                var usageOverlay = viewModel.config.usageOverlay
+                usageOverlay[keyPath: keyPath] = value
+                viewModel.saveSetting { try viewModel.saveUsageOverlay(usageOverlay) }
+            }
+        )
+    }
+
+    private var usageOverlayOpacityBinding: Binding<Double> {
+        Binding(
+            get: { viewModel.config.usageOverlay.backgroundOpacity },
+            set: { viewModel.previewUsageOverlayBackgroundOpacity($0) }
+        )
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsGroup(title: "Appearance") {
@@ -40,6 +58,33 @@ struct GeneralSettingsView: View {
                     Toggle("", isOn: .constant(false))
                     .labelsHidden()
                     .toggleStyle(SettingsToggleStyle())
+                }
+            }
+
+            SettingsGroup(title: "Usage Overlay") {
+                SettingsRow(label: "Show usage window", description: "Keep subscription usage visible in a separate window.") {
+                    Toggle("", isOn: usageOverlayBinding(\.isVisible))
+                        .labelsHidden()
+                        .toggleStyle(SettingsToggleStyle())
+                }
+                SettingsRow(label: "Always on top", description: "Keep the usage window above other windows.", isEnabled: viewModel.config.usageOverlay.isVisible) {
+                    Toggle("", isOn: usageOverlayBinding(\.alwaysOnTop))
+                        .labelsHidden()
+                        .toggleStyle(SettingsToggleStyle())
+                }
+                SettingsRow(label: "Background opacity", description: "Adjust the usage window background transparency.", isEnabled: viewModel.config.usageOverlay.isVisible) {
+                    Slider(
+                        value: usageOverlayOpacityBinding,
+                        in: 0.2...1,
+                        step: 0.05,
+                        onEditingChanged: { isEditing in
+                            guard !isEditing else { return }
+                            viewModel.saveSetting {
+                                try viewModel.saveUsageOverlay(viewModel.config.usageOverlay)
+                            }
+                        }
+                    )
+                    .frame(width: 136)
                 }
             }
 

@@ -118,7 +118,7 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
     func testCodexUsageParsesPrimaryAndSecondaryWindows() async throws {
         let transport = StubSubscriptionUsageTransport(responses: [
             .success(.init(data: Data(#"{"files":[{"name":"codex.json","provider":"codex","auth_index":"codex-index","status":"ready","disabled":false}]}"#.utf8), statusCode: 200)),
-            .success(.init(data: Data(#"{"status_code":200,"body":"{\"rate_limit\":{\"primary_window\":{\"used_percent\":60,\"reset_at\":1783645200},\"secondary_window\":{\"used_percent\":20,\"reset_at\":1783904400}}}"}"#.utf8), statusCode: 200))
+            .success(.init(data: Data(#"{"status_code":200,"body":"{\"rate_limit\":{\"primary_window\":{\"used_percent\":60,\"limit_window_seconds\":18000,\"reset_at\":1783645200},\"secondary_window\":{\"used_percent\":20,\"limit_window_seconds\":604800,\"reset_at\":1783904400}}}"}"#.utf8), statusCode: 200))
         ])
         let client = CLIProxyAPISubscriptionQuotaClient(
             keyStore: StubManagementKeyStore(key: "management-secret"),
@@ -133,6 +133,7 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         }
         XCTAssertEqual(snapshot.windows.map(\.id), ["primary", "secondary"])
         XCTAssertEqual(snapshot.windows.map(\.usedPercent), [60, 20])
+        XCTAssertEqual(snapshot.windows.map(\.limitWindowSeconds), [18_000, 604_800])
         let apiCall = try XCTUnwrap(transport.requests.last?.httpBody)
         let body = try XCTUnwrap(JSONSerialization.jsonObject(with: apiCall) as? [String: Any])
         XCTAssertEqual(body["url"] as? String, "https://chatgpt.com/backend-api/wham/usage")

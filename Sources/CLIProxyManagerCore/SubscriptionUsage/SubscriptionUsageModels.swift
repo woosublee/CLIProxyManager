@@ -5,12 +5,20 @@ public struct UsageWindow: Codable, Equatable, Identifiable, Sendable {
     public let label: String
     public let usedPercent: Double
     public let resetAt: Date?
+    public let limitWindowSeconds: Double?
 
-    public init(id: String, label: String, usedPercent: Double, resetAt: Date?) {
+    public init(
+        id: String,
+        label: String,
+        usedPercent: Double,
+        resetAt: Date?,
+        limitWindowSeconds: Double? = nil
+    ) {
         self.id = id
         self.label = label
         self.usedPercent = usedPercent
         self.resetAt = resetAt
+        self.limitWindowSeconds = limitWindowSeconds
     }
 }
 

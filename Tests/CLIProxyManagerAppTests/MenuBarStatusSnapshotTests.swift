@@ -164,6 +164,45 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
         XCTAssertEqual(windowIDs, [["five_hour", "seven_day"], ["primary"]])
     }
 
+    func testCodexUsageWindowLabelsUseReportedPeriods() {
+        XCTAssertEqual(
+            subscriptionUsageDisplayLabel(
+                for: UsageWindow(
+                    id: "primary",
+                    label: "Primary",
+                    usedPercent: 0,
+                    resetAt: nil,
+                    limitWindowSeconds: 18_000
+                )
+            ),
+            "5h"
+        )
+        XCTAssertEqual(
+            subscriptionUsageDisplayLabel(
+                for: UsageWindow(
+                    id: "secondary",
+                    label: "Secondary",
+                    usedPercent: 0,
+                    resetAt: nil,
+                    limitWindowSeconds: 604_800
+                )
+            ),
+            "7d"
+        )
+        XCTAssertEqual(
+            subscriptionUsageDisplayLabel(
+                for: UsageWindow(
+                    id: "primary",
+                    label: "Primary",
+                    usedPercent: 0,
+                    resetAt: nil,
+                    limitWindowSeconds: 2_628_000
+                )
+            ),
+            "1mo"
+        )
+    }
+
     func testSnapshotPreservesAvailableUsageWithNoWindowsForFallbackRendering() {
         let snapshot = MenuBarStatusSnapshot(
             serverStatus: DiagnosticStatus(severity: .ready, title: "CLIProxyAPI Running", message: "Ready"),
