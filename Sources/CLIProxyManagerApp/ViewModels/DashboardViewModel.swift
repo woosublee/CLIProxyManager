@@ -409,7 +409,6 @@ final class DashboardViewModel: ObservableObject {
             return
         }
         guard serverStatus.severity == .ready else {
-            setSubscriptionUsageStates(.unavailable(.proxyUnavailable))
             return
         }
 
@@ -1673,7 +1672,8 @@ final class DashboardViewModel: ObservableObject {
     private func activeFunctionNames(in config: AppConfig) -> [String] {
         let oauthNames = renderableOAuthCommandProfiles(in: config)
             .map { normalizeCommandName($0.commandName) }
-        let roundRobinNames = renderableRoundRobinProfiles(in: config)
+        let roundRobinNames = config.roundRobinProfiles
+            .filter(\.isEnabled)
             .map { normalizeCommandName($0.commandName) }
         return (oauthNames + roundRobinNames).filter { !$0.isEmpty }
     }

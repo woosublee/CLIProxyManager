@@ -2124,6 +2124,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         await viewModel.refreshSubscriptionUsage()
 
         await viewModel.refresh()
+        await viewModel.refreshSubscriptionUsage()
 
         XCTAssertEqual(viewModel.subscriptionUsageStates[profile.id], initialUsage)
         let fetchCallCount = await quotaClient.fetchCallCount()
@@ -2153,7 +2154,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(fetchCallCount, 1)
     }
 
-    func testSubscriptionUsageRefreshCoalescesConcurrentCallsIntoOneFetch() async {
+    func testForcedSubscriptionUsageRefreshRunsAfterInFlightRefresh() async {
         var config = AppConfig.default
         config.subscriptionUsage.isEnabled = true
         let profile = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
@@ -2175,12 +2176,17 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let secondRefresh = Task { await viewModel.refreshSubscriptionUsage(force: true) }
         await Task.yield()
 
-        let fetchCallCount = await quotaClient.fetchCallCount()
-        XCTAssertEqual(fetchCallCount, 1)
+        let fetchesBeforeFirstResolution = await quotaClient.fetchCallCount()
+        XCTAssertEqual(fetchesBeforeFirstResolution, 1)
 
+        await quotaClient.resolveAll(with: availableUsageReport(for: profile))
+        await waitForUsageFetches(quotaClient, expectedCount: 2)
         await quotaClient.resolveAll(with: availableUsageReport(for: profile))
         await firstRefresh.value
         await secondRefresh.value
+
+        let totalFetches = await quotaClient.fetchCallCount()
+        XCTAssertEqual(totalFetches, 2)
     }
 
     func testManualUsageRefreshKeepsExistingUsageUntilSuccessfulReplacement() async {
