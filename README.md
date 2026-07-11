@@ -2,7 +2,7 @@
 
 <table>
   <tr>
-    <td><img src="docs/assets/readme-main-window.jpeg" alt="CLIProxyManager multi-account dashboard" width="600"></td>
+    <td><img src="docs/assets/readme-main-window.png" alt="CLIProxyManager multi-account dashboard" width="600"></td>
     <td><img src="docs/assets/readme-usage-hud.png" alt="Subscription usage HUD showing Claude and Codex account limits" width="300"></td>
   </tr>
 </table>
