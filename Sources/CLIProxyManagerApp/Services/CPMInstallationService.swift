@@ -18,7 +18,8 @@ enum CPMInstallationError: Error, Equatable, LocalizedError {
     case bundledHelperMissing
     case unmanagedTarget
     case authorizationCancelled
-    case operationFailed
+    case installationFailed
+    case removalFailed
 
     var errorDescription: String? {
         switch self {
@@ -27,9 +28,11 @@ enum CPMInstallationError: Error, Equatable, LocalizedError {
         case .unmanagedTarget:
             "The existing /usr/local/bin/cpm was not installed by CLIProxyManager."
         case .authorizationCancelled:
-            "cpm installation was cancelled."
-        case .operationFailed:
+            "cpm operation was cancelled."
+        case .installationFailed:
             "cpm installation failed."
+        case .removalFailed:
+            "cpm removal failed."
         }
     }
 }
@@ -41,18 +44,24 @@ protocol CPMInstallationManaging {
 }
 
 protocol PrivilegedCPMCommandRunning: Sendable {
-    func run(action: CPMInstallationAction, source: URL?, target: URL) throws
+    func run(action: CPMInstallationAction, source: URL?, target: URL) async throws
 }
 
 struct AppleScriptPrivilegedCPMCommandRunner: PrivilegedCPMCommandRunning {
-    func run(action: CPMInstallationAction, source: URL?, target: URL) throws {
+    func run(action: CPMInstallationAction, source: URL?, target: URL) async throws {
+        try await Task.detached(priority: .utility) {
+            try runBlocking(action: action, source: source)
+        }.value
+    }
+
+    private func runBlocking(action: CPMInstallationAction, source: URL?) throws {
         let script = """
         on run argv
             set actionName to item 1 of argv
             set sourcePath to item 2 of argv
             if actionName is "install" then
                 set quotedSource to quoted form of sourcePath
-                do shell script "/bin/rm -f /usr/local/bin/.cpm-install && /usr/bin/install -m 755 " & quotedSource & " /usr/local/bin/.cpm-install && /bin/mv -f /usr/local/bin/.cpm-install /usr/local/bin/cpm" with administrator privileges
+                do shell script "/bin/mkdir -p /usr/local/bin && /bin/rm -f /usr/local/bin/.cpm-install && /usr/bin/install -m 755 " & quotedSource & " /usr/local/bin/.cpm-install && /bin/mv -f /usr/local/bin/.cpm-install /usr/local/bin/cpm" with administrator privileges
             else if actionName is "remove" then
                 do shell script "/bin/rm -f /usr/local/bin/cpm" with administrator privileges
             else
@@ -71,7 +80,7 @@ struct AppleScriptPrivilegedCPMCommandRunner: PrivilegedCPMCommandRunning {
             try process.run()
             process.waitUntilExit()
         } catch {
-            throw CPMInstallationError.operationFailed
+            throw failure(for: action)
         }
 
         guard process.terminationStatus == 0 else {
@@ -79,8 +88,12 @@ struct AppleScriptPrivilegedCPMCommandRunner: PrivilegedCPMCommandRunning {
             if output.contains("User canceled") || output.contains("-128") {
                 throw CPMInstallationError.authorizationCancelled
             }
-            throw CPMInstallationError.operationFailed
+            throw failure(for: action)
         }
+    }
+
+    private func failure(for action: CPMInstallationAction) -> CPMInstallationError {
+        action == .install ? .installationFailed : .removalFailed
     }
 }
 
@@ -159,15 +172,15 @@ final class CPMInstallationService: CPMInstallationManaging {
             throw CPMInstallationError.bundledHelperMissing
         }
 
-        try runner.run(action: .install, source: sourceURL, target: targetURL)
+        try fileManager.createDirectory(at: paths.rootDirectory, withIntermediateDirectories: true)
+        try await runner.run(action: .install, source: sourceURL, target: targetURL)
         guard let sourceDigest = try? digest(of: sourceURL),
               let targetDigest = try? digest(of: targetURL),
               sourceDigest == targetDigest else {
-            throw CPMInstallationError.operationFailed
+            throw CPMInstallationError.installationFailed
         }
 
         let record = InstallationRecord(digest: targetDigest, version: bundledVersion)
-        try fileManager.createDirectory(at: paths.rootDirectory, withIntermediateDirectories: true)
         try JSONEncoder().encode(record).write(to: paths.cpmInstallationRecordFile, options: .atomic)
     }
 
@@ -176,15 +189,15 @@ final class CPMInstallationService: CPMInstallationManaging {
             try? fileManager.removeItem(at: paths.cpmInstallationRecordFile)
             return
         }
-        guard case .unmanaged = status() else {
-            try runner.run(action: .remove, source: nil, target: targetURL)
-            guard !fileManager.fileExists(atPath: targetURL.path) else {
-                throw CPMInstallationError.operationFailed
-            }
-            try? fileManager.removeItem(at: paths.cpmInstallationRecordFile)
-            return
+        guard status() != .unmanaged else {
+            throw CPMInstallationError.unmanagedTarget
         }
-        throw CPMInstallationError.unmanagedTarget
+
+        try await runner.run(action: .remove, source: nil, target: targetURL)
+        guard !fileManager.fileExists(atPath: targetURL.path) else {
+            throw CPMInstallationError.removalFailed
+        }
+        try? fileManager.removeItem(at: paths.cpmInstallationRecordFile)
     }
 
     private func readRecord() -> InstallationRecord? {

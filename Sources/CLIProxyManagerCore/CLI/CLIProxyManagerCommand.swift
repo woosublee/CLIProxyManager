@@ -509,7 +509,10 @@ public struct CLIProxyManagerCommand: Sendable {
             for window in snapshot.windows {
                 let percent = Int(min(max(window.usedPercent, 0), 100).rounded())
                 let label = quotaWindowLabel(window, provider: provider)
-                output.writeStdout("  \(label.padding(toLength: 4, withPad: " ", startingAt: 0)) \(quotaProgressBar(usedPercent: window.usedPercent)) \(String(format: "%3d", percent))%\n")
+                let displayLabel = label.count < 4
+                    ? label.padding(toLength: 4, withPad: " ", startingAt: 0)
+                    : label
+                output.writeStdout("  \(displayLabel) \(quotaProgressBar(usedPercent: window.usedPercent)) \(String(format: "%3d", percent))%\n")
                 if let resetAt = window.resetAt {
                     output.writeStdout("       Next reset: \(resetAt.formatted(date: .abbreviated, time: .shortened))\n")
                 }

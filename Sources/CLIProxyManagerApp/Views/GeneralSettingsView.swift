@@ -74,6 +74,7 @@ struct GeneralSettingsView: View {
         }
         .padding(.horizontal, 32)
         .padding(.vertical, 28)
+        .onAppear { viewModel.refreshCPMInstallationStatus() }
         .confirmationDialog(
             "Remove cpm?",
             isPresented: $confirmRemoveCPM,

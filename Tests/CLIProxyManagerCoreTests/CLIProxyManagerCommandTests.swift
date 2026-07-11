@@ -152,6 +152,45 @@ final class CLIProxyManagerCommandTests: XCTestCase {
         XCTAssertFalse(output.stdout.joined().contains("Secondary"))
     }
 
+    func testQuotaTextPreservesLongWindowLabel() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox)
+        let configStore = AppConfigStore(paths: paths)
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        config.oauthCommandProfiles = [
+            .init(id: "claude-monthly", provider: .claude, authProfileID: "claude.json", commandName: "cc")
+        ]
+        try configStore.save(config)
+
+        let authDirectory = sandbox.appendingPathComponent("auth", isDirectory: true)
+        try FileManager.default.createDirectory(at: authDirectory, withIntermediateDirectories: true)
+        try Data(#"{"type":"claude","disabled":false}"#.utf8).write(to: authDirectory.appendingPathComponent("claude.json"))
+
+        let output = OutputDouble(isInteractive: false)
+        let services = RuntimeServicesDouble()
+        let command = CLIProxyManagerCommand(
+            secretStore: InMemorySecretStore(),
+            configStore: configStore,
+            authProfileStore: AuthProfileStore(authDirectory: authDirectory),
+            output: output,
+            proxyRuntime: services,
+            appLifecycle: services,
+            logService: services,
+            statusReporter: services,
+            subscriptionQuotaClient: FixedSubscriptionQuotaClient(states: [
+                "claude.json": .available(.init(profileID: "claude.json", provider: .claude, windows: [
+                    .init(id: "monthly", label: "Monthly", usedPercent: 10, resetAt: nil)
+                ], fetchedAt: Date(timeIntervalSince1970: 0)))
+            ])
+        )
+
+        try await command.run(arguments: ["quota"])
+
+        XCTAssertTrue(output.stdout.joined().contains("  Monthly █"), output.stdout.joined())
+        XCTAssertFalse(output.stdout.joined().contains("  Mont █"))
+    }
+
     func testQuotaJSONKeepsProfileIDAndRawWindowLabels() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox)

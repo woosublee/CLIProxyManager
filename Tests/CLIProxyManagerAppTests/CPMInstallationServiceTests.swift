@@ -64,6 +64,49 @@ final class CPMInstallationServiceTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.paths.cpmInstallationRecordFile.path))
         XCTAssertEqual(service.status(), .notInstalled)
     }
+
+    func testRemoveReportsRemovalFailureWhenTargetRemains() async throws {
+        let fixture = try Fixture()
+        try await fixture.makeService(runner: CopyingPrivilegedRunner()).installOrUpdate()
+        let service = fixture.makeService(runner: NonRemovingPrivilegedRunner())
+
+        await XCTAssertThrowsErrorAsync(try await service.remove()) { error in
+            XCTAssertEqual(error as? CPMInstallationError, .removalFailed)
+            XCTAssertEqual(error.localizedDescription, "cpm removal failed.")
+        }
+    }
+
+    func testInstallCreatesRecordDirectoryBeforeRunningPrivilegedInstall() async throws {
+        let fixture = try Fixture()
+        let runner = DirectoryCheckingPrivilegedRunner(directory: fixture.paths.rootDirectory)
+        let service = fixture.makeService(runner: runner)
+
+        try await service.installOrUpdate()
+
+        XCTAssertTrue(runner.didObserveDirectory)
+    }
+}
+
+private struct NonRemovingPrivilegedRunner: PrivilegedCPMCommandRunning {
+    func run(action: CPMInstallationAction, source: URL?, target: URL) async throws {}
+}
+
+private final class DirectoryCheckingPrivilegedRunner: PrivilegedCPMCommandRunning, @unchecked Sendable {
+    private let directory: URL
+    private(set) var didObserveDirectory = false
+
+    init(directory: URL) {
+        self.directory = directory
+    }
+
+    func run(action: CPMInstallationAction, source: URL?, target: URL) async throws {
+        didObserveDirectory = FileManager.default.fileExists(atPath: directory.path)
+        guard let source else {
+            XCTFail("Install requires a source")
+            return
+        }
+        try FileManager.default.copyItem(at: source, to: target)
+    }
 }
 
 private struct Fixture {
@@ -101,7 +144,7 @@ private struct Fixture {
 private final class CopyingPrivilegedRunner: PrivilegedCPMCommandRunning, @unchecked Sendable {
     private(set) var actions: [CPMInstallationAction] = []
 
-    func run(action: CPMInstallationAction, source: URL?, target: URL) throws {
+    func run(action: CPMInstallationAction, source: URL?, target: URL) async throws {
         actions.append(action)
         switch action {
         case .install:
