@@ -2087,6 +2087,50 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(fetchCallCount, 0)
     }
 
+    func testRefreshAfterServerStopsPreservesLastUsageWithoutFetchingAgain() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        let profile = AuthProfile(
+            fileName: "claude.json",
+            type: .claude,
+            email: "claude@example.com",
+            accountID: nil,
+            expired: nil,
+            disabled: false
+        )
+        let initialUsage = availableUsageState(for: profile)
+        let quotaClient = RecordingSubscriptionQuotaClient(reports: [
+            SubscriptionUsageReport(
+                statesByProfileID: [profile.id: initialUsage],
+                fetchedAt: Date(timeIntervalSince1970: 0)
+            )
+        ])
+        let stoppedHealthClient = ProxyHealthClient(
+            httpClient: StubHTTPClient(result: .failure(URLError(.cannotConnectToHost)))
+        )
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [profile]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyHealthClient: stoppedHealthClient,
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector(),
+            subscriptionQuotaClient: quotaClient,
+            subscriptionUsageKeyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true)
+        )
+        viewModel.serverStatus = readyStatus()
+        await viewModel.refreshSubscriptionUsage()
+
+        await viewModel.refresh()
+
+        XCTAssertEqual(viewModel.subscriptionUsageStates[profile.id], initialUsage)
+        let fetchCallCount = await quotaClient.fetchCallCount()
+        XCTAssertEqual(fetchCallCount, 1)
+        XCTAssertFalse(viewModel.canRefreshSubscriptionUsage)
+    }
+
     func testStartingReadyProxyStartsInitialSubscriptionUsageFetch() async {
         var config = AppConfig.default
         config.subscriptionUsage.isEnabled = true
