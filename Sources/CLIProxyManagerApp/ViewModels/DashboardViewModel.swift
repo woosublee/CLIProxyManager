@@ -277,10 +277,20 @@ final class DashboardViewModel: ObservableObject {
         updatedConfig.nicknames = config.nicknames
         updatedConfig.includeDangerouslySkipPermissions = config.includeDangerouslySkipPermissions
         do {
+            if config.subscriptionUsage.isEnabled || subscriptionUsageKeyStore.isConfigured() {
+                cancelSubscriptionUsageWork()
+                try subscriptionUsageKeyStore.deleteManagementKey()
+            }
             try saveConfig(updatedConfig)
+            setSubscriptionUsageStates(.disabled)
             appAppearanceService.apply(showDockIcon: updatedConfig.showDockIcon)
             appAppearanceService.apply(appearance: updatedConfig.appearance)
             settingsMessage = "Settings reset to defaults."
+            if serverControlState.isRunning {
+                Task { [weak self] in
+                    await self?.restartServer()
+                }
+            }
         } catch {
             settingsMessage = "Reset failed: \(error.localizedDescription)"
         }
@@ -295,52 +305,66 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func saveSubscriptionUsageEnabled(_ enabled: Bool) throws {
-        var updatedConfig = config
-        updatedConfig.subscriptionUsage.isEnabled = enabled
-        try saveConfig(updatedConfig)
-        if serverControlState.isRunning {
-            Task { [weak self] in await self?.restartServer() }
-        }
         if enabled {
-            Task { [weak self] in await self?.refreshSubscriptionUsage() }
-        } else {
-            subscriptionUsagePollingTask?.cancel()
-            subscriptionUsagePollingTask = nil
-            setSubscriptionUsageStates(.disabled)
-        }
-    }
-
-    func subscriptionUsageManagementKeyIsConfigured() -> Bool {
-        subscriptionUsageKeyStore.isConfigured()
-    }
-
-    func saveSubscriptionUsageManagementKey(_ value: String) throws {
-        try subscriptionUsageKeyStore.setManagementKey(value)
-        if !config.subscriptionUsage.isEnabled {
+            let createdKey = try subscriptionUsageKeyStore.createManagementKeyIfNeeded()
             var updatedConfig = config
             updatedConfig.subscriptionUsage.isEnabled = true
+            do {
+                try saveConfig(updatedConfig)
+            } catch {
+                if createdKey {
+                    try? subscriptionUsageKeyStore.deleteManagementKey()
+                }
+                throw error
+            }
+        } else {
+            cancelSubscriptionUsageWork()
+            try subscriptionUsageKeyStore.deleteManagementKey()
+            var updatedConfig = config
+            updatedConfig.subscriptionUsage.isEnabled = false
             try saveConfig(updatedConfig)
+            setSubscriptionUsageStates(.disabled)
         }
+
         Task { [weak self] in
             guard let self else { return }
             if self.serverControlState.isRunning {
                 await self.restartServer()
-            }
-            if self.config.subscriptionUsage.isEnabled {
+            } else {
                 await self.refreshSubscriptionUsage()
             }
         }
     }
 
-    func deleteSubscriptionUsageManagementKey() throws {
-        try subscriptionUsageKeyStore.deleteManagementKey()
-        setSubscriptionUsageStates(.managementKeyNotConfigured)
+    func prepareSubscriptionUsage() async {
+        do {
+            if config.subscriptionUsage.isEnabled {
+                let createdKey = try subscriptionUsageKeyStore.createManagementKeyIfNeeded()
+                if createdKey, serverControlState.isRunning {
+                    await restartServer()
+                    return
+                }
+            } else if subscriptionUsageKeyStore.isConfigured() {
+                try subscriptionUsageKeyStore.deleteManagementKey()
+                if serverControlState.isRunning {
+                    await restartServer()
+                    return
+                }
+            }
+        } catch {
+            settingsMessage = "Subscription usage setup failed: \(error.localizedDescription)"
+            return
+        }
+        await refreshSubscriptionUsage()
+    }
+
+    private func cancelSubscriptionUsageWork() {
+        subscriptionUsageRefreshGeneration += 1
+        subscriptionUsageRefreshTask?.cancel()
+        subscriptionUsageRefreshTask = nil
         subscriptionUsagePollingTask?.cancel()
         subscriptionUsagePollingTask = nil
-        Task { [weak self] in
-            guard let self, self.serverControlState.isRunning else { return }
-            await self.restartServer()
-        }
+        subscriptionUsageRetryDelayNanoseconds = 60_000_000_000
     }
 
     func refreshSubscriptionUsage() async {

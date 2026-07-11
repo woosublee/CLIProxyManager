@@ -90,6 +90,7 @@ struct DashboardView: View {
         }
         .task {
             await viewModel.refresh()
+            await viewModel.prepareSubscriptionUsage()
             await viewModel.performAutostartIfEnabled()
             let automaticCheckResult = await cliProxyAPIUpdateService.checkAutomaticallyOnLaunch()
             switch automaticCheckResult {

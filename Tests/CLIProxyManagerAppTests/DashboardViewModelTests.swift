@@ -1613,12 +1613,311 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertTrue(viewModel.isServerActionInProgress)
     }
 
+    func testEnablingSubscriptionUsageCreatesMissingKeyPersistsConfigAndRestartsReadyProxy() async throws {
+        let config = AppConfig.default
+        let configStore = StubConfigStore(config: config)
+        let keyStore = SubscriptionUsageManagementKeyStoreDouble()
+        let proxyService = StubProxyServiceStarter()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: configStore,
+            keyStore: keyStore,
+            proxyService: proxyService
+        )
+        await viewModel.refresh()
+
+        try viewModel.saveSubscriptionUsageEnabled(true)
+        await waitForRestart(proxyService)
+
+        XCTAssertEqual(keyStore.createCallCount, 1)
+        XCTAssertEqual(keyStore.deleteCallCount, 0)
+        XCTAssertTrue(viewModel.config.subscriptionUsage.isEnabled)
+        XCTAssertTrue(configStore.savedConfigs.last?.subscriptionUsage.isEnabled ?? false)
+        XCTAssertEqual(proxyService.restartPorts, [config.port])
+        XCTAssertNil(viewModel.settingsMessage)
+    }
+
+    func testEnablingSubscriptionUsagePreservesExistingManagementKey() async throws {
+        let config = AppConfig.default
+        let configStore = StubConfigStore(config: config)
+        let keyStore = SubscriptionUsageManagementKeyStoreDouble(isConfiguredValue: true)
+        let proxyService = StubProxyServiceStarter()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: configStore,
+            keyStore: keyStore,
+            proxyService: proxyService
+        )
+        await viewModel.refresh()
+
+        try viewModel.saveSubscriptionUsageEnabled(true)
+        await waitForRestart(proxyService)
+
+        XCTAssertEqual(keyStore.createCallCount, 1)
+        XCTAssertEqual(keyStore.deleteCallCount, 0)
+        XCTAssertTrue(keyStore.isConfigured())
+        XCTAssertTrue(viewModel.config.subscriptionUsage.isEnabled)
+        XCTAssertTrue(configStore.savedConfigs.last?.subscriptionUsage.isEnabled ?? false)
+        XCTAssertEqual(proxyService.restartPorts, [config.port])
+    }
+
+    func testDisablingSubscriptionUsageDeletesKeyPersistsDisabledConfigAndRestartsProxy() async throws {
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        let configStore = StubConfigStore(config: config)
+        let keyStore = SubscriptionUsageManagementKeyStoreDouble(isConfiguredValue: true)
+        let proxyService = StubProxyServiceStarter()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: configStore,
+            keyStore: keyStore,
+            proxyService: proxyService
+        )
+        await viewModel.refresh()
+
+        try viewModel.saveSubscriptionUsageEnabled(false)
+        await waitForRestart(proxyService)
+
+        XCTAssertEqual(keyStore.createCallCount, 0)
+        XCTAssertEqual(keyStore.deleteCallCount, 1)
+        XCTAssertFalse(keyStore.isConfigured())
+        XCTAssertFalse(viewModel.config.subscriptionUsage.isEnabled)
+        XCTAssertFalse(configStore.savedConfigs.last?.subscriptionUsage.isEnabled ?? true)
+        XCTAssertEqual(proxyService.restartPorts, [config.port])
+        XCTAssertNil(viewModel.settingsMessage)
+    }
+
+    func testPrepareSubscriptionUsageRepairsEnabledConfigWithMissingKeyBeforeFirstRefresh() async throws {
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        let keyStore = SubscriptionUsageManagementKeyStoreDouble()
+        let proxyService = StubProxyServiceStarter()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: keyStore,
+            proxyService: proxyService
+        )
+        await viewModel.refresh()
+
+        await viewModel.prepareSubscriptionUsage()
+        await waitForRestart(proxyService)
+
+        XCTAssertEqual(keyStore.createCallCount, 1)
+        XCTAssertEqual(keyStore.deleteCallCount, 0)
+        XCTAssertTrue(keyStore.isConfigured())
+        XCTAssertTrue(viewModel.config.subscriptionUsage.isEnabled)
+        XCTAssertEqual(proxyService.restartPorts, [config.port])
+        XCTAssertNil(viewModel.settingsMessage)
+    }
+
+    func testPrepareSubscriptionUsageRemovesStaleKeyAndRestartsReadyProxyWhenUsageIsDisabled() async {
+        let config = AppConfig.default
+        let keyStore = SubscriptionUsageManagementKeyStoreDouble(isConfiguredValue: true)
+        let proxyService = StubProxyServiceStarter()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: keyStore,
+            proxyService: proxyService
+        )
+        await viewModel.refresh()
+
+        await viewModel.prepareSubscriptionUsage()
+
+        XCTAssertEqual(keyStore.createCallCount, 0)
+        XCTAssertEqual(keyStore.deleteCallCount, 1)
+        XCTAssertFalse(keyStore.isConfigured())
+        XCTAssertFalse(viewModel.config.subscriptionUsage.isEnabled)
+        XCTAssertEqual(proxyService.restartPorts, [config.port])
+        XCTAssertNil(viewModel.settingsMessage)
+    }
+
+    func testResetAllSettingsDeletesManagementKeyWhenUsageWasEnabled() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        let configStore = StubConfigStore(config: config)
+        let keyStore = SubscriptionUsageManagementKeyStoreDouble(isConfiguredValue: true)
+        let proxyService = StubProxyServiceStarter()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: configStore,
+            keyStore: keyStore,
+            proxyService: proxyService
+        )
+        await viewModel.refresh()
+
+        viewModel.resetAllSettings()
+        await waitForRestart(proxyService)
+
+        XCTAssertEqual(keyStore.deleteCallCount, 1)
+        XCTAssertFalse(keyStore.isConfigured())
+        XCTAssertFalse(viewModel.config.subscriptionUsage.isEnabled)
+        XCTAssertFalse(configStore.savedConfigs.last?.subscriptionUsage.isEnabled ?? true)
+        XCTAssertEqual(proxyService.restartPorts, [config.port])
+        XCTAssertEqual(viewModel.settingsMessage, "Settings reset to defaults.")
+    }
+
+    func testKeyCreationFailureLeavesSubscriptionUsageDisabled() {
+        let config = AppConfig.default
+        let configStore = StubConfigStore(config: config)
+        let keyStore = SubscriptionUsageManagementKeyStoreDouble()
+        keyStore.createError = NSError(domain: "SubscriptionUsage", code: 1, userInfo: [NSLocalizedDescriptionKey: "Key setup failed"])
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: configStore,
+            keyStore: keyStore,
+            proxyService: StubProxyServiceStarter()
+        )
+
+        XCTAssertThrowsError(try viewModel.saveSubscriptionUsageEnabled(true))
+
+        XCTAssertEqual(keyStore.createCallCount, 1)
+        XCTAssertEqual(keyStore.deleteCallCount, 0)
+        XCTAssertFalse(viewModel.config.subscriptionUsage.isEnabled)
+        XCTAssertTrue(configStore.savedConfigs.isEmpty)
+    }
+
+    func testSubscriptionUsageConfigSaveFailureDeletesOnlyNewlyCreatedKey() {
+        let config = AppConfig.default
+        let configStore = StubConfigStore(config: config, saveError: NSError(domain: "SubscriptionUsage", code: 1))
+        let keyStore = SubscriptionUsageManagementKeyStoreDouble()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: configStore,
+            keyStore: keyStore,
+            proxyService: StubProxyServiceStarter()
+        )
+
+        XCTAssertThrowsError(try viewModel.saveSubscriptionUsageEnabled(true))
+
+        XCTAssertEqual(keyStore.createCallCount, 1)
+        XCTAssertEqual(keyStore.deleteCallCount, 1)
+        XCTAssertFalse(keyStore.isConfigured())
+        XCTAssertFalse(viewModel.config.subscriptionUsage.isEnabled)
+    }
+
+    func testSubscriptionUsageConfigSaveFailurePreservesPreexistingKey() {
+        let config = AppConfig.default
+        let configStore = StubConfigStore(config: config, saveError: NSError(domain: "SubscriptionUsage", code: 1))
+        let keyStore = SubscriptionUsageManagementKeyStoreDouble(isConfiguredValue: true)
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: configStore,
+            keyStore: keyStore,
+            proxyService: StubProxyServiceStarter()
+        )
+
+        XCTAssertThrowsError(try viewModel.saveSubscriptionUsageEnabled(true))
+
+        XCTAssertEqual(keyStore.createCallCount, 1)
+        XCTAssertEqual(keyStore.deleteCallCount, 0)
+        XCTAssertTrue(keyStore.isConfigured())
+        XCTAssertFalse(viewModel.config.subscriptionUsage.isEnabled)
+    }
+
+    func testRestartFailureKeepsDisabledUsageConfigAndDeletedKey() async throws {
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        let configStore = StubConfigStore(config: config)
+        let keyStore = SubscriptionUsageManagementKeyStoreDouble(isConfiguredValue: true)
+        let proxyService = StubProxyServiceStarter(error: NSError(domain: "SubscriptionUsage", code: 1, userInfo: [NSLocalizedDescriptionKey: "Restart failed"]))
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: configStore,
+            keyStore: keyStore,
+            proxyService: proxyService
+        )
+        await viewModel.refresh()
+
+        try viewModel.saveSubscriptionUsageEnabled(false)
+        await waitForRestart(proxyService)
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        XCTAssertFalse(viewModel.config.subscriptionUsage.isEnabled)
+        XCTAssertFalse(configStore.savedConfigs.last?.subscriptionUsage.isEnabled ?? true)
+        XCTAssertFalse(keyStore.isConfigured())
+        XCTAssertEqual(viewModel.serverStatus.title, "Failed to restart CLIProxyAPI")
+    }
+
+    private func subscriptionUsageViewModel(
+        config: AppConfig,
+        configStore: StubConfigStore,
+        keyStore: SubscriptionUsageManagementKeyStoreDouble,
+        proxyService: StubProxyServiceStarter
+    ) -> DashboardViewModel {
+        DashboardViewModel(
+            config: config,
+            configStore: configStore,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            subscriptionQuotaClient: StubSubscriptionQuotaClient(),
+            subscriptionUsageKeyStore: keyStore
+        )
+    }
+
+    private func waitForRestart(_ proxyService: StubProxyServiceStarter, expectedCount: Int = 1) async {
+        for _ in 0..<100 {
+            if proxyService.restartPorts.count >= expectedCount {
+                return
+            }
+            await Task.yield()
+        }
+        XCTFail("Expected proxy restart.")
+    }
+
     private func connectedClaudeConnector() -> ClaudeConnector {
         ClaudeConnector(runner: StubProcessRunner(results: Array(repeating: [
             ProcessResult(exitCode: 0, stdout: "/usr/local/bin/claude\n", stderr: ""),
             ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: ""),
             ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: "")
         ], count: 4).flatMap { $0 }))
+    }
+}
+
+private struct StubSubscriptionQuotaClient: SubscriptionQuotaFetching {
+    func fetchUsage(port: Int, profiles: [AuthProfile]) async -> SubscriptionUsageReport {
+        SubscriptionUsageReport(statesByProfileID: [:], fetchedAt: Date())
+    }
+}
+
+private final class SubscriptionUsageManagementKeyStoreDouble: SubscriptionUsageManagementKeyConfiguring, @unchecked Sendable {
+    var isConfiguredValue: Bool
+    var createCallCount = 0
+    var deleteCallCount = 0
+    var createError: Error?
+
+    init(isConfiguredValue: Bool = false) {
+        self.isConfiguredValue = isConfiguredValue
+    }
+
+    func isConfigured() -> Bool {
+        isConfiguredValue
+    }
+
+    func createManagementKeyIfNeeded() throws -> Bool {
+        createCallCount += 1
+        if let createError {
+            throw createError
+        }
+        guard !isConfiguredValue else {
+            return false
+        }
+        isConfiguredValue = true
+        return true
+    }
+
+    func setManagementKey(_ value: String) throws {
+        isConfiguredValue = !value.isEmpty
+    }
+
+    func deleteManagementKey() throws {
+        deleteCallCount += 1
+        isConfiguredValue = false
     }
 }
 

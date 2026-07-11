@@ -49,7 +49,6 @@ struct GeneralSettingsView: View {
 
 struct ServerSettingsView: View {
     @ObservedObject var viewModel: DashboardViewModel
-    @State private var managementKey = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -96,7 +95,7 @@ struct ServerSettingsView: View {
             SettingsGroup(title: "Subscription Usage (Experimental)") {
                 SettingsRow(
                     label: "Show subscription usage",
-                    description: "Displays Claude and Codex account usage in the menu bar. Requires a local CLIProxyAPI management key."
+                    description: "Displays Claude and Codex account usage in the menu bar. A local management key is created in Keychain automatically and removed when this setting is turned off."
                 ) {
                     Toggle("", isOn: Binding(
                         get: { viewModel.config.subscriptionUsage.isEnabled },
@@ -104,28 +103,6 @@ struct ServerSettingsView: View {
                     ))
                     .labelsHidden()
                     .toggleStyle(SettingsToggleStyle())
-                }
-
-                SettingsRow(
-                    label: "Management key",
-                    description: viewModel.subscriptionUsageManagementKeyIsConfigured() ? "Configured in Keychain." : "Not configured. The key is never displayed after saving."
-                ) {
-                    HStack(spacing: 8) {
-                        SecureField("Management key", text: $managementKey)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 150)
-                        Button(viewModel.subscriptionUsageManagementKeyIsConfigured() ? "Replace" : "Save") {
-                            let value = managementKey
-                            managementKey = ""
-                            viewModel.saveSetting { try viewModel.saveSubscriptionUsageManagementKey(value) }
-                        }
-                        .disabled(managementKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        if viewModel.subscriptionUsageManagementKeyIsConfigured() {
-                            Button("Remove", role: .destructive) {
-                                viewModel.saveSetting { try viewModel.deleteSubscriptionUsageManagementKey() }
-                            }
-                        }
-                    }
                 }
             }
 
