@@ -24,7 +24,7 @@ struct ProviderListView: View {
                     ProviderRowView(
                         provider: provider,
                         connect: { connect(provider.id) },
-                        disconnect: { disconnect(provider.id) },
+                        setEnabled: { enabled in viewModel.setProviderEnabled(provider.id, enabled: enabled) },
                         settings: { activeProvider = provider.id }
                     )
                 }
@@ -46,10 +46,6 @@ struct ProviderListView: View {
 
     private func connect(_ provider: ProviderRowState.ID) {
         viewModel.startOAuthLogin(provider)
-    }
-
-    private func disconnect(_ provider: ProviderRowState.ID) {
-        viewModel.disconnectProvider(provider)
     }
 
     @ViewBuilder
@@ -109,7 +105,7 @@ struct ProviderListView: View {
 private struct ProviderRowView: View {
     let provider: ProviderRowState
     let connect: () -> Void
-    let disconnect: () -> Void
+    let setEnabled: (Bool) -> Void
     let settings: () -> Void
 
     var body: some View {
@@ -126,14 +122,20 @@ private struct ProviderRowView: View {
 
             VStack(alignment: .trailing, spacing: 4) {
                 Text(provider.connectionTitle)
-                    .foregroundStyle(provider.isConnected ? .green : .orange)
+                    .foregroundStyle(provider.isConnected ? .green : provider.isDisabled ? .secondary : .orange)
                 Text(provider.functionName)
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
             }
 
             if provider.isConnected {
-                Button("Disconnect", action: disconnect)
+                Button("Disable account") {
+                    setEnabled(false)
+                }
+            } else if provider.isDisabled {
+                Button("Enable account") {
+                    setEnabled(true)
+                }
             } else {
                 Button("Connect", action: connect)
             }

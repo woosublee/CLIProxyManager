@@ -95,7 +95,7 @@ struct ServerSettingsView: View {
             SettingsGroup(title: "Subscription Usage (Experimental)") {
                 SettingsRow(
                     label: "Show subscription usage",
-                    description: "Displays Claude and Codex account usage in the menu bar. A local management key is created in Keychain automatically and removed when this setting is turned off."
+                    description: "Displays Claude and Codex account usage in the menu bar. A local management key is created in protected app-managed storage automatically and removed when this setting is turned off."
                 ) {
                     Toggle("", isOn: Binding(
                         get: { viewModel.config.subscriptionUsage.isEnabled },

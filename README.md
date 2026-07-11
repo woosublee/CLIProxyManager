@@ -1,24 +1,24 @@
 # CLIProxyManager
 
 <p align="center">
-  <img src="docs/assets/readme-main-window.png" alt="CLIProxyManager main window" width="600">
+  <img src="docs/assets/readme-main-window.jpeg" alt="CLIProxyManager multi-account dashboard" width="600">
 </p>
 
-CLIProxyManager is a macOS menu bar app for managing a local CLIProxyAPI server and the shell functions you use to launch Claude Code with different account and model backends.
+CLIProxyManager is a macOS menu bar app for managing a local CLIProxyAPI server, multiple OAuth accounts, and the shell functions you use to launch Claude Code through them.
 
 It is designed for users who want one place to:
 
-- Connect Claude OAuth and Codex OAuth profiles.
-- Optionally use a Claude API key stored in macOS Keychain.
+- Connect and manage multiple Claude OAuth and Codex OAuth accounts.
+- Give each enabled account its own shell command name and optional nickname.
 - Start, stop, and configure the bundled CLIProxyAPI server.
-- Install convenient shell functions into `~/.zshrc`.
-- Check account, server, and shell setup status from the app.
+- Keep generated shell functions synchronized in `~/.zshrc`.
+- Check account, server, usage, and shell setup status from the app.
 
 ## Requirements
 
 - macOS 15 or later.
 - Claude Code installed and available on your machine.
-- A Claude account, Codex/OpenAI OAuth account, or Claude API key depending on which shell function you want to use.
+- A Claude or Codex/OpenAI account for OAuth sign-in; a Claude API key is optional for direct API-key routing.
 - zsh if you want the app to manage shell functions automatically.
 
 ## Releases and automatic updates
@@ -45,26 +45,24 @@ When the user accepts a CLIProxyAPI binary update, the app downloads `CLIProxyAP
 ## Quick start
 
 1. Open CLIProxyManager.
-2. Use **Add Provider** to connect an account:
-   - **Claude OAuth** for your normal Claude Code subscription login.
+2. Use **Add Provider** to connect one or more accounts:
+   - **Claude OAuth** for Claude subscription routing.
    - **Codex OAuth** for OpenAI/Codex-backed routing through the local proxy.
-3. Review the generated command name and optional nickname, then save.
-4. Open **Settings** and install shell functions.
-5. Restart your terminal, or run:
+3. Give each account a unique command name and, optionally, a nickname.
+4. Restart your terminal, or run:
 
    ```zsh
    source ~/.zshrc
    ```
 
-6. Use one of the installed shell functions:
+5. Run the command name configured for the account you want to use:
 
    ```zsh
-   cc
-   ccodex
-   ccapi
+   claude-work
+   codex-personal
    ```
 
-`ccapi` is installed only when a Claude API key exists in the macOS Keychain.
+The command names above are examples. CLIProxyManager generates the functions from the names you configure for enabled accounts.
 
 ## SSH and headless management
 
@@ -100,7 +98,9 @@ The GUI app is optional — all proxy lifecycle operations work from an SSH sess
 
 ### Experimental subscription usage
 
-CLIProxyManager can show Claude and Codex OAuth subscription usage in each account row of the menu bar. Enable **Subscription Usage (Experimental)** in Server Settings; the app creates the local CLIProxyAPI management key in Keychain automatically. Turning the setting off removes that Keychain item and removes the proxy management configuration. The app never reads, displays, or exports OAuth tokens.
+CLIProxyManager can show Claude and Codex OAuth subscription usage in each account row of the menu bar. Enable **Subscription Usage (Experimental)** in Server Settings; the app creates the local CLIProxyAPI management key automatically in protected app-managed storage. Turning the setting off removes that local secret file and removes the proxy management configuration. The app never reads, displays, or exports OAuth tokens.
+
+The management secret is stored as a `0600` JSON file at `~/.cliproxy-manager/subscription-usage-management-key.json`; debug builds use `~/.cliproxy-manager/dev/subscription-usage-management-key.json`. The app treats this file as the sole source of truth. Legacy subscription-usage Keychain records are intentionally neither read nor automatically removed, so normal app and CLI use cannot trigger a Keychain authentication prompt.
 
 For headless automation, you may explicitly store and delete the local management key with `cpm quota key`; the GUI does not require manual key input.
 
@@ -114,7 +114,7 @@ cpm quota
 cpm quota --json
 ```
 
-`cpm quota` reports normalized account/window states only; it does not modify routing, provider availability, credentials, or subscription limits. `cpm quota key get` is intentionally unsupported. Usage refreshes every five minutes while the local proxy is ready; transient failures back off up to fifteen minutes.
+`cpm quota key status` reports only whether a key is configured, and `set --stdin` and `delete` never print the secret. `cpm quota key get` is intentionally unsupported. `cpm quota` reports normalized account/window states only; it does not modify routing, provider availability, credentials, or subscription limits. Usage refreshes every five minutes while the local proxy is ready; transient failures back off up to fifteen minutes.
 
 ### First `cpm` installation
 
@@ -149,37 +149,22 @@ Key guarantees:
 
 ## Shell functions
 
-CLIProxyManager generates shell functions instead of aliases so each command can set the right environment only for that invocation.
+CLIProxyManager generates shell functions instead of aliases, so each command applies its account-specific routing only for that invocation.
 
-### `cc`
+Each enabled OAuth account has a unique command name that you choose in its settings. The generated function routes Claude Code through the bundled local CLIProxyAPI server using that account. Nicknames are for the app UI; command names are what you run in the terminal.
 
-Runs Claude Code through the bundled local CLIProxyAPI server using your Claude OAuth profile.
-
-Use this when you want Claude Code to use your normal Claude account or subscription login through the app-managed proxy.
-
-### `ccodex`
-
-Runs Claude Code through the bundled local CLIProxyAPI server using Codex/OpenAI OAuth-backed routing.
-
-CLIProxyManager maps Claude model roles to the Codex model settings saved in the app:
-
-- Opus role
-- Sonnet role
-- Haiku role
-
-You can configure model, reasoning level, and context window from the Codex account settings sheet.
-
-### `ccapi`
-
-Runs Claude Code directly with a Claude API key from macOS Keychain.
-
-The app does not write the API key into your shell profile. The generated function calls the helper command to read the key at runtime.
+For example, if you configure `claude-work` for a Claude account and `codex-personal` for a Codex account:
 
 ```zsh
-cliproxy-manager secret get claude-api-key
+claude-work
+codex-personal
 ```
 
-If no Claude API key is stored, `ccapi` is omitted from the installed shell functions.
+You can connect multiple accounts of the same provider. Each account retains its own command name, routing prefix, and provider-specific settings. For Codex accounts, this includes the configured model, reasoning level, and context window.
+
+The optional Claude API key flow also uses the command name you configure. Its function is generated only while a Claude API key is stored in macOS Keychain.
+
+CLIProxyManager writes the generated functions to `~/.cliproxy-manager/functions.zsh` and maintains one managed source block in `~/.zshrc`.
 
 ## Settings overview
 
@@ -190,7 +175,6 @@ Use General settings to control app appearance and behavior:
 - Light, Dark, or System appearance.
 - Launch at login.
 - Menu bar only mode.
-- Notifications.
 
 ### Server
 
@@ -234,6 +218,7 @@ Important files and directories:
 | Path | Purpose |
 | --- | --- |
 | `~/.cliproxy-manager/config.json` | App preferences and command settings. |
+| `~/.cliproxy-manager/subscription-usage-management-key.json` | Owner-only (`0600`) local management secret when subscription usage is enabled. |
 | `~/.cliproxy-manager/functions.zsh` | Generated shell functions. |
 | `~/.cliproxy-manager/auth/` | App-managed OAuth profile files. |
 | `~/.cliproxy-manager/logs/` | App and proxy logs. |
@@ -261,9 +246,9 @@ ls ~/.cliproxy-manager/functions.zsh
 
 Another function or alias with the same name already exists in your shell profile. Choose a different command name in CLIProxyManager, or remove the conflicting function from your shell profile.
 
-### `ccapi` is missing
+### The optional Claude API key command is missing
 
-`ccapi` is generated only when a Claude API key is stored in Keychain. Add or update the API key in the app, then reinstall shell functions.
+The direct Claude API key function is generated only while a Claude API key is stored in macOS Keychain and its configured command name is not blank. Add or update the key and command name in the app, then restart your terminal or run `source ~/.zshrc`.
 
 ### The local server is not responding
 
@@ -280,7 +265,7 @@ Start the local server and confirm the Codex OAuth profile is connected. If mode
 
 ## Security and credentials
 
-- Claude API keys are stored in macOS Keychain.
+- The subscription-usage management secret is stored only in the owner-only (`0600`) app-managed local file described above; legacy subscription Keychain records are ignored.
 - OAuth profile files are stored under `~/.cliproxy-manager/auth`.
 - Generated shell functions use a local dummy API key only for the app-managed local proxy.
 - Do not commit files from `~/.cliproxy-manager` to a repository.

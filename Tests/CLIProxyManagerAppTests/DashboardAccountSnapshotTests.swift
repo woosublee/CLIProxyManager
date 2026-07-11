@@ -18,6 +18,7 @@ final class DashboardAccountSnapshotTests: XCTestCase {
         XCTAssertEqual(snapshot.title, "Claude OAuth")
         XCTAssertEqual(snapshot.commandName, "ccm")
         XCTAssertEqual(snapshot.commandSlug, "$ ccm")
+        XCTAssertEqual(snapshot.headerCommandSlug, "$ ccm")
         XCTAssertEqual(snapshot.detail, "claude@example.com")
         XCTAssertEqual(snapshot.status, DashboardAccountSnapshot.Status.connected)
         XCTAssertEqual(snapshot.primaryActionTitle, "Settings")
@@ -131,6 +132,26 @@ final class DashboardAccountSnapshotTests: XCTestCase {
 
         XCTAssertTrue(snapshot.isAccountDetailHidden)
         XCTAssertFalse(snapshot.showsAccountPrivacyToggle)
+    }
+
+    func testDisabledProviderRowMapsToDisabledAccountActions() {
+        let row = ProviderRowState(
+            id: .claude,
+            name: "Claude OAuth",
+            nickname: "",
+            functionName: "ccm",
+            connectionTitle: "Disabled",
+            connectionDetail: "claude@example.com",
+            isConnected: false,
+            isDisabled: true
+        )
+
+        let snapshot = DashboardAccountSnapshot(provider: row)
+
+        XCTAssertEqual(snapshot.status, DashboardAccountSnapshot.Status.disabled)
+        XCTAssertEqual(snapshot.primaryActionTitle, "Settings")
+        XCTAssertTrue(snapshot.showsMoreMenu)
+        XCTAssertTrue(snapshot.showsAccountPrivacyToggle)
     }
 
     func testWhitespaceOnlyNicknameFallsBackToProviderName() {

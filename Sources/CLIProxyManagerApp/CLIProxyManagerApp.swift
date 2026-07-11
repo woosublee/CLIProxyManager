@@ -12,6 +12,9 @@ struct CLIProxyManagerApp: App {
         let config = LaunchAppearanceBootstrapper().applySavedDockVisibility()
         let viewModel = DashboardViewModel(config: config)
         _viewModel = StateObject(wrappedValue: viewModel)
+        Task {
+            await viewModel.startApplication()
+        }
         _quitCoordinator = StateObject(wrappedValue: QuitCoordinator(shouldStopServerBeforeQuit: {
             viewModel.serverControlState.shouldStopServerBeforeQuit
         }))

@@ -859,7 +859,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(authStore.disabledIDUpdates.map(\.id), ["codex-work.json"])
         XCTAssertEqual(authStore.disabledIDUpdates.map(\.disabled), [true])
         XCTAssertEqual(authStore.disabledUpdates, [])
-        XCTAssertEqual(viewModel.settingsMessage, "Codex OAuth connection was disabled. The auth file was not deleted.")
+        XCTAssertEqual(viewModel.settingsMessage, "Codex OAuth account was disabled. The auth file was not deleted.")
     }
 
     func testRemoveProviderResetsOnlyRemovedClaudeAccountPrivacy() {
@@ -973,7 +973,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(authStore.disabledIDUpdates.map(\.id), ["claude-work.json"])
         XCTAssertEqual(authStore.disabledUpdates, [])
         XCTAssertEqual(viewModel.providerRows.map(\.authProfileID), ["claude-work.json", "claude-personal.json"])
-        XCTAssertEqual(viewModel.settingsMessage, "Claude OAuth connection was disabled. The auth file was not deleted.")
+        XCTAssertEqual(viewModel.settingsMessage, "Claude OAuth account was disabled. The auth file was not deleted.")
     }
 
     func testDisconnectProviderDisablesAuthProfileAndRefreshesRows() {
@@ -997,9 +997,150 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(authStore.disabledIDUpdates.map(\.id), ["codex.json"])
         XCTAssertEqual(authStore.disabledIDUpdates.map(\.disabled), [true])
         XCTAssertEqual(authStore.disabledUpdates, [])
-        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.connectionTitle, "Needs connection")
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.connectionTitle, "Disabled")
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.isConnected, false)
-        XCTAssertEqual(viewModel.settingsMessage, "Codex OAuth connection was disabled. The auth file was not deleted.")
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.isDisabled, true)
+        XCTAssertEqual(viewModel.settingsMessage, "Codex OAuth account was disabled. The auth file was not deleted.")
+    }
+
+    func testSetProviderEnabledPreservesSelectedAccountAndRoundRobinConfiguration() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "claude-work",
+                provider: .claude,
+                authProfileID: "claude-work.json",
+                commandName: "ccwork",
+                nickname: "Work",
+                accountDetailHidden: false,
+                dangerousPermissionsEnabled: true,
+                modelPrefix: "work"
+            ),
+            AppConfig.OAuthCommandProfile(
+                id: "claude-personal",
+                provider: .claude,
+                authProfileID: "claude-personal.json",
+                commandName: "ccpersonal",
+                nickname: "Personal",
+                modelPrefix: "personal"
+            )
+        ]
+        config.roundRobinProfiles = [
+            AppConfig.RoundRobinProfile(
+                id: "claude-round-robin",
+                provider: .claude,
+                isEnabled: true,
+                commandName: "ccrr",
+                includedAuthProfileIDs: ["claude-work.json", "claude-personal.json"]
+            )
+        ]
+        let store = StubConfigStore(config: config)
+        let installer = StubShellInstaller()
+        let authStore = StubAuthProfileStore(profiles: [
+            AuthProfile(fileName: "claude-work.json", type: .claude, email: "work@example.com", accountID: nil, expired: nil, disabled: false, prefix: "work"),
+            AuthProfile(fileName: "claude-personal.json", type: .claude, email: "personal@example.com", accountID: nil, expired: nil, disabled: false, prefix: "personal")
+        ])
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: installer,
+            authProfileStore: authStore,
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+        installer.reset()
+
+        viewModel.setProviderEnabled(ProviderRowState.ID(rawValue: "claude-work"), enabled: false)
+
+        XCTAssertEqual(authStore.disabledIDUpdates.map(\.id), ["claude-work.json"])
+        XCTAssertEqual(authStore.disabledIDUpdates.map(\.disabled), [true])
+        let disabledConfig = try! XCTUnwrap(store.savedConfigs.last)
+        XCTAssertEqual(disabledConfig.oauthCommandProfiles.first { $0.id == "claude-work" }?.isEnabled, false)
+        XCTAssertEqual(disabledConfig.oauthCommandProfiles.first { $0.id == "claude-work" }?.nickname, "Work")
+        XCTAssertEqual(disabledConfig.oauthCommandProfiles.first { $0.id == "claude-work" }?.accountDetailHidden, false)
+        XCTAssertEqual(disabledConfig.oauthCommandProfiles.first { $0.id == "claude-work" }?.dangerousPermissionsEnabled, true)
+        XCTAssertEqual(disabledConfig.oauthCommandProfiles.first { $0.id == "claude-personal" }?.isEnabled, true)
+        XCTAssertEqual(disabledConfig.roundRobinProfiles, config.roundRobinProfiles)
+        XCTAssertEqual(viewModel.providerRows.first { $0.id.rawValue == "claude-work" }?.connectionTitle, "Disabled")
+        XCTAssertTrue(viewModel.providerRows.first { $0.id.rawValue == "claude-work" }?.isDisabled == true)
+        XCTAssertFalse(viewModel.providerRows.first { $0.id.rawValue == "claude-work" }?.isConnected == true)
+        XCTAssertEqual(installer.installedFunctionNames, ["ccpersonal"])
+
+        viewModel.setProviderEnabled(ProviderRowState.ID(rawValue: "claude-work"), enabled: true)
+
+        XCTAssertEqual(authStore.disabledIDUpdates.map(\.disabled), [true, false])
+        let enabledConfig = try! XCTUnwrap(store.savedConfigs.last)
+        XCTAssertEqual(enabledConfig.oauthCommandProfiles.first { $0.id == "claude-work" }?.isEnabled, true)
+        XCTAssertEqual(enabledConfig.roundRobinProfiles, config.roundRobinProfiles)
+        XCTAssertTrue(viewModel.providerRows.first { $0.id.rawValue == "claude-work" }?.isConnected == true)
+        XCTAssertFalse(viewModel.providerRows.first { $0.id.rawValue == "claude-work" }?.isDisabled == true)
+        XCTAssertEqual(installer.installedFunctionNames, ["ccwork", "ccpersonal", "ccrr"])
+    }
+
+    func testSetProviderEnabledRollsBackAuthProfileWhenConfigSaveFails() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "claude-work",
+                provider: .claude,
+                authProfileID: "claude-work.json",
+                commandName: "ccwork"
+            )
+        ]
+        let authStore = StubAuthProfileStore(profiles: [
+            AuthProfile(fileName: "claude-work.json", type: .claude, email: "work@example.com", accountID: nil, expired: nil, disabled: false)
+        ])
+        let installer = StubShellInstaller()
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config, saveError: NSError(domain: "test", code: 1)),
+            shellInstaller: installer,
+            authProfileStore: authStore,
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+        installer.reset()
+
+        viewModel.setProviderEnabled(ProviderRowState.ID(rawValue: "claude-work"), enabled: false)
+
+        XCTAssertEqual(authStore.disabledIDUpdates.map(\.disabled), [true, false])
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.first?.isEnabled, true)
+        XCTAssertTrue(viewModel.providerRows.first?.isConnected == true)
+        XCTAssertFalse(viewModel.providerRows.first?.isDisabled == true)
+        XCTAssertEqual(installer.installedFunctionNames, ["ccwork"])
+        XCTAssertTrue(viewModel.settingsMessage?.hasPrefix("Claude OAuth account disable failed:") == true)
+    }
+
+    func testSetProviderEnabledRollsBackAuthProfileWhenShellInstallFails() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "claude-work",
+                provider: .claude,
+                authProfileID: "claude-work.json",
+                commandName: "ccwork"
+            )
+        ]
+        let authStore = StubAuthProfileStore(profiles: [
+            AuthProfile(fileName: "claude-work.json", type: .claude, email: "work@example.com", accountID: nil, expired: nil, disabled: false)
+        ])
+        let installer = StubShellInstaller(installError: NSError(domain: "test", code: 2))
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: installer,
+            authProfileStore: authStore,
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        viewModel.setProviderEnabled(ProviderRowState.ID(rawValue: "claude-work"), enabled: false)
+
+        XCTAssertEqual(authStore.disabledIDUpdates.map(\.disabled), [true, false])
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.first?.isEnabled, true)
+        XCTAssertTrue(viewModel.providerRows.first?.isConnected == true)
+        XCTAssertFalse(viewModel.providerRows.first?.isDisabled == true)
+        XCTAssertTrue(viewModel.settingsMessage?.hasPrefix("Claude OAuth account disable failed:") == true)
     }
 
     func testSavePortPersistsConfigAndRefreshesOptionRows() throws {
@@ -1616,7 +1757,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     func testEnablingSubscriptionUsageCreatesMissingKeyPersistsConfigAndRestartsReadyProxy() async throws {
         let config = AppConfig.default
         let configStore = StubConfigStore(config: config)
-        let keyStore = SubscriptionUsageManagementKeyStoreDouble()
+        let keyStore = SubscriptionUsageManagementKeyDouble()
         let proxyService = StubProxyServiceStarter()
         let viewModel = subscriptionUsageViewModel(
             config: config,
@@ -1640,7 +1781,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     func testEnablingSubscriptionUsagePreservesExistingManagementKey() async throws {
         let config = AppConfig.default
         let configStore = StubConfigStore(config: config)
-        let keyStore = SubscriptionUsageManagementKeyStoreDouble(isConfiguredValue: true)
+        let keyStore = SubscriptionUsageManagementKeyDouble(isConfiguredValue: true)
         let proxyService = StubProxyServiceStarter()
         let viewModel = subscriptionUsageViewModel(
             config: config,
@@ -1665,7 +1806,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         var config = AppConfig.default
         config.subscriptionUsage.isEnabled = true
         let configStore = StubConfigStore(config: config)
-        let keyStore = SubscriptionUsageManagementKeyStoreDouble(isConfiguredValue: true)
+        let keyStore = SubscriptionUsageManagementKeyDouble(isConfiguredValue: true)
         let proxyService = StubProxyServiceStarter()
         let viewModel = subscriptionUsageViewModel(
             config: config,
@@ -1687,10 +1828,30 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertNil(viewModel.settingsMessage)
     }
 
+    func testStartApplicationRefreshesUsageWhenProxyIsAlreadyReadyWithoutDashboard() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        let profile = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
+        let quotaClient = RecordingSubscriptionQuotaClient(reports: [availableUsageReport(for: profile)])
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [profile],
+            quotaClient: quotaClient
+        )
+
+        await viewModel.startApplication()
+
+        let fetchCallCount = await quotaClient.fetchCallCount()
+        XCTAssertEqual(fetchCallCount, 1)
+    }
+
     func testPrepareSubscriptionUsageRepairsEnabledConfigWithMissingKeyBeforeFirstRefresh() async throws {
         var config = AppConfig.default
         config.subscriptionUsage.isEnabled = true
-        let keyStore = SubscriptionUsageManagementKeyStoreDouble()
+        let keyStore = SubscriptionUsageManagementKeyDouble()
         let proxyService = StubProxyServiceStarter()
         let viewModel = subscriptionUsageViewModel(
             config: config,
@@ -1713,7 +1874,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testPrepareSubscriptionUsageRemovesStaleKeyAndRestartsReadyProxyWhenUsageIsDisabled() async {
         let config = AppConfig.default
-        let keyStore = SubscriptionUsageManagementKeyStoreDouble(isConfiguredValue: true)
+        let keyStore = SubscriptionUsageManagementKeyDouble(isConfiguredValue: true)
         let proxyService = StubProxyServiceStarter()
         let viewModel = subscriptionUsageViewModel(
             config: config,
@@ -1737,7 +1898,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         var config = AppConfig.default
         config.subscriptionUsage.isEnabled = true
         let configStore = StubConfigStore(config: config)
-        let keyStore = SubscriptionUsageManagementKeyStoreDouble(isConfiguredValue: true)
+        let keyStore = SubscriptionUsageManagementKeyDouble(isConfiguredValue: true)
         let proxyService = StubProxyServiceStarter()
         let viewModel = subscriptionUsageViewModel(
             config: config,
@@ -1761,7 +1922,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     func testKeyCreationFailureLeavesSubscriptionUsageDisabled() {
         let config = AppConfig.default
         let configStore = StubConfigStore(config: config)
-        let keyStore = SubscriptionUsageManagementKeyStoreDouble()
+        let keyStore = SubscriptionUsageManagementKeyDouble()
         keyStore.createError = NSError(domain: "SubscriptionUsage", code: 1, userInfo: [NSLocalizedDescriptionKey: "Key setup failed"])
         let viewModel = subscriptionUsageViewModel(
             config: config,
@@ -1781,7 +1942,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     func testSubscriptionUsageConfigSaveFailureDeletesOnlyNewlyCreatedKey() {
         let config = AppConfig.default
         let configStore = StubConfigStore(config: config, saveError: NSError(domain: "SubscriptionUsage", code: 1))
-        let keyStore = SubscriptionUsageManagementKeyStoreDouble()
+        let keyStore = SubscriptionUsageManagementKeyDouble()
         let viewModel = subscriptionUsageViewModel(
             config: config,
             configStore: configStore,
@@ -1800,7 +1961,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     func testSubscriptionUsageConfigSaveFailurePreservesPreexistingKey() {
         let config = AppConfig.default
         let configStore = StubConfigStore(config: config, saveError: NSError(domain: "SubscriptionUsage", code: 1))
-        let keyStore = SubscriptionUsageManagementKeyStoreDouble(isConfiguredValue: true)
+        let keyStore = SubscriptionUsageManagementKeyDouble(isConfiguredValue: true)
         let viewModel = subscriptionUsageViewModel(
             config: config,
             configStore: configStore,
@@ -1820,7 +1981,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         var config = AppConfig.default
         config.subscriptionUsage.isEnabled = true
         let configStore = StubConfigStore(config: config)
-        let keyStore = SubscriptionUsageManagementKeyStoreDouble(isConfiguredValue: true)
+        let keyStore = SubscriptionUsageManagementKeyDouble(isConfiguredValue: true)
         let proxyService = StubProxyServiceStarter(error: NSError(domain: "SubscriptionUsage", code: 1, userInfo: [NSLocalizedDescriptionKey: "Restart failed"]))
         let viewModel = subscriptionUsageViewModel(
             config: config,
@@ -1849,7 +2010,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let viewModel = subscriptionUsageViewModel(
             config: config,
             configStore: StubConfigStore(config: config),
-            keyStore: SubscriptionUsageManagementKeyStoreDouble(isConfiguredValue: true),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
             proxyService: StubProxyServiceStarter(),
             profiles: [profile],
             quotaClient: quotaClient,
@@ -1871,7 +2032,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let viewModel = subscriptionUsageViewModel(
             config: config,
             configStore: StubConfigStore(config: config),
-            keyStore: SubscriptionUsageManagementKeyStoreDouble(isConfiguredValue: true),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
             proxyService: StubProxyServiceStarter(),
             profiles: [profile],
             quotaClient: quotaClient,
@@ -1893,7 +2054,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let viewModel = subscriptionUsageViewModel(
             config: config,
             configStore: StubConfigStore(config: config),
-            keyStore: SubscriptionUsageManagementKeyStoreDouble(isConfiguredValue: true),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
             proxyService: StubProxyServiceStarter(),
             profiles: [profile],
             quotaClient: quotaClient,
@@ -1903,7 +2064,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         let firstRefresh = Task { await viewModel.refreshSubscriptionUsage() }
         await waitForUsageFetches(quotaClient, expectedCount: 1)
-        let secondRefresh = Task { await viewModel.refreshSubscriptionUsage() }
+        let secondRefresh = Task { await viewModel.refreshSubscriptionUsage(force: true) }
         await Task.yield()
 
         let fetchCallCount = await quotaClient.fetchCallCount()
@@ -1912,6 +2073,127 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         await quotaClient.resolveAll(with: availableUsageReport(for: profile))
         await firstRefresh.value
         await secondRefresh.value
+    }
+
+    func testManualUsageRefreshKeepsExistingUsageUntilSuccessfulReplacement() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        let profile = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
+        let initialState: AccountSubscriptionUsageState = .available(
+            SubscriptionUsageSnapshot(
+                profileID: profile.id,
+                provider: .claude,
+                windows: [UsageWindow(id: "five_hour", label: "5h", usedPercent: 25, resetAt: nil)],
+                fetchedAt: Date(timeIntervalSince1970: 0)
+            )
+        )
+        let refreshedState: AccountSubscriptionUsageState = .available(
+            SubscriptionUsageSnapshot(
+                profileID: profile.id,
+                provider: .claude,
+                windows: [UsageWindow(id: "five_hour", label: "5h", usedPercent: 30, resetAt: nil)],
+                fetchedAt: Date(timeIntervalSince1970: 60)
+            )
+        )
+        let quotaClient = SuspendedSubscriptionQuotaClient(reportsBeforeSuspension: [
+            SubscriptionUsageReport(statesByProfileID: [profile.id: initialState], fetchedAt: Date(timeIntervalSince1970: 0))
+        ])
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [profile],
+            quotaClient: quotaClient
+        )
+        viewModel.serverStatus = readyStatus()
+
+        await viewModel.refreshSubscriptionUsage()
+        let reload = Task { await viewModel.refreshSubscriptionUsage(force: true) }
+        await waitForUsageFetches(quotaClient, expectedCount: 2)
+
+        XCTAssertEqual(viewModel.subscriptionUsageStates[profile.id], initialState)
+
+        await quotaClient.resolveAll(with: SubscriptionUsageReport(
+            statesByProfileID: [profile.id: refreshedState],
+            fetchedAt: Date(timeIntervalSince1970: 60)
+        ))
+        await reload.value
+
+        XCTAssertEqual(viewModel.subscriptionUsageStates[profile.id], refreshedState)
+    }
+
+    func testManualUsageRefreshKeepsExistingUsageWhenRefreshFails() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        let profile = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
+        let initialState = availableUsageState(for: profile)
+        let quotaClient = RecordingSubscriptionQuotaClient(reports: [
+            SubscriptionUsageReport(statesByProfileID: [profile.id: initialState], fetchedAt: Date(timeIntervalSince1970: 0)),
+            SubscriptionUsageReport(statesByProfileID: [profile.id: .unavailable(.transientFailure)], fetchedAt: Date(timeIntervalSince1970: 60))
+        ])
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [profile],
+            quotaClient: quotaClient
+        )
+        viewModel.serverStatus = readyStatus()
+
+        await viewModel.refreshSubscriptionUsage()
+        await viewModel.refreshSubscriptionUsage(force: true)
+
+        XCTAssertEqual(viewModel.subscriptionUsageStates[profile.id], initialState)
+    }
+
+    func testManualUsageRefreshWaitsForAutomaticRefreshThenRetriesNonRetriableProfile() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        let claude = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
+        let codex = AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
+        let initialReport = SubscriptionUsageReport(
+            statesByProfileID: [
+                claude.id: .unavailable(.schemaMismatch),
+                codex.id: availableUsageState(for: codex)
+            ],
+            fetchedAt: Date(timeIntervalSince1970: 0)
+        )
+        let quotaClient = SuspendedSubscriptionQuotaClient(reportsBeforeSuspension: [initialReport])
+        let sleeper = SubscriptionUsageSleepRecorder()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [claude, codex],
+            quotaClient: quotaClient,
+            subscriptionUsageSleep: { delay in try await sleeper.sleep(delay) }
+        )
+        viewModel.serverStatus = readyStatus()
+
+        await viewModel.refreshSubscriptionUsage()
+        let automaticRefresh = Task { await viewModel.refreshSubscriptionUsage() }
+        await waitForUsageFetches(quotaClient, expectedCount: 2)
+        let manualRefresh = Task { await viewModel.refreshSubscriptionUsage(force: true) }
+        await Task.yield()
+
+        await quotaClient.resolveAll(with: availableUsageReport(for: codex))
+        await waitForUsageFetches(quotaClient, expectedCount: 3)
+        await quotaClient.resolveAll(with: SubscriptionUsageReport(
+            statesByProfileID: [
+                claude.id: availableUsageState(for: claude),
+                codex.id: availableUsageState(for: codex)
+            ],
+            fetchedAt: Date(timeIntervalSince1970: 60)
+        ))
+        await automaticRefresh.value
+        await manualRefresh.value
+
+        let requestedProfileIDs = await quotaClient.requestedProfileIDs()
+        XCTAssertEqual(requestedProfileIDs, [[claude.id, codex.id], [codex.id], [claude.id, codex.id]])
+        XCTAssertEqual(viewModel.subscriptionUsageStates[claude.id], availableUsageState(for: claude))
     }
 
     func testSuccessfulUsageRefreshSchedulesFiveMinutePoll() async {
@@ -1923,7 +2205,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let viewModel = subscriptionUsageViewModel(
             config: config,
             configStore: StubConfigStore(config: config),
-            keyStore: SubscriptionUsageManagementKeyStoreDouble(isConfiguredValue: true),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
             proxyService: StubProxyServiceStarter(),
             profiles: [profile],
             quotaClient: quotaClient,
@@ -1951,7 +2233,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let viewModel = subscriptionUsageViewModel(
             config: config,
             configStore: StubConfigStore(config: config),
-            keyStore: SubscriptionUsageManagementKeyStoreDouble(isConfiguredValue: true),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
             proxyService: StubProxyServiceStarter(),
             profiles: [profile],
             quotaClient: quotaClient,
@@ -1969,6 +2251,78 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             delays,
             [60_000_000_000, 120_000_000_000, 240_000_000_000, 480_000_000_000, 900_000_000_000]
         )
+    }
+
+    func testManualUsageRefreshRetriesSchemaMismatchProfileAndRestoresFiveMinutePolling() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        let claude = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
+        let codex = AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
+        let initialReport = SubscriptionUsageReport(
+            statesByProfileID: [
+                claude.id: .unavailable(.schemaMismatch),
+                codex.id: availableUsageState(for: codex)
+            ],
+            fetchedAt: Date(timeIntervalSince1970: 0)
+        )
+        let refreshedReport = SubscriptionUsageReport(
+            statesByProfileID: [
+                claude.id: availableUsageState(for: claude),
+                codex.id: availableUsageState(for: codex)
+            ],
+            fetchedAt: Date(timeIntervalSince1970: 60)
+        )
+        let quotaClient = RecordingSubscriptionQuotaClient(reports: [initialReport, refreshedReport])
+        let sleeper = SubscriptionUsageSleepRecorder()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [claude, codex],
+            quotaClient: quotaClient,
+            subscriptionUsageSleep: { delay in try await sleeper.sleep(delay) }
+        )
+        viewModel.serverStatus = readyStatus()
+
+        await viewModel.refreshSubscriptionUsage()
+        await waitForUsageSleeps(sleeper, expectedCount: 1)
+        await viewModel.refreshSubscriptionUsage(force: true)
+        await waitForUsageSleeps(sleeper, expectedCount: 2)
+
+        let requestedProfileIDs = await quotaClient.requestedProfileIDs()
+        let delays = await sleeper.delays()
+        XCTAssertEqual(requestedProfileIDs, [[claude.id, codex.id], [claude.id, codex.id]])
+        XCTAssertEqual(delays, [300_000_000_000, 300_000_000_000])
+        XCTAssertEqual(viewModel.subscriptionUsageStates[claude.id], availableUsageState(for: claude))
+    }
+
+    func testUsageRefreshReportsManualReloadAvailabilityAndProgress() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        let profile = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
+        let quotaClient = SuspendedSubscriptionQuotaClient()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [profile],
+            quotaClient: quotaClient
+        )
+
+        XCTAssertFalse(viewModel.canRefreshSubscriptionUsage)
+        viewModel.serverStatus = readyStatus()
+        XCTAssertTrue(viewModel.canRefreshSubscriptionUsage)
+        XCTAssertFalse(viewModel.isSubscriptionUsageRefreshInProgress)
+
+        let refresh = Task { await viewModel.refreshSubscriptionUsage(force: true) }
+        await waitForUsageFetches(quotaClient, expectedCount: 1)
+        XCTAssertTrue(viewModel.isSubscriptionUsageRefreshInProgress)
+
+        await quotaClient.resolveAll(with: availableUsageReport(for: profile))
+        await refresh.value
+        XCTAssertFalse(viewModel.isSubscriptionUsageRefreshInProgress)
     }
 
     func testNonRetriableProfileIsNotFetchedAgainWhileOtherProfilesContinuePolling() async {
@@ -1992,7 +2346,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let viewModel = subscriptionUsageViewModel(
             config: config,
             configStore: StubConfigStore(config: config),
-            keyStore: SubscriptionUsageManagementKeyStoreDouble(isConfiguredValue: true),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
             proxyService: StubProxyServiceStarter(),
             profiles: [claude, codex],
             quotaClient: quotaClient,
@@ -2012,7 +2366,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         var config = AppConfig.default
         config.subscriptionUsage.isEnabled = true
         let profile = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
-        let keyStore = SubscriptionUsageManagementKeyStoreDouble(isConfiguredValue: true)
+        let keyStore = SubscriptionUsageManagementKeyDouble(isConfiguredValue: true)
         let quotaClient = SuspendedSubscriptionQuotaClient()
         let sleeper = SubscriptionUsageSleepRecorder()
         let viewModel = subscriptionUsageViewModel(
@@ -2038,7 +2392,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     private func subscriptionUsageViewModel(
         config: AppConfig,
         configStore: StubConfigStore,
-        keyStore: SubscriptionUsageManagementKeyStoreDouble,
+        keyStore: SubscriptionUsageManagementKeyDouble,
         proxyService: StubProxyServiceStarter,
         profiles: [AuthProfile] = [],
         quotaClient: any SubscriptionQuotaFetching = StubSubscriptionQuotaClient(),
@@ -2144,17 +2498,28 @@ private actor RecordingSubscriptionQuotaClient: SubscriptionQuotaFetching {
 }
 
 private actor SuspendedSubscriptionQuotaClient: SubscriptionQuotaFetching {
+    private var reportsBeforeSuspension: [SubscriptionUsageReport]
     private var continuations: [CheckedContinuation<SubscriptionUsageReport, Never>] = []
     private var callCount = 0
+    private var profileIDs: [[String]] = []
+
+    init(reportsBeforeSuspension: [SubscriptionUsageReport] = []) {
+        self.reportsBeforeSuspension = reportsBeforeSuspension
+    }
 
     func fetchUsage(port: Int, profiles: [AuthProfile]) async -> SubscriptionUsageReport {
         callCount += 1
+        profileIDs.append(profiles.map(\.id))
+        if !reportsBeforeSuspension.isEmpty {
+            return reportsBeforeSuspension.removeFirst()
+        }
         return await withCheckedContinuation { continuation in
             continuations.append(continuation)
         }
     }
 
     func fetchCallCount() -> Int { callCount }
+    func requestedProfileIDs() -> [[String]] { profileIDs }
 
     func resolveAll(with report: SubscriptionUsageReport) {
         let pending = continuations
@@ -2176,7 +2541,7 @@ private actor SubscriptionUsageSleepRecorder {
     func delays() -> [UInt64] { recordedDelays }
 }
 
-private final class SubscriptionUsageManagementKeyStoreDouble: SubscriptionUsageManagementKeyConfiguring, @unchecked Sendable {
+private final class SubscriptionUsageManagementKeyDouble: SubscriptionUsageManagementKeyConfiguring, @unchecked Sendable {
     var isConfiguredValue: Bool
     var createCallCount = 0
     var deleteCallCount = 0
@@ -2238,17 +2603,20 @@ private final class StubConfigStore: AppConfigStoring, @unchecked Sendable {
 
 private final class StubShellInstaller: ShellFunctionInstalling, @unchecked Sendable {
     private let validationError: Error?
+    private let installError: Error?
     private(set) var installedScript: String?
     private(set) var installedFunctionNames: [String] = []
     private(set) var installCount = 0
     private(set) var validatedFunctionNames: [[String]] = []
     var installed = false
 
-    init(validationError: Error? = nil) {
+    init(validationError: Error? = nil, installError: Error? = nil) {
         self.validationError = validationError
+        self.installError = installError
     }
 
     func install(functionScript: String, functionNames: [String]) throws {
+        if let installError { throw installError }
         installedScript = functionScript
         installedFunctionNames = functionNames
         installCount += 1

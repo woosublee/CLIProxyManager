@@ -77,6 +77,146 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
         XCTAssertEqual(usage.windows.map(\.id), ["five_hour"])
     }
 
+    func testSnapshotHidesAccountIdentifiersWithoutHidingUsage() {
+        let snapshot = MenuBarStatusSnapshot(
+            serverStatus: DiagnosticStatus(severity: .ready, title: "CLIProxyAPI Running", message: "Ready"),
+            providers: [
+                ProviderRowState(
+                    id: .claude,
+                    name: "Claude OAuth",
+                    nickname: "Personal",
+                    functionName: "ccm",
+                    connectionTitle: "Connected",
+                    connectionDetail: "private@example.com",
+                    isConnected: true,
+                    accountDetailHidden: true,
+                    subscriptionUsageState: .available(
+                        SubscriptionUsageSnapshot(
+                            profileID: "claude.json",
+                            provider: .claude,
+                            windows: [UsageWindow(id: "five_hour", label: "5h", usedPercent: 52, resetAt: nil)],
+                            fetchedAt: Date(timeIntervalSince1970: 0)
+                        )
+                    )
+                )
+            ]
+        )
+
+        let provider = try! XCTUnwrap(snapshot.connectedProviders.first)
+        XCTAssertEqual(provider.menuBarDisplayName, "Claude OAuth")
+        XCTAssertNil(provider.menuBarConnectionDetail)
+        guard case let .available(usage) = provider.subscriptionUsageState else {
+            return XCTFail("Expected available subscription usage")
+        }
+        XCTAssertEqual(usage.windows.map(\.id), ["five_hour"])
+    }
+
+    func testSnapshotPreservesUsageWindowCountsAndOrder() {
+        let snapshot = MenuBarStatusSnapshot(
+            serverStatus: DiagnosticStatus(severity: .ready, title: "CLIProxyAPI Running", message: "Ready"),
+            providers: [
+                ProviderRowState(
+                    id: .claude,
+                    name: "Claude OAuth",
+                    nickname: "",
+                    functionName: "ccm",
+                    connectionTitle: "Connected",
+                    connectionDetail: "claude@example.com",
+                    isConnected: true,
+                    accountDetailHidden: false,
+                    subscriptionUsageState: .available(
+                        SubscriptionUsageSnapshot(
+                            profileID: "claude.json",
+                            provider: .claude,
+                            windows: [
+                                UsageWindow(id: "five_hour", label: "5h", usedPercent: 20, resetAt: nil),
+                                UsageWindow(id: "seven_day", label: "7d", usedPercent: 40, resetAt: nil)
+                            ],
+                            fetchedAt: Date(timeIntervalSince1970: 0)
+                        )
+                    )
+                ),
+                ProviderRowState(
+                    id: .codex,
+                    name: "Codex OAuth",
+                    nickname: "",
+                    functionName: "ccmcodex",
+                    connectionTitle: "Connected",
+                    connectionDetail: "codex@example.com",
+                    isConnected: true,
+                    accountDetailHidden: false,
+                    subscriptionUsageState: .available(
+                        SubscriptionUsageSnapshot(
+                            profileID: "codex.json",
+                            provider: .codex,
+                            windows: [UsageWindow(id: "primary", label: "Primary", usedPercent: 60, resetAt: nil)],
+                            fetchedAt: Date(timeIntervalSince1970: 0)
+                        )
+                    )
+                )
+            ]
+        )
+
+        let windowIDs = snapshot.connectedProviders.map { provider -> [String] in
+            guard case let .available(usage) = provider.subscriptionUsageState else { return [] }
+            return usage.windows.map(\.id)
+        }
+        XCTAssertEqual(windowIDs, [["five_hour", "seven_day"], ["primary"]])
+    }
+
+    func testSnapshotPreservesAvailableUsageWithNoWindowsForFallbackRendering() {
+        let snapshot = MenuBarStatusSnapshot(
+            serverStatus: DiagnosticStatus(severity: .ready, title: "CLIProxyAPI Running", message: "Ready"),
+            providers: [
+                ProviderRowState(
+                    id: .claude,
+                    name: "Claude OAuth",
+                    nickname: "",
+                    functionName: "ccm",
+                    connectionTitle: "Connected",
+                    connectionDetail: "claude@example.com",
+                    isConnected: true,
+                    accountDetailHidden: false,
+                    subscriptionUsageState: .available(
+                        SubscriptionUsageSnapshot(
+                            profileID: "claude.json",
+                            provider: .claude,
+                            windows: [],
+                            fetchedAt: Date(timeIntervalSince1970: 0)
+                        )
+                    )
+                )
+            ]
+        )
+
+        guard case let .available(usage)? = snapshot.connectedProviders.first?.subscriptionUsageState else {
+            return XCTFail("Expected available subscription usage")
+        }
+        XCTAssertTrue(usage.windows.isEmpty)
+    }
+
+    func testProxyUnavailableUsageStateIsHiddenBeforeServerStarts() {
+        let snapshot = MenuBarStatusSnapshot(
+            serverStatus: DiagnosticStatus(severity: .warning, title: "CLIProxyAPI Stopped", message: "Stopped"),
+            providers: [
+                ProviderRowState(
+                    id: .claude,
+                    name: "Claude OAuth",
+                    nickname: "",
+                    functionName: "ccm",
+                    connectionTitle: "Connected",
+                    connectionDetail: "claude@example.com",
+                    isConnected: true,
+                    accountDetailHidden: false,
+                    subscriptionUsageState: .unavailable(.proxyUnavailable)
+                )
+            ]
+        )
+
+        let provider = try! XCTUnwrap(snapshot.connectedProviders.first)
+        XCTAssertFalse(provider.subscriptionUsageState.shouldDisplayInMenuBar)
+    }
+
     func testUsageProgressToneThresholds() {
         XCTAssertEqual(subscriptionUsageProgressTone(for: 0), .normal)
         XCTAssertEqual(subscriptionUsageProgressTone(for: 49.9), .normal)
@@ -99,6 +239,35 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
         XCTAssertTrue(label.contains("5h"))
         XCTAssertTrue(label.contains("52"))
         XCTAssertTrue(label.contains("resets"))
+    }
+
+    func testSnapshotExcludesDisabledConnectedProviders() {
+        let snapshot = MenuBarStatusSnapshot(
+            serverStatus: DiagnosticStatus(severity: .ready, title: "CLIProxyAPI Running", message: "Ready"),
+            providers: [
+                ProviderRowState(
+                    id: .claude,
+                    name: "Claude OAuth",
+                    nickname: "",
+                    functionName: "ccm",
+                    connectionTitle: "Connected",
+                    connectionDetail: "claude@example.com",
+                    isConnected: true,
+                    isDisabled: true
+                ),
+                ProviderRowState(
+                    id: .codex,
+                    name: "Codex OAuth",
+                    nickname: "",
+                    functionName: "ccmcodex",
+                    connectionTitle: "Connected",
+                    connectionDetail: "codex@example.com",
+                    isConnected: true
+                )
+            ]
+        )
+
+        XCTAssertEqual(snapshot.connectedProviders.map(\.id), [.codex])
     }
 
     func testSnapshotShowsEmptyMessageWhenNoProviderIsConnected() {

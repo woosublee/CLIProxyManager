@@ -3,6 +3,10 @@
 **작성일:** 2026-07-11  
 **상태:** 승인됨 — 구현 계획 작성 전 검토 대기
 
+## 저장소 정책 대체 결정 (2026-07-11)
+
+> 이 문서의 기존 Keychain 저장·삭제 설명은 더 이상 현재 구현을 나타내지 않는다. Subscription Usage management key의 유일한 권위 저장소는 `ManagedPaths` root 아래의 `subscription-usage-management-key.json` 파일이며, release에서는 `~/.cliproxy-manager/`, debug에서는 `~/.cliproxy-manager/dev/` 아래에 위치한다. 파일과 임시 파일은 소유자 전용 `0600` 권한을 사용한다. 기존 Keychain 항목은 인증 prompt 재발을 막기 위해 읽기·마이그레이션·자동 삭제하지 않고 의도적으로 orphaned 상태로 둔다. Claude API key Keychain 저장은 범위 밖이며 변경하지 않는다.
+
 ## 배경
 
 CLIProxyManager의 Experimental Subscription Usage 기능은 Claude 및 Codex OAuth 계정의 사용량을 CLIProxyAPI 로컬 관리 API를 통해 조회한다. 기존 구현은 사용자가 Management key를 직접 만들고 저장해야 하며, 메뉴바를 열 때마다 사용량을 즉시 다시 조회한다. 이 때문에 다음 문제가 있다.

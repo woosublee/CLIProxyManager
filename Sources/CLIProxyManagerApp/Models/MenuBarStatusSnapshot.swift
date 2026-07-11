@@ -8,6 +8,14 @@ struct MenuBarConnectedProvider: Equatable, Identifiable {
     let connectionDetail: String
     let accountDetailHidden: Bool
     let subscriptionUsageState: AccountSubscriptionUsageState
+
+    var menuBarDisplayName: String {
+        accountDetailHidden ? name : displayName
+    }
+
+    var menuBarConnectionDetail: String? {
+        accountDetailHidden ? nil : connectionDetail
+    }
 }
 
 struct MenuBarStatusSnapshot: Equatable {
@@ -44,6 +52,7 @@ struct MenuBarStatusSnapshot: Equatable {
         endpointTitle = isServerRunning ? "localhost:\(port)" : nil
         connectedProviders = providers
             .filter(\.isConnected)
+            .filter { !$0.isDisabled }
             .map { provider in
                 MenuBarConnectedProvider(
                     id: provider.id,

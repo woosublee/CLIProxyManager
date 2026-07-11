@@ -56,7 +56,7 @@ public struct CLIProxyAPISubscriptionQuotaClient: SubscriptionQuotaFetching {
 
     public init() {
         self.init(
-            keyStore: SubscriptionUsageManagementKeyStore(),
+            keyStore: SubscriptionUsageManagementKeyFileStore(),
             transport: URLSessionSubscriptionUsageHTTPTransport(),
             now: { Date() }
         )
@@ -300,7 +300,13 @@ public struct CLIProxyAPISubscriptionQuotaClient: SubscriptionQuotaFetching {
         ]
         let windows = try specs.compactMap { key, label -> UsageWindow? in
             guard let raw = object[key] as? [String: Any] else { return nil }
-            if key == "extra_usage", let enabled = raw["is_enabled"] as? Bool, !enabled { return nil }
+            if key == "extra_usage" {
+                if let enabled = raw["is_enabled"] as? Bool, !enabled { return nil }
+                guard let utilization = number(raw["utilization"]), (0...100).contains(utilization) else {
+                    return nil
+                }
+                return UsageWindow(id: key, label: label, usedPercent: utilization, resetAt: try resetDate(raw["resets_at"]))
+            }
             guard let utilization = number(raw["utilization"]), (0...100).contains(utilization) else {
                 throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "Invalid utilization"))
             }
@@ -330,7 +336,7 @@ public struct CLIProxyAPISubscriptionQuotaClient: SubscriptionQuotaFetching {
     }
 
     private func resetDate(_ value: Any?) throws -> Date? {
-        guard let value else { return nil }
+        guard let value, !(value is NSNull) else { return nil }
         if let seconds = number(value) {
             return Date(timeIntervalSince1970: seconds)
         }

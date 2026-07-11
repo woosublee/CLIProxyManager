@@ -7,6 +7,16 @@ struct MenuBarStatusView: View {
     let openMain: () -> Void
     let openSettings: () -> Void
     let quit: () -> Void
+    @State private var refreshAgeReferenceDate = Date()
+
+    private var subscriptionUsageRefreshAgeLabel: String? {
+        guard let refreshedAt = viewModel.lastSuccessfulSubscriptionUsageRefreshAt else { return nil }
+        let elapsed = max(0, refreshAgeReferenceDate.timeIntervalSince(refreshedAt))
+        let minutes = Int(elapsed / 60)
+        if minutes == 0 { return "now" }
+        if minutes < 60 { return "\(minutes)m ago" }
+        return "\(minutes / 60)h ago"
+    }
 
     private var snapshot: MenuBarStatusSnapshot {
         MenuBarStatusSnapshot(
@@ -25,6 +35,17 @@ struct MenuBarStatusView: View {
                 .padding(.bottom, 10)
 
             menuSeparator
+
+            MenuItemRow(
+                icon: "arrow.clockwise",
+                label: "Reload usage",
+                trailing: subscriptionUsageRefreshAgeLabel,
+                disabled: !viewModel.canRefreshSubscriptionUsage || viewModel.isSubscriptionUsageRefreshInProgress
+            ) {
+                Task {
+                    await viewModel.refreshSubscriptionUsage(force: true)
+                }
+            }
 
             MenuItemRow(
                 icon: snapshot.isServerRunning ? "stop.fill" : "play.fill",
@@ -52,8 +73,19 @@ struct MenuBarStatusView: View {
         }
         .padding(.vertical, 5)
         .frame(width: AppWindowMetrics.menuBarWidth)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(MenuBarWindowBridge())
+        .onAppear {
+            refreshAgeReferenceDate = Date()
+        }
         .task {
             await viewModel.refresh()
+        }
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 60_000_000_000)
+                refreshAgeReferenceDate = Date()
+            }
         }
     }
 
@@ -138,18 +170,23 @@ private struct MenuBarAccountRow: View {
         HStack(alignment: .top, spacing: 9) {
             ProviderAvatar(providerID: provider.id, size: 22)
             VStack(alignment: .leading, spacing: 3) {
-                Text(provider.displayName)
-                    .font(.system(size: 12.5, weight: .semibold))
-                Text(provider.connectionDetail)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .layoutPriority(1)
-                Text(verbatim: "$ \(provider.functionName)")
-                    .font(.system(size: 10.5, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
+                HStack(spacing: 5) {
+                    Text(provider.menuBarDisplayName)
+                        .font(.system(size: 12.5, weight: .semibold))
+                    Text(verbatim: "$ \(provider.functionName)")
+                        .font(.system(size: 10.5, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                if let connectionDetail = provider.menuBarConnectionDetail {
+                    Text(connectionDetail)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .layoutPriority(1)
+                }
 
                 subscriptionUsage
             }
@@ -169,17 +206,18 @@ private struct MenuBarAccountRow: View {
             Text("Checking subscription usage…")
                 .font(.system(size: 10.5))
                 .foregroundStyle(.tertiary)
+        case .unavailable(.proxyUnavailable):
+            EmptyView()
         case .unavailable(let issue):
             Text("Usage unavailable — \(issue.message)")
                 .font(.system(size: 10.5))
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
         case .available(let snapshot):
-            if provider.accountDetailHidden {
-                Text("Subscription usage hidden")
+            if snapshot.windows.isEmpty {
+                Text("Usage details unavailable")
                     .font(.system(size: 10.5))
                     .foregroundStyle(.tertiary)
-                    .accessibilityLabel("Subscription usage hidden")
             } else {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(snapshot.windows) { window in
@@ -197,6 +235,8 @@ private struct MenuBarAccountRow: View {
                 ProgressView(value: percent, total: 100)
                     .tint(subscriptionUsageProgressTone(for: percent).color)
                     .accessibilityLabel(subscriptionUsageAccessibilityLabel(for: window))
+                    .frame(minWidth: 96, maxWidth: .infinity)
+                    .layoutPriority(1)
                 Text("\(Int(percent.rounded()))%")
                     .frame(width: 34, alignment: .trailing)
             }
@@ -216,6 +256,7 @@ private struct MenuBarAccountRow: View {
 private struct MenuItemRow: View {
     let icon: String?
     let label: String
+    var trailing: String? = nil
     var shortcut: String? = nil
     var disabled: Bool = false
     let action: () -> Void
@@ -241,6 +282,12 @@ private struct MenuItemRow: View {
                     .foregroundStyle(hovering ? Color.white : Color.primary)
 
                 Spacer(minLength: 4)
+
+                if let trailing {
+                    Text(trailing)
+                        .font(.system(size: 10.5, design: .monospaced))
+                        .foregroundStyle(hovering ? Color.white.opacity(0.85) : Color.secondary)
+                }
 
                 if let shortcut {
                     Text(shortcut)

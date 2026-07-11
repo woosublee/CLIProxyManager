@@ -85,7 +85,7 @@ public enum AccountSubscriptionUsageState: Equatable, Sendable {
 
     public var shouldDisplayInMenuBar: Bool {
         switch self {
-        case .disabled, .managementKeyNotConfigured:
+        case .disabled, .managementKeyNotConfigured, .unavailable(.proxyUnavailable):
             false
         case .loading, .available, .unavailable:
             true

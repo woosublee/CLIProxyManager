@@ -71,7 +71,7 @@ public struct CLIProxyManagerCommand: Sendable {
         },
         output: any CLICommandOutputWriting = TerminalCommandOutput(),
         subscriptionQuotaClient: any SubscriptionQuotaFetching = CLIProxyAPISubscriptionQuotaClient(),
-        subscriptionUsageKeyStore: any SubscriptionUsageManagementKeyConfiguring = SubscriptionUsageManagementKeyStore()
+        subscriptionUsageKeyStore: any SubscriptionUsageManagementKeyConfiguring = SubscriptionUsageManagementKeyFileStore()
     ) {
         self.secretStore = secretStore
         self.configStore = configStore
@@ -107,7 +107,7 @@ public struct CLIProxyManagerCommand: Sendable {
         proxyUpdater: any ProxyUpdating = ProxyUpdateService(),
         appUpdater: any AppUpdating = AppUpdateService(),
         subscriptionQuotaClient: any SubscriptionQuotaFetching = CLIProxyAPISubscriptionQuotaClient(),
-        subscriptionUsageKeyStore: any SubscriptionUsageManagementKeyConfiguring = SubscriptionUsageManagementKeyStore(),
+        subscriptionUsageKeyStore: any SubscriptionUsageManagementKeyConfiguring = SubscriptionUsageManagementKeyFileStore(),
         currentUID: @escaping @Sendable () -> uid_t = { geteuid() }
     ) {
         self.secretStore = secretStore
