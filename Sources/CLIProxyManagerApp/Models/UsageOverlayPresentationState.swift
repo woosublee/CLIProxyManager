@@ -22,12 +22,17 @@ func usageOverlayModeAnimation(reduceMotion: Bool) -> Animation? {
 }
 
 struct CompactUsageMeasurementState {
+    static let estimatedHeight: CGFloat = 120
     private(set) var height: CGFloat = 0
 
     mutating func record(height newHeight: CGFloat) -> Bool {
         guard newHeight > 0, abs(newHeight - height) > 0.5 else { return false }
         height = newHeight
         return true
+    }
+
+    func viewportHeight(maximumHeight: CGFloat) -> CGFloat {
+        min(height > 0 ? height : Self.estimatedHeight, maximumHeight)
     }
 }
 

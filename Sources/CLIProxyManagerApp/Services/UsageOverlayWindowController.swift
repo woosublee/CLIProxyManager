@@ -71,6 +71,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     private let persistDisplayMode: (AppConfig.UsageOverlay.DisplayMode) -> Bool
     private let shouldReduceMotion: () -> Bool
     private let visibleFrameProvider: () -> CGRect?
+    private let screenVisibleFrameProvider: () -> CGRect?
     private struct PersistenceTransaction {
         let generation: Int
         let target: AppConfig.UsageOverlay.DisplayMode
@@ -91,9 +92,11 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     private var resizeCoordinator = UsageOverlayResizeCoordinator()
     private var configObservation: AnyCancellable?
     private var contentObservation: AnyCancellable?
+    private var screenParametersObservation: NSObjectProtocol?
 
     @Published private(set) var isVisible = false
     var displayMode: AppConfig.UsageOverlay.DisplayMode { presentationState.displayMode }
+    var compactAccountMaximumHeight: CGFloat { presentationState.compactAccountMaximumHeight }
     var window: NSWindow { panel }
 
     init(
@@ -105,13 +108,15 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         shouldReduceMotion: @escaping () -> Bool = {
             NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         },
-        visibleFrameProvider: (() -> CGRect?)? = nil
+        visibleFrameProvider: (() -> CGRect?)? = nil,
+        screenVisibleFrameProvider: (() -> CGRect?)? = nil
     ) {
         let suppliedPanelFrame = panel?.frame
         let mode = initialDisplayMode ?? viewModel?.config.usageOverlay.displayMode ?? .expanded
         self.presentationState = UsageOverlayPresentationState(displayMode: mode)
         self.shouldReduceMotion = shouldReduceMotion
         self.visibleFrameProvider = visibleFrameProvider ?? { nil }
+        self.screenVisibleFrameProvider = screenVisibleFrameProvider ?? { nil }
         self.persistDisplayMode = persistDisplayMode ?? { [weak viewModel] mode in
             guard let viewModel else { return true }
             var usageOverlay = viewModel.config.usageOverlay
@@ -140,6 +145,21 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         )
         if let suppliedPanelFrame {
             self.panel.setFrame(suppliedPanelFrame, display: false)
+        }
+        screenParametersObservation = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.handleScreenGeometryChange()
+            }
+        }
+    }
+
+    deinit {
+        if let screenParametersObservation {
+            NotificationCenter.default.removeObserver(screenParametersObservation)
         }
     }
 
@@ -196,7 +216,8 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         transitionGeneration: Int?
     ) {
         guard let visibleFrame = currentVisibleFrame() else {
-            panel.setContentSize(size)
+            panel.setFrame(fallbackFrame(targetContentHeight: size.height), display: true)
+            resizeCoordinator.transitionCompletedWithoutAnimation(generation: transitionGeneration)
             return
         }
         let target = UsageOverlayFrameLayout.targetFrame(
@@ -272,6 +293,19 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         hideForCurrentSession()
         return false
+    }
+
+    func windowDidChangeScreen(_ notification: Notification) {
+        handleScreenGeometryChange()
+    }
+
+    func handleScreenGeometryChange() {
+        updatePanelConstraints(for: displayMode)
+        if let contentView = panel.contentView {
+            updateContentSize(contentView.fittingSize, animated: false)
+        } else {
+            updateContentSize(panel.frame.size, animated: false)
+        }
     }
 
     private func configurePanelAndContent(
@@ -356,8 +390,28 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
 
     private func currentVisibleFrame() -> CGRect? {
         visibleFrameProvider()
+            ?? screenVisibleFrameProvider()
             ?? panel.screen?.visibleFrame
             ?? NSScreen.main?.visibleFrame
+    }
+
+    private func fallbackFrame(targetContentHeight: CGFloat) -> CGRect {
+        let width = displayMode == .expanded
+            ? AppWindowMetrics.usageOverlayExpandedWidth
+            : AppWindowMetrics.usageOverlayCompactWidth
+        let minimumHeight = displayMode == .expanded
+            ? AppWindowMetrics.usageOverlayExpandedMinimumHeight
+            : 72
+        let height = min(
+            max(targetContentHeight, minimumHeight),
+            AppWindowMetrics.usageOverlayMaximumHeight
+        )
+        return CGRect(
+            x: panel.frame.maxX - width,
+            y: panel.frame.maxY - height,
+            width: width,
+            height: height
+        )
     }
 
     private func resizeToFittingContent(animated: Bool) {

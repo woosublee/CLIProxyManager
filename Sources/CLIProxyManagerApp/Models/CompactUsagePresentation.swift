@@ -2,11 +2,10 @@ import CLIProxyManagerCore
 import Foundation
 
 struct CompactUsageRowPresentation: Equatable, Identifiable {
+    let id: String
     let label: String
     let value: String
     let accessibilityLabel: String
-
-    var id: String { label }
 }
 
 enum CompactUsageIndicator: Equatable {
@@ -79,8 +78,18 @@ func compactUsagePresentation(
     case .unavailable(let issue):
         return .placeholder(
             "—",
-            indicator: .unavailable(message: issue.message)
+            indicator: compactUnavailableIndicator(for: issue)
         )
+    }
+}
+
+private func compactUnavailableIndicator(for issue: SubscriptionUsageIssue) -> CompactUsageIndicator {
+    switch issue {
+    case .proxyUnavailable, .managementAPINotSupported, .providerContractUnsupported, .unknownProvider:
+        .unavailable(message: issue.message)
+    case .managementKeyRejected, .credentialExpired, .credentialDisabled, .authFileNotMatched,
+         .schemaMismatch, .transientFailure:
+        .warning(message: issue.message)
     }
 }
 
@@ -101,6 +110,7 @@ private func compactSnapshotPresentation(
         let rounded = Int(percent.rounded())
         let label = subscriptionUsageDisplayLabel(for: window)
         return CompactUsageRowPresentation(
+            id: window.id,
             label: label,
             value: "\(rounded)%",
             accessibilityLabel: "\(label), \(rounded) percent used"

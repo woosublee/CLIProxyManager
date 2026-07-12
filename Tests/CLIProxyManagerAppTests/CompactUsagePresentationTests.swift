@@ -26,9 +26,9 @@ final class CompactUsagePresentationTests: XCTestCase {
         XCTAssertEqual(
             presentation.rows,
             [
-                .init(label: "5h", value: "0%", accessibilityLabel: "5h, 0 percent used"),
-                .init(label: "7d", value: "16%", accessibilityLabel: "7d, 16 percent used"),
-                .init(label: "1mo", value: "100%", accessibilityLabel: "1mo, 100 percent used")
+                CompactUsageRowPresentation(id: "primary", label: "5h", value: "0%", accessibilityLabel: "5h, 0 percent used"),
+                CompactUsageRowPresentation(id: "secondary", label: "7d", value: "16%", accessibilityLabel: "7d, 16 percent used"),
+                CompactUsageRowPresentation(id: "monthly", label: "1mo", value: "100%", accessibilityLabel: "1mo, 100 percent used")
             ]
         )
         XCTAssertNil(presentation.placeholder)
@@ -97,5 +97,49 @@ final class CompactUsagePresentationTests: XCTestCase {
         XCTAssertEqual(warning.message, "Needs attention")
         XCTAssertEqual(loading.symbolName, "clock.arrow.circlepath")
         XCTAssertEqual(loading.message, "Loading")
+    }
+
+    func testUnavailableIssuesUseExplicitAvailabilityAndWarningClassification() {
+        XCTAssertEqual(
+            compactUsagePresentation(for: .unavailable(.proxyUnavailable)).indicator,
+            .unavailable(message: "Local proxy is unavailable.")
+        )
+        XCTAssertEqual(
+            compactUsagePresentation(for: .unavailable(.credentialExpired)).indicator,
+            .warning(message: "Credential needs attention.")
+        )
+        XCTAssertEqual(
+            compactUsagePresentation(for: .unavailable(.transientFailure)).indicator,
+            .warning(message: "Usage could not be refreshed.")
+        )
+    }
+
+    func testDuplicateDisplayLabelsPreserveDistinctWindowIDs() {
+        let snapshot = SubscriptionUsageSnapshot(
+            profileID: "codex.json",
+            provider: .codex,
+            windows: [
+                UsageWindow(
+                    id: "monthly-a",
+                    label: "Monthly A",
+                    usedPercent: 10,
+                    resetAt: nil,
+                    limitWindowSeconds: 2_419_200
+                ),
+                UsageWindow(
+                    id: "monthly-b",
+                    label: "Monthly B",
+                    usedPercent: 20,
+                    resetAt: nil,
+                    limitWindowSeconds: 2_419_200
+                )
+            ],
+            fetchedAt: Date(timeIntervalSince1970: 60)
+        )
+
+        let rows = compactUsagePresentation(for: .available(snapshot)).rows
+
+        XCTAssertEqual(rows.map(\.label), ["1mo", "1mo"])
+        XCTAssertEqual(rows.map(\.id), ["monthly-a", "monthly-b"])
     }
 }

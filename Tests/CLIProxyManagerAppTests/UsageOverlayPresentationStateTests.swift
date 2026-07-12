@@ -37,4 +37,18 @@ final class UsageOverlayPresentationStateTests: XCTestCase {
         XCTAssertFalse(state.record(height: 180))
         XCTAssertTrue(state.record(height: 220))
     }
+
+    func testCompactViewportUsesStableEstimateUntilMeasurementIsReady() {
+        let state = CompactUsageMeasurementState()
+
+        XCTAssertEqual(state.viewportHeight(maximumHeight: 500), 120)
+    }
+
+    func testCompactViewportUsesMeasuredHeightAfterMeasurement() {
+        var state = CompactUsageMeasurementState()
+        XCTAssertTrue(state.record(height: 220))
+
+        XCTAssertEqual(state.viewportHeight(maximumHeight: 500), 220)
+        XCTAssertEqual(state.viewportHeight(maximumHeight: 180), 180)
+    }
 }

@@ -350,6 +350,62 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(panel.frame.minY, 16)
     }
 
+    func testScreenChangeRecomputesCompactViewportAndClampsPanel() async {
+        var visibleFrame = CGRect(x: 0, y: 0, width: 1440, height: 900)
+        let panel = makePanel(x: 1200, y: 700, width: 108, height: 600)
+        let controller = UsageOverlayWindowController(
+            panel: panel,
+            initialDisplayMode: .compact,
+            shouldReduceMotion: { true },
+            visibleFrameProvider: { visibleFrame }
+        )
+        let initialMaximum = controller.compactAccountMaximumHeight
+
+        visibleFrame = CGRect(x: 0, y: 0, width: 800, height: 500)
+        controller.handleScreenGeometryChange()
+        await drainMainQueue()
+
+        XCTAssertLessThan(controller.compactAccountMaximumHeight, initialMaximum)
+        XCTAssertLessThanOrEqual(panel.frame.maxX, 784)
+        XCTAssertLessThanOrEqual(panel.frame.maxY, 484)
+    }
+
+    func testNilVisibleFrameUsesCompactMetricsAndCurrentAnchor() {
+        let panel = makePanel(x: 500, y: 400, width: 300, height: 260)
+        let originalAnchor = CGPoint(x: panel.frame.maxX, y: panel.frame.maxY)
+        let controller = UsageOverlayWindowController(
+            panel: panel,
+            initialDisplayMode: .compact,
+            shouldReduceMotion: { true },
+            visibleFrameProvider: { nil },
+            screenVisibleFrameProvider: { nil }
+        )
+
+        controller.updateContentSize(CGSize(width: 0, height: 1), animated: false)
+
+        XCTAssertEqual(panel.frame.size, CGSize(width: 108, height: 72))
+        XCTAssertEqual(panel.frame.maxX, originalAnchor.x)
+        XCTAssertEqual(panel.frame.maxY, originalAnchor.y)
+    }
+
+    func testNilVisibleFrameUsesExpandedMetricsAndCurrentAnchor() {
+        let panel = makePanel(x: 500, y: 400, width: 108, height: 72)
+        let originalAnchor = CGPoint(x: panel.frame.maxX, y: panel.frame.maxY)
+        let controller = UsageOverlayWindowController(
+            panel: panel,
+            initialDisplayMode: .expanded,
+            shouldReduceMotion: { true },
+            visibleFrameProvider: { nil },
+            screenVisibleFrameProvider: { nil }
+        )
+
+        controller.updateContentSize(CGSize(width: 0, height: 1), animated: false)
+
+        XCTAssertEqual(panel.frame.size, CGSize(width: 300, height: 260))
+        XCTAssertEqual(panel.frame.maxX, originalAnchor.x)
+        XCTAssertEqual(panel.frame.maxY, originalAnchor.y)
+    }
+
     private func drainMainQueue() async {
         await withCheckedContinuation { continuation in
             DispatchQueue.main.async {

@@ -5,7 +5,6 @@ struct CompactUsageOverlayView: View {
     let providers: [MenuBarConnectedProvider]
     let maximumAccountHeight: CGFloat
     var onMeasurementChange: () -> Void = {}
-    @State private var naturalAccountHeight: CGFloat = 1
     @State private var measurementState = CompactUsageMeasurementState()
 
     var body: some View {
@@ -45,7 +44,6 @@ struct CompactUsageOverlayView: View {
                 }
                 .onPreferenceChange(CompactAccountHeightPreferenceKey.self) { height in
                     let measuredHeight = max(1, height)
-                    naturalAccountHeight = measuredHeight
                     if measurementState.record(height: measuredHeight) {
                         onMeasurementChange()
                     }
@@ -55,11 +53,11 @@ struct CompactUsageOverlayView: View {
     }
 
     private var viewportHeight: CGFloat {
-        min(naturalAccountHeight, maximumAccountHeight)
+        measurementState.viewportHeight(maximumHeight: maximumAccountHeight)
     }
 
     private var needsScrolling: Bool {
-        naturalAccountHeight > maximumAccountHeight
+        measurementState.height > maximumAccountHeight
     }
 
     private var accountStack: some View {
