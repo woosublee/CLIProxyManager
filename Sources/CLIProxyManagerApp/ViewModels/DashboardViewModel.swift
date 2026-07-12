@@ -1365,6 +1365,9 @@ final class DashboardViewModel: ObservableObject {
                 try await restartProxyAndRefresh()
             } catch {
                 handleProxyConfigurationRestartFailure(error, reasons: reasons)
+                if !pendingProxyConfigurationRestartReasons.isEmpty {
+                    serverControlState = .running
+                }
             }
         }
         if !serverControlState.isRunning {
@@ -2065,6 +2068,30 @@ final class DashboardViewModel: ObservableObject {
         )
     }
 
+    private func codexFastConfiguration(from input: CodexFastConfigurationInput) throws -> CodexFastConfiguration {
+        var snapshotConfig = AppConfig.default
+        snapshotConfig.ccodex = input.oauth.first ?? AppConfig.default.ccodex
+        snapshotConfig.oauthCommandProfiles = input.oauth.enumerated().map { index, codex in
+            .init(
+                id: "fast-snapshot-oauth-\(index)",
+                provider: .codex,
+                authProfileID: "fast-snapshot-oauth-\(index).json",
+                codex: codex,
+                modelPrefix: "fast-snapshot-oauth-\(index)"
+            )
+        }
+        snapshotConfig.roundRobinProfiles = input.roundRobin.enumerated().map { index, codex in
+            .init(
+                id: "fast-snapshot-round-robin-\(index)",
+                provider: .codex,
+                isEnabled: true,
+                codex: codex
+            )
+        }
+        snapshotConfig.codexAPI.codex = input.apiKey
+        return try CodexFastConfiguration(config: snapshotConfig)
+    }
+
     private func saveConfig(
         _ updatedConfig: AppConfig,
         validateShellFunctions: Bool = false,
@@ -2077,9 +2104,13 @@ final class DashboardViewModel: ObservableObject {
         let updatedConfig = Self.persistedConfig(persistedConfig)
         let oldFastInput = codexFastConfigurationInput(config: config)
         let newFastInput = codexFastConfigurationInput(config: updatedConfig)
-        let fastConfigurationChanged = oldFastInput != newFastInput
-        if fastConfigurationChanged {
-            _ = try CodexFastConfiguration(config: updatedConfig)
+        let fastConfigurationChanged: Bool
+        if oldFastInput == newFastInput {
+            fastConfigurationChanged = false
+        } else {
+            let newFastConfiguration = try codexFastConfiguration(from: newFastInput)
+            let oldFastConfiguration = try? codexFastConfiguration(from: oldFastInput)
+            fastConfigurationChanged = oldFastConfiguration != newFastConfiguration
         }
         if validateShellFunctions {
             let activeNames = activeFunctionNames(in: updatedConfig)
@@ -2482,7 +2513,8 @@ final class DashboardViewModel: ObservableObject {
         try await proxyService.restart(port: config.port)
         await refreshUntilServerIsReady()
         guard serverStatus.severity == .ready else {
-            throw ProxyRestartReadinessError(message: serverStatus.message)
+            let message = serverStatus.message.isEmpty ? "Could not connect to the server." : serverStatus.message
+            throw ProxyRestartReadinessError(message: message)
         }
         serverControlState = .running
     }
