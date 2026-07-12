@@ -40,7 +40,7 @@ final class SettingsNavigationTests: XCTestCase {
     }
 
     func testCodexProviderSettingsUsesTallerSheetHeight() {
-        XCTAssertEqual(ProviderSettingsSheetMetrics.codexHeight, 700)
+        XCTAssertEqual(ProviderSettingsSheetMetrics.codexHeight, 720)
     }
 }
 

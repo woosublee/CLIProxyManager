@@ -176,6 +176,9 @@ private struct RoundRobinProviderSettingsCard: View {
     }
 
     private func saveCurrentSettings() {
+        if provider == .codex, let codex = state.profile.codex {
+            state.profile.codex = CodexRoleRoutingOptions.normalizedCodex(codex, options: codexModels)
+        }
         let didSave = viewModel.saveSetting { try viewModel.saveRoundRobinSettings(state) }
         if didSave {
             state = viewModel.roundRobinSettings(for: provider)

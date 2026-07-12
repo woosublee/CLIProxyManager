@@ -7,12 +7,20 @@ final class CodexRoleRoutingOptionsTests: XCTestCase {
         CodexModelOption(
             id: "gpt-5.5",
             supportedReasoning: [.low, .medium, .high, .xhigh],
-            defaultReasoning: .medium
+            defaultReasoning: .medium,
+            supportsFastMode: true
         ),
         CodexModelOption(
             id: "gpt-5.6-sol",
             supportedReasoning: [.low, .medium, .high, .xhigh, .max],
-            defaultReasoning: .low
+            defaultReasoning: .low,
+            supportsFastMode: false
+        ),
+        CodexModelOption(
+            id: "custom-model",
+            supportedReasoning: [.low, .medium],
+            defaultReasoning: .medium,
+            supportsFastMode: false
         )
     ]
 
@@ -39,7 +47,7 @@ final class CodexRoleRoutingOptionsTests: XCTestCase {
         XCTAssertEqual(
             CodexRoleRoutingOptions.reasoningValues(
                 currentReasoning: .xhigh,
-                model: "custom-model",
+                model: "unknown-model",
                 options: options
             ),
             [.auto, .xhigh]
@@ -47,7 +55,7 @@ final class CodexRoleRoutingOptionsTests: XCTestCase {
         XCTAssertEqual(
             CodexRoleRoutingOptions.reasoningValues(
                 currentReasoning: .auto,
-                model: "custom-model",
+                model: "unknown-model",
                 options: options
             ),
             [.auto]
@@ -87,21 +95,67 @@ final class CodexRoleRoutingOptionsTests: XCTestCase {
         XCTAssertEqual(
             CodexRoleRoutingOptions.normalizedReasoning(
                 currentReasoning: .max,
-                model: "custom-model",
+                model: "missing-model",
                 options: options
             ),
             .max
         )
     }
 
+    func testFastModeIsEnabledOnlyForSupportedModel() {
+        XCTAssertTrue(CodexRoleRoutingOptions.supportsFastMode(model: "gpt-5.5", options: options))
+        XCTAssertFalse(CodexRoleRoutingOptions.supportsFastMode(model: "custom-model", options: options))
+        XCTAssertFalse(CodexRoleRoutingOptions.supportsFastMode(model: "missing-model", options: options))
+    }
+
+    func testModelChangeNormalizesReasoningAndDisablesUnsupportedFastMode() {
+        let role = AppConfig.CodexRole(
+            model: "gpt-5.5",
+            reasoning: .xhigh,
+            contextWindow: .context1m,
+            fastModeEnabled: true
+        )
+
+        XCTAssertEqual(
+            CodexRoleRoutingOptions.normalizedRole(role, model: "custom-model", options: options),
+            AppConfig.CodexRole(
+                model: "custom-model",
+                reasoning: .medium,
+                contextWindow: .context1m,
+                fastModeEnabled: false
+            )
+        )
+    }
+
+    func testNormalizedCodexTurnsOffFastForUnsupportedAndUnknownModels() {
+        let codex = AppConfig.Codex(
+            opus: .init(model: "gpt-5.5", reasoning: .xhigh, contextWindow: .auto, fastModeEnabled: true),
+            sonnet: .init(model: "custom-model", reasoning: .medium, contextWindow: .auto, fastModeEnabled: true),
+            haiku: .init(model: "missing-model", reasoning: .low, contextWindow: .auto, fastModeEnabled: true)
+        )
+
+        let normalized = CodexRoleRoutingOptions.normalizedCodex(codex, options: options)
+
+        XCTAssertTrue(normalized.opus.fastModeEnabled)
+        XCTAssertFalse(normalized.sonnet.fastModeEnabled)
+        XCTAssertFalse(normalized.haiku.fastModeEnabled)
+    }
+
+    func testFastModeHelpTextMentionsSpeedAndUsage() {
+        XCTAssertEqual(
+            CodexRoleRoutingOptions.fastModeHelpText,
+            "Fast mode can be about 1.5× faster and may consume more usage or credits."
+        )
+    }
+
     func testModelIDsPreserveLegacyCurrentModelWithoutAddingRoutedModel() {
         XCTAssertEqual(
             CodexRoleRoutingOptions.modelIDs(currentModel: "legacy-model", options: options),
-            ["legacy-model", "gpt-5.5", "gpt-5.6-sol"]
+            ["legacy-model", "gpt-5.5", "gpt-5.6-sol", "custom-model"]
         )
         XCTAssertEqual(
             CodexRoleRoutingOptions.modelIDs(currentModel: "codex-work/gpt-5.5", options: options),
-            ["gpt-5.5", "gpt-5.6-sol"]
+            ["gpt-5.5", "gpt-5.6-sol", "custom-model"]
         )
     }
 }

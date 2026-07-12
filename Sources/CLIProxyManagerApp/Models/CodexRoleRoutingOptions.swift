@@ -2,8 +2,46 @@ import CLIProxyManagerCore
 import Foundation
 
 enum CodexRoleRoutingOptions {
+    static let fastModeHelpText = "Fast mode can be about 1.5× faster and may consume more usage or credits."
+
     static func modelIDs(currentModel: String, options: [CodexModelOption]) -> [String] {
-        ModelSelectionOptions.options(currentModel: currentModel, availableModels: options.map(\.id))
+        ModelSelectionOptions.options(
+            currentModel: CodexFastMode.canonicalModel(from: currentModel),
+            availableModels: options.map(\.id)
+        )
+    }
+
+    static func supportsFastMode(model: String, options: [CodexModelOption]) -> Bool {
+        options.first { $0.id == CodexFastMode.canonicalModel(from: model) }?.supportsFastMode == true
+    }
+
+    static func normalizedCodex(
+        _ codex: AppConfig.Codex,
+        options: [CodexModelOption]
+    ) -> AppConfig.Codex {
+        AppConfig.Codex(
+            opus: normalizedRole(codex.opus, model: codex.opus.model, options: options),
+            sonnet: normalizedRole(codex.sonnet, model: codex.sonnet.model, options: options),
+            haiku: normalizedRole(codex.haiku, model: codex.haiku.model, options: options)
+        )
+    }
+
+    static func normalizedRole(
+        _ role: AppConfig.CodexRole,
+        model: String,
+        options: [CodexModelOption]
+    ) -> AppConfig.CodexRole {
+        var updated = role
+        updated.model = CodexFastMode.canonicalModel(from: model)
+        updated.reasoning = normalizedReasoning(
+            currentReasoning: role.reasoning,
+            model: updated.model,
+            options: options
+        )
+        if !supportsFastMode(model: updated.model, options: options) {
+            updated.fastModeEnabled = false
+        }
+        return updated
     }
 
     static func reasoningValues(
