@@ -147,6 +147,21 @@ final class ShellFunctionRendererTests: XCTestCase {
         XCTAssertFalse(script.contains("'/opt/cliproxy-manager/bin/cliproxy-manager' secret get claude-api-key"))
     }
 
+    func testLegacyCodexCommandRendersRoleSpecificFastAlias() throws {
+        var config = configuredCommands()
+        config.ccodex = .init(
+            opus: .init(model: "gpt-5.6-sol", reasoning: .xhigh, contextWindow: .auto, fastModeEnabled: true),
+            sonnet: .init(model: "gpt-5.6-sol", reasoning: .medium, contextWindow: .auto),
+            haiku: .init(model: "gpt-5.5", reasoning: .auto, contextWindow: .auto, fastModeEnabled: true)
+        )
+
+        let script = try ShellFunctionRenderer(config: config, helperCommand: "/usr/local/bin/cpm").render()
+
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='gpt-5.6-sol-cpm-fast(xhigh)'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL='gpt-5.6-sol(medium)'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL='gpt-5.5-cpm-fast'"))
+    }
+
     func testRenderUsesMultipleOAuthCommandProfilesWithModelPrefixesAndCodexProfileMapping() throws {
         var config = configuredCommands()
         config.oauthCommandProfiles = [
@@ -454,6 +469,48 @@ final class ShellFunctionRendererTests: XCTestCase {
         XCTAssertTrue(function.contains("ANTHROPIC_DEFAULT_OPUS_MODEL=\"$ANTHROPIC_DEFAULT_OPUS_MODEL\""))
         XCTAssertFalse(function.contains("--dangerously-skip-permissions"))
         XCTAssertFalse(function.contains("ANTHROPIC_MODEL="))
+    }
+
+    func testCodexOAuthCommandPrefixesRoleSpecificFastAlias() throws {
+        var config = configuredCommands()
+        config.oauthCommandProfiles = [
+            .init(
+                id: "codex-work",
+                provider: .codex,
+                authProfileID: "codex-work.json",
+                commandName: "ccwork",
+                codex: .init(
+                    opus: .init(model: "gpt-5.6-sol", reasoning: .xhigh, contextWindow: .auto, fastModeEnabled: true),
+                    sonnet: .init(model: "gpt-5.5", reasoning: .medium, contextWindow: .auto),
+                    haiku: .init(model: "gpt-5.5", reasoning: .low, contextWindow: .auto)
+                ),
+                modelPrefix: "codex-work"
+            )
+        ]
+
+        let script = try ShellFunctionRenderer(config: config, helperCommand: "/usr/local/bin/cpm").render()
+
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='codex-work/gpt-5.6-sol-cpm-fast(xhigh)'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL='codex-work/gpt-5.5(medium)'"))
+    }
+
+    func testCodexAPICommandPrefixesFastAliasBeforeReasoning() throws {
+        var config = configuredCommands()
+        config.commands.ccodexapi = "ccodexapi"
+        config.codexAPI.codex.opus = .init(
+            model: "gpt-5.6-terra",
+            reasoning: .max,
+            contextWindow: .auto,
+            fastModeEnabled: true
+        )
+
+        let script = try ShellFunctionRenderer(
+            config: config,
+            helperCommand: "/usr/local/bin/cpm",
+            enabledFunctions: .init(claudeOAuth: false, codex: false, claudeAPI: false, codexAPI: true)
+        ).render()
+
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='cpm-codex-api/gpt-5.6-terra-cpm-fast(max)'"))
     }
 
     func testCodexAPICommandUsesItsOwnRoutingAndSkipFlag() throws {
