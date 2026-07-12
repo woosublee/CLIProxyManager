@@ -1634,6 +1634,42 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         ])
     }
 
+    func testRoundRobinCodexModelsKeepFirstDuplicateInsteadOfCrashing() async throws {
+        let first = CodexModelOption(id: "gpt-5.6", supportedReasoning: [.low, .high], defaultReasoning: .high)
+        let duplicate = CodexModelOption(id: "gpt-5.6", supportedReasoning: [.low], defaultReasoning: .low)
+        let modelClient = StubProxyModelClient(optionsByPrefix: [
+            "codex-work": [first],
+            "codex-personal": [first, duplicate]
+        ])
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            .init(id: "work", provider: .codex, authProfileID: "work.json", modelPrefix: "codex-work"),
+            .init(id: "personal", provider: .codex, authProfileID: "personal.json", modelPrefix: "codex-personal")
+        ]
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            modelClient: modelClient,
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "work.json", type: .codex, email: nil, accountID: nil, expired: nil, disabled: false, prefix: "codex-work"),
+                AuthProfile(fileName: "personal.json", type: .codex, email: nil, accountID: nil, expired: nil, disabled: false, prefix: "codex-personal")
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
+        )
+        let profile = AppConfig.RoundRobinProfile(
+            id: "codex-round-robin",
+            provider: .codex,
+            includedAuthProfileIDs: ["work.json", "personal.json"]
+        )
+
+        let models = try await viewModel.codexModels(forRoundRobinProfile: profile)
+
+        XCTAssertEqual(models, [first])
+    }
+
     func testCodexModelsForProviderUsesCommandProfileModelPrefix() async throws {
         var config = AppConfig.default
         config.oauthCommandProfiles = [

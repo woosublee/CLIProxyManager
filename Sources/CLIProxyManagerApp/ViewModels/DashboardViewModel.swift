@@ -1600,7 +1600,10 @@ final class DashboardViewModel: ObservableObject {
 
         for prefix in prefixes.dropFirst() {
             let next = try await modelClient.codexModelOptions(port: config.port, modelPrefix: prefix)
-            let nextByID = Dictionary(uniqueKeysWithValues: next.map { ($0.id, $0) })
+            let nextByID = Dictionary(
+                next.map { ($0.id, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
             common = common.compactMap { current in
                 guard let other = nextByID[current.id] else { return nil }
                 let supported = current.supportedReasoning.filter(other.supportedReasoning.contains)
