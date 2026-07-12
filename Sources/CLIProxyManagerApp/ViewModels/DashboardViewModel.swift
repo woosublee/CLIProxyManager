@@ -1627,7 +1627,8 @@ final class DashboardViewModel: ObservableObject {
                 return CodexModelOption(
                     id: current.id,
                     supportedReasoning: supported,
-                    defaultReasoning: defaultReasoning
+                    defaultReasoning: defaultReasoning,
+                    supportsFastMode: current.supportsFastMode && other.supportsFastMode
                 )
             }
         }

@@ -24,7 +24,12 @@ public struct CodexModelOption: Equatable, Sendable {
         self.id = canonicalID
         self.supportedReasoning = supportedReasoning
         self.defaultReasoning = defaultReasoning
-        self.supportsFastMode = supportsFastMode
-            ?? Self.fastModeFallbackModels.contains(canonicalID.lowercased())
+        self.supportsFastMode = supportsFastMode ?? Self.supportsFastModeFallback(for: canonicalID)
+    }
+
+    static func supportsFastModeFallback(for id: String) -> Bool {
+        let canonicalID = CodexFastMode.canonicalModel(from: id)
+        let unprefixedID = canonicalID.split(separator: "/").last.map(String.init) ?? canonicalID
+        return fastModeFallbackModels.contains(unprefixedID.lowercased())
     }
 }

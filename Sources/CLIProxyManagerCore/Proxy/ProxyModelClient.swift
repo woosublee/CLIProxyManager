@@ -94,7 +94,7 @@ public struct ProxyModelClient: Sendable {
                 supportedReasoning: supported,
                 defaultReasoning: defaultReasoning.flatMap { supported.contains($0) ? $0 : nil },
                 supportsFastMode: metadataSupportsFast
-                    || CodexModelOption.fastModeFallbackModels.contains(id.lowercased())
+                    || CodexModelOption.supportsFastModeFallback(for: id)
             )
         }
     }

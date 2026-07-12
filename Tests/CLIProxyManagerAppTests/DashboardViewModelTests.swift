@@ -1682,11 +1682,11 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     func testRoundRobinCodexModelsIntersectModelsAndReasoningCapabilities() async throws {
         let modelClient = StubProxyModelClient(optionsByPrefix: [
             "codex-work": [
-                CodexModelOption(id: "gpt-5.6-sol", supportedReasoning: [.low, .medium, .high, .xhigh, .max], defaultReasoning: .low),
+                CodexModelOption(id: "gpt-5.6-sol", supportedReasoning: [.low, .medium, .high, .xhigh, .max], defaultReasoning: .low, supportsFastMode: true),
                 CodexModelOption(id: "gpt-5.5", supportedReasoning: [.low, .medium, .high, .xhigh], defaultReasoning: .medium)
             ],
             "codex-personal": [
-                CodexModelOption(id: "gpt-5.6-sol", supportedReasoning: [.low, .medium, .high, .xhigh], defaultReasoning: .medium)
+                CodexModelOption(id: "gpt-5.6-sol", supportedReasoning: [.low, .medium, .high, .xhigh], defaultReasoning: .medium, supportsFastMode: false)
             ]
         ])
         var config = AppConfig.default
@@ -1719,7 +1719,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             CodexModelOption(
                 id: "gpt-5.6-sol",
                 supportedReasoning: [.low, .medium, .high, .xhigh],
-                defaultReasoning: .medium
+                defaultReasoning: .medium,
+                supportsFastMode: false
             )
         ])
     }
