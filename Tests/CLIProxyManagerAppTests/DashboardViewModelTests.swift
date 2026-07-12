@@ -1466,6 +1466,127 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(proxyService.restartPorts, [config.port])
     }
 
+    func testFastChangeDuringRestartDrainsNextGeneration() async throws {
+        var config = AppConfig.default
+        config.commands.ccodex = "ccodex"
+        let proxyService = StubProxyServiceStarter(
+            suspendedRestartCount: 1,
+            startDelayNanoseconds: 50_000_000
+        )
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            serverStatusRetryDelayNanoseconds: 0
+        )
+
+        let startTask = Task { await viewModel.startServer() }
+        for _ in 0..<100 where !viewModel.isServerActionInProgress { await Task.yield() }
+        try viewModel.saveClaudeAPISettings(
+            functionName: "ccapi",
+            dangerousPermissionsEnabled: false,
+            key: "new-key"
+        )
+        await proxyService.waitForRestartCount(1)
+        var codex = config.ccodex
+        codex.opus.fastModeEnabled = true
+        try viewModel.saveCodexSettings(functionName: "ccodex", codex: codex)
+        proxyService.releaseRestart(1)
+        await startTask.value
+        await proxyService.waitForRestartCount(2)
+
+        XCTAssertEqual(proxyService.restartPorts, [config.port, config.port])
+        XCTAssertNil(viewModel.settingsMessage)
+    }
+
+    func testFastChangeDuringFailingAPIKeyRestartShowsFastFailureAndClearsPending() async throws {
+        var config = AppConfig.default
+        config.commands.ccodex = "ccodex"
+        let proxyService = StubProxyServiceStarter(
+            restartErrors: [
+                NSError(domain: "APIKey", code: 1, userInfo: [NSLocalizedDescriptionKey: "API key restart failed"]),
+                NSError(domain: "FastMode", code: 2, userInfo: [NSLocalizedDescriptionKey: "Fast restart failed"])
+            ],
+            suspendedRestartCount: 1,
+            startDelayNanoseconds: 50_000_000
+        )
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            settingsMessageAutoClearDelayNanoseconds: 60_000_000_000
+        )
+
+        let startTask = Task { await viewModel.startServer() }
+        for _ in 0..<100 where !viewModel.isServerActionInProgress { await Task.yield() }
+        try viewModel.saveClaudeAPISettings(
+            functionName: "ccapi",
+            dangerousPermissionsEnabled: false,
+            key: "new-key"
+        )
+        await proxyService.waitForRestartCount(1)
+        var codex = config.ccodex
+        codex.opus.fastModeEnabled = true
+        try viewModel.saveCodexSettings(functionName: "ccodex", codex: codex)
+        proxyService.releaseRestart(1)
+        await startTask.value
+        await proxyService.waitForRestartCount(2)
+        for _ in 0..<100 where viewModel.settingsMessage == nil { await Task.yield() }
+
+        XCTAssertEqual(
+            viewModel.settingsMessage,
+            "Fast mode settings were saved, but CLIProxyAPI could not restart: Fast restart failed"
+        )
+        XCTAssertEqual(viewModel.serverStatus.severity, .error)
+        XCTAssertEqual(viewModel.serverStatus.title, "Failed to restart CLIProxyAPI")
+        XCTAssertEqual(viewModel.cards.first { $0.command == config.commands.ccodex }?.status.severity, .error)
+    }
+
+    func testFastRestartReadinessFailureShowsSettingsMessage() async throws {
+        var config = AppConfig.default
+        config.commands.ccodex = "ccodex"
+        let proxyService = StubProxyServiceStarter()
+        let healthClient = ProxyHealthClient(
+            httpClient: StubHTTPClient(result: .failure(URLError(.cannotConnectToHost))),
+            timeout: 0.1
+        )
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyHealthClient: healthClient,
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            serverStatusRetryDelayNanoseconds: 0,
+            settingsMessageAutoClearDelayNanoseconds: 60_000_000_000
+        )
+        viewModel.serverControlState = .running
+        var codex = config.ccodex
+        codex.opus.fastModeEnabled = true
+
+        try viewModel.saveCodexSettings(functionName: "ccodex", codex: codex)
+        await waitForRestart(proxyService)
+        for _ in 0..<100 where viewModel.settingsMessage == nil { await Task.yield() }
+
+        XCTAssertEqual(
+            viewModel.settingsMessage,
+            "Fast mode settings were saved, but CLIProxyAPI could not restart: Could not connect to the server."
+        )
+        XCTAssertEqual(viewModel.serverStatus.severity, .error)
+        XCTAssertEqual(viewModel.serverStatus.title, "Failed to restart CLIProxyAPI")
+    }
+
     func testFastRestartFailureKeepsSavedConfigAndShowsSettingsMessage() async throws {
         var config = AppConfig.default
         config.commands.ccodex = "ccodex"
@@ -1496,6 +1617,114 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             viewModel.settingsMessage,
             "Fast mode settings were saved, but CLIProxyAPI could not restart: Restart failed"
         )
+    }
+
+    func testSavingCodexAPISettingsWithoutKeyOrFastChangeDoesNotRestart() async throws {
+        var config = AppConfig.default
+        config.commands.ccodexapi = "ccodexapi"
+        let proxyService = StubProxyServiceStarter()
+        let secretStore = InMemorySecretStore(values: [.codexAPIKey: "existing-key"])
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: secretStore
+        )
+        viewModel.serverControlState = .running
+        var codex = config.codexAPI.codex
+        codex.opus.reasoning = .high
+        codex.opus.contextWindow = .context400k
+
+        try viewModel.saveCodexAPISettings(
+            functionName: "ccodexapi",
+            codex: codex,
+            dangerousPermissionsEnabled: false,
+            key: nil
+        )
+        for _ in 0..<20 { await Task.yield() }
+
+        XCTAssertEqual(proxyService.restartPorts, [])
+    }
+
+    func testSavingClaudeAPISettingsWithoutKeyDoesNotRestart() async throws {
+        var config = AppConfig.default
+        config.commands.ccapi = "ccapi"
+        let proxyService = StubProxyServiceStarter()
+        let secretStore = InMemorySecretStore(values: [.claudeAPIKey: "existing-key"])
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: secretStore
+        )
+        viewModel.serverControlState = .running
+
+        try viewModel.saveClaudeAPISettings(
+            functionName: "ccapi",
+            nickname: "Work",
+            dangerousPermissionsEnabled: false,
+            key: nil
+        )
+        for _ in 0..<20 { await Task.yield() }
+
+        XCTAssertEqual(proxyService.restartPorts, [])
+    }
+
+    func testFastAliasRecoverySaveSucceedsWhenOldSnapshotIsInvalid() throws {
+        var config = AppConfig.default
+        config.commands.ccodex = "ccodex"
+        config.ccodex.opus = .init(
+            model: "gpt-5.6-sol-cpm-fast",
+            reasoning: .high,
+            contextWindow: .auto,
+            fastModeEnabled: true
+        )
+        let store = StubConfigStore(config: config)
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+        var repaired = config.ccodex
+        repaired.opus.model = "gpt-5.6-sol"
+
+        XCTAssertNoThrow(try viewModel.saveCodexSettings(functionName: "ccodex", codex: repaired))
+        XCTAssertEqual(store.savedConfigs.last?.ccodex.opus.model, "gpt-5.6-sol")
+    }
+
+    func testUnrelatedSaveSucceedsWhenExistingFastSnapshotIsInvalid() throws {
+        var config = AppConfig.default
+        config.ccodex.opus = .init(
+            model: "gpt-5.6-sol-cpm-fast",
+            reasoning: .high,
+            contextWindow: .auto,
+            fastModeEnabled: true
+        )
+        let store = StubConfigStore(config: config)
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        XCTAssertNoThrow(try viewModel.saveLogLevel(.debug))
+        XCTAssertEqual(store.savedConfigs.last?.logLevel, .debug)
     }
 
     func testCodexAPIModelsUseFixedAPIKeyRoutingPrefix() async throws {
@@ -1612,6 +1841,79 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         XCTAssertEqual(proxyService.ports, [viewModel.config.port])
         XCTAssertEqual(modelClient.claudePrefixRequests, [])
+    }
+
+    func testFastAndAPIKeyChangesDuringModelServerStartCoalesceIntoOneRestart() async throws {
+        var config = AppConfig.default
+        config.commands.ccodex = "ccodex"
+        let proxyService = StubProxyServiceStarter(startDelayNanoseconds: 50_000_000)
+        let modelClient = StubProxyModelClient(models: ["gpt-5.6-sol"])
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            modelClient: modelClient,
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore(),
+            serverStatusRetryDelayNanoseconds: 0
+        )
+
+        let modelTask = Task { await viewModel.refreshCodexModels() }
+        for _ in 0..<100 where !viewModel.isServerActionInProgress { await Task.yield() }
+        var codex = config.ccodex
+        codex.opus.fastModeEnabled = true
+        try viewModel.saveCodexSettings(functionName: "ccodex", codex: codex)
+        try viewModel.saveClaudeAPISettings(
+            functionName: "ccapi",
+            dangerousPermissionsEnabled: false,
+            key: "new-key"
+        )
+        await modelTask.value
+        await waitForRestart(proxyService)
+
+        XCTAssertEqual(proxyService.restartPorts, [config.port])
+    }
+
+    func testModelServerStartFailureClearsPendingConfigurationRestart() async throws {
+        var config = AppConfig.default
+        config.commands.ccodex = "ccodex"
+        let proxyService = StubProxyServiceStarter(
+            error: NSError(domain: "ModelStart", code: 1, userInfo: [NSLocalizedDescriptionKey: "Start failed"]),
+            startDelayNanoseconds: 50_000_000
+        )
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            modelClient: StubProxyModelClient(models: ["gpt-5.6-sol"]),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        let modelTask = Task { await viewModel.refreshCodexModels() }
+        for _ in 0..<100 where !viewModel.isServerActionInProgress { await Task.yield() }
+        var codex = config.ccodex
+        codex.opus.fastModeEnabled = true
+        try viewModel.saveCodexSettings(functionName: "ccodex", codex: codex)
+        await modelTask.value
+        viewModel.serverControlState = .running
+        try viewModel.saveClaudeAPISettings(
+            functionName: "ccapi",
+            nickname: "Updated",
+            dangerousPermissionsEnabled: false,
+            key: "new-key"
+        )
+        await waitForRestart(proxyService)
+        for _ in 0..<100 { await Task.yield() }
+
+        XCTAssertEqual(proxyService.restartPorts, [config.port])
+        XCTAssertNil(viewModel.settingsMessage)
     }
 
     func testRefreshCodexModelsStartsServerAndFetchesModels() async {
@@ -4274,12 +4576,17 @@ private final class StubProcessRunner: ProcessRunning, @unchecked Sendable {
 private final class StubProxyServiceStarter: ProxyServiceControlling, @unchecked Sendable {
     private let error: Error?
     private let restartError: Error?
+    private var restartErrors: [Error?]
+    private let suspendedRestartCount: Int
     private let startDelayNanoseconds: UInt64
     private let stopDelayNanoseconds: UInt64
     private let lock = NSLock()
     private var _ports: [Int] = []
     private var _restartPorts: [Int] = []
     private var _stopCount = 0
+    private var restartWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+    private var suspendedRestarts: [Int: CheckedContinuation<Void, Never>] = [:]
+    private var releasedRestarts: Set<Int> = []
 
     var ports: [Int] {
         lock.withLock { _ports }
@@ -4296,11 +4603,15 @@ private final class StubProxyServiceStarter: ProxyServiceControlling, @unchecked
     init(
         error: Error? = nil,
         restartError: Error? = nil,
+        restartErrors: [Error?] = [],
+        suspendedRestartCount: Int = 0,
         startDelayNanoseconds: UInt64 = 0,
         stopDelayNanoseconds: UInt64 = 0
     ) {
         self.error = error
         self.restartError = restartError
+        self.restartErrors = restartErrors
+        self.suspendedRestartCount = suspendedRestartCount
         self.startDelayNanoseconds = startDelayNanoseconds
         self.stopDelayNanoseconds = stopDelayNanoseconds
     }
@@ -4325,8 +4636,57 @@ private final class StubProxyServiceStarter: ProxyServiceControlling, @unchecked
         }
     }
 
+    func waitForRestartCount(_ expectedCount: Int) async {
+        if restartPorts.count >= expectedCount { return }
+        await withCheckedContinuation { continuation in
+            lock.withLock {
+                if _restartPorts.count >= expectedCount {
+                    continuation.resume()
+                } else {
+                    restartWaiters.append((expectedCount, continuation))
+                }
+            }
+        }
+    }
+
+    func releaseRestart(_ invocation: Int) {
+        let continuation = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            releasedRestarts.insert(invocation)
+            return suspendedRestarts.removeValue(forKey: invocation)
+        }
+        continuation?.resume()
+    }
+
     func restart(port: Int) async throws {
-        lock.withLock { _restartPorts.append(port) }
+        let invocation = lock.withLock { () -> Int in
+            _restartPorts.append(port)
+            let invocation = _restartPorts.count
+            let readyWaiters = restartWaiters.filter { invocation >= $0.0 }.map(\.1)
+            restartWaiters.removeAll { invocation >= $0.0 }
+            readyWaiters.forEach { $0.resume() }
+            return invocation
+        }
+        if invocation <= suspendedRestartCount {
+            let wasReleased = lock.withLock { releasedRestarts.contains(invocation) }
+            if !wasReleased {
+                await withCheckedContinuation { continuation in
+                    lock.withLock {
+                        if releasedRestarts.contains(invocation) {
+                            continuation.resume()
+                        } else {
+                            suspendedRestarts[invocation] = continuation
+                        }
+                    }
+                }
+            }
+        }
+        let invocationError = lock.withLock { () -> Error? in
+            guard !restartErrors.isEmpty else { return nil }
+            return restartErrors.removeFirst()
+        }
+        if let invocationError {
+            throw invocationError
+        }
         if let restartError {
             throw restartError
         }

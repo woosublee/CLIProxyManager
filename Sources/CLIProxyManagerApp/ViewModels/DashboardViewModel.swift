@@ -110,6 +110,18 @@ final class DashboardViewModel: ObservableObject {
         case fastMode
     }
 
+    private struct CodexFastConfigurationInput: Equatable {
+        let oauth: [AppConfig.Codex]
+        let roundRobin: [AppConfig.Codex]
+        let apiKey: AppConfig.Codex
+    }
+
+    private struct ProxyRestartReadinessError: LocalizedError {
+        let message: String
+
+        var errorDescription: String? { message }
+    }
+
     @Published var cards: [ProfileCard]
     @Published var serverStatus: DiagnosticStatus
     @Published var serverControlState: ServerControlState = .stopped
@@ -1243,11 +1255,17 @@ final class DashboardViewModel: ObservableObject {
             )
         }
         if let key {
-            try withAPIKeyTransaction(key: .claudeAPIKey, replacement: key, operation: saveSettings)
+            let credentialChanged = try withAPIKeyTransaction(
+                key: .claudeAPIKey,
+                replacement: key,
+                operation: saveSettings
+            )
+            if credentialChanged {
+                requestProxyConfigurationRestart(reason: .apiKey)
+            }
         } else {
             try saveSettings()
         }
-        requestProxyConfigurationRestart(reason: .apiKey)
     }
 
     func saveCodexAPISettings(
@@ -1272,11 +1290,17 @@ final class DashboardViewModel: ObservableObject {
             )
         }
         if let key {
-            try withAPIKeyTransaction(key: .codexAPIKey, replacement: key, operation: saveSettings)
+            let credentialChanged = try withAPIKeyTransaction(
+                key: .codexAPIKey,
+                replacement: key,
+                operation: saveSettings
+            )
+            if credentialChanged {
+                requestProxyConfigurationRestart(reason: .apiKey)
+            }
         } else {
             try saveSettings()
         }
-        requestProxyConfigurationRestart(reason: .apiKey)
     }
 
     private func saveAPIKey(_ value: String, for key: SecretKey) throws {
@@ -1291,8 +1315,10 @@ final class DashboardViewModel: ObservableObject {
         key: SecretKey,
         replacement: String?,
         operation: () throws -> Void
-    ) throws {
+    ) throws -> Bool {
         let previousValue = try? secretStore.get(key)
+        let normalizedReplacement = replacement?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let credentialChanged = normalizedReplacement != previousValue
         do {
             if let replacement {
                 try saveAPIKey(replacement, for: key)
@@ -1300,6 +1326,7 @@ final class DashboardViewModel: ObservableObject {
                 try secretStore.delete(key)
             }
             try operation()
+            return credentialChanged
         } catch {
             if let previousValue {
                 try? secretStore.set(previousValue, for: key)
@@ -1319,20 +1346,56 @@ final class DashboardViewModel: ObservableObject {
             return
         }
         pendingProxyConfigurationRestartReasons.insert(reason)
-        guard !isServerActionInProgress, !serverControlState.isTransitioning else { return }
-        guard proxyConfigurationRestartTask == nil else { return }
-        proxyConfigurationRestartTask = Task { await self.restartForPendingConfigurationChanges() }
+        schedulePendingProxyConfigurationRestartIfNeeded()
     }
 
     private func restartForPendingConfigurationChanges() async {
-        defer { proxyConfigurationRestartTask = nil }
-        guard !pendingProxyConfigurationRestartReasons.isEmpty else { return }
-        let reasons = pendingProxyConfigurationRestartReasons
-        pendingProxyConfigurationRestartReasons.removeAll()
+        defer {
+            proxyConfigurationRestartTask = nil
+            schedulePendingProxyConfigurationRestartIfNeeded()
+        }
+        await drainPendingProxyConfigurationRestarts()
+    }
 
-        await restartServer()
+    private func drainPendingProxyConfigurationRestarts() async {
+        while !pendingProxyConfigurationRestartReasons.isEmpty, serverControlState.isRunning {
+            let reasons = pendingProxyConfigurationRestartReasons
+            pendingProxyConfigurationRestartReasons.removeAll()
+            do {
+                try await restartProxyAndRefresh()
+            } catch {
+                handleProxyConfigurationRestartFailure(error, reasons: reasons)
+            }
+        }
+        if !serverControlState.isRunning {
+            pendingProxyConfigurationRestartReasons.removeAll()
+        }
+    }
 
-        if case .error(let message) = serverControlState, reasons.contains(.fastMode) {
+    private func schedulePendingProxyConfigurationRestartIfNeeded() {
+        guard proxyConfigurationRestartTask == nil,
+              !pendingProxyConfigurationRestartReasons.isEmpty,
+              serverControlState.isRunning,
+              !isServerActionInProgress,
+              !serverControlState.isTransitioning else { return }
+        proxyConfigurationRestartTask = Task { await self.restartForPendingConfigurationChanges() }
+    }
+
+    private func handleProxyConfigurationRestartFailure(
+        _ error: Error,
+        reasons: Set<ProxyConfigurationRestartReason>
+    ) {
+        let message = error.localizedDescription
+        updateStatuses(
+            serverStatus: DiagnosticStatus(
+                severity: .error,
+                title: "Failed to restart CLIProxyAPI",
+                message: message
+            ),
+            claudeStatus: nil
+        )
+        serverControlState = .error(message)
+        if reasons.contains(.fastMode) {
             settingsMessage = "Fast mode settings were saved, but CLIProxyAPI could not restart: \(message)"
         }
     }
@@ -1340,7 +1403,7 @@ final class DashboardViewModel: ObservableObject {
     func removeAPIProvider(_ provider: ProviderRowState.ID) {
         let key: SecretKey = provider == .codexAPI ? .codexAPIKey : .claudeAPIKey
         do {
-            try withAPIKeyTransaction(key: key, replacement: nil) {
+            let credentialChanged = try withAPIKeyTransaction(key: key, replacement: nil) {
                 var updatedConfig = config
                 if provider == .codexAPI {
                     updatedConfig.commands.ccodexapi = ""
@@ -1349,7 +1412,9 @@ final class DashboardViewModel: ObservableObject {
                 }
                 try saveConfig(updatedConfig, validateShellFunctions: true)
             }
-            requestProxyConfigurationRestart(reason: .apiKey)
+            if credentialChanged {
+                requestProxyConfigurationRestart(reason: .apiKey)
+            }
         } catch {
             settingsMessage = "API key removal failed: \(error.localizedDescription)"
         }
@@ -1526,11 +1591,25 @@ final class DashboardViewModel: ObservableObject {
         if serverControlState.isRunning { return true }
         guard !isServerActionInProgress else { return false }
         isServerActionInProgress = true
-        defer { isServerActionInProgress = false }
-        try await proxyService.start(port: config.port)
-        await refreshUntilServerIsReady()
-        serverControlState = serverStatus.severity == .ready ? .running : .stopped
-        return serverControlState.isRunning
+        serverControlState = .starting
+        defer {
+            isServerActionInProgress = false
+            schedulePendingProxyConfigurationRestartIfNeeded()
+        }
+        do {
+            try await proxyService.start(port: config.port)
+            await refreshUntilServerIsReady()
+            serverControlState = serverStatus.severity == .ready ? .running : .stopped
+            if serverControlState.isRunning {
+                await drainPendingProxyConfigurationRestarts()
+            } else {
+                pendingProxyConfigurationRestartReasons.removeAll()
+            }
+            return serverControlState.isRunning
+        } catch {
+            pendingProxyConfigurationRestartReasons.removeAll()
+            throw error
+        }
     }
 
     func loadCodexModels() async {
@@ -1965,6 +2044,27 @@ final class DashboardViewModel: ObservableObject {
         config.includeDangerouslySkipPermissions = false
     }
 
+    private func codexFastConfigurationInput(config: AppConfig) -> CodexFastConfigurationInput {
+        let oauth: [AppConfig.Codex]
+        if config.oauthCommandProfiles.isEmpty {
+            oauth = [config.ccodex]
+        } else {
+            oauth = config.oauthCommandProfiles.compactMap { profile in
+                guard profile.provider == .codex, profile.isEnabled else { return nil }
+                return profile.codex ?? config.ccodex
+            }
+        }
+        let roundRobin: [AppConfig.Codex] = config.roundRobinProfiles.compactMap { profile in
+            guard profile.provider == .codex, profile.isEnabled else { return nil }
+            return profile.codex ?? config.ccodex
+        }
+        return CodexFastConfigurationInput(
+            oauth: oauth,
+            roundRobin: roundRobin,
+            apiKey: config.codexAPI.codex
+        )
+    }
+
     private func saveConfig(
         _ updatedConfig: AppConfig,
         validateShellFunctions: Bool = false,
@@ -1975,9 +2075,12 @@ final class DashboardViewModel: ObservableObject {
             ? updatedConfig
             : removingUnavailableRoundRobinProfiles(from: updatedConfig)
         let updatedConfig = Self.persistedConfig(persistedConfig)
-        let oldFastConfiguration = try CodexFastConfiguration(config: config)
-        let newFastConfiguration = try CodexFastConfiguration(config: updatedConfig)
-        let fastConfigurationChanged = oldFastConfiguration != newFastConfiguration
+        let oldFastInput = codexFastConfigurationInput(config: config)
+        let newFastInput = codexFastConfigurationInput(config: updatedConfig)
+        let fastConfigurationChanged = oldFastInput != newFastInput
+        if fastConfigurationChanged {
+            _ = try CodexFastConfiguration(config: updatedConfig)
+        }
         if validateShellFunctions {
             let activeNames = activeFunctionNames(in: updatedConfig)
             try ShellCommandNameValidator.validate(activeNames)
@@ -2355,19 +2458,9 @@ final class DashboardViewModel: ObservableObject {
             }
             // After action completes, derive final state from the latest health.
             serverControlState = serverStatus.severity == .ready ? .running : .stopped
-            if !pendingProxyConfigurationRestartReasons.isEmpty, serverControlState.isRunning {
-                let reasons = pendingProxyConfigurationRestartReasons
-                pendingProxyConfigurationRestartReasons.removeAll()
-                do {
-                    try await restartProxyAndRefresh()
-                } catch {
-                    let message = error.localizedDescription
-                    serverControlState = .error(message)
-                    if reasons.contains(.fastMode) {
-                        settingsMessage = "Fast mode settings were saved, but CLIProxyAPI could not restart: \(message)"
-                    }
-                }
-            } else if !serverControlState.isRunning {
+            if serverControlState.isRunning {
+                await drainPendingProxyConfigurationRestarts()
+            } else {
                 pendingProxyConfigurationRestartReasons.removeAll()
             }
         } catch {
@@ -2388,7 +2481,10 @@ final class DashboardViewModel: ObservableObject {
     private func restartProxyAndRefresh() async throws {
         try await proxyService.restart(port: config.port)
         await refreshUntilServerIsReady()
-        serverControlState = serverStatus.severity == .ready ? .running : .stopped
+        guard serverStatus.severity == .ready else {
+            throw ProxyRestartReadinessError(message: serverStatus.message)
+        }
+        serverControlState = .running
     }
 
     private func stableServerStatus() async -> DiagnosticStatus {
