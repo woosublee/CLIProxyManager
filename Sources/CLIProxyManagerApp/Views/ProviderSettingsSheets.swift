@@ -62,6 +62,12 @@ enum CodexAPIModelOptions {
     }
 }
 
+enum CodexAPIInitialDefaults {
+    static func shouldApply(isConfigured: Bool, didApply: Bool) -> Bool {
+        !isConfigured && !didApply
+    }
+}
+
 enum CodexProviderModelLoadingPresentation {
     static func isRefreshDisabled(modelLoadingState: CodexModelLoadingState, isReloading: Bool) -> Bool {
         modelLoadingState.isLoading || isReloading
@@ -1155,6 +1161,7 @@ struct CodexAPIProviderSettingsSheet: View {
     @State private var dangerousPermissionsEnabled: Bool
     @State private var scopedAvailableModels: [CodexModelOption]
     @State private var isReloading = false
+    @State private var didApplyInitialDefaults = false
     @State private var apiKey = ""
     @State private var saveErrorMessage: String?
     @State private var commandNameCheckState: CommandNameCheckState = .checking
@@ -1327,10 +1334,14 @@ struct CodexAPIProviderSettingsSheet: View {
     }
 
     private func applyInitialDefaultsIfNeeded() {
-        guard !isConfigured, let defaultModel = preferredModel(scopedAvailableModels) else { return }
+        guard CodexAPIInitialDefaults.shouldApply(
+            isConfigured: isConfigured,
+            didApply: didApplyInitialDefaults
+        ), let defaultModel = preferredModel(scopedAvailableModels) else { return }
         opus.model = defaultModel
         sonnet.model = defaultModel
         haiku.model = defaultModel
+        didApplyInitialDefaults = true
     }
 
     private func applyDefaultModel(from models: [CodexModelOption]) {

@@ -704,7 +704,7 @@ public struct CLIProxyManagerCommand: Sendable {
             prefix = "cpm-claude-api"
             routing = config.ccapi.claude
         } else if target == "--legacy" {
-            guard config.oauthCommandProfiles.isEmpty else {
+            guard !config.oauthCommandProfiles.contains(where: { $0.provider == .claude }) else {
                 throw CLIProxyManagerCommandError.prerequisite(
                     "Legacy Claude routing is only available when account-specific command profiles have not been created."
                 )

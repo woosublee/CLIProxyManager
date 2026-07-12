@@ -47,7 +47,7 @@ GitHub Releases에서 직접 내려받은 배포본만 사용하세요.
    source ~/.zshrc
    ```
 
-5. 지정한 명령어로 실행합니다.
+4. 지정한 명령어로 실행합니다.
 
    ```zsh
    claude-work

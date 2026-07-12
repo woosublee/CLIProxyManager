@@ -310,6 +310,28 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
         XCTAssertEqual(snapshot.connectedProviders.map(\.id), [.codex])
     }
 
+    func testSnapshotKeepsConnectedAPIKeyAccountsWithoutSubscriptionUsage() {
+        let snapshot = MenuBarStatusSnapshot(
+            serverStatus: DiagnosticStatus(severity: .ready, title: "CLIProxyAPI Running", message: "Ready"),
+            providers: [
+                ProviderRowState(
+                    id: .claudeAPI,
+                    name: "Claude API Key",
+                    nickname: "Work API",
+                    functionName: "claude-api",
+                    connectionTitle: "Configured",
+                    connectionDetail: "API key configured",
+                    isConnected: true,
+                    showsSubscriptionUsage: false
+                )
+            ]
+        )
+
+        XCTAssertEqual(snapshot.connectedProviders.map(\.id), [.claudeAPI])
+        XCTAssertEqual(snapshot.connectedProviders.first?.displayName, "Work API")
+        XCTAssertEqual(snapshot.connectedProviders.first?.subscriptionUsageState, .disabled)
+    }
+
     func testSnapshotShowsEmptyMessageWhenNoProviderIsConnected() {
         let snapshot = MenuBarStatusSnapshot(
             serverStatus: DiagnosticStatus(

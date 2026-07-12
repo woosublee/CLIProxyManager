@@ -25,17 +25,17 @@ API Key 기능을 기존 OAuth 설정 흐름과 일관되게 마무리한다.
 
 `AppConfig`에 API Key 명령별 권한 설정을 추가한다.
 
-- `ClaudeAPI`는 `connectionMode`와 `dangerousPermissionsEnabled`를 가진다. 기존 `model` 저장값은 호환성 있게 decode만 하고 새 화면·shell rendering에서는 사용하지 않는다.
+- `ClaudeAPI`는 Opus/Sonnet/Haiku 역할별 `ClaudeRouting`과 `dangerousPermissionsEnabled`를 가진다. 기존 `model`과 `connectionMode` 저장값은 호환성 있게 decode만 하며, 새 화면과 shell rendering은 항상 CLIProxyAPI 경로를 사용한다.
 - `codexAPI`는 Codex의 `opus`/`sonnet`/`haiku` 모델 역할 매핑과 별도의 `dangerousPermissionsEnabled`를 가진 API Key 설정 구조로 둔다. OAuth 프로필의 Codex 모델 설정과 전역 `ccodex` 설정은 변경하지 않는다.
 
-Claude API Key 시트에서는 API Key, 명령 이름, Direct/CLIProxyAPI connection mode, `Skip permission prompts`만 노출한다. OpenAI API Key 시트에서는 API Key, 명령 이름, OAuth Codex 시트의 `CodexRoleRoutingFields`, `Skip permission prompts`를 노출하며 CLIProxyAPI 경유임을 계속 안내한다.
+Claude API Key 시트에서는 API Key, 명령 이름, `ClaudeRoleRoutingFields`, `Skip permission prompts`를 노출하고 CLIProxyAPI 고정 경로임을 안내한다. OpenAI API Key 시트에서는 API Key, 명령 이름, OAuth Codex 시트의 `CodexRoleRoutingFields`, `Skip permission prompts`를 노출하며 CLIProxyAPI 경유임을 계속 안내한다.
 
 각 API Key의 skip 토글은 전역 `includeDangerouslySkipPermissions` 및 OAuth 계정별 값과 독립적이다.
 
 ## 실행 및 프록시 동작
 
-- Claude Direct 명령은 API Key 파일에서 키를 읽어 `ANTHROPIC_API_KEY`로 주입하고 상속된 proxy 환경 변수를 해제한다.
-- Claude CLIProxyAPI 명령은 `cpm-claude-api/` prefix와 로컬 프록시를 사용하며, Claude OAuth와 동일한 고정 기본 Opus·Sonnet·Haiku 매핑을 적용한다. API Key 화면에는 이 매핑을 편집하는 모델 설정을 노출하지 않는다.
+- Claude API Key 명령은 항상 `cpm-claude-api/` prefix와 로컬 프록시를 사용한다. `renderClaudeAPIFunction()`은 실행 시 `cpm routing claude-models --api`를 호출해 저장된 역할별 정책과 현재 노출 모델을 해석하고 `ANTHROPIC_DEFAULT_*_MODEL`을 주입한다.
+- Claude API Key 화면은 OAuth 프록시 화면과 동일한 `ClaudeRoleRoutingFields`를 사용해 Automatic 또는 역할별 명시 모델 선택을 제공한다.
 - OpenAI API Key 명령은 `cpm-codex-api/` prefix와 API Key 전용 Codex 역할 매핑을 통해 로컬 프록시를 사용한다.
 - API Key command의 `--dangerously-skip-permissions` 포함 여부는 해당 API Key 설정만 따른다.
 - 프록시 YAML은 FileSecretStore가 읽은 API Key가 있을 때만 기존 `claude-api-key`·`codex-api-key` provider 블록을 생성한다.
@@ -49,6 +49,6 @@ Claude API Key 시트에서는 API Key, 명령 이름, Direct/CLIProxyAPI connec
 - FileSecretStore의 생성, 읽기, 교체, 삭제, 파일 권한, 잘못된 파일 상태, 심볼릭 링크 거부, 동시 안전성 경로를 검증한다.
 - AppConfig의 신규 API Key 권한/모델 설정 encode·decode 및 이전 설정 호환성을 검증한다.
 - API Key 각 시트의 초기값과 save callback 전달 값을 검증한다.
-- shell renderer가 Claude API Key에서 모델 override를 만들지 않고 해당 skip 값만 적용하는지 검증한다.
+- shell renderer가 Claude API Key에서 `routing claude-models --api` 결과를 사용하고 해당 skip 값을 적용하는지 검증한다.
 - shell renderer가 OpenAI API Key 전용 Codex 모델 매핑과 해당 skip 값을 반영하는지 검증한다.
 - DashboardViewModel, AutomaticShellInstallService, ProxyServiceManager, `cpm secret`이 기본 FileSecretStore를 일관되게 사용하는지 검증한다.

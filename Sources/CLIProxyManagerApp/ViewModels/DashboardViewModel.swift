@@ -1491,17 +1491,21 @@ final class DashboardViewModel: ObservableObject {
         }
 
         codexModelLoadingState = .startingServer
-        isServerActionInProgress = true
-        defer { isServerActionInProgress = false }
-
         do {
-            try await proxyService.start(port: config.port)
-            await refreshUntilServerIsReady()
-            serverControlState = serverStatus.severity == .ready ? .running : .stopped
+            try await prepareModelServer()
             await loadCodexModels()
         } catch {
             handleCodexModelLoadingFailure(error)
         }
+    }
+
+    private func prepareModelServer() async throws {
+        guard !serverControlState.isRunning else { return }
+        isServerActionInProgress = true
+        defer { isServerActionInProgress = false }
+        try await proxyService.start(port: config.port)
+        await refreshUntilServerIsReady()
+        serverControlState = serverStatus.severity == .ready ? .running : .stopped
     }
 
     func loadCodexModels() async {
@@ -1559,7 +1563,7 @@ final class DashboardViewModel: ObservableObject {
     func prepareClaudeModels(for provider: ProviderRowState.ID) async {
         if provider == .claudeAPI {
             guard availableClaudeAPIModelOptions.isEmpty else { return }
-            await refreshCodexModels()
+            try? await prepareModelServer()
             _ = try? await claudeAPIModels()
             return
         }
@@ -1568,7 +1572,7 @@ final class DashboardViewModel: ObservableObject {
               config.oauthCommandProfiles.contains(where: {
                   $0.id == provider.rawValue && $0.provider == .claude && $0.connectionMode == .proxy
               }) else { return }
-        await refreshCodexModels()
+        try? await prepareModelServer()
         _ = try? await claudeModels(for: provider)
     }
 
