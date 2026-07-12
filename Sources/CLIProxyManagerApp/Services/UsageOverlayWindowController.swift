@@ -30,6 +30,10 @@ struct UsageOverlayResizeCoordinator {
         activeTransitionGeneration == nil ? nil : transitionAnchor
     }
 
+    var hasActiveTransition: Bool {
+        activeTransitionGeneration != nil
+    }
+
     mutating func requestResize(animated: Bool) -> Bool {
         pendingAnimation = pendingAnimation || animated || activeTransitionGeneration != nil
         guard !resizeScheduled else { return false }
@@ -69,6 +73,15 @@ struct UsageOverlayResizeCoordinator {
         }
     }
 
+    mutating func cancelActiveTransition() {
+        nextGeneration += 1
+        activeTransitionGeneration = nil
+        activeAnimationCount = 0
+        pendingAnimation = false
+        resizeScheduled = false
+        transitionAnchor = nil
+    }
+
     private mutating func clearActiveTransition() {
         activeTransitionGeneration = nil
         transitionAnchor = nil
@@ -85,6 +98,8 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     private let screenVisibleFrameProvider: () -> CGRect?
     private let deferredScreenResizeScheduler: (@escaping @MainActor () -> Void) -> Void
     private let fittingSizeProvider: (() -> CGSize)?
+    private let frameAnimator: (NSPanel, CGRect, @escaping @MainActor () -> Void) -> Void
+    private let frameAnimationInterrupter: (NSPanel) -> Void
     private struct PersistenceTransaction {
         let generation: Int
         let target: AppConfig.UsageOverlay.DisplayMode
@@ -103,6 +118,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     private var failedPersistenceOverride: FailedPersistenceOverride?
     private var persistenceTransaction: PersistenceTransaction?
     private var resizeCoordinator = UsageOverlayResizeCoordinator()
+    private var resizeScheduleGeneration = 0
     private var screenGeometryGeneration = 0
     private var configObservation: AnyCancellable?
     private var contentObservation: AnyCancellable?
@@ -125,7 +141,9 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         visibleFrameProvider: (() -> CGRect?)? = nil,
         screenVisibleFrameProvider: (() -> CGRect?)? = nil,
         deferredScreenResizeScheduler: ((@escaping @MainActor () -> Void) -> Void)? = nil,
-        fittingSizeProvider: (() -> CGSize)? = nil
+        fittingSizeProvider: (() -> CGSize)? = nil,
+        frameAnimator: ((NSPanel, CGRect, @escaping @MainActor () -> Void) -> Void)? = nil,
+        frameAnimationInterrupter: ((NSPanel) -> Void)? = nil
     ) {
         let suppliedPanelFrame = panel?.frame
         let mode = initialDisplayMode ?? viewModel?.config.usageOverlay.displayMode ?? .expanded
@@ -139,6 +157,19 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             }
         }
         self.fittingSizeProvider = fittingSizeProvider
+        self.frameAnimator = frameAnimator ?? { panel, target, completion in
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.25
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                context.allowsImplicitAnimation = true
+                panel.animator().setFrame(target, display: true)
+            } completionHandler: {
+                Task { @MainActor in completion() }
+            }
+        }
+        self.frameAnimationInterrupter = frameAnimationInterrupter ?? { panel in
+            panel.setFrame(panel.frame, display: true, animate: false)
+        }
         self.persistDisplayMode = persistDisplayMode ?? { [weak viewModel] mode in
             guard let viewModel else { return true }
             var usageOverlay = viewModel.config.usageOverlay
@@ -196,7 +227,8 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     func toggleDisplayMode() {
         let original = displayMode
         let target = original.opposite
-        let transitionAnchor = CGPoint(x: panel.frame.maxX, y: panel.frame.maxY)
+        let transitionAnchor = resizeCoordinator.authoritativeAnchor
+            ?? CGPoint(x: panel.frame.maxX, y: panel.frame.maxY)
         presentationState.displayMode = target
         updatePanelConstraints(for: target)
         _ = resizeCoordinator.beginModeTransition(anchor: transitionAnchor)
@@ -259,21 +291,23 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         }
 
         resizeCoordinator.animationStarted(generation: transitionGeneration)
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.25
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            context.allowsImplicitAnimation = true
-            panel.animator().setFrame(target, display: true)
-        } completionHandler: { [weak self] in
-            Task { @MainActor [weak self] in
-                self?.resizeCoordinator.animationCompleted(generation: transitionGeneration)
-            }
+        frameAnimator(panel, target) { [weak self] in
+            self?.resizeCoordinator.animationCompleted(generation: transitionGeneration)
         }
     }
 
     func hideForCurrentSession() {
+        interruptActiveTransition()
         panel.orderOut(nil)
         isVisible = false
+    }
+
+    func handleWindowDrag() {
+        interruptActiveTransition()
+    }
+
+    func requestContentResize(animated: Bool = false) {
+        resizeToFittingContent(animated: animated)
     }
 
     func showForCurrentSession(using preferences: AppConfig.UsageOverlay) {
@@ -309,8 +343,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             isVisible = true
             resizeToFittingContent(animated: false)
         } else {
-            panel.orderOut(nil)
-            isVisible = false
+            hideForCurrentSession()
         }
     }
 
@@ -324,6 +357,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     }
 
     func handleScreenGeometryChange() {
+        interruptActiveTransition()
         updatePanelConstraints(for: displayMode)
         screenGeometryGeneration += 1
         let generation = screenGeometryGeneration
@@ -368,6 +402,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
                 onContentSizeInvalidated: { [weak self] in
                     self?.resizeToFittingContent(animated: false)
                 },
+                onWindowDrag: { [weak self] in self?.handleWindowDrag() },
                 onClose: { [weak self] in self?.hideForCurrentSession() }
             )
         )
@@ -381,8 +416,11 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     }
 
     private func restoreSavedFrameIfUsable() {
-        let screenFrames = NSScreen.screens.map(\.visibleFrame)
+        let screenFrames = currentVisibleFrame().map { [$0] } ?? NSScreen.screens.map(\.visibleFrame)
         guard Self.isFrameUsable(panel.frame, within: screenFrames) else {
+            if visibleFrameProvider() != nil || screenVisibleFrameProvider() != nil {
+                return
+            }
             panel.center()
             return
         }
@@ -424,6 +462,14 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             ?? NSScreen.main?.visibleFrame
     }
 
+    private func interruptActiveTransition() {
+        resizeScheduleGeneration += 1
+        if resizeCoordinator.hasActiveTransition {
+            frameAnimationInterrupter(panel)
+        }
+        resizeCoordinator.cancelActiveTransition()
+    }
+
     private func frameAnchoredAtAuthoritativeTransitionAnchor() -> CGRect {
         guard let anchor = resizeCoordinator.authoritativeAnchor else { return panel.frame }
         return CGRect(
@@ -455,10 +501,17 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
 
     private func resizeToFittingContent(animated: Bool) {
         guard resizeCoordinator.requestResize(animated: animated) else { return }
+        resizeScheduleGeneration += 1
+        let scheduleGeneration = resizeScheduleGeneration
         DispatchQueue.main.async { @MainActor [weak self] in
-            guard let self else { return }
+            guard let self, scheduleGeneration == self.resizeScheduleGeneration else { return }
             let request = self.resizeCoordinator.consumeResizeRequest()
-            guard let contentView = self.panel.contentView else { return }
+            guard let contentView = self.panel.contentView else {
+                self.resizeCoordinator.transitionCompletedWithoutAnimation(
+                    generation: request.transitionGeneration
+                )
+                return
+            }
             contentView.layoutSubtreeIfNeeded()
             let fittingSize = self.fittingSizeProvider?() ?? contentView.fittingSize
             self.updateContentSize(

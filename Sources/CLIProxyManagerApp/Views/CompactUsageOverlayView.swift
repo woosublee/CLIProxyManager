@@ -22,7 +22,7 @@ struct CompactUsageOverlayView: View {
                 .accessibilityElement(children: .combine)
             } else {
                 ZStack(alignment: .top) {
-                    accountStack
+                    measurementAccountStack
                         .fixedSize(horizontal: false, vertical: true)
                         .hidden()
                         .background(
@@ -37,7 +37,7 @@ struct CompactUsageOverlayView: View {
                         .clipped()
 
                     ScrollView(.vertical, showsIndicators: needsScrolling) {
-                        accountStack
+                        visibleAccountStack
                     }
                     .scrollDisabled(!needsScrolling)
                     .frame(height: viewportHeight)
@@ -69,14 +69,25 @@ struct CompactUsageOverlayView: View {
         measurementState.height > maximumAccountHeight
     }
 
-    private var accountStack: some View {
+    private var measurementAccountStack: some View {
         VStack(spacing: 0) {
-            ForEach(Array(providers.enumerated()), id: \.element.id) { index, provider in
-                if index > 0 {
-                    CompactUsageSeparator()
-                }
-                CompactUsageAccountView(provider: provider)
+            accountRows
+        }
+    }
+
+    private var visibleAccountStack: some View {
+        LazyVStack(spacing: 0) {
+            accountRows
+        }
+    }
+
+    @ViewBuilder
+    private var accountRows: some View {
+        ForEach(Array(providers.enumerated()), id: \.element.id) { index, provider in
+            if index > 0 {
+                CompactUsageSeparator()
             }
+            CompactUsageAccountView(provider: provider)
         }
     }
 }

@@ -6,6 +6,7 @@ struct UsageOverlayView: View {
     @ObservedObject var presentationState: UsageOverlayPresentationState
     var onToggleDisplayMode: () -> Void = {}
     var onContentSizeInvalidated: () -> Void = {}
+    var onWindowDrag: () -> Void = {}
     var onClose: () -> Void = {}
     @State private var refreshStatusReferenceDate = Date()
 
@@ -14,12 +15,14 @@ struct UsageOverlayView: View {
         presentationState: UsageOverlayPresentationState,
         onToggleDisplayMode: @escaping () -> Void = {},
         onContentSizeInvalidated: @escaping () -> Void = {},
+        onWindowDrag: @escaping () -> Void = {},
         onClose: @escaping () -> Void = {}
     ) {
         self.viewModel = viewModel
         self.presentationState = presentationState
         self.onToggleDisplayMode = onToggleDisplayMode
         self.onContentSizeInvalidated = onContentSizeInvalidated
+        self.onWindowDrag = onWindowDrag
         self.onClose = onClose
     }
 
@@ -58,14 +61,12 @@ struct UsageOverlayView: View {
                     providers: providers,
                     refreshStatus: refreshStatus
                 )
-                .transition(.opacity)
             case .compact:
                 CompactUsageOverlayView(
                     providers: providers,
                     maximumAccountHeight: presentationState.compactAccountMaximumHeight,
                     onMeasurementChange: onContentSizeInvalidated
                 )
-                .transition(.opacity)
             }
         }
         .padding(presentationState.displayMode == .expanded ? 16 : 10)
@@ -74,6 +75,10 @@ struct UsageOverlayView: View {
         .background(.regularMaterial.opacity(viewModel.config.usageOverlay.backgroundOpacity))
         .clipShape(RoundedRectangle(cornerRadius: presentationState.displayMode == .expanded ? 14 : 18, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: presentationState.displayMode == .expanded ? 14 : 18, style: .continuous))
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 2)
+                .onChanged { _ in onWindowDrag() }
+        )
         .gesture(WindowDragGesture())
         .allowsWindowActivationEvents(true)
         .task { await viewModel.refresh() }

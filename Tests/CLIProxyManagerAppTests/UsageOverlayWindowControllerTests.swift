@@ -322,6 +322,23 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         XCTAssertFalse(coordinator.consumeResizeRequest().animated)
     }
 
+    func testCancelActiveTransitionClearsAnchorAndAnimationIntent() {
+        var coordinator = UsageOverlayResizeCoordinator()
+        let generation = coordinator.beginModeTransition(anchor: CGPoint(x: 800, y: 660))
+        XCTAssertTrue(coordinator.requestResize(animated: true))
+        let request = coordinator.consumeResizeRequest()
+        coordinator.animationStarted(generation: generation)
+
+        coordinator.cancelActiveTransition()
+        coordinator.animationCompleted(generation: request.transitionGeneration)
+
+        XCTAssertNil(coordinator.authoritativeAnchor)
+        XCTAssertTrue(coordinator.requestResize(animated: false))
+        let ordinary = coordinator.consumeResizeRequest()
+        XCTAssertFalse(ordinary.animated)
+        XCTAssertNil(ordinary.transitionGeneration)
+    }
+
     func testToggleKeepsFrameUnchangedUntilScheduledResizeUsesLayoutTarget() {
         let panel = makePanel(x: 500, y: 400, width: 300, height: 260)
         let original = panel.frame
@@ -374,6 +391,160 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         XCTAssertEqual(panel.frame.maxX, compactAnchor.x)
         XCTAssertEqual(panel.frame.maxY, compactAnchor.y)
         XCTAssertEqual(panel.frame.size, fittingSize)
+    }
+
+    func testRapidRetoggleBeforeAnchorRepairPreservesOriginalAnchorInBothDirections() async {
+        for initialMode in [AppConfig.UsageOverlay.DisplayMode.expanded, .compact] {
+            let initialSize = initialMode == .expanded
+                ? CGSize(width: 300, height: 260)
+                : CGSize(width: 108, height: 180)
+            let finalSize = initialSize
+            var fittingSize = initialMode == .expanded
+                ? CGSize(width: 108, height: 180)
+                : CGSize(width: 300, height: 320)
+            let panel = makePanel(x: 500, y: 400, width: initialSize.width, height: initialSize.height)
+            panel.contentView = NSView(frame: CGRect(origin: .zero, size: initialSize))
+            let originalAnchor = CGPoint(x: panel.frame.maxX, y: panel.frame.maxY)
+            let controller = UsageOverlayWindowController(
+                panel: panel,
+                initialDisplayMode: initialMode,
+                persistDisplayMode: { _ in true },
+                shouldReduceMotion: { true },
+                visibleFrameProvider: visibleFrame,
+                fittingSizeProvider: { fittingSize }
+            )
+
+            controller.toggleDisplayMode()
+            simulateTopLeftAnchoredContentResize(panel, to: fittingSize)
+            fittingSize = finalSize
+            controller.toggleDisplayMode()
+            simulateTopLeftAnchoredContentResize(panel, to: fittingSize)
+
+            await drainMainQueue()
+
+            XCTAssertEqual(panel.frame.maxX, originalAnchor.x, "initial mode: \(initialMode)")
+            XCTAssertEqual(panel.frame.maxY, originalAnchor.y, "initial mode: \(initialMode)")
+            XCTAssertEqual(panel.frame.size, finalSize, "initial mode: \(initialMode)")
+        }
+    }
+
+    func testScreenChangeInterruptsAnimationAndStaleCompletionCannotRestoreOldTarget() {
+        var visibleFrame = CGRect(x: 0, y: 0, width: 1440, height: 900)
+        var deferredScreenResizes: [@MainActor () -> Void] = []
+        var pendingAnimations: [() -> Void] = []
+        var animationWasInterrupted = false
+        var animationCount = 0
+        let panel = makePanel(x: 500, y: 400, width: 300, height: 260)
+        panel.contentView = NSView(frame: CGRect(x: 0, y: 0, width: 300, height: 260))
+        let controller = UsageOverlayWindowController(
+            panel: panel,
+            initialDisplayMode: .expanded,
+            persistDisplayMode: { _ in true },
+            shouldReduceMotion: { false },
+            visibleFrameProvider: { visibleFrame },
+            deferredScreenResizeScheduler: { deferredScreenResizes.append($0) },
+            fittingSizeProvider: { CGSize(width: 108, height: 180) },
+            frameAnimator: { panel, target, completion in
+                animationCount += 1
+                animationWasInterrupted = false
+                pendingAnimations.append {
+                    if !animationWasInterrupted {
+                        panel.setFrame(target, display: false)
+                    }
+                    completion()
+                }
+            },
+            frameAnimationInterrupter: { _ in
+                animationWasInterrupted = true
+            }
+        )
+        deferredScreenResizes.removeAll()
+
+        controller.toggleDisplayMode()
+        drainMainQueueSynchronously()
+        XCTAssertEqual(animationCount, 1)
+        XCTAssertEqual(pendingAnimations.count, 1)
+
+        panel.setFrame(CGRect(x: 300, y: 220, width: 108, height: 180), display: false)
+        visibleFrame = CGRect(x: 0, y: 0, width: 800, height: 500)
+        controller.handleScreenGeometryChange()
+        XCTAssertTrue(animationWasInterrupted)
+        XCTAssertEqual(deferredScreenResizes.count, 1)
+
+        deferredScreenResizes.removeFirst()()
+        let screenAdjustedFrame = panel.frame
+        pendingAnimations.removeFirst()()
+
+        XCTAssertEqual(panel.frame, screenAdjustedFrame)
+        controller.requestContentResize(animated: false)
+        drainMainQueueSynchronously()
+        XCTAssertEqual(animationCount, 1)
+    }
+
+    func testUserDragCancelsTransitionAndFutureResizeUsesMovedAnchor() {
+        let panel = makePanel(x: 500, y: 400, width: 300, height: 260)
+        panel.contentView = NSView(frame: CGRect(x: 0, y: 0, width: 300, height: 260))
+        let controller = UsageOverlayWindowController(
+            panel: panel,
+            initialDisplayMode: .expanded,
+            persistDisplayMode: { _ in true },
+            shouldReduceMotion: { true },
+            visibleFrameProvider: visibleFrame,
+            fittingSizeProvider: { CGSize(width: 108, height: 180) }
+        )
+
+        controller.toggleDisplayMode()
+        let movedFrame = CGRect(x: 220, y: 180, width: 108, height: 180)
+        panel.setFrame(movedFrame, display: false)
+        controller.handleWindowDrag()
+        drainMainQueueSynchronously()
+
+        XCTAssertEqual(panel.frame.maxX, movedFrame.maxX)
+        XCTAssertEqual(panel.frame.maxY, movedFrame.maxY)
+    }
+
+    func testHideDuringTransitionCancelsOldAnchorBeforeShow() {
+        let panel = makePanel(x: 500, y: 400, width: 300, height: 260)
+        panel.contentView = NSView(frame: CGRect(x: 0, y: 0, width: 300, height: 260))
+        let preferences = AppConfig.UsageOverlay(isVisible: true, displayMode: .compact)
+        let controller = UsageOverlayWindowController(
+            panel: panel,
+            initialDisplayMode: .expanded,
+            persistDisplayMode: { _ in true },
+            shouldReduceMotion: { true },
+            visibleFrameProvider: visibleFrame,
+            fittingSizeProvider: { CGSize(width: 108, height: 180) }
+        )
+
+        controller.toggleDisplayMode()
+        simulateTopLeftAnchoredContentResize(panel, to: CGSize(width: 108, height: 180))
+        controller.hideForCurrentSession()
+        controller.showForCurrentSession(using: preferences)
+        drainMainQueueSynchronously()
+
+        XCTAssertLessThanOrEqual(panel.frame.maxX, 784)
+        XCTAssertLessThanOrEqual(panel.frame.maxY, 884)
+        XCTAssertNotEqual(panel.frame.maxX, 800)
+    }
+
+    func testMissingContentViewCompletesConsumedTransition() {
+        let panel = makePanel(x: 500, y: 400, width: 300, height: 260)
+        let controller = UsageOverlayWindowController(
+            panel: panel,
+            initialDisplayMode: .expanded,
+            persistDisplayMode: { _ in true },
+            shouldReduceMotion: { true },
+            visibleFrameProvider: visibleFrame
+        )
+
+        controller.toggleDisplayMode()
+        drainMainQueueSynchronously()
+        let movedFrame = CGRect(x: 200, y: 160, width: 300, height: 260)
+        panel.setFrame(movedFrame, display: false)
+        controller.updateContentSize(CGSize(width: 300, height: 300))
+
+        XCTAssertEqual(panel.frame.maxX, movedFrame.maxX)
+        XCTAssertEqual(panel.frame.maxY, movedFrame.maxY)
     }
 
     func testCompactResizeClampsToScreenAndKeepsSafeRightTopAnchor() {
@@ -487,6 +658,10 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
             ),
             display: false
         )
+    }
+
+    private func drainMainQueueSynchronously() {
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
     }
 
     private func drainMainQueue() async {
