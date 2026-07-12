@@ -13,7 +13,5 @@ final class AppWindowMetricsTests: XCTestCase {
         XCTAssertEqual(AppWindowMetrics.usageOverlayExpandedMinimumHeight, 260)
         XCTAssertEqual(AppWindowMetrics.usageOverlayMaximumHeight, 720)
         XCTAssertEqual(AppWindowMetrics.usageOverlayScreenMargin, 16)
-        XCTAssertEqual(AppWindowMetrics.usageOverlayWidth, 300)
-        XCTAssertEqual(AppWindowMetrics.usageOverlayHeight, 260)
     }
 }

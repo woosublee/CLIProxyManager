@@ -11,8 +11,4 @@ enum AppWindowMetrics {
     static let usageOverlayExpandedMinimumHeight: CGFloat = 260
     static let usageOverlayMaximumHeight: CGFloat = 720
     static let usageOverlayScreenMargin: CGFloat = 16
-
-    // Temporary compatibility aliases while the existing view/controller migrate in Tasks 4–5.
-    static let usageOverlayWidth = usageOverlayExpandedWidth
-    static let usageOverlayHeight = usageOverlayExpandedMinimumHeight
 }
