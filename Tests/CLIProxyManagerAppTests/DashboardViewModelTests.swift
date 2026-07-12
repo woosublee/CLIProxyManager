@@ -1482,6 +1482,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
             claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore(),
             serverStatusRetryDelayNanoseconds: 0
         )
 
@@ -1492,13 +1493,15 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             dangerousPermissionsEnabled: false,
             key: "new-key"
         )
-        await proxyService.waitForRestartCount(1)
+        let reachedFirstRestart = await proxyService.reachesRestartCount(1)
+        XCTAssertTrue(reachedFirstRestart)
         var codex = config.ccodex
         codex.opus.fastModeEnabled = true
         try viewModel.saveCodexSettings(functionName: "ccodex", codex: codex)
         proxyService.releaseRestart(1)
+        let reachedSecondRestart = await proxyService.reachesRestartCount(2)
+        XCTAssertTrue(reachedSecondRestart)
         await startTask.value
-        await proxyService.waitForRestartCount(2)
 
         XCTAssertEqual(proxyService.restartPorts, [config.port, config.port])
         XCTAssertNil(viewModel.settingsMessage)
@@ -1521,8 +1524,11 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
             claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore(),
+            serverStatusRetryDelayNanoseconds: 0,
             settingsMessageAutoClearDelayNanoseconds: 60_000_000_000
         )
 
@@ -1533,13 +1539,15 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             dangerousPermissionsEnabled: false,
             key: "new-key"
         )
-        await proxyService.waitForRestartCount(1)
+        let reachedFirstRestart = await proxyService.reachesRestartCount(1)
+        XCTAssertTrue(reachedFirstRestart)
         var codex = config.ccodex
         codex.opus.fastModeEnabled = true
         try viewModel.saveCodexSettings(functionName: "ccodex", codex: codex)
         proxyService.releaseRestart(1)
+        let reachedSecondRestart = await proxyService.reachesRestartCount(2)
+        XCTAssertTrue(reachedSecondRestart)
         await startTask.value
-        await proxyService.waitForRestartCount(2)
         for _ in 0..<100 where viewModel.settingsMessage == nil { await Task.yield() }
 
         XCTAssertEqual(
@@ -1893,7 +1901,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: proxyService,
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore(values: [.claudeAPIKey: "initial-key"])
         )
 
         let modelTask = Task { await viewModel.refreshCodexModels() }
@@ -1907,7 +1916,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             functionName: "ccapi",
             nickname: "Updated",
             dangerousPermissionsEnabled: false,
-            key: "new-key"
+            key: "recovery-key"
         )
         await waitForRestart(proxyService)
         for _ in 0..<100 { await Task.yield() }
@@ -4584,8 +4593,6 @@ private final class StubProxyServiceStarter: ProxyServiceControlling, @unchecked
     private var _ports: [Int] = []
     private var _restartPorts: [Int] = []
     private var _stopCount = 0
-    private var restartWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
-    private var suspendedRestarts: [Int: CheckedContinuation<Void, Never>] = [:]
     private var releasedRestarts: Set<Int> = []
 
     var ports: [Int] {
@@ -4636,49 +4643,37 @@ private final class StubProxyServiceStarter: ProxyServiceControlling, @unchecked
         }
     }
 
-    func waitForRestartCount(_ expectedCount: Int) async {
-        if restartPorts.count >= expectedCount { return }
-        await withCheckedContinuation { continuation in
-            lock.withLock {
-                if _restartPorts.count >= expectedCount {
-                    continuation.resume()
-                } else {
-                    restartWaiters.append((expectedCount, continuation))
-                }
-            }
+    func reachesRestartCount(_ expectedCount: Int, attempts: Int = 1_000) async -> Bool {
+        for _ in 0..<attempts {
+            if restartPorts.count >= expectedCount { return true }
+            try? await Task.sleep(nanoseconds: 1_000_000)
         }
+        return restartPorts.count >= expectedCount
     }
 
     func releaseRestart(_ invocation: Int) {
-        let continuation = lock.withLock { () -> CheckedContinuation<Void, Never>? in
-            releasedRestarts.insert(invocation)
-            return suspendedRestarts.removeValue(forKey: invocation)
+        _ = lock.withLock { releasedRestarts.insert(invocation) }
+    }
+
+    private func waitForRestartRelease(_ invocation: Int) async throws {
+        for _ in 0..<1_000 {
+            if lock.withLock({ releasedRestarts.contains(invocation) }) { return }
+            try await Task.sleep(nanoseconds: 1_000_000)
         }
-        continuation?.resume()
+        throw NSError(
+            domain: "StubProxyServiceStarter",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "Restart \(invocation) was not released by its test."]
+        )
     }
 
     func restart(port: Int) async throws {
         let invocation = lock.withLock { () -> Int in
             _restartPorts.append(port)
-            let invocation = _restartPorts.count
-            let readyWaiters = restartWaiters.filter { invocation >= $0.0 }.map(\.1)
-            restartWaiters.removeAll { invocation >= $0.0 }
-            readyWaiters.forEach { $0.resume() }
-            return invocation
+            return _restartPorts.count
         }
         if invocation <= suspendedRestartCount {
-            let wasReleased = lock.withLock { releasedRestarts.contains(invocation) }
-            if !wasReleased {
-                await withCheckedContinuation { continuation in
-                    lock.withLock {
-                        if releasedRestarts.contains(invocation) {
-                            continuation.resume()
-                        } else {
-                            suspendedRestarts[invocation] = continuation
-                        }
-                    }
-                }
-            }
+            try await waitForRestartRelease(invocation)
         }
         let invocationError = lock.withLock { () -> Error? in
             guard !restartErrors.isEmpty else { return nil }
