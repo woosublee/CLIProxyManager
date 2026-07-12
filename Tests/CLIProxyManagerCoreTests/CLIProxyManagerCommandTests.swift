@@ -668,6 +668,40 @@ final class CLIProxyManagerCommandTests: XCTestCase {
         }
     }
 
+    func testLegacyClaudeRoutingAllowsAccountSpecificCodexProfiles() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox)
+        let configStore = AppConfigStore(paths: paths)
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            .init(id: "codex-work", provider: .codex, authProfileID: "codex-work.json", modelPrefix: "codex-work")
+        ]
+        try configStore.save(config)
+        try FileManager.default.createDirectory(at: paths.authDirectory, withIntermediateDirectories: true)
+        try Data(#"{"type":"claude","prefix":"claude-work","disabled":false}"#.utf8)
+            .write(to: paths.authDirectory.appendingPathComponent("claude-work.json"))
+        let models = StubClaudeModelListing(optionsByPrefix: [
+            "claude-work": [
+                .init(id: "claude-opus-4-8"),
+                .init(id: "claude-sonnet-5"),
+                .init(id: "claude-haiku-4-5")
+            ]
+        ])
+        let output = OutputDouble(isInteractive: false)
+        let command = CLIProxyManagerCommand(
+            secretStore: InMemorySecretStore(),
+            configStore: configStore,
+            authProfileStore: AuthProfileStore(authDirectory: paths.authDirectory),
+            output: output,
+            claudeModelClient: models
+        )
+
+        try await command.run(arguments: ["routing", "claude-models", "--legacy"])
+
+        XCTAssertEqual(models.requests.map(\.prefix), ["claude-work"])
+        XCTAssertTrue(output.stdout.joined().contains("claude-work/claude-opus-4-8"))
+    }
+
     func testLegacyClaudeRoutingRequiresExactlyOneEnabledPrefixedClaudeProfile() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox)

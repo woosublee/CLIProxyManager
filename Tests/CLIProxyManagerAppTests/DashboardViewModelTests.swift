@@ -1355,6 +1355,96 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(modelClient.prefixRequests.map(\.prefix), ["cpm-codex-api"])
     }
 
+    func testPrepareClaudeModelsDoesNotMutateCodexLoadingStateOrModels() async {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            .init(
+                id: "claude-work",
+                provider: .claude,
+                authProfileID: "claude-work.json",
+                modelPrefix: "claude-work"
+            )
+        ]
+        let modelClient = StubProxyModelClient(claudeOptionsByPrefix: [
+            "claude-work": [
+                .init(id: "claude-opus-4-8"),
+                .init(id: "claude-sonnet-5"),
+                .init(id: "claude-haiku-4-5")
+            ]
+        ])
+        let proxyService = StubProxyServiceStarter()
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            modelClient: modelClient,
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(
+                    fileName: "claude-work.json",
+                    type: .claude,
+                    email: "work@example.com",
+                    accountID: nil,
+                    expired: nil,
+                    disabled: false,
+                    prefix: "claude-work"
+                )
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            claudeModelOptionsCache: EmptyClaudeModelOptionsCache(),
+            serverStatusRetryDelayNanoseconds: 0
+        )
+
+        await viewModel.prepareClaudeModels(for: .init(rawValue: "claude-work"))
+
+        XCTAssertEqual(viewModel.codexModelLoadingState, .idle)
+        XCTAssertEqual(viewModel.availableCodexModelOptions, [])
+        XCTAssertEqual(modelClient.codexBaseModelsCallCount, 0)
+        XCTAssertEqual(modelClient.claudePrefixRequests.map(\.prefix), ["claude-work"])
+    }
+
+    func testPrepareClaudeModelsSkipsDuplicateStartAndModelLookupDuringServerAction() async {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            .init(
+                id: "claude-work",
+                provider: .claude,
+                authProfileID: "claude-work.json",
+                modelPrefix: "claude-work"
+            )
+        ]
+        let modelClient = StubProxyModelClient(claudeOptionsByPrefix: [
+            "claude-work": [.init(id: "claude-opus-4-8")]
+        ])
+        let proxyService = StubProxyServiceStarter(startDelayNanoseconds: 50_000_000)
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            modelClient: modelClient,
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "claude-work.json", type: .claude, email: nil, accountID: nil, expired: nil, disabled: false, prefix: "claude-work")
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            claudeModelOptionsCache: EmptyClaudeModelOptionsCache(),
+            serverStatusRetryDelayNanoseconds: 0
+        )
+
+        let startTask = Task { await viewModel.startServer() }
+        for _ in 0..<20 {
+            if viewModel.isServerActionInProgress { break }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        await viewModel.prepareClaudeModels(for: .init(rawValue: "claude-work"))
+        await startTask.value
+
+        XCTAssertEqual(proxyService.ports, [viewModel.config.port])
+        XCTAssertEqual(modelClient.claudePrefixRequests, [])
+    }
+
     func testRefreshCodexModelsStartsServerAndFetchesModels() async {
         let modelClient = StubProxyModelClient(models: ["gpt-5.5", "gpt-5.6"])
         let proxyService = StubProxyServiceStarter()
@@ -3488,6 +3578,11 @@ private final class SubscriptionUsageSnapshotCacheDouble: SubscriptionUsageSnaps
     func load() -> [String: SubscriptionUsageSnapshot] { snapshots }
     func save(_ snapshots: [String: SubscriptionUsageSnapshot]) throws { self.snapshots = snapshots }
     func clear() throws { snapshots = [:] }
+}
+
+private final class EmptyClaudeModelOptionsCache: ClaudeModelOptionsCaching, @unchecked Sendable {
+    func load() -> [String: [ClaudeModelOption]] { [:] }
+    func save(_: [String: [ClaudeModelOption]]) throws {}
 }
 
 private final class SubscriptionUsageManagementKeyDouble: SubscriptionUsageManagementKeyConfiguring, @unchecked Sendable {
