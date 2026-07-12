@@ -19,6 +19,7 @@ struct UsageOverlayResizeCoordinator {
     mutating func beginModeTransition() -> Int {
         nextGeneration += 1
         activeTransitionGeneration = nextGeneration
+        activeAnimationCount = 0
         pendingAnimation = true
         return nextGeneration
     }
@@ -52,6 +53,15 @@ struct UsageOverlayResizeCoordinator {
             activeTransitionGeneration = nil
         }
     }
+
+    mutating func transitionCompletedWithoutAnimation(generation: Int?) {
+        guard generation == activeTransitionGeneration, generation != nil else { return }
+        activeAnimationCount = 0
+        pendingAnimation = false
+        if !resizeScheduled {
+            activeTransitionGeneration = nil
+        }
+    }
 }
 
 @MainActor
@@ -65,8 +75,8 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         let generation: Int
         let target: AppConfig.UsageOverlay.DisplayMode
         let original: AppConfig.UsageOverlay.DisplayMode
-        var didObserveDeferredTarget = false
-        var didObserveDeferredRollback = false
+        var recordedEmissions: [AppConfig.UsageOverlay.DisplayMode] = []
+        var queuedEmissionsToIgnore: [AppConfig.UsageOverlay.DisplayMode] = []
     }
 
     private struct FailedPersistenceOverride {
@@ -160,14 +170,16 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             failedPersistenceOverride = nil
             persistenceTransaction = nil
         } else {
-            let didObserveDeferredSequence = persistenceTransaction?.didObserveDeferredRollback == true
+            let recordedEmissions = persistenceTransaction?.recordedEmissions ?? []
             failedPersistenceOverride = FailedPersistenceOverride(
                 generation: generation,
                 mode: target,
-                awaitsLaterAcknowledgement: didObserveDeferredSequence
+                awaitsLaterAcknowledgement: true
             )
-            if didObserveDeferredSequence {
+            if recordedEmissions.isEmpty {
                 persistenceTransaction = nil
+            } else {
+                persistenceTransaction?.queuedEmissionsToIgnore = recordedEmissions
             }
         }
 
@@ -197,6 +209,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
 
         guard shouldAnimate else {
             panel.setFrame(target, display: true)
+            resizeCoordinator.transitionCompletedWithoutAnimation(generation: transitionGeneration)
             return
         }
 
@@ -234,31 +247,14 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             window: panel,
             alwaysOnTop: preferences.alwaysOnTop
         )
-        if var transaction = persistenceTransaction {
-            if preferences.displayMode == transaction.target, !transaction.didObserveDeferredTarget {
-                transaction.didObserveDeferredTarget = true
-                persistenceTransaction = transaction
-            } else if transaction.didObserveDeferredTarget,
-                      preferences.displayMode == transaction.original,
-                      !transaction.didObserveDeferredRollback {
-                transaction.didObserveDeferredRollback = true
-                if var override = failedPersistenceOverride,
-                   override.generation == transaction.generation {
-                    override.awaitsLaterAcknowledgement = true
-                    failedPersistenceOverride = override
-                    persistenceTransaction = nil
-                } else {
-                    persistenceTransaction = transaction
-                }
-            } else {
-                persistenceTransaction = nil
-                applyPersistedDisplayModeIfAllowed(preferences.displayMode)
-            }
-        } else if var override = failedPersistenceOverride {
-            if override.awaitsLaterAcknowledgement, preferences.displayMode == override.mode {
-                override.awaitsLaterAcknowledgement = false
-                failedPersistenceOverride = nil
-            }
+        if var transaction = persistenceTransaction,
+           transaction.queuedEmissionsToIgnore.first == preferences.displayMode {
+            transaction.queuedEmissionsToIgnore.removeFirst()
+            persistenceTransaction = transaction.queuedEmissionsToIgnore.isEmpty ? nil : transaction
+        } else if let override = failedPersistenceOverride,
+                  override.awaitsLaterAcknowledgement,
+                  preferences.displayMode == override.mode {
+            failedPersistenceOverride = nil
         } else {
             applyPersistedDisplayModeIfAllowed(preferences.displayMode)
         }
@@ -294,6 +290,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         configObservation = publisher?
             .removeDuplicates()
             .sink { [weak self] preferences in
+                self?.recordPersistenceEmission(preferences.displayMode)
                 DispatchQueue.main.async {
                     self?.update(preferences)
                 }
@@ -326,6 +323,12 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             panel.center()
             return
         }
+    }
+
+    private func recordPersistenceEmission(_ mode: AppConfig.UsageOverlay.DisplayMode) {
+        guard var transaction = persistenceTransaction else { return }
+        transaction.recordedEmissions.append(mode)
+        persistenceTransaction = transaction
     }
 
     private func applyPersistedDisplayModeIfAllowed(_ mode: AppConfig.UsageOverlay.DisplayMode) {

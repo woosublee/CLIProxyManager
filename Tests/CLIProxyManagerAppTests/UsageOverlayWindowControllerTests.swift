@@ -221,6 +221,30 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         XCTAssertEqual(controller.displayMode, .expanded)
     }
 
+    func testFailureWithoutOptimisticEmissionsAcknowledgesFirstLaterTarget() async {
+        let subject = PassthroughSubject<AppConfig.UsageOverlay, Never>()
+        let panel = makePanel(x: 500, y: 400, width: 300, height: 260)
+        let controller = UsageOverlayWindowController(
+            panel: panel,
+            initialDisplayMode: .expanded,
+            persistDisplayMode: { _ in false },
+            usageOverlayPublisher: subject.eraseToAnyPublisher(),
+            shouldReduceMotion: { true },
+            visibleFrameProvider: visibleFrame
+        )
+
+        controller.toggleDisplayMode()
+        XCTAssertEqual(controller.displayMode, .compact)
+
+        subject.send(.init(isVisible: false, displayMode: .compact))
+        await drainMainQueue()
+        XCTAssertEqual(controller.displayMode, .compact)
+
+        subject.send(.init(isVisible: false, displayMode: .expanded))
+        await drainMainQueue()
+        XCTAssertEqual(controller.displayMode, .expanded)
+    }
+
     func testModeTransitionAnimationRemainsActiveThroughFollowUpRetarget() {
         var coordinator = UsageOverlayResizeCoordinator()
         let generation = coordinator.beginModeTransition()
@@ -242,6 +266,58 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         XCTAssertTrue(coordinator.consumeResizeRequest().animated)
 
         coordinator.animationCompleted(generation: generation)
+        XCTAssertTrue(coordinator.requestResize(animated: false))
+        XCTAssertFalse(coordinator.consumeResizeRequest().animated)
+    }
+
+    func testRapidRetoggleIgnoresOldCompletionBeforeNewCompletion() {
+        var coordinator = UsageOverlayResizeCoordinator()
+        let generation1 = coordinator.beginModeTransition()
+        XCTAssertTrue(coordinator.requestResize(animated: true))
+        _ = coordinator.consumeResizeRequest()
+        coordinator.animationStarted(generation: generation1)
+
+        let generation2 = coordinator.beginModeTransition()
+        XCTAssertTrue(coordinator.requestResize(animated: true))
+        _ = coordinator.consumeResizeRequest()
+        coordinator.animationStarted(generation: generation2)
+
+        coordinator.animationCompleted(generation: generation1)
+        coordinator.animationCompleted(generation: generation2)
+
+        XCTAssertTrue(coordinator.requestResize(animated: false))
+        XCTAssertFalse(coordinator.consumeResizeRequest().animated)
+    }
+
+    func testRapidRetoggleIgnoresOldCompletionAfterNewCompletion() {
+        var coordinator = UsageOverlayResizeCoordinator()
+        let generation1 = coordinator.beginModeTransition()
+        XCTAssertTrue(coordinator.requestResize(animated: true))
+        _ = coordinator.consumeResizeRequest()
+        coordinator.animationStarted(generation: generation1)
+
+        let generation2 = coordinator.beginModeTransition()
+        XCTAssertTrue(coordinator.requestResize(animated: true))
+        _ = coordinator.consumeResizeRequest()
+        coordinator.animationStarted(generation: generation2)
+
+        coordinator.animationCompleted(generation: generation2)
+        coordinator.animationCompleted(generation: generation1)
+
+        XCTAssertTrue(coordinator.requestResize(animated: false))
+        XCTAssertFalse(coordinator.consumeResizeRequest().animated)
+    }
+
+    func testImmediateTransitionCompletionClearsAnimationIntent() {
+        var coordinator = UsageOverlayResizeCoordinator()
+        let generation = coordinator.beginModeTransition()
+        XCTAssertTrue(coordinator.requestResize(animated: true))
+        let request = coordinator.consumeResizeRequest()
+        XCTAssertTrue(request.animated)
+        XCTAssertEqual(request.transitionGeneration, generation)
+
+        coordinator.transitionCompletedWithoutAnimation(generation: generation)
+
         XCTAssertTrue(coordinator.requestResize(animated: false))
         XCTAssertFalse(coordinator.consumeResizeRequest().animated)
     }
