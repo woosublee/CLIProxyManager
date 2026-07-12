@@ -192,7 +192,7 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         XCTAssertEqual(panel.frame.height, 420)
     }
 
-    func testFailedPersistenceIgnoresDeferredTargetAndRollbackEmissions() async {
+    func testFailedPersistenceIgnoresDeferredRollbackThenAcceptsLaterAcknowledgement() async {
         let subject = PassthroughSubject<AppConfig.UsageOverlay, Never>()
         let panel = makePanel(x: 500, y: 400, width: 300, height: 260)
         let controller = UsageOverlayWindowController(
@@ -210,17 +210,40 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
 
         controller.toggleDisplayMode()
         await drainMainQueue()
-
         XCTAssertEqual(controller.displayMode, .compact)
+
+        subject.send(.init(isVisible: false, displayMode: .compact))
+        await drainMainQueue()
+        XCTAssertEqual(controller.displayMode, .compact)
+
+        subject.send(.init(isVisible: false, displayMode: .expanded))
+        await drainMainQueue()
+        XCTAssertEqual(controller.displayMode, .expanded)
     }
 
-    func testModeTransitionCoordinatorPreservesAnimationAcrossOrdinaryResizeRequests() {
+    func testModeTransitionAnimationRemainsActiveThroughFollowUpRetarget() {
         var coordinator = UsageOverlayResizeCoordinator()
-        coordinator.beginModeTransition()
+        let generation = coordinator.beginModeTransition()
 
         XCTAssertTrue(coordinator.requestResize(animated: true))
-        XCTAssertFalse(coordinator.requestResize(animated: false))
-        XCTAssertTrue(coordinator.consumeResizeAnimation())
+        let initial = coordinator.consumeResizeRequest()
+        XCTAssertTrue(initial.animated)
+        XCTAssertEqual(initial.transitionGeneration, generation)
+        coordinator.animationStarted(generation: generation)
+
+        XCTAssertTrue(coordinator.requestResize(animated: false))
+        let followUp = coordinator.consumeResizeRequest()
+        XCTAssertTrue(followUp.animated)
+        XCTAssertEqual(followUp.transitionGeneration, generation)
+        coordinator.animationStarted(generation: generation)
+
+        coordinator.animationCompleted(generation: generation)
+        XCTAssertTrue(coordinator.requestResize(animated: false))
+        XCTAssertTrue(coordinator.consumeResizeRequest().animated)
+
+        coordinator.animationCompleted(generation: generation)
+        XCTAssertTrue(coordinator.requestResize(animated: false))
+        XCTAssertFalse(coordinator.consumeResizeRequest().animated)
     }
 
     func testToggleKeepsFrameUnchangedUntilScheduledResizeUsesLayoutTarget() {

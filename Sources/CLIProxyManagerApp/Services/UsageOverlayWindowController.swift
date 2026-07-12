@@ -5,25 +5,52 @@ import QuartzCore
 import SwiftUI
 
 struct UsageOverlayResizeCoordinator {
+    struct Request {
+        let animated: Bool
+        let transitionGeneration: Int?
+    }
+
+    private var nextGeneration = 0
+    private var activeTransitionGeneration: Int?
+    private var activeAnimationCount = 0
     private var pendingAnimation = false
     private var resizeScheduled = false
 
-    mutating func beginModeTransition() {
+    mutating func beginModeTransition() -> Int {
+        nextGeneration += 1
+        activeTransitionGeneration = nextGeneration
         pendingAnimation = true
+        return nextGeneration
     }
 
     mutating func requestResize(animated: Bool) -> Bool {
-        pendingAnimation = pendingAnimation || animated
+        pendingAnimation = pendingAnimation || animated || activeTransitionGeneration != nil
         guard !resizeScheduled else { return false }
         resizeScheduled = true
         return true
     }
 
-    mutating func consumeResizeAnimation() -> Bool {
+    mutating func consumeResizeRequest() -> Request {
         resizeScheduled = false
-        let animated = pendingAnimation
+        let animated = pendingAnimation || activeTransitionGeneration != nil
         pendingAnimation = false
-        return animated
+        return Request(
+            animated: animated,
+            transitionGeneration: animated ? activeTransitionGeneration : nil
+        )
+    }
+
+    mutating func animationStarted(generation: Int?) {
+        guard generation == activeTransitionGeneration, generation != nil else { return }
+        activeAnimationCount += 1
+    }
+
+    mutating func animationCompleted(generation: Int?) {
+        guard generation == activeTransitionGeneration, generation != nil else { return }
+        activeAnimationCount = max(0, activeAnimationCount - 1)
+        if activeAnimationCount == 0, !resizeScheduled {
+            activeTransitionGeneration = nil
+        }
     }
 }
 
@@ -35,13 +62,21 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     private let shouldReduceMotion: () -> Bool
     private let visibleFrameProvider: () -> CGRect?
     private struct PersistenceTransaction {
+        let generation: Int
         let target: AppConfig.UsageOverlay.DisplayMode
         let original: AppConfig.UsageOverlay.DisplayMode
-        var didObserveTarget = false
-        var didObserveRollback = false
+        var didObserveDeferredTarget = false
+        var didObserveDeferredRollback = false
     }
 
-    private var failedPersistenceOverride: AppConfig.UsageOverlay.DisplayMode?
+    private struct FailedPersistenceOverride {
+        let generation: Int
+        let mode: AppConfig.UsageOverlay.DisplayMode
+        var awaitsLaterAcknowledgement: Bool
+    }
+
+    private var nextPersistenceGeneration = 0
+    private var failedPersistenceOverride: FailedPersistenceOverride?
     private var persistenceTransaction: PersistenceTransaction?
     private var resizeCoordinator = UsageOverlayResizeCoordinator()
     private var configObservation: AnyCancellable?
@@ -111,19 +146,43 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         let target = original.opposite
         presentationState.displayMode = target
         updatePanelConstraints(for: target)
-        resizeCoordinator.beginModeTransition()
+        _ = resizeCoordinator.beginModeTransition()
 
-        persistenceTransaction = PersistenceTransaction(target: target, original: original)
+        nextPersistenceGeneration += 1
+        let generation = nextPersistenceGeneration
+        persistenceTransaction = PersistenceTransaction(
+            generation: generation,
+            target: target,
+            original: original
+        )
         let didPersist = persistDisplayMode(target)
-        failedPersistenceOverride = didPersist ? nil : target
-        if persistenceTransaction?.didObserveRollback == true || !didPersist {
+        if didPersist {
+            failedPersistenceOverride = nil
             persistenceTransaction = nil
+        } else {
+            let didObserveDeferredSequence = persistenceTransaction?.didObserveDeferredRollback == true
+            failedPersistenceOverride = FailedPersistenceOverride(
+                generation: generation,
+                mode: target,
+                awaitsLaterAcknowledgement: didObserveDeferredSequence
+            )
+            if didObserveDeferredSequence {
+                persistenceTransaction = nil
+            }
         }
 
         resizeToFittingContent(animated: true)
     }
 
     func updateContentSize(_ size: CGSize, animated: Bool = false) {
+        updateContentSize(size, animated: animated, transitionGeneration: nil)
+    }
+
+    private func updateContentSize(
+        _ size: CGSize,
+        animated: Bool,
+        transitionGeneration: Int?
+    ) {
         guard let visibleFrame = currentVisibleFrame() else {
             panel.setContentSize(size)
             return
@@ -141,11 +200,16 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             return
         }
 
+        resizeCoordinator.animationStarted(generation: transitionGeneration)
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.25
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             context.allowsImplicitAnimation = true
             panel.animator().setFrame(target, display: true)
+        } completionHandler: { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.resizeCoordinator.animationCompleted(generation: transitionGeneration)
+            }
         }
     }
 
@@ -171,17 +235,29 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             alwaysOnTop: preferences.alwaysOnTop
         )
         if var transaction = persistenceTransaction {
-            if preferences.displayMode == transaction.target, !transaction.didObserveTarget {
-                transaction.didObserveTarget = true
+            if preferences.displayMode == transaction.target, !transaction.didObserveDeferredTarget {
+                transaction.didObserveDeferredTarget = true
                 persistenceTransaction = transaction
-            } else if transaction.didObserveTarget,
+            } else if transaction.didObserveDeferredTarget,
                       preferences.displayMode == transaction.original,
-                      !transaction.didObserveRollback {
-                transaction.didObserveRollback = true
-                persistenceTransaction = transaction
+                      !transaction.didObserveDeferredRollback {
+                transaction.didObserveDeferredRollback = true
+                if var override = failedPersistenceOverride,
+                   override.generation == transaction.generation {
+                    override.awaitsLaterAcknowledgement = true
+                    failedPersistenceOverride = override
+                    persistenceTransaction = nil
+                } else {
+                    persistenceTransaction = transaction
+                }
             } else {
                 persistenceTransaction = nil
                 applyPersistedDisplayModeIfAllowed(preferences.displayMode)
+            }
+        } else if var override = failedPersistenceOverride {
+            if override.awaitsLaterAcknowledgement, preferences.displayMode == override.mode {
+                override.awaitsLaterAcknowledgement = false
+                failedPersistenceOverride = nil
             }
         } else {
             applyPersistedDisplayModeIfAllowed(preferences.displayMode)
@@ -285,9 +361,13 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         guard resizeCoordinator.requestResize(animated: animated) else { return }
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            let shouldAnimate = self.resizeCoordinator.consumeResizeAnimation()
+            let request = self.resizeCoordinator.consumeResizeRequest()
             guard let contentView = self.panel.contentView else { return }
-            self.updateContentSize(contentView.fittingSize, animated: shouldAnimate)
+            self.updateContentSize(
+                contentView.fittingSize,
+                animated: request.animated,
+                transitionGeneration: request.transitionGeneration
+            )
         }
     }
 }
