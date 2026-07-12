@@ -135,13 +135,13 @@ struct ModelsSettingsSheet: View {
     @State private var sonnet: AppConfig.CodexRole
     @State private var haiku: AppConfig.CodexRole
     @State private var errorMessage: String?
-    let availableModels: [String]
+    let availableModels: [CodexModelOption]
     let refreshModels: () -> Void
     let save: (AppConfig.Codex) throws -> Void
 
     init(
         config: AppConfig,
-        availableModels: [String],
+        availableModels: [CodexModelOption],
         refreshModels: @escaping () -> Void,
         save: @escaping (AppConfig.Codex) throws -> Void
     ) {
@@ -166,7 +166,7 @@ struct ModelsSettingsSheet: View {
                 opus: $opus,
                 sonnet: $sonnet,
                 haiku: $haiku,
-                availableModels: availableModels.map { CodexModelOption(id: $0) }
+                availableModels: availableModels
             )
 
             Text("1M context passes the requested value only. Actual support depends on the Codex account, model, OAuth session, and CLIProxyAPI support.")
@@ -180,7 +180,7 @@ struct ModelsSettingsSheet: View {
                     do {
                         let codex = CodexRoleRoutingOptions.normalizedCodex(
                             AppConfig.Codex(opus: opus, sonnet: sonnet, haiku: haiku),
-                            options: availableModels.map { CodexModelOption(id: $0) }
+                            options: availableModels
                         )
                         try save(codex)
                         dismiss()

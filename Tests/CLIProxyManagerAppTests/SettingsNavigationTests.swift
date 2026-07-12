@@ -42,6 +42,18 @@ final class SettingsNavigationTests: XCTestCase {
     func testCodexProviderSettingsUsesTallerSheetHeight() {
         XCTAssertEqual(ProviderSettingsSheetMetrics.codexHeight, 720)
     }
+
+    func testLegacyCodexModelsSheetPreservesFastModeCapability() {
+        let option = CodexModelOption(id: "gpt-5.5", supportsFastMode: true)
+        let sheet = ModelsSettingsSheet(
+            config: .default,
+            availableModels: [option],
+            refreshModels: {},
+            save: { _ in }
+        )
+
+        XCTAssertTrue(sheet.availableModels.first?.supportsFastMode == true)
+    }
 }
 
 private final class BundleMock: Bundle, @unchecked Sendable {
