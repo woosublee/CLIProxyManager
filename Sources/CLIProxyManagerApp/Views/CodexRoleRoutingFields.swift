@@ -5,7 +5,7 @@ struct CodexRoleRoutingFields: View {
     @Binding var opus: AppConfig.CodexRole
     @Binding var sonnet: AppConfig.CodexRole
     @Binding var haiku: AppConfig.CodexRole
-    let availableModels: [String]
+    let availableModels: [CodexModelOption]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -43,8 +43,14 @@ struct CodexRoleRoutingFields: View {
                     .font(.system(size: 12.5, weight: .semibold))
                     .frame(width: 64, alignment: .leading)
 
-                Picker("", selection: role.model) {
-                    ForEach(ModelSelectionOptions.options(currentModel: role.wrappedValue.model, availableModels: availableModels), id: \.self) { model in
+                Picker("", selection: modelBinding(for: role)) {
+                    ForEach(
+                        CodexRoleRoutingOptions.modelIDs(
+                            currentModel: role.wrappedValue.model,
+                            options: availableModels
+                        ),
+                        id: \.self
+                    ) { model in
                         Text(model).tag(model)
                     }
                 }
@@ -53,7 +59,14 @@ struct CodexRoleRoutingFields: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 Picker("", selection: role.reasoning) {
-                    ForEach(AppConfig.CodexReasoning.allCases, id: \.self) { reasoning in
+                    ForEach(
+                        CodexRoleRoutingOptions.reasoningValues(
+                            currentReasoning: role.wrappedValue.reasoning,
+                            model: role.wrappedValue.model,
+                            options: availableModels
+                        ),
+                        id: \.self
+                    ) { reasoning in
                         Text(reasoning.rawValue).tag(reasoning)
                     }
                 }
@@ -77,5 +90,21 @@ struct CodexRoleRoutingFields: View {
                 Divider().padding(.leading, 14)
             }
         }
+    }
+
+    private func modelBinding(for role: Binding<AppConfig.CodexRole>) -> Binding<String> {
+        Binding(
+            get: { role.wrappedValue.model },
+            set: { model in
+                var updated = role.wrappedValue
+                updated.model = model
+                updated.reasoning = CodexRoleRoutingOptions.normalizedReasoning(
+                    currentReasoning: updated.reasoning,
+                    model: model,
+                    options: availableModels
+                )
+                role.wrappedValue = updated
+            }
+        )
     }
 }

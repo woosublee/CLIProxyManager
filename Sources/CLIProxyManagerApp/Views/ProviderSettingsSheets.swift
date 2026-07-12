@@ -7,12 +7,58 @@ enum ProviderSettingsSheetMetrics {
     static let defaultMinHeight: CGFloat = 360
     static let defaultMaxHeight: CGFloat = 720
     static let codexHeight: CGFloat = 700
+    static let claudeHeight: CGFloat = 620
+    static let claudeModelPickerWidth: CGFloat = 225
     static let footerActionButtonControlSize = ControlSize.regular
 }
 
 enum CodexProviderModelOptions {
-    static func modelsAfterGlobalAvailableModelsChange(currentScopedModels: [String], globalAvailableModels _: [String]) -> [String] {
+    static func modelsAfterGlobalAvailableModelsChange(
+        currentScopedModels: [CodexModelOption],
+        globalAvailableModels _: [CodexModelOption]
+    ) -> [CodexModelOption] {
         currentScopedModels
+    }
+}
+
+enum CodexAPIModelOptions {
+    static func initialModels(
+        codex: AppConfig.Codex,
+        availableModels: [CodexModelOption]
+    ) -> [CodexModelOption] {
+        if !availableModels.isEmpty {
+            return availableModels
+        }
+        return baseModels(from: [codex.opus.model, codex.sonnet.model, codex.haiku.model])
+            .map { CodexModelOption(id: $0) }
+    }
+
+    static func baseModels(from models: [String]) -> [String] {
+        var seen = Set<String>()
+        return models.compactMap { model in
+            let unprefixed = model.split(separator: "/", omittingEmptySubsequences: false).last.map(String.init) ?? model
+            let baseModel = unprefixed.replacingOccurrences(
+                of: #"\((?:auto|low|medium|high|xhigh|max)\)$"#,
+                with: "",
+                options: .regularExpression
+            ).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !baseModel.isEmpty, seen.insert(baseModel).inserted else { return nil }
+            return baseModel
+        }
+    }
+
+    static func normalized(_ codex: AppConfig.Codex) -> AppConfig.Codex {
+        AppConfig.Codex(
+            opus: normalized(codex.opus),
+            sonnet: normalized(codex.sonnet),
+            haiku: normalized(codex.haiku)
+        )
+    }
+
+    private static func normalized(_ role: AppConfig.CodexRole) -> AppConfig.CodexRole {
+        var role = role
+        role.model = baseModels(from: [role.model]).first ?? ""
+        return role
     }
 }
 
@@ -97,7 +143,7 @@ private struct GroupTitle: View {
     }
 }
 
-private struct GroupCard<Content: View>: View {
+struct GroupCard<Content: View>: View {
     @ViewBuilder var content: Content
     var body: some View {
         VStack(spacing: 0) {
@@ -114,7 +160,7 @@ private struct GroupCard<Content: View>: View {
     }
 }
 
-private struct CardRow<Control: View>: View {
+struct CardRow<Control: View>: View {
     let label: String
     var description: String?
     var warning: String?
@@ -150,6 +196,42 @@ private struct CardRow<Control: View>: View {
 
             if !isLast {
                 Divider().padding(.leading, 14)
+            }
+        }
+    }
+}
+
+private struct ClaudeOAuthConnectionModeSection: View {
+    @Binding var connectionMode: AppConfig.ConnectionMode
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            GroupTitle(text: "Connection")
+            Picker("Connection", selection: $connectionMode) {
+                Text("CLIProxyAPI").tag(AppConfig.ConnectionMode.proxy)
+                Text("Direct").tag(AppConfig.ConnectionMode.direct)
+            }
+            .pickerStyle(.segmented)
+            Text(connectionMode == .proxy
+                 ? "Routes this registered OAuth account through CLIProxyAPI."
+                 : "Runs Claude Code directly with its current official login.")
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct FixedCLIProxyAPIConnectionSection: View {
+    let description: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            GroupTitle(text: "Connection")
+            GroupCard {
+                CardRow(label: "CLIProxyAPI", description: description, isLast: true) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(BrandPalette.statusRunning)
+                }
             }
         }
     }
@@ -341,12 +423,46 @@ private func commandNameHelpText(prefix: String, checkState: CommandNameCheckSta
     }
 }
 
+private func debouncedCommandNameCheck(
+    functionName: String,
+    checkCommandName: (String) async -> CommandNameAvailability
+) async -> CommandNameCheckState? {
+    guard !functionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+    do {
+        try await Task.sleep(nanoseconds: 300_000_000)
+    } catch {
+        return nil
+    }
+    guard !Task.isCancelled else { return nil }
+    let availability = await checkCommandName(functionName)
+    guard !Task.isCancelled else { return nil }
+    switch availability {
+    case .available:
+        return .available
+    case .unavailable(let message):
+        return .unavailable(message)
+    }
+}
+
 // MARK: - Claude OAuth sheet
 
 struct OAuthSettingsInitialState: Equatable {
     let functionName: String
     let nickname: String
     let dangerousPermissionsEnabled: Bool
+    let claudeRouting: ClaudeRouting
+
+    init(
+        functionName: String,
+        nickname: String,
+        dangerousPermissionsEnabled: Bool,
+        claudeRouting: ClaudeRouting = .automatic
+    ) {
+        self.functionName = functionName
+        self.nickname = nickname
+        self.dangerousPermissionsEnabled = dangerousPermissionsEnabled
+        self.claudeRouting = claudeRouting
+    }
 }
 
 func oauthSettingsRecommendedFunctionName(provider: ProviderRowState.ID) -> String {
@@ -362,7 +478,8 @@ func oauthSettingsInitialState(config: AppConfig, provider: ProviderRowState.ID,
         return OAuthSettingsInitialState(
             functionName: isInitialSetup ? "" : commandProfile.commandName,
             nickname: isInitialSetup ? "" : commandProfile.nickname,
-            dangerousPermissionsEnabled: isInitialSetup ? false : commandProfile.dangerousPermissionsEnabled
+            dangerousPermissionsEnabled: isInitialSetup ? false : commandProfile.dangerousPermissionsEnabled,
+            claudeRouting: isInitialSetup ? .automatic : commandProfile.effectiveClaudeRouting
         )
     }
     return oauthSettingsInitialState(config: config, providerType: provider.inferredProviderType, isInitialSetup: isInitialSetup)
@@ -370,7 +487,7 @@ func oauthSettingsInitialState(config: AppConfig, provider: ProviderRowState.ID,
 
 func oauthSettingsInitialState(config: AppConfig, providerType: AuthProfileType, isInitialSetup: Bool) -> OAuthSettingsInitialState {
     if isInitialSetup {
-        return OAuthSettingsInitialState(functionName: "", nickname: "", dangerousPermissionsEnabled: false)
+        return OAuthSettingsInitialState(functionName: "", nickname: "", dangerousPermissionsEnabled: false, claudeRouting: .automatic)
     }
 
     switch providerType {
@@ -378,13 +495,15 @@ func oauthSettingsInitialState(config: AppConfig, providerType: AuthProfileType,
         return OAuthSettingsInitialState(
             functionName: config.commands.cc,
             nickname: config.nicknames.cc,
-            dangerousPermissionsEnabled: config.includeDangerouslySkipPermissions
+            dangerousPermissionsEnabled: config.includeDangerouslySkipPermissions,
+            claudeRouting: .automatic
         )
     case .codex:
         return OAuthSettingsInitialState(
             functionName: config.commands.ccodex,
             nickname: config.nicknames.ccodex,
-            dangerousPermissionsEnabled: config.includeDangerouslySkipPermissions
+            dangerousPermissionsEnabled: config.includeDangerouslySkipPermissions,
+            claudeRouting: .automatic
         )
     }
 }
@@ -416,6 +535,11 @@ struct ClaudeOAuthProviderSettingsSheet: View {
     @State private var functionName: String
     @State private var nickname: String
     @State private var dangerousPermissionsEnabled: Bool
+    @State private var connectionMode: AppConfig.ConnectionMode
+    @State private var claudeRouting: ClaudeRouting
+    @State private var scopedModels: [ClaudeModelOption]
+    @State private var modelLoadError: String?
+    @State private var isReloadingModels = false
     @State private var saveErrorMessage: String?
     @State private var commandNameCheckState: CommandNameCheckState = .checking
     @State private var confirmRemove: Bool = false
@@ -424,9 +548,10 @@ struct ClaudeOAuthProviderSettingsSheet: View {
     let isConnected: Bool
     let onDisconnect: () -> Void
     let checkCommandName: (String) async -> CommandNameAvailability
+    let refreshModels: () async throws -> [ClaudeModelOption]
     var onCancel: () -> Void = {}
     var isInitialSetup: Bool = false
-    let save: (String, String, Bool) throws -> Void
+    let save: (String, String, Bool, AppConfig.ConnectionMode, ClaudeRouting) throws -> Void
 
     init(
         config: AppConfig,
@@ -434,20 +559,26 @@ struct ClaudeOAuthProviderSettingsSheet: View {
         connectionDetail: String,
         isConnected: Bool,
         onDisconnect: @escaping () -> Void,
+        initialModels: [ClaudeModelOption] = [],
         checkCommandName: @escaping (String) async -> CommandNameAvailability,
+        refreshModels: @escaping () async throws -> [ClaudeModelOption] = { [] },
         onCancel: @escaping () -> Void = {},
         isInitialSetup: Bool = false,
-        save: @escaping (String, String, Bool) throws -> Void
+        save: @escaping (String, String, Bool, AppConfig.ConnectionMode, ClaudeRouting) throws -> Void
     ) {
         let initialState = oauthSettingsInitialState(config: config, provider: providerID, isInitialSetup: isInitialSetup)
         _functionName = State(initialValue: initialState.functionName)
         _nickname = State(initialValue: initialState.nickname)
         _dangerousPermissionsEnabled = State(initialValue: initialState.dangerousPermissionsEnabled)
+        _connectionMode = State(initialValue: config.oauthCommandProfiles.first(where: { $0.id == providerID.rawValue })?.connectionMode ?? .proxy)
+        _claudeRouting = State(initialValue: initialState.claudeRouting)
+        _scopedModels = State(initialValue: initialModels)
         self.providerID = providerID
         self.connectionDetail = connectionDetail
         self.isConnected = isConnected
         self.onDisconnect = onDisconnect
         self.checkCommandName = checkCommandName
+        self.refreshModels = refreshModels
         self.onCancel = onCancel
         self.isInitialSetup = isInitialSetup
         self.save = save
@@ -461,6 +592,7 @@ struct ClaudeOAuthProviderSettingsSheet: View {
             providerType: .claude,
             title: "Account Settings",
             width: 460,
+            minHeight: ProviderSettingsSheetMetrics.claudeHeight,
             onClose: {
                 onCancel()
                 dismiss()
@@ -487,6 +619,39 @@ struct ClaudeOAuthProviderSettingsSheet: View {
                     prefix: "The terminal command that launches Claude Code with this account.",
                     checkState: commandNameCheckState
                 )
+            }
+
+            ClaudeOAuthConnectionModeSection(connectionMode: $connectionMode)
+
+            if ClaudeRoleRoutingOptions.showsModels(connectionMode: connectionMode) {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        GroupTitle(text: "Models")
+                        Spacer()
+                        Button {
+                            Task { await reloadModels() }
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isReloadingModels)
+                        .help("Refresh models for this Claude account")
+                    }
+                    ClaudeRoleRoutingFields(routing: $claudeRouting, options: scopedModels)
+                    if isReloadingModels {
+                        Text("Loading models for this Claude account.")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                    } else if let modelLoadError {
+                        Text(modelLoadError)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(BrandPalette.statusWarning)
+                    }
+                }
+            } else {
+                Text("Direct uses Claude Code's current model policy.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
             }
 
             VStack(alignment: .leading, spacing: 6) {
@@ -516,7 +681,7 @@ struct ClaudeOAuthProviderSettingsSheet: View {
                 },
                 onSave: {
                     do {
-                        try save(functionName, nickname, dangerousPermissionsEnabled)
+                        try save(functionName, nickname, dangerousPermissionsEnabled, connectionMode, claudeRouting)
                         dismiss()
                     } catch {
                         saveErrorMessage = error.localizedDescription
@@ -527,6 +692,11 @@ struct ClaudeOAuthProviderSettingsSheet: View {
         }
         .task(id: functionName) {
             await updateCommandNameAvailability()
+        }
+        .task(id: connectionMode) {
+            if connectionMode == .proxy, scopedModels.isEmpty {
+                await reloadModels()
+            }
         }
         .settingsToast(message: saveErrorMessage, dismiss: { saveErrorMessage = nil })
         .alert("Remove this Claude account?", isPresented: $confirmRemove) {
@@ -542,18 +712,22 @@ struct ClaudeOAuthProviderSettingsSheet: View {
 
     private func updateCommandNameAvailability() async {
         commandNameCheckState = .checking
-        guard !functionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        do {
-            try await Task.sleep(nanoseconds: 300_000_000)
-        } catch {
-            return
-        }
+        guard let state = await debouncedCommandNameCheck(
+            functionName: functionName,
+            checkCommandName: checkCommandName
+        ) else { return }
+        commandNameCheckState = state
+    }
 
-        switch await checkCommandName(functionName) {
-        case .available:
-            commandNameCheckState = .available
-        case .unavailable(let message):
-            commandNameCheckState = .unavailable(message)
+    private func reloadModels() async {
+        guard connectionMode == .proxy, !isReloadingModels else { return }
+        isReloadingModels = true
+        defer { isReloadingModels = false }
+        do {
+            scopedModels = try await refreshModels()
+            modelLoadError = nil
+        } catch {
+            modelLoadError = error.localizedDescription
         }
     }
 }
@@ -571,19 +745,19 @@ struct CodexProviderSettingsSheet: View {
     @State private var saveErrorMessage: String?
     @State private var commandNameCheckState: CommandNameCheckState = .checking
     @State private var confirmRemove: Bool = false
-    @State private var scopedAvailableModels: [String]
+    @State private var scopedAvailableModels: [CodexModelOption]
     @State private var isReloading: Bool = false
     let providerID: ProviderRowState.ID
     let connectionDetail: String
     let isConnected: Bool
-    let availableModels: [String]
+    let availableModels: [CodexModelOption]
     let modelLoadingState: CodexModelLoadingState
-    let refreshModels: () async throws -> [String]
+    let refreshModels: () async throws -> [CodexModelOption]
     let onDisconnect: () -> Void
     let checkCommandName: (String) async -> CommandNameAvailability
     var onCancel: () -> Void = {}
     var isInitialSetup: Bool = false
-    var latestModel: () -> String? = { nil }
+    let preferredModel: ([CodexModelOption]) -> String?
     let save: (String, String, AppConfig.Codex, Bool) throws -> Void
     @State private var didApplyInitialDefaults: Bool = false
 
@@ -592,14 +766,14 @@ struct CodexProviderSettingsSheet: View {
         providerID: ProviderRowState.ID = .codex,
         connectionDetail: String,
         isConnected: Bool,
-        availableModels: [String],
+        availableModels: [CodexModelOption],
         modelLoadingState: CodexModelLoadingState,
-        refreshModels: @escaping () async throws -> [String],
+        refreshModels: @escaping () async throws -> [CodexModelOption],
         onDisconnect: @escaping () -> Void,
         checkCommandName: @escaping (String) async -> CommandNameAvailability,
         onCancel: @escaping () -> Void = {},
         isInitialSetup: Bool = false,
-        latestModel: @escaping () -> String? = { nil },
+        preferredModel: @escaping ([CodexModelOption]) -> String?,
         save: @escaping (String, String, AppConfig.Codex, Bool) throws -> Void
     ) {
         let initialState = oauthSettingsInitialState(config: config, provider: providerID, isInitialSetup: isInitialSetup)
@@ -621,7 +795,7 @@ struct CodexProviderSettingsSheet: View {
         self.checkCommandName = checkCommandName
         self.onCancel = onCancel
         self.isInitialSetup = isInitialSetup
-        self.latestModel = latestModel
+        self.preferredModel = preferredModel
         self.save = save
     }
 
@@ -762,19 +936,11 @@ struct CodexProviderSettingsSheet: View {
 
     private func updateCommandNameAvailability() async {
         commandNameCheckState = .checking
-        guard !functionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        do {
-            try await Task.sleep(nanoseconds: 300_000_000)
-        } catch {
-            return
-        }
-
-        switch await checkCommandName(functionName) {
-        case .available:
-            commandNameCheckState = .available
-        case .unavailable(let message):
-            commandNameCheckState = .unavailable(message)
-        }
+        guard let state = await debouncedCommandNameCheck(
+            functionName: functionName,
+            checkCommandName: checkCommandName
+        ) else { return }
+        commandNameCheckState = state
     }
 
     private func reloadModels() async {
@@ -789,61 +955,388 @@ struct CodexProviderSettingsSheet: View {
     }
 
     private func applyInitialDefaultsIfNeeded() {
-        guard isInitialSetup, !didApplyInitialDefaults else { return }
-        guard let latest = latestModel() else { return }
-        opus.model = latest
-        sonnet.model = latest
-        haiku.model = latest
+        guard isInitialSetup, !didApplyInitialDefaults,
+              let defaultModel = preferredModel(scopedAvailableModels) else { return }
+        opus.model = defaultModel
+        sonnet.model = defaultModel
+        haiku.model = defaultModel
         didApplyInitialDefaults = true
     }
 
-    private func applyDefaultModel(from models: [String]) {
-        guard let firstModel = models.first else { return }
-        if opus.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { opus.model = firstModel }
-        if sonnet.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { sonnet.model = firstModel }
-        if haiku.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { haiku.model = firstModel }
+    private func applyDefaultModel(from models: [CodexModelOption]) {
+        guard let defaultModel = preferredModel(models) else { return }
+        if opus.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { opus.model = defaultModel }
+        if sonnet.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { sonnet.model = defaultModel }
+        if haiku.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { haiku.model = defaultModel }
     }
 }
 
-// MARK: - Claude API sheet (kept; not used by main popover anymore)
+// MARK: - API key sheets
 
 struct ClaudeAPIProviderSettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var functionName: String
-    @State private var model: String
+    @State private var nickname: String
+    @State private var claudeRouting: ClaudeRouting
+    @State private var scopedModels: [ClaudeModelOption]
+    @State private var isReloadingModels = false
+    @State private var modelLoadError: String?
+    @State private var dangerousPermissionsEnabled: Bool
+    @State private var apiKey = ""
     @State private var saveErrorMessage: String?
-    let save: (String, String) throws -> Void
+    @State private var commandNameCheckState: CommandNameCheckState = .checking
+    let isConfigured: Bool
+    let refreshModels: () async throws -> [ClaudeModelOption]
+    let checkCommandName: (String) async -> CommandNameAvailability
+    let save: (String, String, ClaudeRouting, Bool, String?) throws -> Void
+    let remove: () -> Void
 
-    init(config: AppConfig, save: @escaping (String, String) throws -> Void) {
+    init(
+        config: AppConfig,
+        isConfigured: Bool,
+        initialModels: [ClaudeModelOption] = [],
+        refreshModels: @escaping () async throws -> [ClaudeModelOption],
+        checkCommandName: @escaping (String) async -> CommandNameAvailability,
+        save: @escaping (String, String, ClaudeRouting, Bool, String?) throws -> Void,
+        remove: @escaping () -> Void
+    ) {
         _functionName = State(initialValue: config.commands.ccapi)
-        _model = State(initialValue: config.ccapi.model)
+        _nickname = State(initialValue: config.ccapi.nickname)
+        _claudeRouting = State(initialValue: config.ccapi.claude)
+        _scopedModels = State(initialValue: initialModels)
+        _dangerousPermissionsEnabled = State(initialValue: config.ccapi.dangerousPermissionsEnabled)
+        self.isConfigured = isConfigured
+        self.refreshModels = refreshModels
+        self.checkCommandName = checkCommandName
         self.save = save
+        self.remove = remove
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Claude API")
-                .font(.title2.bold())
-            TextField("Function name", text: $functionName)
-                .textFieldStyle(.roundedBorder)
-            TextField("Model", text: $model)
-                .textFieldStyle(.roundedBorder)
-            HStack {
-                Spacer()
-                Button("Cancel") { dismiss() }
-                Button("Save") {
+        AccountSheetChrome(
+            providerID: .claudeAPI,
+            providerType: .claude,
+            title: "Claude API Key",
+            width: 460,
+            minHeight: ProviderSettingsSheetMetrics.claudeHeight,
+            onClose: { dismiss() }
+        ) {
+            Text(isConfigured ? "API key configured" : "Add an Anthropic API key")
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(isConfigured ? BrandPalette.statusRunning : .secondary)
+
+            VStack(alignment: .leading, spacing: 6) {
+                GroupTitle(text: "API key")
+                SecureField(isConfigured ? "Enter a new key to replace it" : "sk-ant-…", text: $apiKey)
+                    .textFieldStyle(.roundedBorder)
+                Text("Stored in a private local file and used only by CLIProxyAPI.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                GroupTitle(text: "Nickname")
+                StyledTextField(placeholder: "e.g. Personal, Work", text: $nickname)
+                Text("Shown in the menu bar and account list. Optional.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                GroupTitle(text: "Command name")
+                CommandNameField(value: $functionName, checkState: commandNameCheckState)
+                commandNameHelpText(
+                    prefix: "The terminal command that launches Claude Code with this API key.",
+                    checkState: commandNameCheckState
+                )
+            }
+
+            FixedCLIProxyAPIConnectionSection(
+                description: "API key requests always route through CLIProxyAPI to keep them separate from the current OAuth subscription login."
+            )
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    GroupTitle(text: "Models")
+                    Spacer()
+                    Button {
+                        Task { await reloadModels() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isReloadingModels)
+                    .help("Refresh models for this Claude API key")
+                }
+                ClaudeRoleRoutingFields(routing: $claudeRouting, options: scopedModels)
+                if isReloadingModels {
+                    Text("Loading models for this Claude API key.")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                } else if let modelLoadError {
+                    Text(modelLoadError)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(BrandPalette.statusWarning)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                GroupTitle(text: "Permissions")
+                GroupCard {
+                    CardRow(
+                        label: "Skip permission prompts",
+                        description: "Adds --dangerously-skip-permissions when launching. Use only for trusted local work.",
+                        warning: dangerousPermissionsEnabled ? "Claude Code will skip every permission confirmation." : nil,
+                        isLast: true
+                    ) {
+                        Toggle("", isOn: $dangerousPermissionsEnabled)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .tint(BrandPalette.accent)
+                            .controlSize(.small)
+                    }
+                }
+            }
+        } footer: {
+            SheetFooter(
+                removeLabel: "Remove key",
+                onRemove: { remove(); dismiss() },
+                onCancel: { dismiss() },
+                onSave: {
                     do {
-                        try save(functionName, model)
+                        try save(functionName, nickname, claudeRouting, dangerousPermissionsEnabled, apiKey.isEmpty ? nil : apiKey)
+                        apiKey = ""
                         dismiss()
                     } catch {
                         saveErrorMessage = error.localizedDescription
                     }
-                }
-                .keyboardShortcut(.defaultAction)
+                },
+                saveDisabled: functionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || commandNameCheckState.isSaveDisabled
+                    || (!isConfigured && apiKey.isEmpty)
+            )
+        }
+        .task {
+            if scopedModels.isEmpty {
+                await reloadModels()
             }
         }
-        .padding(24)
-        .frame(width: 460)
+        .task(id: functionName) {
+            commandNameCheckState = .checking
+            guard let state = await debouncedCommandNameCheck(
+                functionName: functionName,
+                checkCommandName: checkCommandName
+            ) else { return }
+            commandNameCheckState = state
+        }
         .settingsToast(message: saveErrorMessage, dismiss: { saveErrorMessage = nil })
+    }
+
+    private func reloadModels() async {
+        guard !isReloadingModels else { return }
+        isReloadingModels = true
+        defer { isReloadingModels = false }
+        do {
+            scopedModels = try await refreshModels()
+            modelLoadError = nil
+        } catch {
+            modelLoadError = error.localizedDescription
+        }
+    }
+}
+
+struct CodexAPIProviderSettingsSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var functionName: String
+    @State private var nickname: String
+    @State private var opus: AppConfig.CodexRole
+    @State private var sonnet: AppConfig.CodexRole
+    @State private var haiku: AppConfig.CodexRole
+    @State private var dangerousPermissionsEnabled: Bool
+    @State private var scopedAvailableModels: [CodexModelOption]
+    @State private var isReloading = false
+    @State private var apiKey = ""
+    @State private var saveErrorMessage: String?
+    @State private var commandNameCheckState: CommandNameCheckState = .checking
+    let isConfigured: Bool
+    let modelLoadingState: CodexModelLoadingState
+    let refreshModels: () async throws -> [CodexModelOption]
+    let preferredModel: ([CodexModelOption]) -> String?
+    let checkCommandName: (String) async -> CommandNameAvailability
+    let save: (String, String, AppConfig.Codex, Bool, String?) throws -> Void
+    let remove: () -> Void
+
+    init(
+        config: AppConfig,
+        isConfigured: Bool,
+        availableModels: [CodexModelOption],
+        modelLoadingState: CodexModelLoadingState,
+        refreshModels: @escaping () async throws -> [CodexModelOption],
+        preferredModel: @escaping ([CodexModelOption]) -> String?,
+        checkCommandName: @escaping (String) async -> CommandNameAvailability,
+        save: @escaping (String, String, AppConfig.Codex, Bool, String?) throws -> Void,
+        remove: @escaping () -> Void
+    ) {
+        let normalizedCodex = CodexAPIModelOptions.normalized(config.codexAPI.codex)
+        let normalizedModels = CodexAPIModelOptions.initialModels(
+            codex: normalizedCodex,
+            availableModels: availableModels
+        )
+        _functionName = State(initialValue: config.commands.ccodexapi)
+        _nickname = State(initialValue: config.codexAPI.nickname)
+        _opus = State(initialValue: normalizedCodex.opus)
+        _sonnet = State(initialValue: normalizedCodex.sonnet)
+        _haiku = State(initialValue: normalizedCodex.haiku)
+        _dangerousPermissionsEnabled = State(initialValue: config.codexAPI.dangerousPermissionsEnabled)
+        _scopedAvailableModels = State(initialValue: normalizedModels)
+        self.isConfigured = isConfigured
+        self.modelLoadingState = modelLoadingState
+        self.refreshModels = refreshModels
+        self.preferredModel = preferredModel
+        self.checkCommandName = checkCommandName
+        self.save = save
+        self.remove = remove
+    }
+
+    var body: some View {
+        AccountSheetChrome(providerID: .codexAPI, providerType: .codex, title: "OpenAI API Key", width: 600, minHeight: ProviderSettingsSheetMetrics.codexHeight, onClose: { dismiss() }) {
+            Text(isConfigured ? "API key configured" : "Add an OpenAI API key")
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(isConfigured ? BrandPalette.statusRunning : .secondary)
+
+            VStack(alignment: .leading, spacing: 6) {
+                GroupTitle(text: "API key")
+                SecureField(isConfigured ? "Enter a new key to replace it" : "sk-…", text: $apiKey)
+                    .textFieldStyle(.roundedBorder)
+                Text("This provider always routes through CLIProxyAPI.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                GroupTitle(text: "Nickname")
+                StyledTextField(placeholder: "e.g. Personal, Work", text: $nickname)
+                Text("Shown in the menu bar and account list. Optional.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                GroupTitle(text: "Command name")
+                CommandNameField(value: $functionName, checkState: commandNameCheckState)
+                commandNameHelpText(
+                    prefix: "The terminal command that launches Claude Code with this API key.",
+                    checkState: commandNameCheckState
+                )
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    GroupTitle(text: "Routing")
+                    Spacer()
+                    Button {
+                        Task { await reloadModels() }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.clockwise")
+                            Text("Refresh")
+                        }
+                        .font(.system(size: 11))
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(CodexProviderModelLoadingPresentation.isRefreshDisabled(modelLoadingState: modelLoadingState, isReloading: isReloading))
+                }
+                Text(CodexProviderModelLoadingPresentation.message(modelLoadingState: modelLoadingState, isReloading: isReloading) ?? "Map each Claude model tier to a GPT model, reasoning, and context window.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(CodexProviderModelLoadingPresentation.isError(modelLoadingState: modelLoadingState, isReloading: isReloading) ? BrandPalette.statusError : .secondary)
+                GroupCard {
+                    CodexRoleRoutingFields(opus: $opus, sonnet: $sonnet, haiku: $haiku, availableModels: scopedAvailableModels)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                GroupTitle(text: "Permissions")
+                GroupCard {
+                    CardRow(
+                        label: "Skip permission prompts",
+                        description: "Adds --dangerously-skip-permissions when launching. Use only for trusted local work.",
+                        warning: dangerousPermissionsEnabled ? "Claude Code will skip every permission confirmation." : nil,
+                        isLast: true
+                    ) {
+                        Toggle("", isOn: $dangerousPermissionsEnabled)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .tint(BrandPalette.accent)
+                            .controlSize(.small)
+                    }
+                }
+            }
+        } footer: {
+            SheetFooter(
+                removeLabel: "Remove key",
+                onRemove: { remove(); dismiss() },
+                onCancel: { dismiss() },
+                onSave: {
+                    do {
+                        try save(
+                            functionName,
+                            nickname,
+                            CodexAPIModelOptions.normalized(AppConfig.Codex(opus: opus, sonnet: sonnet, haiku: haiku)),
+                            dangerousPermissionsEnabled,
+                            apiKey.isEmpty ? nil : apiKey
+                        )
+                        apiKey = ""
+                        dismiss()
+                    } catch {
+                        saveErrorMessage = error.localizedDescription
+                    }
+                },
+                saveDisabled: functionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || commandNameCheckState.isSaveDisabled
+                    || (!isConfigured && apiKey.isEmpty)
+            )
+        }
+        .task {
+            await reloadModels()
+            applyInitialDefaultsIfNeeded()
+        }
+        .task(id: functionName) {
+            commandNameCheckState = .checking
+            guard let state = await debouncedCommandNameCheck(
+                functionName: functionName,
+                checkCommandName: checkCommandName
+            ) else { return }
+            commandNameCheckState = state
+        }
+        .settingsToast(message: saveErrorMessage, dismiss: { saveErrorMessage = nil })
+    }
+
+    private func reloadModels() async {
+        guard !isReloading else { return }
+        isReloading = true
+        defer { isReloading = false }
+        do {
+            scopedAvailableModels = try await refreshModels()
+            applyDefaultModel(from: scopedAvailableModels)
+            if !isConfigured {
+                applyInitialDefaultsIfNeeded()
+            }
+        } catch {
+            // Keep the current API-key-scoped options; OAuth/global models are not valid fallbacks.
+        }
+    }
+
+    private func applyInitialDefaultsIfNeeded() {
+        guard !isConfigured, let defaultModel = preferredModel(scopedAvailableModels) else { return }
+        opus.model = defaultModel
+        sonnet.model = defaultModel
+        haiku.model = defaultModel
+    }
+
+    private func applyDefaultModel(from models: [CodexModelOption]) {
+        guard let defaultModel = preferredModel(models) else { return }
+        if opus.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { opus.model = defaultModel }
+        if sonnet.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { sonnet.model = defaultModel }
+        if haiku.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { haiku.model = defaultModel }
     }
 }

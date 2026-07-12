@@ -131,22 +131,20 @@ struct ShellFunctionsSettingsSheet: View {
 
 struct ModelsSettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @State private var claudeModel: String
     @State private var opus: AppConfig.CodexRole
     @State private var sonnet: AppConfig.CodexRole
     @State private var haiku: AppConfig.CodexRole
     @State private var errorMessage: String?
     let availableModels: [String]
     let refreshModels: () -> Void
-    let save: (AppConfig.ClaudeAPI, AppConfig.Codex) throws -> Void
+    let save: (AppConfig.Codex) throws -> Void
 
     init(
         config: AppConfig,
         availableModels: [String],
         refreshModels: @escaping () -> Void,
-        save: @escaping (AppConfig.ClaudeAPI, AppConfig.Codex) throws -> Void
+        save: @escaping (AppConfig.Codex) throws -> Void
     ) {
-        _claudeModel = State(initialValue: config.ccapi.model)
         _opus = State(initialValue: config.ccodex.opus)
         _sonnet = State(initialValue: config.ccodex.sonnet)
         _haiku = State(initialValue: config.ccodex.haiku)
@@ -164,9 +162,6 @@ struct ModelsSettingsSheet: View {
                 Button("Refresh model list", action: refreshModels)
             }
 
-            TextField("Claude API model", text: $claudeModel)
-                .textFieldStyle(.roundedBorder)
-
             roleEditor(title: "Opus role", role: $opus)
             roleEditor(title: "Sonnet role", role: $sonnet)
             roleEditor(title: "Haiku role", role: $haiku)
@@ -180,10 +175,7 @@ struct ModelsSettingsSheet: View {
                 Button("Cancel") { dismiss() }
                 Button("Save") {
                     do {
-                        try save(
-                            AppConfig.ClaudeAPI(model: claudeModel),
-                            AppConfig.Codex(opus: opus, sonnet: sonnet, haiku: haiku)
-                        )
+                        try save(AppConfig.Codex(opus: opus, sonnet: sonnet, haiku: haiku))
                         dismiss()
                     } catch {
                         errorMessage = error.localizedDescription

@@ -244,6 +244,8 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
     private let fileManager: FileManager
     private let managementKeyProvider: @Sendable () -> String?
     private let subscriptionUsageEnabledProvider: @Sendable () -> Bool
+    private let claudeAPIKeyProvider: @Sendable () -> String?
+    private let codexAPIKeyProvider: @Sendable () -> String?
     private let processState = LockedProcessState()
     private let lifecycleLock = NSLock()
 
@@ -254,7 +256,9 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         launcher: any ProcessLaunching = ProcessLauncher(),
         fileManager: FileManager = .default,
         managementKeyProvider: (@Sendable () -> String?)? = nil,
-        subscriptionUsageEnabledProvider: (@Sendable () -> Bool)? = nil
+        subscriptionUsageEnabledProvider: (@Sendable () -> Bool)? = nil,
+        claudeAPIKeyProvider: (@Sendable () -> String?)? = nil,
+        codexAPIKeyProvider: (@Sendable () -> String?)? = nil
     ) {
         self.init(
             paths: paths,
@@ -266,7 +270,9 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
             managementKeyProvider: managementKeyProvider ?? { try? SubscriptionUsageManagementKeyFileStore(paths: paths).managementKey() },
             subscriptionUsageEnabledProvider: subscriptionUsageEnabledProvider ?? {
                 (try? AppConfigStore(paths: paths).load().subscriptionUsage.isEnabled) ?? false
-            }
+            },
+            claudeAPIKeyProvider: claudeAPIKeyProvider ?? { try? FileSecretStore(paths: paths).get(.claudeAPIKey) },
+            codexAPIKeyProvider: codexAPIKeyProvider ?? { try? FileSecretStore(paths: paths).get(.codexAPIKey) }
         )
     }
 
@@ -278,7 +284,9 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         launchctl: any LaunchctlManaging,
         fileManager: FileManager = .default,
         managementKeyProvider: (@Sendable () -> String?)? = nil,
-        subscriptionUsageEnabledProvider: (@Sendable () -> Bool)? = nil
+        subscriptionUsageEnabledProvider: (@Sendable () -> Bool)? = nil,
+        claudeAPIKeyProvider: (@Sendable () -> String?)? = nil,
+        codexAPIKeyProvider: (@Sendable () -> String?)? = nil
     ) {
         self.paths = paths
         self.bundledBinaryURL = bundledBinaryURL
@@ -291,6 +299,8 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         self.subscriptionUsageEnabledProvider = subscriptionUsageEnabledProvider ?? {
             (try? AppConfigStore(paths: paths).load().subscriptionUsage.isEnabled) ?? false
         }
+        self.claudeAPIKeyProvider = claudeAPIKeyProvider ?? { try? FileSecretStore(paths: paths).get(.claudeAPIKey) }
+        self.codexAPIKeyProvider = codexAPIKeyProvider ?? { try? FileSecretStore(paths: paths).get(.codexAPIKey) }
     }
 
     public func prepare(port: Int) throws {
@@ -516,6 +526,31 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         } else {
             managementConfiguration = ""
         }
+
+        let claudeAPIConfiguration: String
+        if let key = nonEmpty(claudeAPIKeyProvider()) {
+            claudeAPIConfiguration = """
+            claude-api-key:
+              - api-key: \(yamlDoubleQuoted(key))
+                base-url: \(yamlDoubleQuoted("https://api.anthropic.com"))
+                prefix: \(yamlDoubleQuoted("cpm-claude-api"))
+            """
+        } else {
+            claudeAPIConfiguration = ""
+        }
+
+        let codexAPIConfiguration: String
+        if let key = nonEmpty(codexAPIKeyProvider()) {
+            codexAPIConfiguration = """
+            codex-api-key:
+              - api-key: \(yamlDoubleQuoted(key))
+                base-url: \(yamlDoubleQuoted("https://api.openai.com/v1"))
+                prefix: \(yamlDoubleQuoted("cpm-codex-api"))
+            """
+        } else {
+            codexAPIConfiguration = ""
+        }
+
         return """
         port: \(port)
         auth-dir: \(yamlDoubleQuoted(paths.authDirectory.path))
@@ -524,7 +559,15 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         api-keys:
           - sk-dummy
         \(managementConfiguration)
+        \(claudeAPIConfiguration)
+        \(codexAPIConfiguration)
         """
+    }
+
+    private func nonEmpty(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private func yamlDoubleQuoted(_ value: String) -> String {

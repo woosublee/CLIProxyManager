@@ -1,10 +1,16 @@
 import CLIProxyManagerCore
 import SwiftUI
 
+enum ProviderSetupChoice {
+    case oauth(AuthProfileType)
+    case apiKey(AuthProfileType)
+}
+
 struct AddProviderModal: View {
     @Environment(\.dismiss) private var dismiss
+    @State private var selectedProvider: AuthProfileType?
     let activeOAuthLoginProvider: ProviderRowState.ID?
-    let onPick: (AuthProfileType) -> Void
+    let onPick: (ProviderSetupChoice) -> Void
     let onCancelLogin: () -> Void
 
     var body: some View {
@@ -13,6 +19,8 @@ struct AddProviderModal: View {
                 OAuthLoginProgressView(provider: activeOAuthLoginProvider)
                     .padding(.horizontal, 18)
                     .padding(.vertical, 16)
+            } else if let selectedProvider {
+                connectionPicker(provider: selectedProvider)
             } else {
                 providerPicker
             }
@@ -21,9 +29,15 @@ struct AddProviderModal: View {
 
             HStack {
                 if activeOAuthLoginProvider == nil {
-                    Button("Cancel") { dismiss() }
-                        .frame(maxWidth: .infinity)
-                        .controlSize(.regular)
+                    Button(selectedProvider == nil ? "Cancel" : "Back") {
+                        if selectedProvider == nil {
+                            dismiss()
+                        } else {
+                            selectedProvider = nil
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .controlSize(.regular)
                 } else {
                     Button("Cancel Login") {
                         onCancelLogin()
@@ -37,6 +51,37 @@ struct AddProviderModal: View {
             .padding(.vertical, 12)
         }
         .frame(width: activeOAuthLoginProvider == nil ? 380 : 320)
+    }
+
+    private func connectionPicker(provider: AuthProfileType) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Add \(provider == .claude ? "Claude" : "Codex")")
+                .font(.system(size: 15, weight: .semibold))
+            Text("Choose how to connect this provider.")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+
+            Button {
+                onPick(.oauth(provider))
+            } label: {
+                ConnectionChoiceRow(title: "OAuth subscription", detail: "Sign in in your browser and use the subscription through CLIProxyAPI.")
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                onPick(.apiKey(provider))
+            } label: {
+                ConnectionChoiceRow(
+                    title: "API Key",
+                    detail: provider == .claude
+                        ? "Save an Anthropic API key for use through CLIProxyAPI."
+                        : "Save an OpenAI API key for use through CLIProxyAPI."
+                )
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
     }
 
     private var providerPicker: some View {
@@ -55,10 +100,10 @@ struct AddProviderModal: View {
 
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
                 ProviderTile(kind: .claude) {
-                    onPick(.claude)
+                    selectedProvider = .claude
                 }
                 ProviderTile(kind: .codex) {
-                    onPick(.codex)
+                    selectedProvider = .codex
                 }
                 ProviderTile(kind: .gemini)
                 ProviderTile(kind: .qwen)
@@ -67,6 +112,26 @@ struct AddProviderModal: View {
             .padding(.top, 6)
             .padding(.bottom, 16)
         }
+    }
+}
+
+private struct ConnectionChoiceRow: View {
+    let title: String
+    let detail: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+            Text(detail)
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(0.04)))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Color.primary.opacity(0.10), lineWidth: 0.5))
     }
 }
 

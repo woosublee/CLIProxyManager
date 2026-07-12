@@ -14,6 +14,8 @@ CLIProxyManager is a macOS menu bar app for managing multiple Claude and Codex O
 ## Highlights
 
 - Connect and manage multiple Claude OAuth and Codex OAuth accounts.
+- Add Claude and OpenAI API keys with per-command nicknames, model mapping, and permission settings.
+- Run every API key command through the local CLIProxyAPI path, isolated from OAuth subscription logins.
 - Configure a command name, nickname, and model settings per account.
 - Start, stop, inspect, and view logs for the local CLIProxyAPI server.
 - Check subscription usage in the menu bar or a separate HUD window.
@@ -37,7 +39,7 @@ Only use release builds downloaded directly from GitHub Releases.
 
 ## Quick start
 
-1. In the app, select **Add Provider** and connect a Claude OAuth or Codex OAuth account.
+1. In the app, select **Add Provider** and add a Claude or Codex OAuth subscription or API key.
 2. In each account's Settings, choose a command name, such as `claude-work` or `codex-personal`.
 3. Open a new Terminal window, or run:
 
@@ -119,7 +121,7 @@ Follow the instructions in [Installation and macOS security warning](#installati
 
 ## Security
 
-CLIProxyManager stores OAuth profiles and preferences under `~/.cliproxy-manager`. This directory can contain credentials, so do not commit it to a repository or share it.
+CLIProxyManager stores OAuth profiles and preferences under `~/.cliproxy-manager`. API keys are stored as plaintext files under `~/.cliproxy-manager/api-keys/`. The app applies `0700` permissions to the directory and `0600` permissions to each key file, but anyone who can access your macOS account can read them. Do not copy, commit, or share this directory.
 
 ## License
 

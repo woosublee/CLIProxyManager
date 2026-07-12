@@ -119,34 +119,50 @@ private struct UsageOverlayAccountView: View {
 
     @ViewBuilder
     private var usageContent: some View {
-        switch provider.subscriptionUsageState {
-        case .disabled, .managementKeyNotConfigured:
-            Text("Subscription usage is disabled")
-                .font(.system(size: 10.5))
-                .foregroundStyle(.secondary)
-        case .loading:
-            Text("Checking subscription usage…")
-                .font(.system(size: 10.5))
-                .foregroundStyle(.secondary)
-        case .unavailable(.proxyUnavailable):
+        if case .unavailable(.proxyUnavailable) = provider.subscriptionUsageState {
             Text("Start the server to check usage")
                 .font(.system(size: 10.5))
                 .foregroundStyle(.secondary)
-        case .unavailable(let issue):
-            Text("Usage unavailable — \(issue.message)")
-                .font(.system(size: 10.5))
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-        case .available(let snapshot):
-            if snapshot.windows.isEmpty {
-                Text("Usage details unavailable")
+        } else {
+            switch subscriptionUsageDisplayState(for: provider.subscriptionUsageState) {
+            case .hidden:
+                Text("Subscription usage is disabled")
                     .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)
-            } else {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(snapshot.windows) { window in
-                        UsageOverlayProgressRow(window: window)
+            case .loading(let message):
+                Text(message)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+            case .unavailable(let message):
+                Text(message)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            case .snapshot(let snapshot, let warning):
+                HStack(alignment: .top, spacing: 6) {
+                    snapshotUsage(snapshot)
+                    if let warning {
+                        SubscriptionUsageWarningIcon(
+                            issue: warning,
+                            lastUpdatedAt: snapshot.fetchedAt
+                        )
+                        .padding(.top, 1)
                     }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func snapshotUsage(_ snapshot: SubscriptionUsageSnapshot) -> some View {
+        if snapshot.windows.isEmpty {
+            Text("Usage details unavailable")
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(snapshot.windows) { window in
+                    UsageOverlayProgressRow(window: window)
                 }
             }
         }

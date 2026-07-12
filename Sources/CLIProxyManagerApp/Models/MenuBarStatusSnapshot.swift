@@ -57,6 +57,7 @@ struct MenuBarStatusSnapshot: Equatable {
         connectedProviders = providers
             .filter(\.isConnected)
             .filter { !$0.isDisabled }
+            .filter(\.showsSubscriptionUsage)
             .map { provider in
                 MenuBarConnectedProvider(
                     id: provider.id,

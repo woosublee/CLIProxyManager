@@ -24,7 +24,7 @@ final class DashboardViewModelTests: XCTestCase {
         let config = AppConfig(
             port: 9444,
             commands: AppConfig.Commands(cc: "claude-local", ccapi: "api-local", ccodex: "codex-local"),
-            ccapi: AppConfig.ClaudeAPI(model: "test-claude"),
+            ccapi: AppConfig.ClaudeAPI(),
             ccodex: AppConfig.Codex(
                 opus: AppConfig.CodexRole(model: "test-opus", reasoning: .auto, contextWindow: .auto),
                 sonnet: AppConfig.CodexRole(model: "test-sonnet", reasoning: .auto, contextWindow: .auto),
@@ -63,7 +63,7 @@ final class DashboardViewModelTests: XCTestCase {
     func testDefaultProfileCardsExcludeClaudeAPIEvenWhenConfigured() {
         var config = AppConfig.default
         config.commands.ccapi = "manualapi"
-        config.ccapi = AppConfig.ClaudeAPI(model: "manual-model")
+        config.ccapi = AppConfig.ClaudeAPI()
 
         let cards = ProfileCard.makeDefaultCards(config: config)
 

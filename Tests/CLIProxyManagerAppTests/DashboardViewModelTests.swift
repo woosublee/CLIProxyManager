@@ -8,7 +8,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let config = AppConfig(
             port: 9444,
             commands: AppConfig.Commands(cc: "claude-local", ccapi: "api-local", ccodex: "codex-local"),
-            ccapi: AppConfig.ClaudeAPI(model: "test-claude"),
+            ccapi: AppConfig.ClaudeAPI(),
             ccodex: AppConfig.Codex(
                 opus: AppConfig.CodexRole(model: "test-opus", reasoning: .auto, contextWindow: .auto),
                 sonnet: AppConfig.CodexRole(model: "test-sonnet", reasoning: .auto, contextWindow: .auto),
@@ -175,7 +175,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         XCTAssertEqual(viewModel.providerRows, [])
@@ -188,7 +189,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         viewModel.addProvider()
@@ -203,7 +205,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         viewModel.addProvider()
@@ -241,7 +244,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         XCTAssertFalse(viewModel.config.showNotifications)
@@ -266,7 +270,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         XCTAssertEqual(viewModel.providerRows, [])
@@ -284,7 +289,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.functionName, "ccmcodex")
@@ -301,7 +307,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: profiles),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.connectionTitle, "Connected")
@@ -322,7 +329,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.accountDetailHidden, false)
@@ -342,7 +350,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         viewModel.toggleAccountDetailVisibility(.claude)
@@ -366,7 +375,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         viewModel.toggleAccountDetailVisibility(.codex)
@@ -387,7 +397,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
         let installCountBeforeToggle = installer.installCount
         let installedBeforeToggle = installer.installedFunctionNames
@@ -432,7 +443,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .failure(HTTPClientError.timedOut)), timeout: 0.1),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         await viewModel.refresh()
@@ -458,7 +470,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         viewModel.toggleAccountDetailVisibility(.claude)
@@ -478,7 +491,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.isErrored, false)
@@ -495,7 +509,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.isErrored, true)
@@ -538,7 +553,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: oauth,
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
         authStore.nextProfiles = [
             AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: nil, disabled: false)
@@ -571,7 +587,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         await viewModel.connectProvider(.codex)
@@ -589,7 +606,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
         let validatedBeforeLogin = installer.validatedFunctionNames
         authStore.nextProfiles = [
@@ -613,7 +631,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: oauth,
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         viewModel.startOAuthLogin(.claude)
@@ -649,7 +668,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: oauth,
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         viewModel.startOAuthLogin(ProviderRowState.ID(rawValue: "codex-work"))
@@ -674,7 +694,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: oauth,
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         viewModel.startOAuthLogin(.codex)
@@ -698,7 +719,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: oauth,
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         viewModel.startOAuthLogin(.claude)
@@ -722,7 +744,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: oauth,
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         viewModel.startOAuthLogin(.claude)
@@ -752,7 +775,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         viewModel.removeInitialProvider(.claude)
@@ -787,7 +811,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         viewModel.removeProvider(ProviderRowState.ID(rawValue: "claude-work"))
@@ -820,7 +845,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         viewModel.removeProvider(ProviderRowState.ID(rawValue: "codex-work"))
@@ -851,7 +877,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         viewModel.disconnectProvider(ProviderRowState.ID(rawValue: "codex-work"))
@@ -876,7 +903,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         viewModel.removeProvider(.claude)
@@ -899,7 +927,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         viewModel.removeProvider(.codex)
@@ -917,7 +946,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.isErrored, true)
@@ -932,7 +962,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.isErrored, false)
@@ -965,7 +996,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         viewModel.disconnectProvider(ProviderRowState.ID(rawValue: "claude-work"))
@@ -989,7 +1021,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         viewModel.disconnectProvider(.codex)
@@ -1046,7 +1079,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
         installer.reset()
 
@@ -1097,7 +1131,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
         installer.reset()
 
@@ -1131,7 +1166,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         viewModel.setProviderEnabled(ProviderRowState.ID(rawValue: "claude-work"), enabled: false)
@@ -1151,7 +1187,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         try viewModel.savePort(18_888)
@@ -1169,7 +1206,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         let didSave = viewModel.saveSetting { try viewModel.savePort(18_888) }
@@ -1199,7 +1237,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             automaticShellInstallService: automaticInstaller,
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         try viewModel.installShellFunctions(helperCommand: "/usr/local/bin/cliproxy-manager")
@@ -1226,7 +1265,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             automaticShellInstallService: automaticInstaller,
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         try viewModel.installShellFunctions(helperCommand: "/Applications/CLI Proxy/cliproxy-manager")
@@ -1248,7 +1288,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
         installer.reset()
 
@@ -1258,6 +1299,60 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertFalse(installer.installedScript?.contains("cc() {") == true)
         XCTAssertFalse(installer.installedScript?.contains("ccodex() {") == true)
         XCTAssertFalse(installer.installedScript?.contains("ccapi() {") == true)
+    }
+
+    func testAPIKeyChangeDuringServerStartQueuesRestartAfterStartCompletes() async throws {
+        var config = AppConfig.default
+        config.commands.ccapi = "ccapi"
+        let proxyService = StubProxyServiceStarter(startDelayNanoseconds: 50_000_000)
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore(),
+            serverStatusRetryDelayNanoseconds: 0
+        )
+
+        let startTask = Task { await viewModel.startServer() }
+        try await Task.sleep(nanoseconds: 10_000_000)
+        try viewModel.saveClaudeAPISettings(
+            functionName: "ccapi",
+            dangerousPermissionsEnabled: false,
+            key: "new-key"
+        )
+        await startTask.value
+
+        XCTAssertEqual(proxyService.restartPorts, [config.port])
+    }
+
+    func testCodexAPIModelsUseFixedAPIKeyRoutingPrefix() async throws {
+        let expected = [
+            CodexModelOption(
+                id: "gpt-5.6-sol",
+                supportedReasoning: [.low, .medium, .high, .xhigh, .max],
+                defaultReasoning: .low
+            )
+        ]
+        let modelClient = StubProxyModelClient(optionsByPrefix: ["cpm-codex-api": expected])
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
+            modelClient: modelClient,
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
+        )
+
+        let models = try await viewModel.codexAPIModels()
+
+        XCTAssertEqual(models, expected)
+        XCTAssertEqual(modelClient.prefixRequests.map(\.prefix), ["cpm-codex-api"])
     }
 
     func testRefreshCodexModelsStartsServerAndFetchesModels() async {
@@ -1393,13 +1488,150 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         await viewModel.loadCodexModels()
 
         XCTAssertEqual(modelClient.ports, [viewModel.config.port])
         XCTAssertEqual(viewModel.availableCodexModels, ["gpt-5.5", "gpt-5.6"])
+    }
+
+    func testPreferredCodexDefaultModelUsesTerraThenFirstScopedModel() {
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
+            modelClient: StubProxyModelClient(models: []),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
+        )
+
+        XCTAssertEqual(
+            viewModel.preferredCodexDefaultModel(in: [
+                CodexModelOption(id: "gpt-5.6-sol"),
+                CodexModelOption(id: "gpt-5.6-terra"),
+                CodexModelOption(id: "gpt-5.5")
+            ]),
+            "gpt-5.6-terra"
+        )
+        XCTAssertEqual(
+            viewModel.preferredCodexDefaultModel(in: [CodexModelOption(id: "gpt-5.5")]),
+            "gpt-5.5"
+        )
+    }
+
+    func testCodexModelsForProviderPreserveOAuthReasoningMetadata() async throws {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            .init(id: "codex-work", provider: .codex, authProfileID: "work.json", modelPrefix: "codex-work")
+        ]
+        let expected = [
+            CodexModelOption(
+                id: "gpt-5.6-terra",
+                supportedReasoning: [.low, .medium, .high, .xhigh, .max],
+                defaultReasoning: .medium
+            )
+        ]
+        let modelClient = StubProxyModelClient(optionsByPrefix: ["codex-work": expected])
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            modelClient: modelClient,
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "work.json", type: .codex, email: "work@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-work")
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
+        )
+
+        let models = try await viewModel.codexModels(for: .init(rawValue: "codex-work"))
+
+        XCTAssertEqual(models, expected)
+    }
+
+    func testClaudeModelsForProviderUseOnlyThatCommandProfilePrefix() async throws {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            .init(
+                id: "claude-work",
+                provider: .claude,
+                authProfileID: "claude-work.json",
+                commandName: "ccwork",
+                modelPrefix: "claude-work"
+            )
+        ]
+        let modelClient = StubProxyModelClient(claudeOptionsByPrefix: [
+            "claude-work": [
+                .init(id: "claude-opus-4-8"),
+                .init(id: "claude-sonnet-5"),
+                .init(id: "claude-haiku-4-5")
+            ]
+        ])
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            modelClient: modelClient,
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
+        )
+
+        let options = try await viewModel.claudeModels(for: .init(rawValue: "claude-work"))
+
+        XCTAssertEqual(options.map(\.id), ["claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"])
+        XCTAssertEqual(modelClient.claudePrefixRequests, [PrefixModelRequest(port: config.port, prefix: "claude-work")])
+    }
+
+    func testRoundRobinCodexModelsIntersectModelsAndReasoningCapabilities() async throws {
+        let modelClient = StubProxyModelClient(optionsByPrefix: [
+            "codex-work": [
+                CodexModelOption(id: "gpt-5.6-sol", supportedReasoning: [.low, .medium, .high, .xhigh, .max], defaultReasoning: .low),
+                CodexModelOption(id: "gpt-5.5", supportedReasoning: [.low, .medium, .high, .xhigh], defaultReasoning: .medium)
+            ],
+            "codex-personal": [
+                CodexModelOption(id: "gpt-5.6-sol", supportedReasoning: [.low, .medium, .high, .xhigh], defaultReasoning: .medium)
+            ]
+        ])
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            .init(id: "work", provider: .codex, authProfileID: "work.json", modelPrefix: "codex-work"),
+            .init(id: "personal", provider: .codex, authProfileID: "personal.json", modelPrefix: "codex-personal")
+        ]
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            modelClient: modelClient,
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "work.json", type: .codex, email: "work@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-work"),
+                AuthProfile(fileName: "personal.json", type: .codex, email: "personal@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-personal")
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
+        )
+        let profile = AppConfig.RoundRobinProfile(
+            id: "codex-round-robin",
+            provider: .codex,
+            includedAuthProfileIDs: ["work.json", "personal.json"]
+        )
+
+        let models = try await viewModel.codexModels(forRoundRobinProfile: profile)
+
+        XCTAssertEqual(models, [
+            CodexModelOption(
+                id: "gpt-5.6-sol",
+                supportedReasoning: [.low, .medium, .high, .xhigh],
+                defaultReasoning: .medium
+            )
+        ])
     }
 
     func testCodexModelsForProviderUsesCommandProfileModelPrefix() async throws {
@@ -1422,12 +1654,13 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         let models = try await viewModel.codexModels(for: ProviderRowState.ID(rawValue: "codex-work"))
 
-        XCTAssertEqual(models, ["gpt-5.6"])
+        XCTAssertEqual(models, [CodexModelOption(id: "gpt-5.6")])
         XCTAssertEqual(modelClient.prefixRequests, [PrefixModelRequest(port: viewModel.config.port, prefix: "codex-work")])
     }
 
@@ -1451,7 +1684,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
         let profile = AppConfig.RoundRobinProfile(
             id: "codex-default",
@@ -1463,14 +1697,14 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         let models = try await viewModel.codexModels(forRoundRobinProfile: profile)
 
-        XCTAssertEqual(models, ["gpt-5.5"])
+        XCTAssertEqual(models, [CodexModelOption(id: "gpt-5.5")])
         XCTAssertEqual(modelClient.prefixRequests, [
             PrefixModelRequest(port: viewModel.config.port, prefix: "codex-work"),
             PrefixModelRequest(port: viewModel.config.port, prefix: "codex-personal")
         ])
     }
 
-    func testLatestBaseCodexModelPrefersMainGptModelWithSuffix() async {
+    func testLatestBaseCodexModelUsesFirstScopedModelWhenTerraIsUnavailable() async {
         let modelClient = StubProxyModelClient(models: ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo"])
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: .default),
@@ -1479,12 +1713,13 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         await viewModel.loadCodexModels()
 
-        XCTAssertEqual(viewModel.latestBaseCodexModel, "gpt-4o")
+        XCTAssertEqual(viewModel.latestBaseCodexModel, "gpt-4o-mini")
     }
 
     func testSetServerEnabledStartsAndStopsServer() async {
@@ -1849,6 +2084,32 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(keyStore.deleteCallCount, 0)
     }
 
+    func testResetAllSettingsPreservesIndependentCodexAPISettings() {
+        var config = AppConfig.default
+        config.codexAPI = .init(
+            codex: AppConfig.Codex(
+                opus: .init(model: "gpt-5.6", reasoning: .xhigh, contextWindow: .context1m),
+                sonnet: .init(model: "gpt-5.6", reasoning: .medium, contextWindow: .context400k),
+                haiku: .init(model: "gpt-5.6-mini", reasoning: .low, contextWindow: .context200k)
+            ),
+            nickname: "OpenAI Work",
+            dangerousPermissionsEnabled: true
+        )
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
+        )
+
+        viewModel.resetAllSettings()
+
+        XCTAssertEqual(viewModel.config.codexAPI, config.codexAPI)
+    }
+
     func testResetAllSettingsPreservesKeyAndEnabledConfigWhenConfigSaveFails() {
         var config = AppConfig.default
         config.subscriptionUsage.isEnabled = true
@@ -2087,7 +2348,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(fetchCallCount, 0)
     }
 
-    func testRefreshAfterServerStopsPreservesLastUsageWithoutFetchingAgain() async {
+    func testRefreshAfterServerStopsMarksUsageStaleRetriesAndRecovers() async {
         var config = AppConfig.default
         config.subscriptionUsage.isEnabled = true
         let profile = AuthProfile(
@@ -2099,12 +2360,21 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             disabled: false
         )
         let initialUsage = availableUsageState(for: profile)
-        let quotaClient = RecordingSubscriptionQuotaClient(reports: [
-            SubscriptionUsageReport(
-                statesByProfileID: [profile.id: initialUsage],
-                fetchedAt: Date(timeIntervalSince1970: 0)
+        let initialSnapshot = try! XCTUnwrap(initialUsage.snapshot)
+        let recoveredUsage = AccountSubscriptionUsageState.available(
+            SubscriptionUsageSnapshot(
+                profileID: profile.id,
+                provider: profile.type,
+                windows: [UsageWindow(id: "primary", label: "Primary", usedPercent: 40, resetAt: nil)],
+                fetchedAt: Date(timeIntervalSince1970: 120)
             )
+        )
+        let quotaClient = RecordingSubscriptionQuotaClient(reports: [
+            SubscriptionUsageReport(statesByProfileID: [profile.id: initialUsage], fetchedAt: Date(timeIntervalSince1970: 0)),
+            SubscriptionUsageReport(statesByProfileID: [profile.id: .unavailable(.proxyUnavailable)], fetchedAt: Date(timeIntervalSince1970: 60)),
+            SubscriptionUsageReport(statesByProfileID: [profile.id: recoveredUsage], fetchedAt: Date(timeIntervalSince1970: 120))
         ])
+        let sleeper = SubscriptionUsageSleepRecorder()
         let stoppedHealthClient = ProxyHealthClient(
             httpClient: StubHTTPClient(result: .failure(URLError(.cannotConnectToHost)))
         )
@@ -2118,7 +2388,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             proxyService: StubProxyServiceStarter(),
             claudeConnector: connectedClaudeConnector(),
             subscriptionQuotaClient: quotaClient,
-            subscriptionUsageKeyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true)
+            subscriptionUsageKeyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            subscriptionUsageSleep: { delay in try await sleeper.sleep(delay) }
         )
         viewModel.serverStatus = readyStatus()
         await viewModel.refreshSubscriptionUsage()
@@ -2126,10 +2397,20 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         await viewModel.refresh()
         await viewModel.refreshSubscriptionUsage()
 
-        XCTAssertEqual(viewModel.subscriptionUsageStates[profile.id], initialUsage)
-        let fetchCallCount = await quotaClient.fetchCallCount()
-        XCTAssertEqual(fetchCallCount, 1)
+        XCTAssertEqual(viewModel.subscriptionUsageStates[profile.id], .stale(initialSnapshot, .proxyUnavailable))
+        let fetchCallCountAfterFailure = await quotaClient.fetchCallCount()
+        let delaysAfterFailure = await sleeper.delays()
+        XCTAssertEqual(fetchCallCountAfterFailure, 2)
+        XCTAssertEqual(delaysAfterFailure, [300_000_000_000, 60_000_000_000])
         XCTAssertFalse(viewModel.canRefreshSubscriptionUsage)
+
+        await viewModel.refreshSubscriptionUsage()
+
+        XCTAssertEqual(viewModel.subscriptionUsageStates[profile.id], recoveredUsage)
+        let fetchCallCountAfterRecovery = await quotaClient.fetchCallCount()
+        let delaysAfterRecovery = await sleeper.delays()
+        XCTAssertEqual(fetchCallCountAfterRecovery, 3)
+        XCTAssertEqual(delaysAfterRecovery, [300_000_000_000, 60_000_000_000, 300_000_000_000])
     }
 
     func testStartingReadyProxyStartsInitialSubscriptionUsageFetch() async {
@@ -2230,7 +2511,223 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.subscriptionUsageStates[profile.id], refreshedState)
     }
 
-    func testAutomaticUsageRefreshKeepsExistingUsageAfterTransientFailure() async {
+    func testRemovingExplicitAccountDuringUsageRefreshCannotRestoreStateOrCache() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "claude-work",
+                provider: .claude,
+                authProfileID: "claude-work.json",
+                commandName: "ccwork"
+            )
+        ]
+        let profile = AuthProfile(
+            fileName: "claude-work.json",
+            type: .claude,
+            email: "work@example.com",
+            accountID: nil,
+            expired: nil,
+            disabled: false
+        )
+        let initialState = availableUsageState(for: profile)
+        let snapshot = try! XCTUnwrap(initialState.snapshot)
+        let quotaClient = SuspendedSubscriptionQuotaClient(reportsBeforeSuspension: [
+            .init(statesByProfileID: [profile.id: initialState], fetchedAt: snapshot.fetchedAt)
+        ])
+        let cache = SubscriptionUsageSnapshotCacheDouble()
+        let authStore = StubAuthProfileStore(profiles: [profile], supportsIDDelete: true)
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [profile],
+            authProfileStore: authStore,
+            quotaClient: quotaClient,
+            subscriptionUsageSnapshotCache: cache
+        )
+        viewModel.serverStatus = readyStatus()
+
+        await viewModel.refreshSubscriptionUsage()
+        XCTAssertEqual(cache.load(), [profile.id: snapshot])
+
+        let refresh = Task { await viewModel.refreshSubscriptionUsage(force: true) }
+        await waitForUsageFetches(quotaClient, expectedCount: 2)
+        viewModel.removeProvider(ProviderRowState.ID(rawValue: "claude-work"))
+        await quotaClient.resolveAll(with: .init(
+            statesByProfileID: [profile.id: .unavailable(.transientFailure)],
+            fetchedAt: Date(timeIntervalSince1970: 60)
+        ))
+        await refresh.value
+
+        XCTAssertNil(viewModel.subscriptionUsageStates[profile.id])
+        XCTAssertNil(cache.load()[profile.id])
+    }
+
+    func testRemovingAccountDuringColdAutomaticRefreshImmediatelyRestartsRemainingAccount() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        let claude = AuthProfile(fileName: "claude-work.json", type: .claude, email: nil, accountID: nil, expired: nil, disabled: false)
+        let codex = AuthProfile(fileName: "codex-work.json", type: .codex, email: nil, accountID: nil, expired: nil, disabled: false)
+        config.oauthCommandProfiles = [
+            .init(id: "claude-work", provider: .claude, authProfileID: claude.id, commandName: "ccwork"),
+            .init(id: "codex-work", provider: .codex, authProfileID: codex.id, commandName: "codexwork")
+        ]
+        let authStore = StubAuthProfileStore(profiles: [claude, codex], supportsIDDelete: true)
+        let quotaClient = SuspendedSubscriptionQuotaClient()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [claude, codex],
+            authProfileStore: authStore,
+            quotaClient: quotaClient
+        )
+        viewModel.serverStatus = readyStatus()
+
+        let refresh = Task { await viewModel.refreshSubscriptionUsage() }
+        await waitForUsageFetches(quotaClient, expectedCount: 1)
+        viewModel.removeProvider(.init(rawValue: "claude-work"))
+        await waitForUsageFetches(quotaClient, expectedCount: 2)
+
+        let requestedProfileIDs = await quotaClient.requestedProfileIDs()
+        XCTAssertEqual(requestedProfileIDs, [[claude.id, codex.id], [codex.id]])
+        XCTAssertEqual(viewModel.subscriptionUsageStates[codex.id], .loading)
+
+        await quotaClient.resolveAll(with: availableUsageReport(for: codex))
+        await refresh.value
+        await waitForUsageState(viewModel, profileID: codex.id, expected: availableUsageState(for: codex))
+
+        XCTAssertNil(viewModel.subscriptionUsageStates[claude.id])
+        XCTAssertEqual(viewModel.subscriptionUsageStates[codex.id], availableUsageState(for: codex))
+    }
+
+    func testNotFoundRemovalDuringUsageRefreshImmediatelyRestartsCurrentAccount() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        let profile = AuthProfile(fileName: "claude-work.json", type: .claude, email: nil, accountID: nil, expired: nil, disabled: false)
+        config.oauthCommandProfiles = [
+            .init(id: "claude-work", provider: .claude, authProfileID: profile.id, commandName: "ccwork")
+        ]
+        let authStore = StubAuthProfileStore(profiles: [profile], supportsIDDelete: false)
+        let quotaClient = SuspendedSubscriptionQuotaClient()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [profile],
+            authProfileStore: authStore,
+            quotaClient: quotaClient
+        )
+        viewModel.serverStatus = readyStatus()
+
+        let refresh = Task { await viewModel.refreshSubscriptionUsage() }
+        await waitForUsageFetches(quotaClient, expectedCount: 1)
+        viewModel.removeProvider(.init(rawValue: "claude-work"))
+        await waitForUsageFetches(quotaClient, expectedCount: 2)
+
+        let requestedProfileIDs = await quotaClient.requestedProfileIDs()
+        XCTAssertEqual(requestedProfileIDs, [[profile.id], [profile.id]])
+        XCTAssertEqual(viewModel.settingsMessage, "Claude OAuth auth file was not found.")
+
+        await quotaClient.resolveAll(with: availableUsageReport(for: profile))
+        await refresh.value
+        await waitForUsageState(viewModel, profileID: profile.id, expected: availableUsageState(for: profile))
+    }
+
+    func testQueuedForcedUsageRefreshSurvivesRemovalAndIncludesRemainingTerminalProfile() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        let claude = AuthProfile(fileName: "claude-work.json", type: .claude, email: nil, accountID: nil, expired: nil, disabled: false)
+        let codex = AuthProfile(fileName: "codex-work.json", type: .codex, email: nil, accountID: nil, expired: nil, disabled: false)
+        config.oauthCommandProfiles = [
+            .init(id: "claude-work", provider: .claude, authProfileID: claude.id, commandName: "ccwork"),
+            .init(id: "codex-work", provider: .codex, authProfileID: codex.id, commandName: "codexwork")
+        ]
+        let initialReport = SubscriptionUsageReport(
+            statesByProfileID: [
+                claude.id: availableUsageState(for: claude),
+                codex.id: .unavailable(.credentialExpired)
+            ],
+            fetchedAt: Date(timeIntervalSince1970: 0)
+        )
+        let authStore = StubAuthProfileStore(profiles: [claude, codex], supportsIDDelete: true)
+        let quotaClient = SuspendedSubscriptionQuotaClient(reportsBeforeSuspension: [initialReport])
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [claude, codex],
+            authProfileStore: authStore,
+            quotaClient: quotaClient
+        )
+        viewModel.serverStatus = readyStatus()
+
+        await viewModel.refreshSubscriptionUsage()
+        let automaticRefresh = Task { await viewModel.refreshSubscriptionUsage() }
+        await waitForUsageFetches(quotaClient, expectedCount: 2)
+        await viewModel.refreshSubscriptionUsage(force: true)
+        viewModel.removeProvider(.init(rawValue: "claude-work"))
+        await waitForUsageFetches(quotaClient, expectedCount: 3)
+
+        let requestedProfileIDs = await quotaClient.requestedProfileIDs()
+        XCTAssertEqual(requestedProfileIDs, [[claude.id, codex.id], [claude.id], [codex.id]])
+
+        await quotaClient.resolveAll(with: availableUsageReport(for: codex))
+        await automaticRefresh.value
+        await waitForUsageState(viewModel, profileID: codex.id, expected: availableUsageState(for: codex))
+        XCTAssertNil(viewModel.subscriptionUsageStates[claude.id])
+    }
+
+    func testActiveForcedUsageRefreshRemovalRestartsWithForceForRemainingTerminalProfile() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        let claude = AuthProfile(fileName: "claude-work.json", type: .claude, email: nil, accountID: nil, expired: nil, disabled: false)
+        let codex = AuthProfile(fileName: "codex-work.json", type: .codex, email: nil, accountID: nil, expired: nil, disabled: false)
+        config.oauthCommandProfiles = [
+            .init(id: "claude-work", provider: .claude, authProfileID: claude.id, commandName: "ccwork"),
+            .init(id: "codex-work", provider: .codex, authProfileID: codex.id, commandName: "codexwork")
+        ]
+        let initialReport = SubscriptionUsageReport(
+            statesByProfileID: [
+                claude.id: availableUsageState(for: claude),
+                codex.id: .unavailable(.credentialExpired)
+            ],
+            fetchedAt: Date(timeIntervalSince1970: 0)
+        )
+        let authStore = StubAuthProfileStore(profiles: [claude, codex], supportsIDDelete: true)
+        let quotaClient = SuspendedSubscriptionQuotaClient(reportsBeforeSuspension: [initialReport])
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [claude, codex],
+            authProfileStore: authStore,
+            quotaClient: quotaClient
+        )
+        viewModel.serverStatus = readyStatus()
+
+        await viewModel.refreshSubscriptionUsage()
+        let forcedRefresh = Task { await viewModel.refreshSubscriptionUsage(force: true) }
+        await waitForUsageFetches(quotaClient, expectedCount: 2)
+        viewModel.removeProvider(.init(rawValue: "claude-work"))
+        await waitForUsageFetches(quotaClient, expectedCount: 3)
+
+        let requestedProfileIDs = await quotaClient.requestedProfileIDs()
+        XCTAssertEqual(requestedProfileIDs, [[claude.id, codex.id], [claude.id, codex.id], [codex.id]])
+
+        await quotaClient.resolveAll(with: availableUsageReport(for: codex))
+        await forcedRefresh.value
+        await waitForUsageState(viewModel, profileID: codex.id, expected: availableUsageState(for: codex))
+        XCTAssertNil(viewModel.subscriptionUsageStates[claude.id])
+    }
+
+    func testAutomaticUsageRefreshKeepsSnapshotAndMarksTransientFailureStale() async {
         var config = AppConfig.default
         config.subscriptionUsage.isEnabled = true
         let profile = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
@@ -2252,10 +2749,76 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         await viewModel.refreshSubscriptionUsage()
         await viewModel.refreshSubscriptionUsage()
 
-        XCTAssertEqual(viewModel.subscriptionUsageStates[profile.id], initialState)
+        XCTAssertEqual(
+            viewModel.subscriptionUsageStates[profile.id],
+            .stale(try! XCTUnwrap(initialState.snapshot), .transientFailure)
+        )
     }
 
-    func testAutomaticUsageRefreshReplacesExistingUsageAfterTerminalFailure() async {
+    func testStaleUsageRefreshBecomesAvailableAfterSuccessfulReplacement() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        let profile = AuthProfile(fileName: "claude.json", type: .claude, email: nil, accountID: nil, expired: nil, disabled: false)
+        let initialState = availableUsageState(for: profile)
+        let refreshedSnapshot = SubscriptionUsageSnapshot(
+            profileID: profile.id,
+            provider: .claude,
+            windows: [UsageWindow(id: "primary", label: "Primary", usedPercent: 40, resetAt: nil)],
+            fetchedAt: Date(timeIntervalSince1970: 120)
+        )
+        let quotaClient = RecordingSubscriptionQuotaClient(reports: [
+            .init(statesByProfileID: [profile.id: initialState], fetchedAt: Date(timeIntervalSince1970: 0)),
+            .init(statesByProfileID: [profile.id: .unavailable(.transientFailure)], fetchedAt: Date(timeIntervalSince1970: 60)),
+            .init(statesByProfileID: [profile.id: .available(refreshedSnapshot)], fetchedAt: Date(timeIntervalSince1970: 120))
+        ])
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [profile],
+            quotaClient: quotaClient
+        )
+        viewModel.serverStatus = readyStatus()
+
+        await viewModel.refreshSubscriptionUsage()
+        await viewModel.refreshSubscriptionUsage()
+        await viewModel.refreshSubscriptionUsage()
+
+        XCTAssertEqual(viewModel.subscriptionUsageStates[profile.id], .available(refreshedSnapshot))
+        XCTAssertEqual(viewModel.lastSuccessfulSubscriptionUsageRefreshAt, refreshedSnapshot.fetchedAt)
+    }
+
+    func testStaleUsageRefreshRetainsSnapshotAndUpdatesIssue() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        let profile = AuthProfile(fileName: "claude.json", type: .claude, email: nil, accountID: nil, expired: nil, disabled: false)
+        let initialState = availableUsageState(for: profile)
+        let snapshot = try! XCTUnwrap(initialState.snapshot)
+        let quotaClient = RecordingSubscriptionQuotaClient(reports: [
+            .init(statesByProfileID: [profile.id: initialState], fetchedAt: Date(timeIntervalSince1970: 0)),
+            .init(statesByProfileID: [profile.id: .unavailable(.transientFailure)], fetchedAt: Date(timeIntervalSince1970: 60)),
+            .init(statesByProfileID: [profile.id: .unavailable(.credentialExpired)], fetchedAt: Date(timeIntervalSince1970: 120))
+        ])
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [profile],
+            quotaClient: quotaClient
+        )
+        viewModel.serverStatus = readyStatus()
+
+        await viewModel.refreshSubscriptionUsage()
+        await viewModel.refreshSubscriptionUsage()
+        await viewModel.refreshSubscriptionUsage()
+
+        XCTAssertEqual(viewModel.subscriptionUsageStates[profile.id], .stale(snapshot, .credentialExpired))
+        XCTAssertEqual(viewModel.lastSuccessfulSubscriptionUsageRefreshAt, snapshot.fetchedAt)
+    }
+
+    func testAutomaticUsageRefreshKeepsSnapshotAndCacheAfterTerminalFailure() async {
         var config = AppConfig.default
         config.subscriptionUsage.isEnabled = true
         let profile = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
@@ -2279,8 +2842,9 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         await viewModel.refreshSubscriptionUsage()
         await viewModel.refreshSubscriptionUsage()
 
-        XCTAssertEqual(viewModel.subscriptionUsageStates[profile.id], .unavailable(.credentialExpired))
-        XCTAssertTrue(cache.load().isEmpty)
+        let snapshot = try! XCTUnwrap(initialState.snapshot)
+        XCTAssertEqual(viewModel.subscriptionUsageStates[profile.id], .stale(snapshot, .credentialExpired))
+        XCTAssertEqual(cache.load(), [profile.id: snapshot])
     }
 
     func testInitializationRestoresLastSuccessfulUsageBeforeNextRefresh() {
@@ -2354,7 +2918,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.subscriptionUsageStates[profile.id], refreshedState)
     }
 
-    func testManualUsageRefreshKeepsExistingUsageWhenRefreshFails() async {
+    func testManualUsageRefreshKeepsSnapshotAndMarksFailureStale() async {
         var config = AppConfig.default
         config.subscriptionUsage.isEnabled = true
         let profile = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
@@ -2376,7 +2940,10 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         await viewModel.refreshSubscriptionUsage()
         await viewModel.refreshSubscriptionUsage(force: true)
 
-        XCTAssertEqual(viewModel.subscriptionUsageStates[profile.id], initialState)
+        XCTAssertEqual(
+            viewModel.subscriptionUsageStates[profile.id],
+            .stale(try! XCTUnwrap(initialState.snapshot), .transientFailure)
+        )
     }
 
     func testManualUsageRefreshWaitsForAutomaticRefreshThenRetriesNonRetriableProfile() async {
@@ -2451,15 +3018,17 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(delays, [300_000_000_000])
     }
 
-    func testTransientUsageFailureDoublesRetryDelayUpToFifteenMinutes() async {
+    func testTransientStaleUsageRefreshUpdatesIssueAndDoublesRetryDelay() async {
         var config = AppConfig.default
         config.subscriptionUsage.isEnabled = true
         let profile = AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
-        let transientReport = SubscriptionUsageReport(
-            statesByProfileID: [profile.id: .unavailable(.transientFailure)],
-            fetchedAt: Date(timeIntervalSince1970: 0)
-        )
-        let quotaClient = RecordingSubscriptionQuotaClient(reports: Array(repeating: transientReport, count: 5))
+        let initialState = availableUsageState(for: profile)
+        let snapshot = try! XCTUnwrap(initialState.snapshot)
+        let quotaClient = RecordingSubscriptionQuotaClient(reports: [
+            .init(statesByProfileID: [profile.id: initialState], fetchedAt: snapshot.fetchedAt),
+            .init(statesByProfileID: [profile.id: .unavailable(.transientFailure)], fetchedAt: Date(timeIntervalSince1970: 60)),
+            .init(statesByProfileID: [profile.id: .unavailable(.proxyUnavailable)], fetchedAt: Date(timeIntervalSince1970: 120))
+        ])
         let sleeper = SubscriptionUsageSleepRecorder()
         let viewModel = subscriptionUsageViewModel(
             config: config,
@@ -2472,16 +3041,14 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         )
         viewModel.serverStatus = readyStatus()
 
-        for expectedCount in 1...5 {
-            await viewModel.refreshSubscriptionUsage()
-            await waitForUsageSleeps(sleeper, expectedCount: expectedCount)
-        }
+        await viewModel.refreshSubscriptionUsage()
+        await viewModel.refreshSubscriptionUsage()
+        XCTAssertEqual(viewModel.subscriptionUsageStates[profile.id], .stale(snapshot, .transientFailure))
+        await viewModel.refreshSubscriptionUsage()
 
+        XCTAssertEqual(viewModel.subscriptionUsageStates[profile.id], .stale(snapshot, .proxyUnavailable))
         let delays = await sleeper.delays()
-        XCTAssertEqual(
-            delays,
-            [60_000_000_000, 120_000_000_000, 240_000_000_000, 480_000_000_000, 900_000_000_000]
-        )
+        XCTAssertEqual(Array(delays.suffix(2)), [60_000_000_000, 120_000_000_000])
     }
 
     func testManualUsageRefreshRetriesSchemaMismatchProfileAndRestoresFiveMinutePolling() async {
@@ -2556,23 +3123,25 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertFalse(viewModel.isSubscriptionUsageRefreshInProgress)
     }
 
-    func testNonRetriableProfileIsNotFetchedAgainWhileOtherProfilesContinuePolling() async {
+    func testTerminalStaleProfileIsExcludedAutomaticallyAndForceRefreshRecoversIt() async {
         var config = AppConfig.default
         config.subscriptionUsage.isEnabled = true
         let claude = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
         let codex = AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
-        let initialReport = SubscriptionUsageReport(
-            statesByProfileID: [
-                claude.id: .unavailable(.credentialExpired),
-                codex.id: availableUsageState(for: codex)
-            ],
-            fetchedAt: Date(timeIntervalSince1970: 0)
+        let initialClaudeState = availableUsageState(for: claude)
+        let initialClaudeSnapshot = try! XCTUnwrap(initialClaudeState.snapshot)
+        let recoveredClaudeSnapshot = SubscriptionUsageSnapshot(
+            profileID: claude.id,
+            provider: .claude,
+            windows: [UsageWindow(id: "primary", label: "Primary", usedPercent: 40, resetAt: nil)],
+            fetchedAt: Date(timeIntervalSince1970: 120)
         )
-        let subsequentReport = SubscriptionUsageReport(
-            statesByProfileID: [codex.id: availableUsageState(for: codex)],
-            fetchedAt: Date(timeIntervalSince1970: 60)
-        )
-        let quotaClient = RecordingSubscriptionQuotaClient(reports: [initialReport, subsequentReport])
+        let quotaClient = RecordingSubscriptionQuotaClient(reports: [
+            .init(statesByProfileID: [claude.id: initialClaudeState, codex.id: availableUsageState(for: codex)], fetchedAt: Date(timeIntervalSince1970: 0)),
+            .init(statesByProfileID: [claude.id: .unavailable(.credentialExpired), codex.id: availableUsageState(for: codex)], fetchedAt: Date(timeIntervalSince1970: 60)),
+            .init(statesByProfileID: [codex.id: availableUsageState(for: codex)], fetchedAt: Date(timeIntervalSince1970: 90)),
+            .init(statesByProfileID: [claude.id: .available(recoveredClaudeSnapshot), codex.id: availableUsageState(for: codex)], fetchedAt: Date(timeIntervalSince1970: 120))
+        ])
         let sleeper = SubscriptionUsageSleepRecorder()
         let viewModel = subscriptionUsageViewModel(
             config: config,
@@ -2586,11 +3155,14 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         viewModel.serverStatus = readyStatus()
 
         await viewModel.refreshSubscriptionUsage()
-        XCTAssertEqual(viewModel.subscriptionUsageStates[claude.id], .unavailable(.credentialExpired))
         await viewModel.refreshSubscriptionUsage()
+        XCTAssertEqual(viewModel.subscriptionUsageStates[claude.id], .stale(initialClaudeSnapshot, .credentialExpired))
+        await viewModel.refreshSubscriptionUsage()
+        await viewModel.refreshSubscriptionUsage(force: true)
 
         let requestedProfileIDs = await quotaClient.requestedProfileIDs()
-        XCTAssertEqual(requestedProfileIDs, [[claude.id, codex.id], [codex.id]])
+        XCTAssertEqual(requestedProfileIDs, [[claude.id, codex.id], [claude.id, codex.id], [codex.id], [claude.id, codex.id]])
+        XCTAssertEqual(viewModel.subscriptionUsageStates[claude.id], .available(recoveredClaudeSnapshot))
     }
 
     func testDisablingSubscriptionUsageInvalidatesInFlightRefreshResult() async throws {
@@ -2667,6 +3239,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         keyStore: SubscriptionUsageManagementKeyDouble,
         proxyService: StubProxyServiceStarter,
         profiles: [AuthProfile] = [],
+        authProfileStore: (any AuthProfileManaging)? = nil,
         quotaClient: any SubscriptionQuotaFetching = StubSubscriptionQuotaClient(),
         subscriptionUsageSnapshotCache: any SubscriptionUsageSnapshotCaching = SubscriptionUsageSnapshotCacheDouble(),
         subscriptionUsageSleep: @escaping @Sendable (UInt64) async throws -> Void = { delay in
@@ -2677,7 +3250,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             config: config,
             configStore: configStore,
             shellInstaller: StubShellInstaller(),
-            authProfileStore: StubAuthProfileStore(profiles: profiles),
+            authProfileStore: authProfileStore ?? StubAuthProfileStore(profiles: profiles),
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
             proxyService: proxyService,
@@ -2725,6 +3298,18 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             await Task.yield()
         }
         XCTFail("Expected subscription usage polling delay.")
+    }
+
+    private func waitForUsageState(
+        _ viewModel: DashboardViewModel,
+        profileID: String,
+        expected: AccountSubscriptionUsageState
+    ) async {
+        for _ in 0..<100 {
+            if viewModel.subscriptionUsageStates[profileID] == expected { return }
+            await Task.yield()
+        }
+        XCTFail("Expected subscription usage state \(expected).")
     }
 
     private func waitForRestart(_ proxyService: StubProxyServiceStarter, expectedCount: Int = 1) async {
@@ -2979,21 +3564,20 @@ private struct PrefixModelRequest: Equatable {
 }
 
 private final class StubProxyModelClient: ProxyModelListing, @unchecked Sendable {
-    private let models: [String]
-    private let modelsByPrefix: [String: [String]]
+    private let options: [CodexModelOption]
+    private let optionsByPrefix: [String: [CodexModelOption]]
+    private let claudeOptionsByPrefix: [String: [ClaudeModelOption]]
     private let lock = NSLock()
     private var _ports: [Int] = []
     private var _prefixRequests: [PrefixModelRequest] = []
-    private var _baseModelsCallCount = 0
+    private var _claudePrefixRequests: [PrefixModelRequest] = []
     private var _codexBaseModelsCallCount = 0
 
     var ports: [Int] {
         lock.withLock { _ports }
     }
 
-    var baseModelsCallCount: Int {
-        lock.withLock { _baseModelsCallCount }
-    }
+    var baseModelsCallCount: Int { 0 }
 
     var codexBaseModelsCallCount: Int {
         lock.withLock { _codexBaseModelsCallCount }
@@ -3003,38 +3587,61 @@ private final class StubProxyModelClient: ProxyModelListing, @unchecked Sendable
         lock.withLock { _prefixRequests }
     }
 
+    var claudePrefixRequests: [PrefixModelRequest] {
+        lock.withLock { _claudePrefixRequests }
+    }
+
     init(models: [String]) {
-        self.models = models
-        self.modelsByPrefix = [:]
+        options = models.map { CodexModelOption(id: $0) }
+        optionsByPrefix = [:]
+        claudeOptionsByPrefix = [:]
+    }
+
+    init(options: [CodexModelOption]) {
+        self.options = options
+        optionsByPrefix = [:]
+        claudeOptionsByPrefix = [:]
     }
 
     init(modelsByPrefix: [String: [String]]) {
-        self.models = []
-        self.modelsByPrefix = modelsByPrefix
+        options = []
+        optionsByPrefix = modelsByPrefix.mapValues { $0.map { CodexModelOption(id: $0) } }
+        claudeOptionsByPrefix = [:]
     }
 
-    func baseModels(port: Int) async throws -> [String] {
-        lock.withLock {
-            _ports.append(port)
-            _baseModelsCallCount += 1
-        }
-        return models
+    init(optionsByPrefix: [String: [CodexModelOption]]) {
+        options = []
+        self.optionsByPrefix = optionsByPrefix
+        claudeOptionsByPrefix = [:]
     }
 
-    func codexBaseModels(port: Int) async throws -> [String] {
+    init(claudeOptionsByPrefix: [String: [ClaudeModelOption]]) {
+        options = []
+        optionsByPrefix = [:]
+        self.claudeOptionsByPrefix = claudeOptionsByPrefix
+    }
+
+    func codexModelOptions(port: Int) async throws -> [CodexModelOption] {
         lock.withLock {
             _ports.append(port)
             _codexBaseModelsCallCount += 1
         }
-        return models
+        return options
     }
 
-    func codexBaseModels(port: Int, modelPrefix: String) async throws -> [String] {
+    func codexModelOptions(port: Int, modelPrefix: String) async throws -> [CodexModelOption] {
         lock.withLock {
             _prefixRequests.append(PrefixModelRequest(port: port, prefix: modelPrefix))
             _codexBaseModelsCallCount += 1
         }
-        return modelsByPrefix[modelPrefix] ?? models
+        return optionsByPrefix[modelPrefix] ?? options
+    }
+
+    func claudeModelOptions(port: Int, modelPrefix: String) async throws -> [ClaudeModelOption] {
+        lock.withLock {
+            _claudePrefixRequests.append(PrefixModelRequest(port: port, prefix: modelPrefix))
+        }
+        return claudeOptionsByPrefix[modelPrefix] ?? []
     }
 }
 

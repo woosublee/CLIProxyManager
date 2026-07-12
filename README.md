@@ -14,6 +14,8 @@ CLIProxyManager는 여러 Claude·Codex OAuth 계정과 로컬 CLIProxyAPI 서�
 ## 주요 기능
 
 - Claude OAuth와 Codex OAuth 계정을 여러 개 연결하고 관리
+- Claude와 OpenAI API Key를 추가하고 API Key별 명령어·별칭·모델 매핑·권한 설정 관리
+- 모든 API Key 명령은 OAuth 구독 로그인과 분리된 로컬 CLIProxyAPI 경로로 실행
 - 계정별 명령어·별칭·모델 설정
 - 로컬 CLIProxyAPI 서버 시작·중지·상태·로그 확인
 - 메뉴바와 별도 HUD에서 구독 사용량 확인
@@ -37,9 +39,9 @@ GitHub Releases에서 직접 내려받은 배포본만 사용하세요.
 
 ## 시작하기
 
-1. 앱에서 **Add Provider**를 눌러 Claude OAuth 또는 Codex OAuth 계정을 연결합니다.
-3. 계정별 Settings에서 원하는 명령어를 지정합니다. 예: `claude-work`, `codex-personal`
-4. 새 터미널을 열거나 다음 명령을 실행합니다.
+1. 앱에서 **Add Provider**를 눌러 Claude/Codex의 OAuth subscription 또는 API Key를 추가합니다.
+2. 계정별 Settings에서 원하는 명령어를 지정합니다. 예: `claude-work`, `codex-personal`
+3. 새 터미널을 열거나 다음 명령을 실행합니다.
 
    ```zsh
    source ~/.zshrc
@@ -119,7 +121,7 @@ source ~/.zshrc
 
 ## 보안
 
-앱은 OAuth 프로필과 설정을 `~/.cliproxy-manager` 아래에서 관리합니다. 이 디렉터리에는 인증 정보가 포함될 수 있으므로 저장소에 커밋하거나 공유하지 마세요.
+앱은 OAuth 프로필과 설정을 `~/.cliproxy-manager` 아래에서 관리합니다. API Key는 `~/.cliproxy-manager/api-keys/`의 평문 파일에 저장합니다. 앱은 디렉터리에 `0700`, 각 key 파일에 `0600` 권한을 적용하지만 macOS 계정에 접근할 수 있는 사용자는 값을 읽을 수 있습니다. 이 디렉터리를 복사·공유하거나 저장소에 커밋하지 마세요.
 
 ## 라이선스
 

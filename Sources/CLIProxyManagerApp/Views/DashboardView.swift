@@ -64,13 +64,24 @@ struct DashboardView: View {
                         ProviderAccountCardView(
                             account: account,
                             connect: {
-                                activeSheet = .addProvider
-                                viewModel.startOAuthLogin(account.id)
+                                if account.isAPIKeyProfile {
+                                    openProviderSettings(account.id, isInitialSetup: false)
+                                } else {
+                                    activeSheet = .addProvider
+                                    viewModel.startOAuthLogin(account.id)
+                                }
                             },
-                            settings: { activeSheet = .providerSettings(account.id, isInitialSetup: false) },
+
+                            settings: { openProviderSettings(account.id, isInitialSetup: false) },
                             toggleAccountDetailVisibility: { viewModel.toggleAccountDetailVisibility(account.id) },
                             setEnabled: { enabled in viewModel.setProviderEnabled(account.id, enabled: enabled) },
-                            remove: { viewModel.removeProvider(account.id) }
+                            remove: {
+                                if account.isAPIKeyProfile {
+                                    viewModel.removeAPIProvider(account.id)
+                                } else {
+                                    viewModel.removeProvider(account.id)
+                                }
+                            }
                         )
                     }
 
@@ -153,8 +164,16 @@ struct DashboardView: View {
                 case .addProvider:
                     AddProviderModal(
                         activeOAuthLoginProvider: viewModel.activeOAuthLoginProvider,
-                        onPick: { provider in
-                            viewModel.startOAuthLogin(providerType: provider)
+                        onPick: { choice in
+                            switch choice {
+                            case .oauth(let provider):
+                                viewModel.startOAuthLogin(providerType: provider)
+                            case .apiKey(let provider):
+                                openProviderSettings(
+                                    provider == .claude ? .claudeAPI : .codexAPI,
+                                    isInitialSetup: true
+                                )
+                            }
                         },
                         onCancelLogin: {
                             viewModel.cancelOAuthLogin()
@@ -166,7 +185,7 @@ struct DashboardView: View {
             }
             .onChange(of: viewModel.activeOAuthLoginProvider) { _, provider in
                 guard provider == nil, let connectedProvider = viewModel.completedOAuthLoginProvider else { return }
-                activeSheet = DashboardSheet.afterOAuthLoginCompletion(
+                openProviderSettings(
                     connectedProvider,
                     isInitialSetup: viewModel.completedOAuthLoginIsInitialSetup
                 )
@@ -233,79 +252,159 @@ struct DashboardView: View {
         }
     }
 
+    private func openProviderSettings(_ provider: ProviderRowState.ID, isInitialSetup: Bool) {
+        Task {
+            switch provider {
+            case .codexAPI:
+                await viewModel.prepareCodexAPIModels()
+            case .claudeAPI:
+                await viewModel.prepareClaudeModels(for: provider)
+            default:
+                if provider.inferredProviderType == .claude {
+                    await viewModel.prepareClaudeModels(for: provider)
+                }
+            }
+            activeSheet = .providerSettings(provider, isInitialSetup: isInitialSetup)
+        }
+    }
+
     @ViewBuilder
     private func providerSettingsSheet(_ provider: ProviderRowState.ID, isInitialSetup: Bool) -> some View {
         let row = viewModel.providerRows.first { $0.id == provider }
         let providerType = row?.providerType ?? provider.inferredProviderType
-        switch providerType {
-        case .claude:
-            ClaudeOAuthProviderSettingsSheet(
+
+        if provider == .claudeAPI {
+            ClaudeAPIProviderSettingsSheet(
                 config: viewModel.config,
-                providerID: provider,
-                connectionDetail: row?.connectionDetail ?? "",
-                isConnected: row?.isConnected ?? false,
-                onDisconnect: {
-                    viewModel.removeProvider(provider)
-                    activeSheet = nil
+                isConfigured: viewModel.isAPIKeyConfigured(.claudeAPIKey),
+                initialModels: viewModel.availableClaudeAPIModelOptions,
+                refreshModels: {
+                    try await viewModel.claudeAPIModels()
                 },
                 checkCommandName: { functionName in
-                    await viewModel.commandNameAvailability(provider: provider, functionName: functionName)
+                    await viewModel.commandNameAvailability(provider: .claudeAPI, functionName: functionName)
                 },
-                onCancel: {
-                    if isInitialSetup {
-                        viewModel.removeInitialProvider(provider)
-                    }
-                    activeSheet = nil
-                },
-                isInitialSetup: isInitialSetup,
-                save: { functionName, nickname, dangerousPermissionsEnabled in
-                    try viewModel.saveClaudeOAuthSettings(
-                        provider: provider,
+                save: { functionName, nickname, claudeRouting, dangerousPermissionsEnabled, key in
+                    try viewModel.saveClaudeAPISettings(
                         functionName: functionName,
                         nickname: nickname,
-                        dangerousPermissionsEnabled: dangerousPermissionsEnabled
+                        claudeRouting: claudeRouting,
+                        dangerousPermissionsEnabled: dangerousPermissionsEnabled,
+                        key: key
                     )
+                    activeSheet = nil
+                },
+                remove: {
+                    viewModel.removeAPIProvider(provider)
                     activeSheet = nil
                 }
             )
-        case .codex:
-            CodexProviderSettingsSheet(
+        } else if provider == .codexAPI {
+            CodexAPIProviderSettingsSheet(
                 config: viewModel.config,
-                providerID: provider,
-                connectionDetail: row?.connectionDetail ?? "",
-                isConnected: row?.isConnected ?? false,
-                availableModels: viewModel.availableCodexModels,
+                isConfigured: viewModel.isAPIKeyConfigured(.codexAPIKey),
+                availableModels: viewModel.availableCodexAPIModelOptions,
                 modelLoadingState: viewModel.codexModelLoadingState,
                 refreshModels: {
                     await viewModel.refreshCodexModels()
-                    return try await viewModel.codexModels(for: provider)
+                    return try await viewModel.codexAPIModels()
                 },
-                onDisconnect: {
-                    viewModel.removeProvider(provider)
-                    activeSheet = nil
-                },
+                preferredModel: { viewModel.preferredCodexDefaultModel(in: $0) },
                 checkCommandName: { functionName in
-                    await viewModel.commandNameAvailability(provider: provider, functionName: functionName)
+                    await viewModel.commandNameAvailability(provider: .codexAPI, functionName: functionName)
                 },
-                onCancel: {
-                    if isInitialSetup {
-                        viewModel.removeInitialProvider(provider)
-                    }
-                    activeSheet = nil
-                },
-                isInitialSetup: isInitialSetup,
-                latestModel: { viewModel.latestBaseCodexModel },
-                save: { functionName, nickname, codex, dangerousPermissionsEnabled in
-                    try viewModel.saveCodexSettings(
-                        provider: provider,
+                save: { functionName, nickname, codex, dangerousPermissionsEnabled, key in
+                    try viewModel.saveCodexAPISettings(
                         functionName: functionName,
                         nickname: nickname,
                         codex: codex,
-                        dangerousPermissionsEnabled: dangerousPermissionsEnabled
+                        dangerousPermissionsEnabled: dangerousPermissionsEnabled,
+                        key: key
                     )
+                    activeSheet = nil
+                },
+                remove: {
+                    viewModel.removeAPIProvider(provider)
                     activeSheet = nil
                 }
             )
+        } else {
+            switch providerType {
+            case .claude:
+                ClaudeOAuthProviderSettingsSheet(
+                    config: viewModel.config,
+                    providerID: provider,
+                    connectionDetail: row?.connectionDetail ?? "",
+                    isConnected: row?.isConnected ?? false,
+                    onDisconnect: {
+                        viewModel.removeProvider(provider)
+                        activeSheet = nil
+                    },
+                    initialModels: viewModel.availableClaudeModelOptionsByProvider[provider] ?? [],
+                    checkCommandName: { functionName in
+                        await viewModel.commandNameAvailability(provider: provider, functionName: functionName)
+                    },
+                    refreshModels: {
+                        try await viewModel.claudeModels(for: provider)
+                    },
+                    onCancel: {
+                        if isInitialSetup {
+                            viewModel.removeInitialProvider(provider)
+                        }
+                        activeSheet = nil
+                    },
+                    isInitialSetup: isInitialSetup,
+                    save: { functionName, nickname, dangerousPermissionsEnabled, connectionMode, claudeRouting in
+                        try viewModel.saveClaudeOAuthSettings(
+                            provider: provider,
+                            functionName: functionName,
+                            nickname: nickname,
+                            dangerousPermissionsEnabled: dangerousPermissionsEnabled,
+                            connectionMode: connectionMode,
+                            claudeRouting: claudeRouting
+                        )
+                        activeSheet = nil
+                    }
+                )
+            case .codex:
+                CodexProviderSettingsSheet(
+                    config: viewModel.config,
+                    providerID: provider,
+                    connectionDetail: row?.connectionDetail ?? "",
+                    isConnected: row?.isConnected ?? false,
+                    availableModels: viewModel.availableCodexModelOptions,
+                    modelLoadingState: viewModel.codexModelLoadingState,
+                    refreshModels: {
+                        await viewModel.refreshCodexModels()
+                        return try await viewModel.codexModels(for: provider)
+                    },
+                    onDisconnect: {
+                        viewModel.removeProvider(provider)
+                        activeSheet = nil
+                    },
+                    checkCommandName: { functionName in
+                        await viewModel.commandNameAvailability(provider: provider, functionName: functionName)
+                    },
+                    onCancel: {
+                        if isInitialSetup {
+                            viewModel.removeInitialProvider(provider)
+                        }
+                        activeSheet = nil
+                    },
+                    isInitialSetup: isInitialSetup,
+                    preferredModel: { viewModel.preferredCodexDefaultModel(in: $0) },
+                    save: { functionName, nickname, codex, dangerousPermissionsEnabled in
+                        try viewModel.saveCodexSettings(
+                            provider: provider,
+                            functionName: functionName,
+                            nickname: nickname,
+                            codex: codex,
+                            dangerousPermissionsEnabled: dangerousPermissionsEnabled
+                        )
+                        activeSheet = nil
+                    }
+                )
+            }
         }
     }
 }
@@ -564,16 +663,18 @@ private struct ProviderAccountCardView: View {
                 .buttonStyle(.plain)
 
                 Menu {
-                    Button {
-                        setEnabled(false)
-                    } label: {
-                        Label("Disable account", systemImage: "power")
+                    if !account.isAPIKeyProfile {
+                        Button {
+                            setEnabled(false)
+                        } label: {
+                            Label("Disable account", systemImage: "power")
+                        }
+                        Divider()
                     }
-                    Divider()
                     Button(role: .destructive) {
                         confirmRemove = true
                     } label: {
-                        Label("Remove account", systemImage: "trash")
+                        Label(account.isAPIKeyProfile ? "Remove API key" : "Remove account", systemImage: "trash")
                     }
                 } label: {
                     Image(systemName: "ellipsis")

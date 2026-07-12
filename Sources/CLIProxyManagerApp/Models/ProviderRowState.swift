@@ -24,6 +24,8 @@ struct ProviderRowID: Hashable, RawRepresentable, ExpressibleByStringLiteral, Cu
 
     static let claude = ProviderRowID(rawValue: "claude")
     static let codex = ProviderRowID(rawValue: "codex")
+    static let claudeAPI = ProviderRowID(rawValue: "claude-api")
+    static let codexAPI = ProviderRowID(rawValue: "codex-api")
 }
 
 struct ProviderRowState: Identifiable, Equatable {
@@ -43,6 +45,7 @@ struct ProviderRowState: Identifiable, Equatable {
     let isErrored: Bool
     let accountDetailHidden: Bool
     let subscriptionUsageState: AccountSubscriptionUsageState
+    let showsSubscriptionUsage: Bool
 
     init(
         id: ID,
@@ -58,7 +61,8 @@ struct ProviderRowState: Identifiable, Equatable {
         isDisabled: Bool = false,
         isErrored: Bool = false,
         accountDetailHidden: Bool = true,
-        subscriptionUsageState: AccountSubscriptionUsageState = .disabled
+        subscriptionUsageState: AccountSubscriptionUsageState = .disabled,
+        showsSubscriptionUsage: Bool = true
     ) {
         self.id = id
         self.providerType = providerType ?? Self.inferredProviderType(from: id)
@@ -74,6 +78,7 @@ struct ProviderRowState: Identifiable, Equatable {
         self.isErrored = isErrored
         self.accountDetailHidden = accountDetailHidden
         self.subscriptionUsageState = subscriptionUsageState
+        self.showsSubscriptionUsage = showsSubscriptionUsage
     }
 
     var displayTitle: String {

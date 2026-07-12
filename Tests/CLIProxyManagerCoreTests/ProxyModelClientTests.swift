@@ -175,6 +175,47 @@ final class ProxyModelClientTests: XCTestCase {
         XCTAssertEqual(models, ["gpt-5.5", "claude-sonnet-4-6"])
     }
 
+    func testCodexModelOptionsCombineScopedModelsWithReasoningMetadata() async throws {
+        let regular = Data(#"{"data":[{"id":"cpm-codex-api/gpt-5.6-sol","owned_by":"openai","created":300},{"id":"cpm-codex-api/gpt-5.5","owned_by":"openai","created":200}]}"#.utf8)
+        let metadata = Data(#"{"models":[{"slug":"cpm-codex-api/gpt-5.6-sol","default_reasoning_level":"low","supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"},{"effort":"high"},{"effort":"xhigh"},{"effort":"max"},{"effort":"ultra"}]},{"slug":"cpm-codex-api/gpt-5.5","default_reasoning_level":"medium","supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"},{"effort":"high"},{"effort":"xhigh"}]}]}"#.utf8)
+        let httpClient = StubHTTPClient(results: [.success(regular), .success(metadata)])
+        let client = ProxyModelClient(httpClient: httpClient)
+
+        let models = try await client.codexModelOptions(port: 18_317, modelPrefix: "cpm-codex-api")
+
+        XCTAssertEqual(models, [
+            CodexModelOption(id: "gpt-5.6-sol", supportedReasoning: [.low, .medium, .high, .xhigh, .max], defaultReasoning: .low),
+            CodexModelOption(id: "gpt-5.5", supportedReasoning: [.low, .medium, .high, .xhigh], defaultReasoning: .medium)
+        ])
+        XCTAssertEqual(httpClient.requests.map(\.url.absoluteString), [
+            "http://127.0.0.1:18317/v1/models",
+            "http://127.0.0.1:18317/v1/models?client_version=0.144.0"
+        ])
+    }
+
+    func testCodexModelOptionsKeepRegularModelsWhenMetadataFails() async throws {
+        let regular = Data(#"{"data":[{"id":"cpm-codex-api/custom-gpt","owned_by":"openai","created":300}]}"#.utf8)
+        let httpClient = StubHTTPClient(results: [
+            .success(regular),
+            .failure(URLError(.cannotParseResponse))
+        ])
+        let client = ProxyModelClient(httpClient: httpClient)
+
+        let models = try await client.codexModelOptions(port: 18_317, modelPrefix: "cpm-codex-api")
+
+        XCTAssertEqual(models, [CodexModelOption(id: "custom-gpt", supportedReasoning: [], defaultReasoning: nil)])
+    }
+
+    func testCodexModelOptionsIgnoreUnknownReasoningAndMetadataOnlyModels() async throws {
+        let regular = Data(#"{"data":[{"id":"codex-work/gpt-5.5","owned_by":"openai","created":300}]}"#.utf8)
+        let metadata = Data(#"{"models":[{"slug":"codex-work/gpt-5.5","default_reasoning_level":"future","supported_reasoning_levels":[{"effort":"medium"},{"effort":"future"}]},{"slug":"codex-work/metadata-only","supported_reasoning_levels":[{"effort":"high"}]}]}"#.utf8)
+        let client = ProxyModelClient(httpClient: StubHTTPClient(results: [.success(regular), .success(metadata)]))
+
+        let models = try await client.codexModelOptions(port: 18_317, modelPrefix: "codex-work")
+
+        XCTAssertEqual(models, [CodexModelOption(id: "gpt-5.5", supportedReasoning: [.medium], defaultReasoning: nil)])
+    }
+
     func testModelsRejectsInvalidPortBeforeRequestingModels() async throws {
         let httpClient = StubHTTPClient(result: .success(Data(#"{"data":[]}"#.utf8)))
         let client = ProxyModelClient(httpClient: httpClient)
@@ -188,11 +229,58 @@ final class ProxyModelClientTests: XCTestCase {
 
         XCTAssertEqual(httpClient.requests.count, 0)
     }
+
+    func testClaudeModelOptionsKeepOnlyExactAccountPrefixAndMetadata() async throws {
+        let data = Data(#"""
+        {"data":[
+          {"id":"claude-work/claude-opus-4-8","owned_by":"anthropic","created":500},
+          {"id":"claude-work/claude-sonnet-5","owned_by":"anthropic","created":400},
+          {"id":"claude-work/claude-haiku-4-5","owned_by":"anthropic","created":300},
+          {"id":"claude-work/claude-custom-preview","owned_by":"anthropic","created":200},
+          {"id":"claude-worker/claude-opus-4-8","owned_by":"anthropic","created":600},
+          {"id":"claude-personal/claude-opus-4-7","owned_by":"anthropic","created":700},
+          {"id":"cpm-claude-api/claude-opus-4-8","owned_by":"anthropic","created":800},
+          {"id":"claude-work/gpt-5.6","owned_by":"openai","created":900}
+        ]}
+        """#.utf8)
+        let client = ProxyModelClient(httpClient: StubHTTPClient(result: .success(data)))
+
+        let options = try await client.claudeModelOptions(port: 18_317, modelPrefix: " claude-work ")
+
+        XCTAssertEqual(options, [
+            ClaudeModelOption(id: "claude-opus-4-8", family: .opus, created: 500),
+            ClaudeModelOption(id: "claude-sonnet-5", family: .sonnet, created: 400),
+            ClaudeModelOption(id: "claude-haiku-4-5", family: .haiku, created: 300),
+            ClaudeModelOption(id: "claude-custom-preview", family: .other, created: 200)
+        ])
+    }
+
+    func testClaudeModelOptionsKeepFirstDuplicateBaseID() async throws {
+        let data = Data(#"{"data":[{"id":"claude-work/claude-opus-4-8","created":500},{"id":"claude-work/claude-opus-4-8","created":100}]}"#.utf8)
+        let client = ProxyModelClient(httpClient: StubHTTPClient(result: .success(data)))
+
+        let options = try await client.claudeModelOptions(port: 18_317, modelPrefix: "claude-work")
+
+        XCTAssertEqual(options, [ClaudeModelOption(id: "claude-opus-4-8", family: .opus, created: 500)])
+    }
+
+    func testClaudeModelOptionsRejectBlankPrefixBeforeNetworkRequest() async {
+        let httpClient = StubHTTPClient(result: .success(Data(#"{"data":[]}"#.utf8)))
+        let client = ProxyModelClient(httpClient: httpClient)
+
+        do {
+            _ = try await client.claudeModelOptions(port: 18_317, modelPrefix: "   ")
+            XCTFail("Expected empty model prefix error")
+        } catch {
+            XCTAssertEqual(error as? ClaudeModelDiscoveryError, .emptyModelPrefix)
+        }
+        XCTAssertTrue(httpClient.requests.isEmpty)
+    }
 }
 
 private final class StubHTTPClient: HTTPClient, @unchecked Sendable {
-    private let result: Result<Data, Error>
     private let lock = NSLock()
+    private var results: [Result<Data, Error>]
     private var _requests: [(url: URL, headers: [String: String])] = []
 
     var requests: [(url: URL, headers: [String: String])] {
@@ -200,11 +288,21 @@ private final class StubHTTPClient: HTTPClient, @unchecked Sendable {
     }
 
     init(result: Result<Data, Error>) {
-        self.result = result
+        results = [result]
+    }
+
+    init(results: [Result<Data, Error>]) {
+        self.results = results
     }
 
     func get(_ url: URL, headers: [String: String]) async throws -> Data {
-        lock.withLock { _requests.append((url, headers)) }
+        let result: Result<Data, Error> = lock.withLock {
+            _requests.append((url, headers))
+            guard !results.isEmpty else {
+                return .failure(URLError(.badServerResponse))
+            }
+            return results.removeFirst()
+        }
         return try result.get()
     }
 }

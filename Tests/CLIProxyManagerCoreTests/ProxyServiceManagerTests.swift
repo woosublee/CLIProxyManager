@@ -45,6 +45,10 @@ final class ProxyServiceManagerTests: XCTestCase {
         XCTAssertTrue(config.contains("debug: false"))
         XCTAssertTrue(config.contains("api-keys:"))
         XCTAssertTrue(config.contains("  - sk-dummy"))
+        XCTAssertFalse(config.contains("claude-api-key:"))
+        XCTAssertFalse(config.contains("codex-api-key:"))
+        XCTAssertFalse(config.contains("https://api.anthropic.com"))
+        XCTAssertFalse(config.contains("https://api.openai.com/v1"))
 
         XCTAssertEqual(launcher.invocations, [
             FakeProcessLauncher.Invocation(
@@ -52,6 +56,50 @@ final class ProxyServiceManagerTests: XCTestCase {
                 arguments: ["--config", paths.clipProxyConfigFile.path]
             )
         ])
+    }
+
+    func testStartAddsConfiguredAPIKeysWithOfficialBaseURLsAndFixedPrefixes() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let manager = ProxyServiceManager(
+            paths: paths,
+            launcher: FakeProcessLauncher(),
+            claudeAPIKeyProvider: { "claude-key\"\nvalue" },
+            codexAPIKeyProvider: { "codex-key" }
+        )
+
+        try await manager.start(port: 8317)
+
+        let config = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
+        XCTAssertTrue(config.contains("claude-api-key:"))
+        XCTAssertTrue(config.contains("api-key: \"claude-key\\\"\\nvalue\""))
+        XCTAssertTrue(config.contains("base-url: \"https://api.anthropic.com\""))
+        XCTAssertTrue(config.contains("prefix: \"cpm-claude-api\""))
+        XCTAssertTrue(config.contains("codex-api-key:"))
+        XCTAssertTrue(config.contains("api-key: \"codex-key\""))
+        XCTAssertTrue(config.contains("base-url: \"https://api.openai.com/v1\""))
+        XCTAssertTrue(config.contains("prefix: \"cpm-codex-api\""))
+        XCTAssertTrue(config.contains("auth-dir: \"\(paths.authDirectory.path)\""))
+        XCTAssertTrue(config.contains("  - sk-dummy"))
+    }
+
+    func testStartAlwaysAddsClaudeAPIKeyRegardlessOfLegacyConnectionMode() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let manager = ProxyServiceManager(
+            paths: paths,
+            launcher: FakeProcessLauncher(),
+            claudeAPIKeyProvider: { "claude-key" },
+            codexAPIKeyProvider: { nil }        )
+
+        try await manager.start(port: 8317)
+
+        let config = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
+        XCTAssertTrue(config.contains("claude-api-key:"))
+        XCTAssertTrue(config.contains("api-key: \"claude-key\""))
+        XCTAssertTrue(config.contains("prefix: \"cpm-claude-api\""))
     }
 
     func testStartAddsManagementSecretOnlyWhenConfigured() async throws {

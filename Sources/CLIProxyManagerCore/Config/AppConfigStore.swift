@@ -1,7 +1,7 @@
 import Foundation
 
 public struct AppConfigStore: @unchecked Sendable {
-    private let paths: ManagedPaths
+    public let paths: ManagedPaths
     private let fileManager: FileManager
 
     public init(paths: ManagedPaths = ManagedPaths(), fileManager: FileManager = .default) {

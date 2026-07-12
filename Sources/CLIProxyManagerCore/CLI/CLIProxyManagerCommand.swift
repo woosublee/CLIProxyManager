@@ -19,8 +19,9 @@ public enum CLIProxyManagerCommandError: Error, Equatable, CustomStringConvertib
               cpm update check [app | proxy | all]
               cpm update stage [app | proxy | all]
               cpm update apply [app | proxy | all] [--yes]
-              cpm secret get|set|delete claude-api-key
+              cpm secret get|set|delete <claude-api-key|codex-api-key>
               cpm routing next <round-robin-profile-id>
+              cpm routing claude-models <command-profile-id|--api|--legacy>
               cpm quota [--json]
               cpm quota key status [--json] | set --stdin | delete
             """
@@ -58,10 +59,11 @@ public struct CLIProxyManagerCommand: Sendable {
     private let appUpdater: any AppUpdating
     private let subscriptionQuotaClient: any SubscriptionQuotaFetching
     private let subscriptionUsageKeyStore: any SubscriptionUsageManagementKeyConfiguring
+    private let claudeModelClient: any ClaudeModelListing
     private let currentUID: @Sendable () -> uid_t
 
     public init(
-        secretStore: any SecretStore = KeychainSecretStore(),
+        secretStore: (any SecretStore)? = nil,
         configStore: AppConfigStore = AppConfigStore(),
         authProfileStore: AuthProfileStore = AuthProfileStore(),
         stateSelector: any RoundRobinStateSelecting = RoundRobinStateStore(),
@@ -71,9 +73,10 @@ public struct CLIProxyManagerCommand: Sendable {
         },
         output: any CLICommandOutputWriting = TerminalCommandOutput(),
         subscriptionQuotaClient: any SubscriptionQuotaFetching = CLIProxyAPISubscriptionQuotaClient(),
-        subscriptionUsageKeyStore: any SubscriptionUsageManagementKeyConfiguring = SubscriptionUsageManagementKeyFileStore()
+        subscriptionUsageKeyStore: any SubscriptionUsageManagementKeyConfiguring = SubscriptionUsageManagementKeyFileStore(),
+        claudeModelClient: any ClaudeModelListing = ProxyModelClient()
     ) {
-        self.secretStore = secretStore
+        self.secretStore = secretStore ?? FileSecretStore(paths: configStore.paths)
         self.configStore = configStore
         self.authProfileStore = authProfileStore
         self.stateSelector = stateSelector
@@ -87,11 +90,12 @@ public struct CLIProxyManagerCommand: Sendable {
         self.appUpdater = AppUpdateService()
         self.subscriptionQuotaClient = subscriptionQuotaClient
         self.subscriptionUsageKeyStore = subscriptionUsageKeyStore
+        self.claudeModelClient = claudeModelClient
         self.currentUID = { geteuid() }
     }
 
     init(
-        secretStore: any SecretStore = KeychainSecretStore(),
+        secretStore: (any SecretStore)? = nil,
         configStore: AppConfigStore = AppConfigStore(),
         authProfileStore: AuthProfileStore = AuthProfileStore(),
         stateSelector: any RoundRobinStateSelecting = RoundRobinStateStore(),
@@ -108,9 +112,10 @@ public struct CLIProxyManagerCommand: Sendable {
         appUpdater: any AppUpdating = AppUpdateService(),
         subscriptionQuotaClient: any SubscriptionQuotaFetching = CLIProxyAPISubscriptionQuotaClient(),
         subscriptionUsageKeyStore: any SubscriptionUsageManagementKeyConfiguring = SubscriptionUsageManagementKeyFileStore(),
+        claudeModelClient: any ClaudeModelListing = ProxyModelClient(),
         currentUID: @escaping @Sendable () -> uid_t = { geteuid() }
     ) {
-        self.secretStore = secretStore
+        self.secretStore = secretStore ?? FileSecretStore(paths: configStore.paths)
         self.configStore = configStore
         self.authProfileStore = authProfileStore
         self.stateSelector = stateSelector
@@ -124,6 +129,7 @@ public struct CLIProxyManagerCommand: Sendable {
         self.appUpdater = appUpdater
         self.subscriptionQuotaClient = subscriptionQuotaClient
         self.subscriptionUsageKeyStore = subscriptionUsageKeyStore
+        self.claudeModelClient = claudeModelClient
         self.currentUID = currentUID
     }
 
@@ -139,7 +145,11 @@ public struct CLIProxyManagerCommand: Sendable {
             return
         }
         if arguments.count == 3, arguments[0] == "routing", arguments[1] == "next" {
-            try runRoutingNext(profileID: arguments[2])
+            try await runRoutingNext(profileID: arguments[2])
+            return
+        }
+        if arguments.count == 3, arguments[0] == "routing", arguments[1] == "claude-models" {
+            try await runClaudeModelsRouting(target: arguments[2])
             return
         }
 
@@ -502,20 +512,27 @@ public struct CLIProxyManagerCommand: Sendable {
         case .unavailable(let issue):
             output.writeStdout("  Usage unavailable — \(issue.message)\n")
         case .available(let snapshot):
-            guard !snapshot.windows.isEmpty else {
-                output.writeStdout("  Usage details unavailable\n")
-                return
-            }
-            for window in snapshot.windows {
-                let percent = Int(min(max(window.usedPercent, 0), 100).rounded())
-                let label = quotaWindowLabel(window, provider: provider)
-                let displayLabel = label.count < 4
-                    ? label.padding(toLength: 4, withPad: " ", startingAt: 0)
-                    : label
-                output.writeStdout("  \(displayLabel) \(quotaProgressBar(usedPercent: window.usedPercent)) \(String(format: "%3d", percent))%\n")
-                if let resetAt = window.resetAt {
-                    output.writeStdout("       Next reset: \(resetAt.formatted(date: .abbreviated, time: .shortened))\n")
-                }
+            writeQuotaSnapshot(snapshot, provider: provider)
+        case .stale(let snapshot, let issue):
+            writeQuotaSnapshot(snapshot, provider: provider)
+            output.writeStdout("  Warning: \(issue.message) Showing last successful usage.\n")
+        }
+    }
+
+    private func writeQuotaSnapshot(_ snapshot: SubscriptionUsageSnapshot, provider: AuthProfileType) {
+        guard !snapshot.windows.isEmpty else {
+            output.writeStdout("  Usage details unavailable\n")
+            return
+        }
+        for window in snapshot.windows {
+            let percent = Int(min(max(window.usedPercent, 0), 100).rounded())
+            let label = quotaWindowLabel(window, provider: provider)
+            let displayLabel = label.count < 4
+                ? label.padding(toLength: 4, withPad: " ", startingAt: 0)
+                : label
+            output.writeStdout("  \(displayLabel) \(quotaProgressBar(usedPercent: window.usedPercent)) \(String(format: "%3d", percent))%\n")
+            if let resetAt = window.resetAt {
+                output.writeStdout("       Next reset: \(resetAt.formatted(date: .abbreviated, time: .shortened))\n")
             }
         }
     }
@@ -613,6 +630,10 @@ public struct CLIProxyManagerCommand: Sendable {
                 status = "available"
                 issue = nil
                 windows = snapshot.windows
+            case .stale(let snapshot, let value):
+                status = "stale"
+                issue = value
+                windows = snapshot.windows
             case .unavailable(let value):
                 status = "unavailable"
                 issue = value
@@ -650,17 +671,93 @@ public struct CLIProxyManagerCommand: Sendable {
                 throw CLIProxyManagerCommandError.emptySecret(key.rawValue)
             }
             try secretStore.set(value, for: key)
+            output.writeStderr("Restart CLIProxyAPI with `cpm restart` to apply the API key change.\n")
         case "delete":
             try secretStore.delete(key)
+            output.writeStderr("Restart CLIProxyAPI with `cpm restart` to apply the API key change.\n")
         default:
             throw CLIProxyManagerCommandError.usage
         }
     }
 
-    private func runRoutingNext(profileID: String) throws {
+    private func runRoutingNext(profileID: String) async throws {
         let config = try configStore.load()
         let authProfiles = try authProfileStore.profiles()
-        let service = RoundRobinSelectionService(stateSelector: stateSelector)
-        output.writeStdout("\(try service.shellEnvironmentAssignments(profileID: profileID, config: config, authProfiles: authProfiles))\n")
+        let service = RoundRobinSelectionService(
+            stateSelector: stateSelector,
+            claudeModelClient: claudeModelClient
+        )
+        let assignments = try await service.shellEnvironmentAssignments(
+            profileID: profileID,
+            config: config,
+            authProfiles: authProfiles
+        )
+        output.writeStdout(assignments + "\n")
+    }
+
+    private func runClaudeModelsRouting(target: String) async throws {
+        let config = try configStore.load()
+        let routing: ClaudeRouting
+        let prefix: String
+
+        if target == "--api" {
+            prefix = "cpm-claude-api"
+            routing = config.ccapi.claude
+        } else if target == "--legacy" {
+            guard config.oauthCommandProfiles.isEmpty else {
+                throw CLIProxyManagerCommandError.prerequisite(
+                    "Legacy Claude routing is only available when account-specific command profiles have not been created."
+                )
+            }
+            let profiles = try authProfileStore.profiles().filter {
+                $0.type == .claude && !$0.disabled
+            }
+            guard profiles.count == 1, let profile = profiles.first else {
+                let message = profiles.isEmpty
+                    ? "No enabled Claude OAuth account is available. Connect Claude OAuth in the app, then retry."
+                    : "Multiple Claude OAuth accounts are enabled. Save an account-specific command in the app, then retry."
+                throw CLIProxyManagerCommandError.prerequisite(message)
+            }
+            prefix = profile.prefix?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            routing = .automatic
+        } else {
+            guard let profile = config.oauthCommandProfiles.first(where: { $0.id == target }) else {
+                throw CLIProxyManagerCommandError.prerequisite("Claude command profile `\(target)` was not found.")
+            }
+            guard profile.provider == .claude else {
+                throw CLIProxyManagerCommandError.prerequisite("Command profile `\(target)` is not a Claude OAuth profile.")
+            }
+            guard profile.isEnabled else {
+                throw CLIProxyManagerCommandError.prerequisite("Claude command profile `\(target)` is disabled.")
+            }
+            guard profile.connectionMode == .proxy else {
+                throw CLIProxyManagerCommandError.prerequisite(
+                    "Claude command profile `\(target)` uses Direct mode and does not use proxy model routing."
+                )
+            }
+            prefix = profile.modelPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
+            routing = profile.effectiveClaudeRouting
+        }
+
+        guard !prefix.isEmpty else {
+            throw CLIProxyManagerCommandError.prerequisite(
+                "This Claude account does not have a routing prefix. Save the account settings, then retry."
+            )
+        }
+
+        do {
+            let options = try await claudeModelClient.claudeModelOptions(
+                port: config.port,
+                modelPrefix: prefix
+            )
+            let resolved = try ClaudeModelResolver.resolve(
+                routing: routing,
+                options: options,
+                prefix: prefix
+            )
+            output.writeStdout(resolved.shellEnvironmentAssignments + "\n")
+        } catch {
+            throw CLIProxyManagerCommandError.operation(error.localizedDescription)
+        }
     }
 }

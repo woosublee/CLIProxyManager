@@ -29,8 +29,9 @@ final class SecretStoreTests: XCTestCase {
         }
     }
 
-    func testSecretKeyRawValueInitializesClaudeAPIKey() {
+    func testSecretKeyRawValuesInitializeAPIKeys() {
         XCTAssertEqual(SecretKey(rawValue: "claude-api-key"), .claudeAPIKey)
+        XCTAssertEqual(SecretKey(rawValue: "codex-api-key"), .codexAPIKey)
     }
 
     func testSecretStoreErrorDescriptionIsDeterministic() {

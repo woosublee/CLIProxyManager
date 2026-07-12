@@ -43,7 +43,7 @@ private struct RoundRobinProviderSettingsCard: View {
     let provider: AuthProfileType
     @State private var state: RoundRobinSettingsState
     @State private var commandNameCheckState: CommandNameAvailability = .available
-    @State private var codexModels: [String] = []
+    @State private var codexModels: [CodexModelOption] = []
 
     init(viewModel: DashboardViewModel, provider: AuthProfileType) {
         self.viewModel = viewModel
@@ -217,7 +217,7 @@ private struct RoundRobinProviderSettingsCard: View {
 
 private struct CodexRoundRobinRoleFields: View {
     @Binding var profile: AppConfig.RoundRobinProfile
-    let availableModels: [String]
+    let availableModels: [CodexModelOption]
 
     var body: some View {
         CodexRoleRoutingFields(

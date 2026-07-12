@@ -63,12 +63,17 @@ struct ProviderListView: View {
                 checkCommandName: { functionName in
                     await viewModel.commandNameAvailability(provider: provider, functionName: functionName)
                 },
-                save: { functionName, nickname, dangerousPermissionsEnabled in
+                refreshModels: {
+                    try await viewModel.claudeModels(for: provider)
+                },
+                save: { functionName, nickname, dangerousPermissionsEnabled, connectionMode, claudeRouting in
                     try viewModel.saveClaudeOAuthSettings(
                         provider: provider,
                         functionName: functionName,
                         nickname: nickname,
-                        dangerousPermissionsEnabled: dangerousPermissionsEnabled
+                        dangerousPermissionsEnabled: dangerousPermissionsEnabled,
+                        connectionMode: connectionMode,
+                        claudeRouting: claudeRouting
                     )
                 }
             )
@@ -78,7 +83,7 @@ struct ProviderListView: View {
                 providerID: provider,
                 connectionDetail: row?.connectionDetail ?? "",
                 isConnected: row?.isConnected ?? false,
-                availableModels: viewModel.availableCodexModels,
+                availableModels: viewModel.availableCodexModelOptions,
                 modelLoadingState: viewModel.codexModelLoadingState,
                 refreshModels: {
                     await viewModel.refreshCodexModels()
@@ -88,6 +93,7 @@ struct ProviderListView: View {
                 checkCommandName: { functionName in
                     await viewModel.commandNameAvailability(provider: provider, functionName: functionName)
                 },
+                preferredModel: { viewModel.preferredCodexDefaultModel(in: $0) },
                 save: { functionName, nickname, codex, dangerousPermissionsEnabled in
                     try viewModel.saveCodexSettings(
                         provider: provider,
