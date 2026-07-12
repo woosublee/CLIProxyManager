@@ -23,7 +23,7 @@ public struct CodexFastConfiguration: Equatable, Sendable {
         } else {
             oauthCodexConfigs = config.oauthCommandProfiles.compactMap { profile in
                 guard profile.provider == .codex, profile.isEnabled else { return nil }
-                return profile.codex
+                return profile.codex ?? config.ccodex
             }
         }
 

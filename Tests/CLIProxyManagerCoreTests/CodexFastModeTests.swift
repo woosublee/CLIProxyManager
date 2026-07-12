@@ -86,16 +86,14 @@ final class CodexFastModeTests: XCTestCase {
         )
     }
 
-    func testLegacyCodexModelsAreUsedOnlyWithoutOAuthCommandProfiles() throws {
+    func testEnabledOAuthProfileWithoutCodexRoutingFallsBackToLegacyCodexModels() throws {
         var config = AppConfig.default
         config.ccodex.opus.fastModeEnabled = true
-
-        XCTAssertEqual(try CodexFastConfiguration(config: config).oauthCanonicalModels, ["gpt-5.6-terra"])
-
         config.oauthCommandProfiles = [
             .init(id: "codex-work", provider: .codex, authProfileID: "codex.json", commandName: "ccwork", modelPrefix: "codex-work")
         ]
-        XCTAssertEqual(try CodexFastConfiguration(config: config).oauthCanonicalModels, [])
+
+        XCTAssertEqual(try CodexFastConfiguration(config: config).oauthCanonicalModels, ["gpt-5.6-terra"])
     }
 
     func testFastConfigurationRejectsManagedAliasCollision() {

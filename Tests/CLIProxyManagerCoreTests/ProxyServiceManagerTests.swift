@@ -38,6 +38,16 @@ final class ProxyServiceManagerTests: XCTestCase {
         XCTAssertTrue(authIsDirectory.boolValue)
 
         let config = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
+        XCTAssertEqual(config, """
+        port: 8317
+        auth-dir: "\(paths.authDirectory.path)"
+        logging-to-file: true
+        debug: false
+        api-keys:
+          - sk-dummy
+
+
+        """)
         XCTAssertTrue(config.contains("port: 8317"))
         XCTAssertTrue(config.contains("auth-dir: \"\(paths.authDirectory.path)\""))
         XCTAssertFalse(config.contains("~/.cli-proxy-api"))

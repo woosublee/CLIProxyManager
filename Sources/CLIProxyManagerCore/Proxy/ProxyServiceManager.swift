@@ -572,19 +572,24 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
             aliases: fastConfiguration.allAliases
         )
 
-        return """
-        port: \(port)
-        auth-dir: \(yamlDoubleQuoted(paths.authDirectory.path))
-        logging-to-file: true
-        debug: false
-        api-keys:
-          - sk-dummy
-        \(managementConfiguration)
-        \(claudeAPIConfiguration)
-        \(codexAPIConfiguration)
-        \(oauthFastConfiguration)
-        \(payloadConfiguration)
-        """
+        var sections = [
+            """
+            port: \(port)
+            auth-dir: \(yamlDoubleQuoted(paths.authDirectory.path))
+            logging-to-file: true
+            debug: false
+            api-keys:
+              - sk-dummy
+            """
+        ]
+        sections.append(contentsOf: [
+            managementConfiguration,
+            claudeAPIConfiguration,
+            codexAPIConfiguration,
+            oauthFastConfiguration,
+            payloadConfiguration
+        ].filter { !$0.isEmpty })
+        return sections.joined(separator: "\n") + "\n\n"
     }
 
     private func oauthFastAliasConfiguration(models: [String]) -> String {
