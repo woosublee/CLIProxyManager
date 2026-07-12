@@ -55,9 +55,10 @@ Claude API Key는 `base-url`이 없어도 CLIProxyAPI가 항목을 유지하고 
 - Claude API Key와 OpenAI API Key는 항상 CLIProxyAPI를 경유한다.
 - 두 API Key provider에 공식 upstream base URL과 고정 prefix를 명시한다.
 - OpenAI API Key 모델 목록을 실제 `cpm-codex-api/*` 모델 응답으로 구성한다.
-- Codex 계열 모델 설정에서 모델별 지원 reasoning만 제공한다.
+- Codex OAuth와 OpenAI API Key 모두 account/provider prefix의 실제 모델 및 reasoning metadata를 사용한다.
+- 신규 Codex OAuth와 OpenAI API Key 설정의 기본 모델은 `gpt-5.6-terra`로 한다.
 - API Key 명령은 전용 prefix 모델이 실제로 등록된 경우에만 실행한다.
-- 기존 저장 설정을 손실 없이 읽고, capability가 확인된 시점에만 안전하게 정규화한다.
+- 기존 저장 모델은 자동 변경하지 않고, capability가 확인된 시점에만 지원하지 않는 reasoning을 안전하게 정규화한다.
 
 ## 비목표
 
@@ -159,9 +160,21 @@ Authorization: Bearer sk-dummy
 - OpenAI API Key: `cpm-codex-api`
 - Codex round robin: 포함 계정들의 공통 base model 집합
 
-prefix를 제거한 base model ID를 key로 하여 일반 모델 목록과 metadata를 결합한다. 모델 표시 순서는 일반 `/v1/models`의 created 내림차순을 유지한다.
+prefix를 제거한 base model ID를 key로 하여 일반 모델 목록과 metadata를 결합한다. 이 결합은 OpenAI API Key뿐 아니라 각 Codex OAuth account prefix와 Codex round robin에도 동일하게 적용한다. 모델 표시는 일반 `/v1/models`의 created 내림차순을 유지하되, 기본 모델 선택에는 동률 순서를 사용하지 않는다.
 
 metadata 응답에 특정 모델이 없으면 해당 모델은 목록에서 제거하지 않는다. 모델은 일반 응답을 기준으로 유지하고 capability만 unknown으로 취급한다.
+
+## 기본 모델 정책
+
+신규 Codex OAuth 계정과 신규 OpenAI API Key 설정은 `gpt-5.6-terra`가 해당 scoped 모델 목록에 있으면 Opus·Sonnet·Haiku의 초기 모델로 사용한다. `terra`가 없으면 현재 scoped 모델 목록의 첫 사용 가능 모델로 fallback한다.
+
+`AppConfig.default.ccodex`도 신규 설정 fallback과 일치하도록 모델을 `gpt-5.6-terra`로 변경하되 역할별 reasoning 기본값은 유지한다.
+
+- Opus: `xhigh`
+- Sonnet: `medium`
+- Haiku: `low`
+
+기존 OAuth command profile, 기존 `ccodex`, 기존 OpenAI API Key에 저장된 모델은 자동 migration하지 않는다. 사용자가 설정 화면에서 모델을 변경하거나 신규 provider를 생성할 때만 새 기본 정책을 적용한다.
 
 ## reasoning 선택지와 정규화
 
@@ -257,9 +270,12 @@ OAuth 명령과 round-robin 명령의 preflight는 이번 범위에서 변경하
    - 모델 변경 시 지원하지 않는 reasoning이 default 또는 `auto`로 정규화된다.
    - capability unknown 모델은 `auto`와 기존 저장값만 보존한다.
 
-2. 모델 scope
-   - OpenAI API Key 화면은 `cpm-codex-api` 모델만 사용한다.
-   - Codex OAuth 계정은 해당 account prefix 모델만 사용한다.
+2. 모델 scope와 기본값
+   - OpenAI API Key 화면은 `cpm-codex-api` 모델과 reasoning metadata만 사용한다.
+   - Codex OAuth 계정은 해당 account prefix 모델과 reasoning metadata만 사용한다.
+   - Codex round robin은 포함 account들의 공통 모델과 공통 reasoning만 사용한다.
+   - 신규 Codex OAuth와 OpenAI API Key는 scoped 목록에 `gpt-5.6-terra`가 있으면 세 역할의 초기 모델로 사용한다.
+   - 기존 저장 모델은 자동 변경하지 않는다.
    - API Key scoped refresh 실패 시 OAuth/global 모델을 섞지 않는다.
 
 3. 연결 방식 UI와 저장
@@ -273,10 +289,11 @@ OAuth 명령과 round-robin 명령의 preflight는 이번 범위에서 변경하
 
 1. API Key를 저장하고 CLIProxyAPI를 재시작한다.
 2. 로그에 `1 Claude API keys`와 `1 Codex keys`가 등록된다.
-3. `/v1/models`에 `cpm-claude-api/*`와 `cpm-codex-api/*`가 모두 존재한다.
-4. OpenAI API Key 설정 화면에서 여러 GPT 모델이 표시된다.
-5. GPT-5.5와 GPT-5.6 선택 시 reasoning 메뉴가 각각 다른 값을 표시한다.
-6. API Key provider 블록을 제거한 상태에서는 해당 shell command preflight가 실패한다.
+3. `/v1/models`에 `cpm-claude-api/*`, `cpm-codex-api/*`, 각 Codex OAuth account prefix 모델이 존재한다.
+4. OpenAI API Key와 각 Codex OAuth 설정 화면에서 scoped GPT 모델이 표시된다.
+5. API Key 및 OAuth 모두 GPT-5.5와 GPT-5.6 선택 시 reasoning 메뉴가 각각 다른 값을 표시한다.
+6. 신규 Codex OAuth와 OpenAI API Key의 초기 모델이 `gpt-5.6-terra`인지 확인한다.
+7. API Key provider 블록을 제거한 상태에서는 해당 shell command preflight가 실패한다.
 
 검증 과정에서는 실제 generation 요청을 보내지 않아 API 사용량이나 과금을 발생시키지 않는다.
 
@@ -286,6 +303,7 @@ OAuth 명령과 round-robin 명령의 preflight는 이번 범위에서 변경하
 - 두 API Key provider가 공식 base URL과 고정 prefix로 CLIProxyAPI에 등록된다.
 - OpenAI API Key가 런타임 로그에서 Codex key로 등록되고 전용 모델 목록을 반환한다.
 - API Key shell 명령이 다른 provider의 모델 존재만으로 실행되지 않는다.
-- Codex 설정 화면이 모델별 지원 reasoning을 정확히 제한한다.
-- 기존 사용자 설정과 현재 선택값을 capability 확인 전에는 손실하지 않는다.
+- Codex OAuth, OpenAI API Key, Codex round robin 설정 화면이 scoped 모델별 지원 reasoning을 정확히 제한한다.
+- 신규 Codex OAuth와 OpenAI API Key의 기본 모델은 `gpt-5.6-terra`다.
+- 기존 사용자 모델 설정과 현재 선택값을 자동 변경하거나 capability 확인 전에 손실하지 않는다.
 - 관련 단위 테스트와 개발 빌드 런타임 검증이 모두 통과한다.

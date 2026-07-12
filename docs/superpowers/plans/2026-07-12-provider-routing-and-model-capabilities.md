@@ -18,6 +18,8 @@
 - OpenAI API Key upstream은 정확히 `https://api.openai.com/v1`, prefix는 `cpm-codex-api`다.
 - custom base URL 및 OpenAI-compatible third-party provider 입력 UI는 추가하지 않는다.
 - Claude API Key에는 모델 선택 UI를 추가하지 않는다.
+- Codex OAuth와 OpenAI API Key 모두 해당 account/provider prefix의 모델 및 reasoning metadata를 사용한다.
+- 신규 Codex OAuth와 OpenAI API Key의 기본 모델은 `gpt-5.6-terra`다; 기존 저장 모델은 자동 변경하지 않는다.
 - Codex metadata에 없는 모델은 일반 모델 목록에서 제거하지 않고 capability unknown으로 유지한다.
 - capability unknown 상태에서는 `auto`와 기존 저장 reasoning만 보존하며 새로운 값을 추측하지 않는다.
 - `ultra`는 앱의 reasoning 선택지에 추가하지 않는다.
@@ -42,7 +44,7 @@
 - `Sources/CLIProxyManagerApp/Views/AddProviderModal.swift`: Claude API Key가 Direct를 선택할 수 있다는 잘못된 문구를 제거한다.
 - `Tests/CLIProxyManagerCoreTests/ProxyServiceManagerTests.swift`: 공식 base URL YAML을 검증한다.
 - `Tests/CLIProxyManagerCoreTests/ShellFunctionRendererTests.swift`: 두 API Key command의 prefix preflight를 검증한다.
-- `Tests/CLIProxyManagerCoreTests/AppConfigTests.swift`: `max` encode/decode와 suffix를 검증한다.
+- `Tests/CLIProxyManagerCoreTests/AppConfigTests.swift`: 신규 Terra 기본값, `max` encode/decode와 suffix를 검증한다.
 - `Tests/CLIProxyManagerCoreTests/ProxyModelClientTests.swift`: metadata parsing, fallback, ordering, scope를 검증한다.
 - `Tests/CLIProxyManagerAppTests/ModelSelectionOptionsTests.swift`: model picker의 기존 보존 동작을 유지한다.
 - `Tests/CLIProxyManagerAppTests/CodexRoleRoutingOptionsTests.swift`: reasoning capability와 정규화를 검증한다.
@@ -226,11 +228,26 @@ git commit -m "fix: register API key providers explicitly"
 - Produces: `ProxyModelClient.codexModelOptions(port:modelPrefix:) async throws -> [CodexModelOption]`.
 - Preserves: existing `codexBaseModels` methods as wrappers returning `options.map(\.id)` so non-migrated callers and tests continue to compile during the task.
 
-- [ ] **Step 1: Add failing `max` serialization tests**
+- [ ] **Step 1: Add failing Terra default and `max` serialization tests**
 
 Add to `AppConfigTests`:
 
 ```swift
+func testDefaultCodexRoutingUsesTerraWithRoleSpecificReasoning() {
+    XCTAssertEqual(
+        AppConfig.default.ccodex.opus,
+        AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .xhigh, contextWindow: .auto)
+    )
+    XCTAssertEqual(
+        AppConfig.default.ccodex.sonnet,
+        AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .medium, contextWindow: .auto)
+    )
+    XCTAssertEqual(
+        AppConfig.default.ccodex.haiku,
+        AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .low, contextWindow: .auto)
+    )
+}
+
 func testCodexReasoningMaxRendersAndRoundTrips() throws {
     let role = AppConfig.CodexRole(model: "gpt-5.6-sol", reasoning: .max, contextWindow: .auto)
 
@@ -242,17 +259,28 @@ func testCodexReasoningMaxRendersAndRoundTrips() throws {
 }
 ```
 
-- [ ] **Step 2: Run the `max` test and verify compilation failure**
+- [ ] **Step 2: Run the Terra default and `max` tests and verify failure**
 
 Run:
 
 ```bash
+swift test --filter AppConfigTests/testDefaultCodexRoutingUsesTerraWithRoleSpecificReasoning && \
 swift test --filter AppConfigTests/testCodexReasoningMaxRendersAndRoundTrips
 ```
 
-Expected: compilation failure because `CodexReasoning.max` does not exist.
+Expected: the default test fails with `gpt-5.5`, and the `max` test fails to compile because `CodexReasoning.max` does not exist.
 
-- [ ] **Step 3: Add `max` without changing existing `auto` semantics**
+- [ ] **Step 3: Set the new default to Terra and add `max` without changing existing `auto` semantics**
+
+Update the default config:
+
+```swift
+ccodex: Codex(
+    opus: CodexRole(model: "gpt-5.6-terra", reasoning: .xhigh, contextWindow: .auto),
+    sonnet: CodexRole(model: "gpt-5.6-terra", reasoning: .medium, contextWindow: .auto),
+    haiku: CodexRole(model: "gpt-5.6-terra", reasoning: .low, contextWindow: .auto)
+),
+```
 
 Update the enum and switch:
 
@@ -546,6 +574,7 @@ The `codexMetadata` helper above uses `URLComponents`, so the exact query remain
 Run:
 
 ```bash
+swift test --filter AppConfigTests/testDefaultCodexRoutingUsesTerraWithRoleSpecificReasoning && \
 swift test --filter AppConfigTests/testCodexReasoningMaxRendersAndRoundTrips && \
 swift test --filter ProxyModelClientTests
 ```
@@ -573,6 +602,7 @@ git commit -m "feat: load Codex model capabilities"
 - Updates protocol: `ProxyModelListing.codexModelOptions(port:)` and `codexModelOptions(port:modelPrefix:)`.
 - Produces: `@Published private(set) var availableCodexModelOptions: [CodexModelOption]`.
 - Preserves convenience: `var availableCodexModels: [String] { availableCodexModelOptions.map(\.id) }`.
+- Produces: `preferredCodexDefaultModel(in:) -> String?`, preferring exact `gpt-5.6-terra` and otherwise the first scoped option.
 - Produces: `codexAPIModels()`, `codexModels(for:)`, and `codexModels(forRoundRobinProfile:)` returning `[CodexModelOption]`.
 
 - [ ] **Step 1: Convert the model-client stub and add failing typed assertions**
@@ -662,7 +692,68 @@ XCTAssertEqual(models, expected)
 XCTAssertEqual(modelClient.prefixRequests.map(\.prefix), ["cpm-codex-api"])
 ```
 
-- [ ] **Step 2: Add failing round-robin capability intersection test**
+- [ ] **Step 2: Add failing Terra default and round-robin capability tests**
+
+Add the default-selection test:
+
+```swift
+func testPreferredCodexDefaultModelUsesTerraThenFirstScopedModel() {
+    let viewModel = DashboardViewModel(
+        configStore: StubConfigStore(config: .default),
+        shellInstaller: StubShellInstaller(),
+        modelClient: StubProxyModelClient(models: []),
+        authProfileStore: StubAuthProfileStore(profiles: []),
+        oauthLoginService: StubOAuthLoginService(),
+        proxyService: StubProxyServiceStarter(),
+        claudeConnector: connectedClaudeConnector(),
+        secretStore: InMemorySecretStore()
+    )
+
+    XCTAssertEqual(
+        viewModel.preferredCodexDefaultModel(in: [
+            CodexModelOption(id: "gpt-5.6-sol"),
+            CodexModelOption(id: "gpt-5.6-terra"),
+            CodexModelOption(id: "gpt-5.5")
+        ]),
+        "gpt-5.6-terra"
+    )
+    XCTAssertEqual(
+        viewModel.preferredCodexDefaultModel(in: [CodexModelOption(id: "gpt-5.5")]),
+        "gpt-5.5"
+    )
+}
+```
+
+Add the OAuth account capability test:
+
+```swift
+func testCodexModelsForProviderPreserveOAuthReasoningMetadata() async throws {
+    var config = AppConfig.default
+    config.oauthCommandProfiles = [
+        .init(id: "codex-work", provider: .codex, authProfileID: "work.json", modelPrefix: "codex-work")
+    ]
+    let expected = [
+        CodexModelOption(id: "gpt-5.6-terra", supportedReasoning: [.low, .medium, .high, .xhigh, .max], defaultReasoning: .medium)
+    ]
+    let modelClient = StubProxyModelClient(optionsByPrefix: ["codex-work": expected])
+    let viewModel = DashboardViewModel(
+        configStore: StubConfigStore(config: config),
+        shellInstaller: StubShellInstaller(),
+        modelClient: modelClient,
+        authProfileStore: StubAuthProfileStore(profiles: [
+            AuthProfile(fileName: "work.json", type: .codex, email: "work@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-work")
+        ]),
+        oauthLoginService: StubOAuthLoginService(),
+        proxyService: StubProxyServiceStarter(),
+        claudeConnector: connectedClaudeConnector(),
+        secretStore: InMemorySecretStore()
+    )
+
+    XCTAssertEqual(try await viewModel.codexModels(for: .init(rawValue: "codex-work")), expected)
+}
+```
+
+Then add the round-robin test:
 
 ```swift
 func testRoundRobinCodexModelsIntersectModelsAndReasoningCapabilities() async throws {
@@ -713,6 +804,8 @@ Run:
 
 ```bash
 swift test --filter DashboardViewModelTests/testCodexAPIModelsUseFixedAPIKeyRoutingPrefix && \
+swift test --filter DashboardViewModelTests/testPreferredCodexDefaultModelUsesTerraThenFirstScopedModel && \
+swift test --filter DashboardViewModelTests/testCodexModelsForProviderPreserveOAuthReasoningMetadata && \
 swift test --filter DashboardViewModelTests/testRoundRobinCodexModelsIntersectModelsAndReasoningCapabilities
 ```
 
@@ -729,12 +822,12 @@ var availableCodexModels: [String] {
     availableCodexModelOptions.map(\.id)
 }
 
+func preferredCodexDefaultModel(in options: [CodexModelOption]) -> String? {
+    options.first(where: { $0.id == "gpt-5.6-terra" })?.id ?? options.first?.id
+}
+
 var latestBaseCodexModel: String? {
-    let excludedKeywords = ["mini", "preview", "codex", "spark", "review"]
-    return availableCodexModels.first { model in
-        let lowercasedModel = model.lowercased()
-        return lowercasedModel.hasPrefix("gpt-") && !excludedKeywords.contains { lowercasedModel.contains($0) }
-    } ?? availableCodexModels.first
+    preferredCodexDefaultModel(in: availableCodexModelOptions)
 }
 ```
 
@@ -1022,23 +1115,46 @@ let availableModels: [CodexModelOption]
 let refreshModels: () async throws -> [CodexModelOption]
 ```
 
-Update default selection to use IDs:
+Pass an explicit preferred-model closure to both sheets:
+
+```swift
+let preferredModel: ([CodexModelOption]) -> String?
+```
+
+`DashboardView` and `ProviderListView` pass:
+
+```swift
+preferredModel: { viewModel.preferredCodexDefaultModel(in: $0) }
+```
+
+Use it only when a role model is blank or the provider is in initial setup:
 
 ```swift
 private func applyDefaultModel(from models: [CodexModelOption]) {
-    guard let firstModel = models.first?.id else { return }
-    if opus.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { opus.model = firstModel }
-    if sonnet.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { sonnet.model = firstModel }
-    if haiku.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { haiku.model = firstModel }
+    guard let defaultModel = preferredModel(models) else { return }
+    if opus.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { opus.model = defaultModel }
+    if sonnet.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { sonnet.model = defaultModel }
+    if haiku.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { haiku.model = defaultModel }
+}
+
+private func applyInitialDefaultsIfNeeded() {
+    guard isInitialSetup, !didApplyInitialDefaults,
+          let defaultModel = preferredModel(scopedAvailableModels) else { return }
+    opus.model = defaultModel
+    sonnet.model = defaultModel
+    haiku.model = defaultModel
+    didApplyInitialDefaults = true
 }
 ```
+
+This replaces the global `latestModel` closure, whose created-time tie currently selects Terra accidentally rather than by policy. Existing non-initial OAuth and configured API Key values remain untouched.
 
 For API Key initial saved models, preserve normalized IDs as unknown-capability placeholders until refresh:
 
 ```swift
 let normalizedModels = CodexAPIModelOptions.baseModels(
     from: [normalizedCodex.opus.model, normalizedCodex.sonnet.model, normalizedCodex.haiku.model]
-).map(CodexModelOption.init(id:))
+).map { CodexModelOption(id: $0) }
 ```
 
 In API Key reload, do not substitute OAuth/global options:
@@ -1047,12 +1163,15 @@ In API Key reload, do not substitute OAuth/global options:
 do {
     scopedAvailableModels = try await refreshModels()
     applyDefaultModel(from: scopedAvailableModels)
+    if !isConfigured {
+        applyInitialDefaultsIfNeeded()
+    }
 } catch {
     // Keep the current API-key-scoped options; OAuth/global models are not valid fallbacks.
 }
 ```
 
-Keep `CodexAPIModelOptions.normalized(_:)` for legacy routed model strings saved before this change.
+For a new API Key, `applyInitialDefaultsIfNeeded()` selects `gpt-5.6-terra` from the `cpm-codex-api` scoped options. For an already configured API Key, the normalized saved role models remain unchanged. Keep `CodexAPIModelOptions.normalized(_:)` for legacy routed model strings saved before this change.
 
 - [ ] **Step 6: Split Claude OAuth selection from fixed API Key presentation**
 
@@ -1277,7 +1396,7 @@ test -s /tmp/cpm-provider-routing-models.json
 
 Expected: the model response file is created.
 
-- [ ] **Step 5: Verify both API Key providers and scoped models**
+- [ ] **Step 5: Verify API Key providers and OAuth/API Key scoped models**
 
 Run:
 
@@ -1289,10 +1408,16 @@ models = json.load(open('/tmp/cpm-provider-routing-models.json')).get('data', []
 ids = [item.get('id', '') for item in models]
 claude = [model for model in ids if model.startswith('cpm-claude-api/')]
 codex = [model for model in ids if model.startswith('cpm-codex-api/')]
+oauth_prefixes = sorted({model.split('/', 1)[0] for model in ids
+                         if model.startswith('codex-') and '/' in model and not model.startswith('cpm-codex-api/')})
 print('claude_api_models=', len(claude))
 print('codex_api_models=', len(codex))
+print('codex_oauth_prefixes=', oauth_prefixes)
 assert claude, 'missing cpm-claude-api models'
 assert codex, 'missing cpm-codex-api models'
+assert oauth_prefixes, 'missing Codex OAuth scoped models'
+for prefix in oauth_prefixes:
+    assert f'{prefix}/gpt-5.6-terra' in ids
 
 log = Path.home()/'.cliproxy-manager/dev/auth/logs/main.log'
 recent = '\n'.join(log.read_text(errors='replace').splitlines()[-200:])
@@ -1302,7 +1427,7 @@ print('provider registration verified')
 PY
 ```
 
-Expected: both counts are greater than zero and provider registration is verified.
+Expected: both API Key counts are greater than zero, at least one Codex OAuth prefix exists, every detected OAuth prefix exposes `gpt-5.6-terra`, and provider registration is verified.
 
 If the user's development secret files are not configured, do not create billable credentials. Instead, repeat the previously proven isolated YAML test using the existing configured development keys only when they are already present; otherwise report runtime provider verification as skipped and retain the unit-test evidence.
 
@@ -1318,14 +1443,21 @@ python3 - <<'PY'
 import json
 models = json.load(open('/tmp/cpm-provider-routing-codex-models.json')).get('models', [])
 scoped = {m.get('slug'): [r.get('effort') for r in m.get('supported_reasoning_levels', [])]
-          for m in models if m.get('slug', '').startswith('cpm-codex-api/')}
-print(scoped)
-assert 'max' not in scoped['cpm-codex-api/gpt-5.5']
-assert 'max' in scoped['cpm-codex-api/gpt-5.6-sol']
+          for m in models}
+api_prefix = 'cpm-codex-api'
+oauth_prefixes = sorted({slug.split('/', 1)[0] for slug in scoped
+                         if slug.startswith('codex-') and '/' in slug and not slug.startswith(api_prefix + '/')})
+print('api=', {k: v for k, v in scoped.items() if k.startswith(api_prefix + '/')})
+print('oauth_prefixes=', oauth_prefixes)
+assert 'max' not in scoped[f'{api_prefix}/gpt-5.5']
+assert 'max' in scoped[f'{api_prefix}/gpt-5.6-terra']
+for prefix in oauth_prefixes:
+    assert 'max' not in scoped[f'{prefix}/gpt-5.5']
+    assert 'max' in scoped[f'{prefix}/gpt-5.6-terra']
 PY
 ```
 
-Expected: GPT-5.5 stops at `xhigh`, while GPT-5.6 Sol includes `max`.
+Expected: OpenAI API Key와 각 Codex OAuth account에서 GPT-5.5는 `xhigh`까지만 제공하고 GPT-5.6 Terra는 `max`를 포함한다.
 
 - [ ] **Step 7: Quit the development app and restore rewritten files**
 
