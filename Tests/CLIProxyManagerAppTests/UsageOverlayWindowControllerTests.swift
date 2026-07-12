@@ -247,7 +247,7 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
 
     func testModeTransitionAnimationRemainsActiveThroughFollowUpRetarget() {
         var coordinator = UsageOverlayResizeCoordinator()
-        let generation = coordinator.beginModeTransition()
+        let generation = coordinator.beginModeTransition(anchor: CGPoint(x: 800, y: 660))
 
         XCTAssertTrue(coordinator.requestResize(animated: true))
         let initial = coordinator.consumeResizeRequest()
@@ -272,12 +272,12 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
 
     func testRapidRetoggleIgnoresOldCompletionBeforeNewCompletion() {
         var coordinator = UsageOverlayResizeCoordinator()
-        let generation1 = coordinator.beginModeTransition()
+        let generation1 = coordinator.beginModeTransition(anchor: CGPoint(x: 800, y: 660))
         XCTAssertTrue(coordinator.requestResize(animated: true))
         _ = coordinator.consumeResizeRequest()
         coordinator.animationStarted(generation: generation1)
 
-        let generation2 = coordinator.beginModeTransition()
+        let generation2 = coordinator.beginModeTransition(anchor: CGPoint(x: 800, y: 660))
         XCTAssertTrue(coordinator.requestResize(animated: true))
         _ = coordinator.consumeResizeRequest()
         coordinator.animationStarted(generation: generation2)
@@ -291,12 +291,12 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
 
     func testRapidRetoggleIgnoresOldCompletionAfterNewCompletion() {
         var coordinator = UsageOverlayResizeCoordinator()
-        let generation1 = coordinator.beginModeTransition()
+        let generation1 = coordinator.beginModeTransition(anchor: CGPoint(x: 800, y: 660))
         XCTAssertTrue(coordinator.requestResize(animated: true))
         _ = coordinator.consumeResizeRequest()
         coordinator.animationStarted(generation: generation1)
 
-        let generation2 = coordinator.beginModeTransition()
+        let generation2 = coordinator.beginModeTransition(anchor: CGPoint(x: 800, y: 660))
         XCTAssertTrue(coordinator.requestResize(animated: true))
         _ = coordinator.consumeResizeRequest()
         coordinator.animationStarted(generation: generation2)
@@ -310,7 +310,7 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
 
     func testImmediateTransitionCompletionClearsAnimationIntent() {
         var coordinator = UsageOverlayResizeCoordinator()
-        let generation = coordinator.beginModeTransition()
+        let generation = coordinator.beginModeTransition(anchor: CGPoint(x: 800, y: 660))
         XCTAssertTrue(coordinator.requestResize(animated: true))
         let request = coordinator.consumeResizeRequest()
         XCTAssertTrue(request.animated)
@@ -336,6 +336,44 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         controller.toggleDisplayMode()
 
         XCTAssertEqual(panel.frame, original)
+    }
+
+    func testModeTransitionRestoresCapturedRightTopAnchorAfterAppKitContentResizeMutation() async {
+        var fittingSize = CGSize(width: 108, height: 180)
+        let panel = makePanel(x: 500, y: 400, width: 300, height: 260)
+        let originalAnchor = CGPoint(x: panel.frame.maxX, y: panel.frame.maxY)
+        let controller = UsageOverlayWindowController(
+            panel: panel,
+            initialDisplayMode: .expanded,
+            persistDisplayMode: { _ in true },
+            shouldReduceMotion: { true },
+            visibleFrameProvider: visibleFrame,
+            fittingSizeProvider: { fittingSize }
+        )
+
+        controller.toggleDisplayMode()
+        simulateTopLeftAnchoredContentResize(panel, to: fittingSize)
+        XCTAssertNotEqual(panel.frame.maxX, originalAnchor.x)
+        XCTAssertEqual(panel.frame.maxY, originalAnchor.y)
+
+        await drainMainQueue()
+
+        XCTAssertEqual(panel.frame.maxX, originalAnchor.x)
+        XCTAssertEqual(panel.frame.maxY, originalAnchor.y)
+        XCTAssertEqual(panel.frame.size, fittingSize)
+
+        let compactAnchor = CGPoint(x: panel.frame.maxX, y: panel.frame.maxY)
+        fittingSize = CGSize(width: 300, height: 320)
+        controller.toggleDisplayMode()
+        simulateTopLeftAnchoredContentResize(panel, to: fittingSize)
+        XCTAssertNotEqual(panel.frame.maxX, compactAnchor.x)
+        XCTAssertEqual(panel.frame.maxY, compactAnchor.y)
+
+        await drainMainQueue()
+
+        XCTAssertEqual(panel.frame.maxX, compactAnchor.x)
+        XCTAssertEqual(panel.frame.maxY, compactAnchor.y)
+        XCTAssertEqual(panel.frame.size, fittingSize)
     }
 
     func testCompactResizeClampsToScreenAndKeepsSafeRightTopAnchor() {
@@ -371,7 +409,7 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
     }
 
     func testScreenGeometryResizeDefersAndCoalescesToLatestGeneration() {
-        var callbacks: [() -> Void] = []
+        var callbacks: [@MainActor () -> Void] = []
         var fittingSizeReads = 0
         var visibleFrame = CGRect(x: 0, y: 0, width: 800, height: 500)
         let panel = makePanel(x: 600, y: 300, width: 108, height: 300)
@@ -386,6 +424,7 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
                 return CGSize(width: 108, height: visibleFrame.height - 100)
             }
         )
+        callbacks.removeAll()
 
         controller.handleScreenGeometryChange()
         visibleFrame = CGRect(x: 0, y: 0, width: 1440, height: 900)
@@ -435,6 +474,19 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         XCTAssertEqual(panel.frame.size, CGSize(width: 300, height: 260))
         XCTAssertEqual(panel.frame.maxX, originalAnchor.x)
         XCTAssertEqual(panel.frame.maxY, originalAnchor.y)
+    }
+
+    private func simulateTopLeftAnchoredContentResize(_ panel: NSPanel, to size: CGSize) {
+        let topLeft = CGPoint(x: panel.frame.minX, y: panel.frame.maxY)
+        panel.setFrame(
+            CGRect(
+                x: topLeft.x,
+                y: topLeft.y - size.height,
+                width: size.width,
+                height: size.height
+            ),
+            display: false
+        )
     }
 
     private func drainMainQueue() async {

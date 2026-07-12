@@ -24,9 +24,24 @@ final class UsageOverlayPresentationStateTests: XCTestCase {
         XCTAssertEqual(state.compactAccountMaximumHeight, 420)
     }
 
-    func testModeAnimationPolicyDisablesAnimationForReduceMotion() {
-        XCTAssertNil(usageOverlayModeAnimation(reduceMotion: true))
-        XCTAssertNotNil(usageOverlayModeAnimation(reduceMotion: false))
+    func testExpandedContentUsesHeaderOnlyForProvidersWithoutUsageCapability() {
+        XCTAssertEqual(
+            expandedUsageContentPresentation(
+                showsSubscriptionUsage: false,
+                subscriptionUsageState: .disabled
+            ),
+            .headerOnly
+        )
+    }
+
+    func testExpandedContentShowsDisabledMessageForCapableOAuthProvider() {
+        XCTAssertEqual(
+            expandedUsageContentPresentation(
+                showsSubscriptionUsage: true,
+                subscriptionUsageState: .disabled
+            ),
+            .message("Subscription usage is disabled")
+        )
     }
 
     func testCompactMeasurementRequestsResizeOnlyForNewPositiveHeight() {

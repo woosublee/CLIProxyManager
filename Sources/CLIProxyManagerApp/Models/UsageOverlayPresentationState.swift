@@ -17,10 +17,6 @@ final class UsageOverlayPresentationState: ObservableObject {
     }
 }
 
-func usageOverlayModeAnimation(reduceMotion: Bool) -> Animation? {
-    reduceMotion ? nil : .easeOut(duration: 0.12)
-}
-
 struct CompactUsageMeasurementState {
     static let estimatedHeight: CGFloat = 120
     private(set) var height: CGFloat = 0

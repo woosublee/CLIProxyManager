@@ -15,13 +15,19 @@ struct UsageOverlayResizeCoordinator {
     private var activeAnimationCount = 0
     private var pendingAnimation = false
     private var resizeScheduled = false
+    private var transitionAnchor: CGPoint?
 
-    mutating func beginModeTransition() -> Int {
+    mutating func beginModeTransition(anchor: CGPoint) -> Int {
         nextGeneration += 1
         activeTransitionGeneration = nextGeneration
         activeAnimationCount = 0
         pendingAnimation = true
+        transitionAnchor = anchor
         return nextGeneration
+    }
+
+    var authoritativeAnchor: CGPoint? {
+        activeTransitionGeneration == nil ? nil : transitionAnchor
     }
 
     mutating func requestResize(animated: Bool) -> Bool {
@@ -50,7 +56,7 @@ struct UsageOverlayResizeCoordinator {
         guard generation == activeTransitionGeneration, generation != nil else { return }
         activeAnimationCount = max(0, activeAnimationCount - 1)
         if activeAnimationCount == 0, !resizeScheduled {
-            activeTransitionGeneration = nil
+            clearActiveTransition()
         }
     }
 
@@ -59,8 +65,13 @@ struct UsageOverlayResizeCoordinator {
         activeAnimationCount = 0
         pendingAnimation = false
         if !resizeScheduled {
-            activeTransitionGeneration = nil
+            clearActiveTransition()
         }
+    }
+
+    private mutating func clearActiveTransition() {
+        activeTransitionGeneration = nil
+        transitionAnchor = nil
     }
 }
 
@@ -72,7 +83,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     private let shouldReduceMotion: () -> Bool
     private let visibleFrameProvider: () -> CGRect?
     private let screenVisibleFrameProvider: () -> CGRect?
-    private let deferredScreenResizeScheduler: (@escaping () -> Void) -> Void
+    private let deferredScreenResizeScheduler: (@escaping @MainActor () -> Void) -> Void
     private let fittingSizeProvider: (() -> CGSize)?
     private struct PersistenceTransaction {
         let generation: Int
@@ -113,7 +124,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         },
         visibleFrameProvider: (() -> CGRect?)? = nil,
         screenVisibleFrameProvider: (() -> CGRect?)? = nil,
-        deferredScreenResizeScheduler: ((@escaping () -> Void) -> Void)? = nil,
+        deferredScreenResizeScheduler: ((@escaping @MainActor () -> Void) -> Void)? = nil,
         fittingSizeProvider: (() -> CGSize)? = nil
     ) {
         let suppliedPanelFrame = panel?.frame
@@ -123,7 +134,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         self.visibleFrameProvider = visibleFrameProvider ?? { nil }
         self.screenVisibleFrameProvider = screenVisibleFrameProvider ?? { nil }
         self.deferredScreenResizeScheduler = deferredScreenResizeScheduler ?? { action in
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { @MainActor in
                 action()
             }
         }
@@ -185,9 +196,10 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     func toggleDisplayMode() {
         let original = displayMode
         let target = original.opposite
+        let transitionAnchor = CGPoint(x: panel.frame.maxX, y: panel.frame.maxY)
         presentationState.displayMode = target
         updatePanelConstraints(for: target)
-        _ = resizeCoordinator.beginModeTransition()
+        _ = resizeCoordinator.beginModeTransition(anchor: transitionAnchor)
 
         nextPersistenceGeneration += 1
         let generation = nextPersistenceGeneration
@@ -226,13 +238,14 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         animated: Bool,
         transitionGeneration: Int?
     ) {
+        let anchorFrame = frameAnchoredAtAuthoritativeTransitionAnchor()
         guard let visibleFrame = currentVisibleFrame() else {
-            panel.setFrame(fallbackFrame(targetContentHeight: size.height), display: true)
+            panel.setFrame(fallbackFrame(targetContentHeight: size.height, currentFrame: anchorFrame), display: true)
             resizeCoordinator.transitionCompletedWithoutAnimation(generation: transitionGeneration)
             return
         }
         let target = UsageOverlayFrameLayout.targetFrame(
-            currentFrame: panel.frame,
+            currentFrame: anchorFrame,
             targetContentHeight: size.height,
             mode: displayMode,
             visibleFrame: visibleFrame
@@ -314,8 +327,9 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         updatePanelConstraints(for: displayMode)
         screenGeometryGeneration += 1
         let generation = screenGeometryGeneration
-        deferredScreenResizeScheduler { [weak self] in
+        deferredScreenResizeScheduler { @MainActor [weak self] in
             guard let self, generation == self.screenGeometryGeneration else { return }
+            self.panel.contentView?.layoutSubtreeIfNeeded()
             let fittingSize = self.fittingSizeProvider?()
                 ?? self.panel.contentView?.fittingSize
                 ?? self.panel.frame.size
@@ -410,7 +424,17 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             ?? NSScreen.main?.visibleFrame
     }
 
-    private func fallbackFrame(targetContentHeight: CGFloat) -> CGRect {
+    private func frameAnchoredAtAuthoritativeTransitionAnchor() -> CGRect {
+        guard let anchor = resizeCoordinator.authoritativeAnchor else { return panel.frame }
+        return CGRect(
+            x: anchor.x - panel.frame.width,
+            y: anchor.y - panel.frame.height,
+            width: panel.frame.width,
+            height: panel.frame.height
+        )
+    }
+
+    private func fallbackFrame(targetContentHeight: CGFloat, currentFrame: CGRect) -> CGRect {
         let width = displayMode == .expanded
             ? AppWindowMetrics.usageOverlayExpandedWidth
             : AppWindowMetrics.usageOverlayCompactWidth
@@ -422,8 +446,8 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             AppWindowMetrics.usageOverlayMaximumHeight
         )
         return CGRect(
-            x: panel.frame.maxX - width,
-            y: panel.frame.maxY - height,
+            x: currentFrame.maxX - width,
+            y: currentFrame.maxY - height,
             width: width,
             height: height
         )
@@ -431,12 +455,14 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
 
     private func resizeToFittingContent(animated: Bool) {
         guard resizeCoordinator.requestResize(animated: animated) else { return }
-        DispatchQueue.main.async { [weak self] in
+        DispatchQueue.main.async { @MainActor [weak self] in
             guard let self else { return }
             let request = self.resizeCoordinator.consumeResizeRequest()
             guard let contentView = self.panel.contentView else { return }
+            contentView.layoutSubtreeIfNeeded()
+            let fittingSize = self.fittingSizeProvider?() ?? contentView.fittingSize
             self.updateContentSize(
-                contentView.fittingSize,
+                fittingSize,
                 animated: request.animated,
                 transitionGeneration: request.transitionGeneration
             )

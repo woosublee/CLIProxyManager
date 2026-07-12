@@ -70,7 +70,7 @@ struct CompactUsageOverlayView: View {
     }
 
     private var accountStack: some View {
-        LazyVStack(spacing: 0) {
+        VStack(spacing: 0) {
             ForEach(Array(providers.enumerated()), id: \.element.id) { index, provider in
                 if index > 0 {
                     CompactUsageSeparator()

@@ -7,7 +7,6 @@ struct UsageOverlayView: View {
     var onToggleDisplayMode: () -> Void = {}
     var onContentSizeInvalidated: () -> Void = {}
     var onClose: () -> Void = {}
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var refreshStatusReferenceDate = Date()
 
     init(
@@ -72,7 +71,6 @@ struct UsageOverlayView: View {
         .padding(presentationState.displayMode == .expanded ? 16 : 10)
         .frame(width: overlayWidth, alignment: .top)
         .fixedSize(horizontal: false, vertical: true)
-        .animation(usageOverlayModeAnimation(reduceMotion: reduceMotion), value: presentationState.displayMode)
         .background(.regularMaterial.opacity(viewModel.config.usageOverlay.backgroundOpacity))
         .clipShape(RoundedRectangle(cornerRadius: presentationState.displayMode == .expanded ? 14 : 18, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: presentationState.displayMode == .expanded ? 14 : 18, style: .continuous))
@@ -189,6 +187,31 @@ private struct ExpandedUsageOverlayContent: View {
     }
 }
 
+enum ExpandedUsageContentPresentation: Equatable {
+    case headerOnly
+    case message(String)
+    case usage
+}
+
+func expandedUsageContentPresentation(
+    showsSubscriptionUsage: Bool,
+    subscriptionUsageState: AccountSubscriptionUsageState
+) -> ExpandedUsageContentPresentation {
+    guard showsSubscriptionUsage else { return .headerOnly }
+    if case .unavailable(.proxyUnavailable) = subscriptionUsageState {
+        return .message("Start the server to check usage")
+    }
+
+    switch subscriptionUsageDisplayState(for: subscriptionUsageState) {
+    case .hidden:
+        return .message("Subscription usage is disabled")
+    case .loading(let message), .unavailable(let message):
+        return .message(message)
+    case .snapshot:
+        return .usage
+    }
+}
+
 private struct ExpandedUsageOverlayAccountView: View {
     let provider: MenuBarConnectedProvider
 
@@ -209,26 +232,21 @@ private struct ExpandedUsageOverlayAccountView: View {
 
     @ViewBuilder
     private var usageContent: some View {
-        if case .unavailable(.proxyUnavailable) = provider.subscriptionUsageState {
-            Text("Start the server to check usage")
+        switch expandedUsageContentPresentation(
+            showsSubscriptionUsage: provider.showsSubscriptionUsage,
+            subscriptionUsageState: provider.subscriptionUsageState
+        ) {
+        case .headerOnly:
+            EmptyView()
+        case .message(let message):
+            Text(message)
                 .font(.system(size: 10.5))
                 .foregroundStyle(.secondary)
-        } else {
-            switch subscriptionUsageDisplayState(for: provider.subscriptionUsageState) {
-            case .hidden:
-                Text("Subscription usage is disabled")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
-            case .loading(let message):
-                Text(message)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
-            case .unavailable(let message):
-                Text(message)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            case .snapshot(let snapshot, let warning):
+                .lineLimit(2)
+        case .usage:
+            if case let .snapshot(snapshot, warning) = subscriptionUsageDisplayState(
+                for: provider.subscriptionUsageState
+            ) {
                 HStack(alignment: .top, spacing: 6) {
                     snapshotUsage(snapshot)
                     if let warning {
