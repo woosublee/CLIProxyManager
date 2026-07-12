@@ -481,26 +481,87 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         XCTAssertEqual(animationCount, 1)
     }
 
-    func testUserDragCancelsTransitionAndFutureResizeUsesMovedAnchor() {
+    func testWindowMoveWithoutActiveTransitionKeepsScheduledFittingResize() {
+        var fittingSizeReads = 0
+        let panel = makePanel(x: 500, y: 400, width: 108, height: 180)
+        panel.contentView = NSView(frame: CGRect(x: 0, y: 0, width: 108, height: 180))
+        let controller = UsageOverlayWindowController(
+            panel: panel,
+            initialDisplayMode: .compact,
+            shouldReduceMotion: { true },
+            visibleFrameProvider: visibleFrame,
+            fittingSizeProvider: {
+                fittingSizeReads += 1
+                return CGSize(width: 108, height: 240)
+            }
+        )
+        drainMainQueueSynchronously()
+
+        let readsBeforeResize = fittingSizeReads
+        controller.requestContentResize(animated: false)
+        panel.setFrameOrigin(CGPoint(x: 220, y: 180))
+        controller.handleWindowDidMove()
+        drainMainQueueSynchronously()
+
+        XCTAssertEqual(fittingSizeReads, readsBeforeResize + 1)
+        XCTAssertEqual(panel.frame.height, 240)
+    }
+
+    func testWindowMoveDuringTransitionSettlesAtMovedRightTopAnchorWithoutAnimation() {
+        var animationCount = 0
         let panel = makePanel(x: 500, y: 400, width: 300, height: 260)
         panel.contentView = NSView(frame: CGRect(x: 0, y: 0, width: 300, height: 260))
         let controller = UsageOverlayWindowController(
             panel: panel,
             initialDisplayMode: .expanded,
             persistDisplayMode: { _ in true },
-            shouldReduceMotion: { true },
+            shouldReduceMotion: { false },
             visibleFrameProvider: visibleFrame,
-            fittingSizeProvider: { CGSize(width: 108, height: 180) }
+            fittingSizeProvider: { CGSize(width: 108, height: 180) },
+            frameAnimator: { _, _, _ in animationCount += 1 }
         )
 
         controller.toggleDisplayMode()
-        let movedFrame = CGRect(x: 220, y: 180, width: 108, height: 180)
+        let movedFrame = CGRect(x: 220, y: 180, width: 150, height: 210)
         panel.setFrame(movedFrame, display: false)
-        controller.handleWindowDrag()
+        controller.handleWindowDidMove()
         drainMainQueueSynchronously()
 
+        XCTAssertEqual(animationCount, 0)
         XCTAssertEqual(panel.frame.maxX, movedFrame.maxX)
         XCTAssertEqual(panel.frame.maxY, movedFrame.maxY)
+        XCTAssertEqual(panel.frame.size, CGSize(width: 108, height: 180))
+    }
+
+    func testControllerAppliedFrameMoveIsIgnoredByWindowMoveHandler() {
+        var fittingSizeReads = 0
+        var controller: UsageOverlayWindowController!
+        let panel = makePanel(x: 500, y: 400, width: 300, height: 260)
+        panel.contentView = NSView(frame: CGRect(x: 0, y: 0, width: 300, height: 260))
+        controller = UsageOverlayWindowController(
+            panel: panel,
+            initialDisplayMode: .expanded,
+            persistDisplayMode: { _ in true },
+            shouldReduceMotion: { false },
+            visibleFrameProvider: visibleFrame,
+            fittingSizeProvider: {
+                fittingSizeReads += 1
+                return CGSize(width: 108, height: 180)
+            },
+            frameAnimator: { panel, target, completion in
+                panel.setFrame(target, display: false)
+                controller.handleWindowDidMove()
+                completion()
+            }
+        )
+        drainMainQueueSynchronously()
+
+        let readsBeforeToggle = fittingSizeReads
+        controller.toggleDisplayMode()
+        drainMainQueueSynchronously()
+
+        XCTAssertEqual(fittingSizeReads, readsBeforeToggle + 1)
+        XCTAssertEqual(panel.frame.size, CGSize(width: 108, height: 180))
     }
 
     func testHideDuringTransitionCancelsOldAnchorBeforeShow() {

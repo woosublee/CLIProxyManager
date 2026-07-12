@@ -120,6 +120,8 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     private var resizeCoordinator = UsageOverlayResizeCoordinator()
     private var resizeScheduleGeneration = 0
     private var screenGeometryGeneration = 0
+    private var nextControllerFrameGeneration = 0
+    private var activeControllerFrameGeneration: Int?
     private var configObservation: AnyCancellable?
     private var contentObservation: AnyCancellable?
     private var screenParametersObservation: NSObjectProtocol?
@@ -197,7 +199,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             usageOverlayPublisher: usageOverlayPublisher
         )
         if let suppliedPanelFrame {
-            self.panel.setFrame(suppliedPanelFrame, display: false)
+            applyControllerFrame(suppliedPanelFrame, display: false)
         }
         screenParametersObservation = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
@@ -272,7 +274,10 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     ) {
         let anchorFrame = frameAnchoredAtAuthoritativeTransitionAnchor()
         guard let visibleFrame = currentVisibleFrame() else {
-            panel.setFrame(fallbackFrame(targetContentHeight: size.height, currentFrame: anchorFrame), display: true)
+            applyControllerFrame(
+                fallbackFrame(targetContentHeight: size.height, currentFrame: anchorFrame),
+                display: true
+            )
             resizeCoordinator.transitionCompletedWithoutAnimation(generation: transitionGeneration)
             return
         }
@@ -285,14 +290,17 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         let shouldAnimate = animated && !shouldReduceMotion()
 
         guard shouldAnimate else {
-            panel.setFrame(target, display: true)
+            applyControllerFrame(target, display: true)
             resizeCoordinator.transitionCompletedWithoutAnimation(generation: transitionGeneration)
             return
         }
 
         resizeCoordinator.animationStarted(generation: transitionGeneration)
+        let controllerFrameGeneration = beginControllerFrameApplication()
         frameAnimator(panel, target) { [weak self] in
-            self?.resizeCoordinator.animationCompleted(generation: transitionGeneration)
+            guard let self else { return }
+            self.endControllerFrameApplication(generation: controllerFrameGeneration)
+            self.resizeCoordinator.animationCompleted(generation: transitionGeneration)
         }
     }
 
@@ -302,8 +310,15 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         isVisible = false
     }
 
-    func handleWindowDrag() {
+    func windowDidMove(_ notification: Notification) {
+        handleWindowDidMove()
+    }
+
+    func handleWindowDidMove() {
+        guard activeControllerFrameGeneration == nil,
+              resizeCoordinator.hasActiveTransition else { return }
         interruptActiveTransition()
+        resizeToFittingContent(animated: false)
     }
 
     func requestContentResize(animated: Bool = false) {
@@ -402,7 +417,6 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
                 onContentSizeInvalidated: { [weak self] in
                     self?.resizeToFittingContent(animated: false)
                 },
-                onWindowDrag: { [weak self] in self?.handleWindowDrag() },
                 onClose: { [weak self] in self?.hideForCurrentSession() }
             )
         )
@@ -465,9 +479,28 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     private func interruptActiveTransition() {
         resizeScheduleGeneration += 1
         if resizeCoordinator.hasActiveTransition {
+            let controllerFrameGeneration = beginControllerFrameApplication()
             frameAnimationInterrupter(panel)
+            endControllerFrameApplication(generation: controllerFrameGeneration)
         }
         resizeCoordinator.cancelActiveTransition()
+    }
+
+    private func beginControllerFrameApplication() -> Int {
+        nextControllerFrameGeneration += 1
+        activeControllerFrameGeneration = nextControllerFrameGeneration
+        return nextControllerFrameGeneration
+    }
+
+    private func endControllerFrameApplication(generation: Int) {
+        guard activeControllerFrameGeneration == generation else { return }
+        activeControllerFrameGeneration = nil
+    }
+
+    private func applyControllerFrame(_ frame: CGRect, display: Bool) {
+        let generation = beginControllerFrameApplication()
+        panel.setFrame(frame, display: display)
+        endControllerFrameApplication(generation: generation)
     }
 
     private func frameAnchoredAtAuthoritativeTransitionAnchor() -> CGRect {
