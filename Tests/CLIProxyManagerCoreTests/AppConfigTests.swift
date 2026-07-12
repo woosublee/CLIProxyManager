@@ -13,10 +13,17 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(config.commands.cc, "")
         XCTAssertEqual(config.commands.ccapi, "")
         XCTAssertEqual(config.commands.ccodex, "")
-        XCTAssertEqual(config.ccapi.model, "claude-opus-4-8")
-        XCTAssertEqual(config.ccodex.opus, AppConfig.CodexRole(model: "gpt-5.5", reasoning: .xhigh, contextWindow: .auto))
-        XCTAssertEqual(config.ccodex.sonnet, AppConfig.CodexRole(model: "gpt-5.5", reasoning: .medium, contextWindow: .auto))
-        XCTAssertEqual(config.ccodex.haiku, AppConfig.CodexRole(model: "gpt-5.5", reasoning: .low, contextWindow: .auto))
+        XCTAssertEqual(config.commands.ccodexapi, "")
+        XCTAssertEqual(config.ccapi.connectionMode, .proxy)
+        XCTAssertEqual(config.ccapi.claude, .automatic)
+        XCTAssertEqual(config.ccapi.nickname, "")
+        XCTAssertFalse(config.ccapi.dangerousPermissionsEnabled)
+        XCTAssertEqual(config.codexAPI.codex, config.ccodex)
+        XCTAssertEqual(config.codexAPI.nickname, "")
+        XCTAssertFalse(config.codexAPI.dangerousPermissionsEnabled)
+        XCTAssertEqual(config.ccodex.opus, AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .xhigh, contextWindow: .auto))
+        XCTAssertEqual(config.ccodex.sonnet, AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .medium, contextWindow: .auto))
+        XCTAssertEqual(config.ccodex.haiku, AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .low, contextWindow: .auto))
         XCTAssertFalse(config.includeDangerouslySkipPermissions)
         XCTAssertFalse(config.startAtLogin)
         XCTAssertTrue(config.showDockIcon)
@@ -27,6 +34,31 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(config.usageOverlay.backgroundOpacity, 0.9)
         XCTAssertFalse(config.roundRobinEnabled)
         XCTAssertEqual(config.roundRobinProfiles, [])
+    }
+
+    func testDefaultCodexRoutingUsesTerraWithRoleSpecificReasoning() {
+        XCTAssertEqual(
+            AppConfig.default.ccodex.opus,
+            AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .xhigh, contextWindow: .auto)
+        )
+        XCTAssertEqual(
+            AppConfig.default.ccodex.sonnet,
+            AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .medium, contextWindow: .auto)
+        )
+        XCTAssertEqual(
+            AppConfig.default.ccodex.haiku,
+            AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .low, contextWindow: .auto)
+        )
+    }
+
+    func testCodexReasoningMaxRendersAndRoundTrips() throws {
+        let role = AppConfig.CodexRole(model: "gpt-5.6-sol", reasoning: .max, contextWindow: .auto)
+
+        XCTAssertEqual(role.modelIdentifier, "gpt-5.6-sol(max)")
+
+        let encoded = try JSONEncoder().encode(role)
+        let decoded = try JSONDecoder().decode(AppConfig.CodexRole.self, from: encoded)
+        XCTAssertEqual(decoded, role)
     }
 
     func testUsageOverlayInitializerClampsBackgroundOpacity() {
@@ -63,7 +95,121 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(config.commands.cc, "savedcc")
         XCTAssertEqual(config.commands.ccapi, "savedapi")
         XCTAssertEqual(config.commands.ccodex, "savedcodex")
-        XCTAssertEqual(config.ccapi.model, "claude-opus-4-7")
+        XCTAssertEqual(config.commands.ccodexapi, "")
+        XCTAssertEqual(config.ccapi.connectionMode, .proxy)
+        XCTAssertEqual(config.ccapi.claude, .automatic)
+        XCTAssertFalse(config.ccapi.dangerousPermissionsEnabled)
+        XCTAssertEqual(config.codexAPI.codex, config.ccodex)
+        XCTAssertFalse(config.codexAPI.dangerousPermissionsEnabled)
+    }
+
+    func testLegacyClaudeAPIFieldsDecodeWithoutPersistingModelOrConnectionMode() throws {
+        let data = Data(#"""
+        {
+          "port": 18317,
+          "commands": { "cc": "", "ccapi": "savedapi", "ccodex": "" },
+          "ccapi": {
+            "model": "claude-sonnet-4-6",
+            "connectionMode": "direct",
+            "dangerousPermissionsEnabled": true
+          },
+          "ccodex": {
+            "opus": { "model": "gpt-5.5", "reasoning": "xhigh", "contextWindow": "auto" },
+            "sonnet": { "model": "gpt-5.5", "reasoning": "medium", "contextWindow": "auto" },
+            "haiku": { "model": "gpt-5.5", "reasoning": "low", "contextWindow": "auto" }
+          },
+          "includeDangerouslySkipPermissions": false,
+          "startAtLogin": false,
+          "showDockIcon": true,
+          "showMenuBarIcon": true
+        }
+        """#.utf8)
+
+        let config = try JSONDecoder().decode(AppConfig.self, from: data)
+        let encodedString = String(decoding: try JSONEncoder().encode(config), as: UTF8.self)
+
+        XCTAssertTrue(config.ccapi.dangerousPermissionsEnabled)
+        XCTAssertFalse(encodedString.contains("claude-sonnet-4-6"))
+        XCTAssertFalse(encodedString.contains("connectionMode"))
+    }
+
+    func testAPIKeyNicknamesRoundTripAndLegacyConfigsDefaultToEmpty() throws {
+        var config = AppConfig.default
+        config.ccapi = .init(nickname: "Anthropic Work", dangerousPermissionsEnabled: true)
+        config.codexAPI = .init(
+            codex: config.ccodex,
+            nickname: "OpenAI Personal",
+            dangerousPermissionsEnabled: true
+        )
+
+        let roundTripped = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))
+
+        XCTAssertEqual(roundTripped.ccapi.nickname, "Anthropic Work")
+        XCTAssertEqual(roundTripped.codexAPI.nickname, "OpenAI Personal")
+
+        let legacy = try JSONDecoder().decode(AppConfig.self, from: Data(#"""
+        {
+          "port": 18317,
+          "commands": { "cc": "", "ccapi": "", "ccodex": "" },
+          "ccapi": {},
+          "ccodex": {
+            "opus": { "model": "gpt-5.5", "reasoning": "xhigh", "contextWindow": "auto" },
+            "sonnet": { "model": "gpt-5.5", "reasoning": "medium", "contextWindow": "auto" },
+            "haiku": { "model": "gpt-5.5", "reasoning": "low", "contextWindow": "auto" }
+          },
+          "includeDangerouslySkipPermissions": false,
+          "startAtLogin": false,
+          "showDockIcon": true,
+          "showMenuBarIcon": true
+        }
+        """#.utf8))
+        XCTAssertEqual(legacy.ccapi.nickname, "")
+        XCTAssertEqual(legacy.codexAPI.nickname, "")
+    }
+
+    func testMalformedWrappedCodexAPISettingsFailDecodingInsteadOfResettingToDefaults() {
+        let data = Data(#"""
+        {
+          "port": 18317,
+          "commands": { "cc": "", "ccapi": "", "ccodex": "" },
+          "ccapi": {},
+          "ccodex": {
+            "opus": { "model": "gpt-5.5", "reasoning": "xhigh", "contextWindow": "auto" },
+            "sonnet": { "model": "gpt-5.5", "reasoning": "medium", "contextWindow": "auto" },
+            "haiku": { "model": "gpt-5.5", "reasoning": "low", "contextWindow": "auto" }
+          },
+          "codexAPI": {
+            "nickname": "Work",
+            "dangerousPermissionsEnabled": true,
+            "codex": {
+              "opus": { "model": "gpt-5.6", "reasoning": "future", "contextWindow": "auto" },
+              "sonnet": { "model": "gpt-5.6", "reasoning": "medium", "contextWindow": "auto" },
+              "haiku": { "model": "gpt-5.6", "reasoning": "low", "contextWindow": "auto" }
+            }
+          },
+          "includeDangerouslySkipPermissions": false,
+          "startAtLogin": false,
+          "showDockIcon": true,
+          "showMenuBarIcon": true
+        }
+        """#.utf8)
+
+        XCTAssertThrowsError(try JSONDecoder().decode(AppConfig.self, from: data))
+    }
+
+    func testOAuthCommandProfileDefaultsMissingConnectionModeToProxy() throws {
+        let data = Data(#"""
+        {
+          "id": "claude-work",
+          "provider": "claude",
+          "authProfileID": "claude-work.json",
+          "commandName": "ccwork"
+        }
+        """#.utf8)
+
+        let profile = try JSONDecoder().decode(AppConfig.OAuthCommandProfile.self, from: data)
+
+        XCTAssertEqual(profile.connectionMode, .proxy)
     }
 
     func testDefaultAccountPrivacyHidesProviderDetails() {
@@ -455,5 +601,69 @@ final class AppConfigTests: XCTestCase {
         let root = URL(fileURLWithPath: "/tmp/managed", isDirectory: true)
         let paths = ManagedPaths(rootDirectory: root)
         XCTAssertEqual(paths.proxyLogsDirectory, root.appendingPathComponent("auth/logs", isDirectory: true))
+    }
+
+    func testManagedPathsExposeUserPrivateAPIKeyFiles() {
+        let root = URL(fileURLWithPath: "/tmp/managed", isDirectory: true)
+        let paths = ManagedPaths(rootDirectory: root)
+
+        XCTAssertEqual(paths.apiKeysDirectory, root.appendingPathComponent("api-keys", isDirectory: true))
+        XCTAssertEqual(paths.apiKeyFile(for: .claudeAPIKey), root.appendingPathComponent("api-keys/claude-api-key.json"))
+        XCTAssertEqual(paths.apiKeyFile(for: .codexAPIKey), root.appendingPathComponent("api-keys/codex-api-key.json"))
+    }
+
+    func testClaudeModelSelectionUsesStringRepresentationAndNormalizesBlankValues() throws {
+        let automatic = try JSONDecoder().decode(ClaudeModelSelection.self, from: Data(#""automatic""#.utf8))
+        let blank = try JSONDecoder().decode(ClaudeModelSelection.self, from: Data(#""   ""#.utf8))
+        let explicit = try JSONDecoder().decode(ClaudeModelSelection.self, from: Data(#""claude-opus-4-8""#.utf8))
+
+        XCTAssertEqual(automatic, .automatic)
+        XCTAssertEqual(blank, .automatic)
+        XCTAssertEqual(explicit, .model("claude-opus-4-8"))
+        XCTAssertEqual(String(decoding: try JSONEncoder().encode(automatic), as: UTF8.self), #""automatic""#)
+        XCTAssertEqual(String(decoding: try JSONEncoder().encode(explicit), as: UTF8.self), #""claude-opus-4-8""#)
+    }
+
+    func testLegacyClaudeOAuthProfileUsesAutomaticEffectiveRoutingWithoutForcingStoredField() throws {
+        let data = Data(#"""
+        {
+          "id": "claude-work",
+          "provider": "claude",
+          "authProfileID": "claude-work.json",
+          "commandName": "ccwork",
+          "connectionMode": "proxy"
+        }
+        """#.utf8)
+
+        let profile = try JSONDecoder().decode(AppConfig.OAuthCommandProfile.self, from: data)
+
+        XCTAssertNil(profile.claude)
+        XCTAssertEqual(profile.effectiveClaudeRouting, .automatic)
+    }
+
+    func testClaudeRoutingRoundTripsAndSurvivesDirectMode() throws {
+        let routing = ClaudeRouting(
+            opus: .model("claude-opus-4-8"),
+            sonnet: .automatic,
+            haiku: .model("claude-haiku-4-5")
+        )
+        let profile = AppConfig.OAuthCommandProfile(
+            id: "claude-work",
+            provider: .claude,
+            authProfileID: "claude-work.json",
+            commandName: "ccwork",
+            claude: routing,
+            modelPrefix: "claude-work",
+            connectionMode: .direct
+        )
+
+        let decoded = try JSONDecoder().decode(
+            AppConfig.OAuthCommandProfile.self,
+            from: JSONEncoder().encode(profile)
+        )
+
+        XCTAssertEqual(decoded.claude, routing)
+        XCTAssertEqual(decoded.effectiveClaudeRouting, routing)
+        XCTAssertEqual(decoded.connectionMode, .direct)
     }
 }

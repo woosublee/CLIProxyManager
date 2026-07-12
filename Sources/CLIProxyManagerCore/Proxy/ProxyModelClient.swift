@@ -17,24 +17,78 @@ public struct ProxyModelClient: Sendable {
         uniqueBaseModels(from: try await models(port: port))
     }
 
+    public func codexModelOptions(port: Int) async throws -> [CodexModelOption] {
+        try await codexModelOptions(port: port, modelPrefix: nil)
+    }
+
+    public func codexModelOptions(port: Int, modelPrefix: String) async throws -> [CodexModelOption] {
+        let prefix = modelPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
+        return try await codexModelOptions(port: port, modelPrefix: prefix.isEmpty ? nil : prefix)
+    }
+
     public func codexBaseModels(port: Int) async throws -> [String] {
-        let models = try await sortedModels(port: port)
-            .filter(isCodexModel)
-            .map(\.id)
-        return uniqueBaseModels(from: models)
+        try await codexModelOptions(port: port).map(\.id)
     }
 
     public func codexBaseModels(port: Int, modelPrefix: String) async throws -> [String] {
+        try await codexModelOptions(port: port, modelPrefix: modelPrefix).map(\.id)
+    }
+
+    public func claudeModelOptions(
+        port: Int,
+        modelPrefix: String
+    ) async throws -> [ClaudeModelOption] {
         let prefix = modelPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prefix.isEmpty else { return try await codexBaseModels(port: port) }
-        let models = try await sortedModels(port: port).compactMap { model -> String? in
-            guard let identifier = modelIdentifier(model.id, withoutRoutingPrefix: prefix),
-                  isCodexModelID(identifier, ownedBy: model.ownedBy) else {
-                return nil
+        guard !prefix.isEmpty else { throw ClaudeModelDiscoveryError.emptyModelPrefix }
+
+        var seen = Set<String>()
+        var result: [ClaudeModelOption] = []
+        for model in try await sortedModels(port: port) {
+            guard let baseID = modelIdentifier(model.id, withoutRoutingPrefix: prefix),
+                  baseID.lowercased().hasPrefix("claude-") else {
+                continue
             }
-            return identifier
+            guard seen.insert(baseID).inserted else { continue }
+            result.append(
+                ClaudeModelOption(
+                    id: baseID,
+                    created: model.created.flatMap(Int.init(exactly:))
+                )
+            )
         }
-        return uniqueBaseModels(from: models)
+        return result
+    }
+
+    private func codexModelOptions(port: Int, modelPrefix: String?) async throws -> [CodexModelOption] {
+        let regularModels = try await sortedModels(port: port)
+        let scopedIDs = uniqueCodexModelIDs(from: regularModels, modelPrefix: modelPrefix)
+
+        let metadataByID: [String: CodexClientModelsResponse.Model]
+        do {
+            metadataByID = try await codexMetadata(port: port, modelPrefix: modelPrefix)
+        } catch {
+            metadataByID = [:]
+        }
+
+        return scopedIDs.map { id in
+            guard let metadata = metadataByID[id] else { return CodexModelOption(id: id) }
+            let supported = metadata.supportedReasoningLevels.compactMap { level -> AppConfig.CodexReasoning? in
+                guard let reasoning = AppConfig.CodexReasoning(rawValue: level.effort), reasoning != .auto else {
+                    return nil
+                }
+                return reasoning
+            }.reduce(into: [AppConfig.CodexReasoning]()) { values, reasoning in
+                if !values.contains(reasoning) {
+                    values.append(reasoning)
+                }
+            }
+            let defaultReasoning = metadata.defaultReasoningLevel.flatMap(AppConfig.CodexReasoning.init(rawValue:))
+            return CodexModelOption(
+                id: id,
+                supportedReasoning: supported,
+                defaultReasoning: defaultReasoning.flatMap { supported.contains($0) ? $0 : nil }
+            )
+        }
     }
 
     private func sortedModels(port: Int) async throws -> [ModelsResponse.Model] {
@@ -58,6 +112,62 @@ public struct ProxyModelClient: Sendable {
             }
         }
 
+        return result
+    }
+
+    private func uniqueCodexModelIDs(
+        from models: [ModelsResponse.Model],
+        modelPrefix: String?
+    ) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+
+        for model in models {
+            let identifier: String
+            if let modelPrefix {
+                guard let unprefixed = modelIdentifier(model.id, withoutRoutingPrefix: modelPrefix),
+                      isCodexModelID(unprefixed, ownedBy: model.ownedBy) else {
+                    continue
+                }
+                identifier = baseModelName(unprefixed)
+            } else {
+                guard isCodexModel(model) else { continue }
+                identifier = baseModelName(model.id)
+            }
+            if seen.insert(identifier).inserted {
+                result.append(identifier)
+            }
+        }
+        return result
+    }
+
+    private func scopedModelID(_ identifier: String, modelPrefix: String?) -> String? {
+        guard let modelPrefix else { return baseModelName(identifier) }
+        guard let unprefixed = modelIdentifier(identifier, withoutRoutingPrefix: modelPrefix) else { return nil }
+        return baseModelName(unprefixed)
+    }
+
+    private func codexMetadata(
+        port: Int,
+        modelPrefix: String?
+    ) async throws -> [String: CodexClientModelsResponse.Model] {
+        guard (1...65_535).contains(port) else {
+            throw ProxyServiceError.invalidPort(port)
+        }
+        var components = URLComponents(string: "http://127.0.0.1:\(port)/v1/models")!
+        components.queryItems = [URLQueryItem(name: "client_version", value: "0.144.0")]
+        let data = try await httpClient.get(
+            components.url!,
+            headers: ["Authorization": "Bearer \(localAPIKey)"]
+        )
+        let response = try JSONDecoder().decode(CodexClientModelsResponse.self, from: data)
+        var result: [String: CodexClientModelsResponse.Model] = [:]
+        for model in response.models {
+            guard let id = scopedModelID(model.slug, modelPrefix: modelPrefix) else { continue }
+            if result[id] == nil {
+                result[id] = model
+            }
+        }
         return result
     }
 
@@ -91,6 +201,8 @@ public struct ProxyModelClient: Sendable {
     }
 }
 
+extension ProxyModelClient: ClaudeModelListing {}
+
 private struct ModelsResponse: Decodable {
     var data: [Model]
 
@@ -104,5 +216,38 @@ private struct ModelsResponse: Decodable {
             case created
             case ownedBy = "owned_by"
         }
+    }
+}
+
+private struct CodexClientModelsResponse: Decodable {
+    var models: [Model]
+
+    struct Model: Decodable {
+        var slug: String
+        var supportedReasoningLevels: [ReasoningLevel]
+        var defaultReasoningLevel: String?
+        var visibility: String?
+
+        enum CodingKeys: String, CodingKey {
+            case slug
+            case supportedReasoningLevels = "supported_reasoning_levels"
+            case defaultReasoningLevel = "default_reasoning_level"
+            case visibility
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            slug = try container.decode(String.self, forKey: .slug)
+            supportedReasoningLevels = try container.decodeIfPresent(
+                [ReasoningLevel].self,
+                forKey: .supportedReasoningLevels
+            ) ?? []
+            defaultReasoningLevel = try container.decodeIfPresent(String.self, forKey: .defaultReasoningLevel)
+            visibility = try container.decodeIfPresent(String.self, forKey: .visibility)
+        }
+    }
+
+    struct ReasoningLevel: Decodable {
+        var effort: String
     }
 }

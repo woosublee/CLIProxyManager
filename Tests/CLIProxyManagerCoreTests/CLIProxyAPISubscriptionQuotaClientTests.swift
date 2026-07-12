@@ -154,6 +154,33 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         XCTAssertEqual(report.statesByProfileID[profile.id], .unavailable(.managementKeyRejected))
     }
 
+    func testExpiredLocalProfileStillLetsCLIProxyAPIRefreshAndFetchUsage() async {
+        let transport = StubSubscriptionUsageTransport(responses: [
+            .success(.init(data: Data(#"{"files":[{"name":"claude.json","provider":"claude","auth_index":"claude-index","status":"active","disabled":false}]}"#.utf8), statusCode: 200)),
+            .success(.init(data: Data(#"{"status_code":200,"body":"{\"five_hour\":{\"utilization\":12}}"}"#.utf8), statusCode: 200))
+        ])
+        let client = CLIProxyAPISubscriptionQuotaClient(
+            keyStore: StubManagementKeyStore(key: "management-secret"),
+            transport: transport,
+            now: { Date(timeIntervalSince1970: 2_000_000_000) }
+        )
+        let profile = AuthProfile(
+            fileName: "claude.json",
+            type: .claude,
+            email: nil,
+            accountID: nil,
+            expired: "2026-01-01T00:00:00Z",
+            disabled: false
+        )
+
+        let report = await client.fetchUsage(port: 18_317, profiles: [profile])
+
+        guard case .available? = report.statesByProfileID[profile.id] else {
+            return XCTFail("Expected CLIProxyAPI to refresh the expired access token and return usage")
+        }
+        XCTAssertEqual(transport.requests.count, 2)
+    }
+
     func testClaudeProviderUnauthorizedResponseMapsToCredentialExpired() async {
         let transport = StubSubscriptionUsageTransport(responses: [
             .success(.init(data: Data(#"{"files":[{"name":"claude.json","provider":"claude","auth_index":"claude-index","status":"ready","disabled":false}]}"#.utf8), statusCode: 200)),
@@ -168,6 +195,25 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         let report = await client.fetchUsage(port: 18_317, profiles: [profile])
 
         XCTAssertEqual(report.statesByProfileID[profile.id], .unavailable(.credentialExpired))
+    }
+
+    func testCredentialErrorStatusStillCallsProviderEndpointToAllowRefresh() async {
+        let transport = StubSubscriptionUsageTransport(responses: [
+            .success(.init(data: Data(#"{"files":[{"name":"claude.json","provider":"claude","auth_index":"claude-index","status":"error","disabled":false}]}"#.utf8), statusCode: 200)),
+            .success(.init(data: Data(#"{"status_code":200,"body":"{\"five_hour\":{\"utilization\":7}}"}"#.utf8), statusCode: 200))
+        ])
+        let client = CLIProxyAPISubscriptionQuotaClient(
+            keyStore: StubManagementKeyStore(key: "management-secret"),
+            transport: transport
+        )
+        let profile = AuthProfile(fileName: "claude.json", type: .claude, email: nil, accountID: nil, expired: nil, disabled: false)
+
+        let report = await client.fetchUsage(port: 18_317, profiles: [profile])
+
+        guard case .available? = report.statesByProfileID[profile.id] else {
+            return XCTFail("Expected provider API call to determine the current credential state")
+        }
+        XCTAssertEqual(transport.requests.count, 2)
     }
 
     func testClaudeMalformedUsagePayloadMapsToSchemaMismatch() async {

@@ -14,6 +14,52 @@ final class CLIProxyManagerCommandTests: XCTestCase {
         XCTAssertEqual(output.stdout, ["secret-value\n"])
     }
 
+    func testCodexAPISecretGetPrintsSecret() async throws {
+        let output = OutputDouble(isInteractive: false)
+        let command = CLIProxyManagerCommand(
+            secretStore: InMemorySecretStore(values: [.codexAPIKey: "codex-secret"]),
+            output: output
+        )
+
+        try await command.run(arguments: ["secret", "get", "codex-api-key"])
+
+        XCTAssertEqual(output.stdout, ["codex-secret\n"])
+    }
+
+    func testSecretMutationsExplainThatRunningProxyNeedsRestart() async throws {
+        let output = OutputDouble(isInteractive: false)
+        let command = CLIProxyManagerCommand(
+            secretStore: InMemorySecretStore(),
+            input: { "new-secret\n" },
+            output: output
+        )
+
+        try await command.run(arguments: ["secret", "set", "claude-api-key"])
+        try await command.run(arguments: ["secret", "delete", "claude-api-key"])
+
+        XCTAssertEqual(output.stderr, [
+            "Restart CLIProxyAPI with `cpm restart` to apply the API key change.\n",
+            "Restart CLIProxyAPI with `cpm restart` to apply the API key change.\n"
+        ])
+    }
+
+    func testDefaultCLICommandReadsAPIKeyFromManagedFileStore() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox)
+        try AppConfigStore(paths: paths).save(.default)
+        try FileSecretStore(paths: paths).set("file-secret", for: .claudeAPIKey)
+        let output = OutputDouble(isInteractive: false)
+        let command = CLIProxyManagerCommand(
+            configStore: AppConfigStore(paths: paths),
+            authProfileStore: AuthProfileStore(authDirectory: paths.authDirectory),
+            output: output
+        )
+
+        try await command.run(arguments: ["secret", "get", "claude-api-key"])
+
+        XCTAssertEqual(output.stdout, ["file-secret\n"])
+    }
+
     func testRoutingNextPrintsShellAssignments() async throws {
         let sandbox = try makeSandbox()
         let configStore = AppConfigStore(paths: ManagedPaths(rootDirectory: sandbox))
@@ -43,8 +89,57 @@ final class CLIProxyManagerCommandTests: XCTestCase {
 
         XCTAssertEqual(output.stdout.count, 1)
         XCTAssertTrue(output.stdout[0].hasSuffix("\n"))
-        XCTAssertTrue(output.stdout[0].contains("ANTHROPIC_DEFAULT_OPUS_MODEL='codex-a/gpt-5.5(xhigh)'"))
+        XCTAssertTrue(output.stdout[0].contains("ANTHROPIC_DEFAULT_OPUS_MODEL='codex-a/gpt-5.6-terra(xhigh)'"))
         XCTAssertTrue(output.stdout[0].contains("CLIPROXY_ROUND_ROBIN_PROFILE='codex-a.json'"))
+    }
+
+    func testRoutingNextResolvesClaudeModelsForSelectedAccount() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox)
+        let configStore = AppConfigStore(paths: paths)
+        var config = AppConfig.default
+        config.port = 18_888
+        config.oauthCommandProfiles = [
+            .init(id: "claude-work", provider: .claude, authProfileID: "claude-work.json", commandName: "ccwork", claude: .automatic, modelPrefix: "claude-work"),
+            .init(
+                id: "claude-personal",
+                provider: .claude,
+                authProfileID: "claude-personal.json",
+                commandName: "ccpersonal",
+                claude: .init(opus: .model("claude-opus-4-7"), sonnet: .automatic, haiku: .automatic),
+                modelPrefix: "claude-personal"
+            )
+        ]
+        config.roundRobinProfiles = [
+            .init(id: "claude-default", provider: .claude, isEnabled: true, commandName: "cc", includedAuthProfileIDs: ["claude-personal.json", "claude-work.json"])
+        ]
+        try configStore.save(config)
+        try FileManager.default.createDirectory(at: paths.authDirectory, withIntermediateDirectories: true)
+        try Data(#"{"type":"claude","prefix":"claude-work","disabled":false}"#.utf8)
+            .write(to: paths.authDirectory.appendingPathComponent("claude-work.json"))
+        try Data(#"{"type":"claude","prefix":"claude-personal","disabled":false}"#.utf8)
+            .write(to: paths.authDirectory.appendingPathComponent("claude-personal.json"))
+        let models = StubClaudeModelListing(optionsByPrefix: [
+            "claude-personal": [
+                .init(id: "claude-opus-4-7"),
+                .init(id: "claude-sonnet-4-6"),
+                .init(id: "claude-haiku-4-5")
+            ]
+        ])
+        let output = OutputDouble(isInteractive: false)
+        let command = CLIProxyManagerCommand(
+            secretStore: InMemorySecretStore(),
+            configStore: configStore,
+            authProfileStore: AuthProfileStore(authDirectory: paths.authDirectory),
+            stateSelector: RoundRobinStateStore(stateFile: sandbox.appendingPathComponent("round-robin-state.json")),
+            output: output,
+            claudeModelClient: models
+        )
+
+        try await command.run(arguments: ["routing", "next", "claude-default"])
+
+        XCTAssertEqual(models.requests.map { "\($0.port):\($0.prefix)" }, ["18888:claude-personal"])
+        XCTAssertTrue(output.stdout.joined().contains("ANTHROPIC_DEFAULT_OPUS_MODEL='claude-personal/claude-opus-4-7'"))
     }
 
     func testQuotaKeySetStatusAndDeleteUseInjectedLocalFileWithoutPrintingKey() async throws {
@@ -277,6 +372,104 @@ final class CLIProxyManagerCommandTests: XCTestCase {
         XCTAssertEqual(windows.map { $0["label"] as? String }, ["Primary", "Secondary"])
     }
 
+    func testQuotaTextPrintsStaleSnapshotBeforeWarning() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox)
+        let configStore = AppConfigStore(paths: paths)
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        config.oauthCommandProfiles = [
+            .init(id: "codex-personal", provider: .codex, authProfileID: "codex.json", commandName: "cdx")
+        ]
+        try configStore.save(config)
+
+        let authDirectory = sandbox.appendingPathComponent("auth", isDirectory: true)
+        try FileManager.default.createDirectory(at: authDirectory, withIntermediateDirectories: true)
+        try Data(#"{"type":"codex","disabled":false}"#.utf8).write(to: authDirectory.appendingPathComponent("codex.json"))
+
+        let snapshot = SubscriptionUsageSnapshot(
+            profileID: "codex.json",
+            provider: .codex,
+            windows: [
+                .init(id: "primary", label: "Primary", usedPercent: 15, resetAt: nil)
+            ],
+            fetchedAt: Date(timeIntervalSince1970: 60)
+        )
+        let output = OutputDouble(isInteractive: false)
+        let services = RuntimeServicesDouble()
+        let command = CLIProxyManagerCommand(
+            secretStore: InMemorySecretStore(),
+            configStore: configStore,
+            authProfileStore: AuthProfileStore(authDirectory: authDirectory),
+            output: output,
+            proxyRuntime: services,
+            appLifecycle: services,
+            logService: services,
+            statusReporter: services,
+            subscriptionQuotaClient: FixedSubscriptionQuotaClient(states: [
+                "codex.json": .stale(snapshot, .credentialExpired)
+            ])
+        )
+
+        try await command.run(arguments: ["quota"])
+
+        let text = output.stdout.joined()
+        XCTAssertTrue(text.contains("5h   ██░░░░░░░░  15%"))
+        XCTAssertTrue(text.contains("Warning: Credential needs attention. Showing last successful usage."))
+        XCTAssertLessThan(
+            try XCTUnwrap(text.range(of: "15%")?.lowerBound),
+            try XCTUnwrap(text.range(of: "Warning:")?.lowerBound)
+        )
+    }
+
+    func testQuotaJSONPreservesStaleSnapshotAndIssue() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox)
+        let configStore = AppConfigStore(paths: paths)
+        var config = AppConfig.default
+        config.subscriptionUsage.isEnabled = true
+        config.oauthCommandProfiles = [
+            .init(id: "codex-personal", provider: .codex, authProfileID: "codex.json", commandName: "cdx")
+        ]
+        try configStore.save(config)
+
+        let authDirectory = sandbox.appendingPathComponent("auth", isDirectory: true)
+        try FileManager.default.createDirectory(at: authDirectory, withIntermediateDirectories: true)
+        try Data(#"{"type":"codex","disabled":false}"#.utf8).write(to: authDirectory.appendingPathComponent("codex.json"))
+
+        let snapshot = SubscriptionUsageSnapshot(
+            profileID: "codex.json",
+            provider: .codex,
+            windows: [
+                .init(id: "primary", label: "Primary", usedPercent: 15, resetAt: nil)
+            ],
+            fetchedAt: Date(timeIntervalSince1970: 60)
+        )
+        let output = OutputDouble(isInteractive: false)
+        let services = RuntimeServicesDouble()
+        let command = CLIProxyManagerCommand(
+            secretStore: InMemorySecretStore(),
+            configStore: configStore,
+            authProfileStore: AuthProfileStore(authDirectory: authDirectory),
+            output: output,
+            proxyRuntime: services,
+            appLifecycle: services,
+            logService: services,
+            statusReporter: services,
+            subscriptionQuotaClient: FixedSubscriptionQuotaClient(states: [
+                "codex.json": .stale(snapshot, .credentialExpired)
+            ])
+        )
+
+        try await command.run(arguments: ["quota", "--json"])
+
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(output.stdout.joined().utf8)) as? [String: Any])
+        let account = try XCTUnwrap((json["accounts"] as? [[String: Any]])?.first)
+        XCTAssertEqual(account["status"] as? String, "stale")
+        XCTAssertEqual(account["issue"] as? String, "credentialExpired")
+        XCTAssertEqual((account["windows"] as? [[String: Any]])?.map { $0["label"] as? String }, ["Primary"])
+    }
+
     func testUnknownArgumentsStillThrowUsage() async {
         let command = CLIProxyManagerCommand(output: OutputDouble(isInteractive: false))
 
@@ -360,6 +553,178 @@ final class CLIProxyManagerCommandTests: XCTestCase {
         }
     }
 
+    func testRoutingClaudeModelsPrintsOnlyShellAssignmentsForEnabledProxyProfile() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox)
+        let configStore = AppConfigStore(paths: paths)
+        var config = AppConfig.default
+        config.port = 18_888
+        config.oauthCommandProfiles = [
+            .init(
+                id: "claude-work",
+                provider: .claude,
+                authProfileID: "claude-work.json",
+                commandName: "ccwork",
+                claude: .automatic,
+                modelPrefix: "claude-work"
+            )
+        ]
+        try configStore.save(config)
+        let models = StubClaudeModelListing(optionsByPrefix: [
+            "claude-work": [
+                .init(id: "claude-opus-4-8", created: 500),
+                .init(id: "claude-sonnet-5", created: 400),
+                .init(id: "claude-haiku-4-5", created: 300)
+            ]
+        ])
+        let output = OutputDouble(isInteractive: false)
+        let command = CLIProxyManagerCommand(
+            secretStore: InMemorySecretStore(),
+            configStore: configStore,
+            authProfileStore: AuthProfileStore(authDirectory: paths.authDirectory),
+            output: output,
+            claudeModelClient: models
+        )
+
+        try await command.run(arguments: ["routing", "claude-models", "claude-work"])
+
+        XCTAssertEqual(models.requests.map { "\($0.port):\($0.prefix)" }, ["18888:claude-work"])
+        XCTAssertEqual(output.stderr, [])
+        XCTAssertEqual(output.stdout, ["""
+        ANTHROPIC_DEFAULT_OPUS_MODEL='claude-work/claude-opus-4-8'
+        ANTHROPIC_DEFAULT_SONNET_MODEL='claude-work/claude-sonnet-5'
+        ANTHROPIC_DEFAULT_HAIKU_MODEL='claude-work/claude-haiku-4-5'
+
+        """])
+    }
+
+    func testRoutingClaudeModelsResolvesClaudeAPIKeyModelsWithDedicatedPrefix() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox)
+        let configStore = AppConfigStore(paths: paths)
+        var config = AppConfig.default
+        config.port = 18_888
+        config.ccapi = .init(claude: .init(
+            opus: .model("claude-opus-4-7"),
+            sonnet: .automatic,
+            haiku: .automatic
+        ))
+        try configStore.save(config)
+        let models = StubClaudeModelListing(optionsByPrefix: [
+            "cpm-claude-api": [
+                .init(id: "claude-opus-4-8", created: 500),
+                .init(id: "claude-opus-4-7", created: 400),
+                .init(id: "claude-sonnet-5", created: 500),
+                .init(id: "claude-haiku-4-5", created: 500)
+            ]
+        ])
+        let output = OutputDouble(isInteractive: false)
+        let command = CLIProxyManagerCommand(
+            secretStore: InMemorySecretStore(),
+            configStore: configStore,
+            authProfileStore: AuthProfileStore(authDirectory: paths.authDirectory),
+            output: output,
+            claudeModelClient: models
+        )
+
+        try await command.run(arguments: ["routing", "claude-models", "--api"])
+
+        XCTAssertEqual(models.requests.map { "\($0.port):\($0.prefix)" }, ["18888:cpm-claude-api"])
+        XCTAssertTrue(output.stdout.joined().contains("cpm-claude-api/claude-opus-4-7"))
+        XCTAssertTrue(output.stdout.joined().contains("cpm-claude-api/claude-sonnet-5"))
+    }
+
+    func testRoutingClaudeModelsRejectsInvalidProfilesWithoutQueryingModels() async throws {
+        let cases: [(String, AppConfig.OAuthCommandProfile?, String)] = [
+            ("unknown", nil, "Claude command profile `unknown` was not found."),
+            ("disabled", .init(id: "disabled", provider: .claude, authProfileID: "claude.json", modelPrefix: "claude", isEnabled: false), "Claude command profile `disabled` is disabled."),
+            ("codex", .init(id: "codex", provider: .codex, authProfileID: "codex.json", modelPrefix: "codex"), "Command profile `codex` is not a Claude OAuth profile."),
+            ("direct", .init(id: "direct", provider: .claude, authProfileID: "claude.json", modelPrefix: "claude", connectionMode: .direct), "Claude command profile `direct` uses Direct mode and does not use proxy model routing."),
+            ("empty-prefix", .init(id: "empty-prefix", provider: .claude, authProfileID: "claude.json", modelPrefix: "  "), "This Claude account does not have a routing prefix. Save the account settings, then retry.")
+        ]
+
+        for (target, profile, message) in cases {
+            let sandbox = try makeSandbox()
+            let paths = ManagedPaths(rootDirectory: sandbox)
+            let configStore = AppConfigStore(paths: paths)
+            var config = AppConfig.default
+            config.oauthCommandProfiles = profile.map { [$0] } ?? []
+            try configStore.save(config)
+            let models = StubClaudeModelListing(optionsByPrefix: [:])
+            let command = CLIProxyManagerCommand(
+                secretStore: InMemorySecretStore(),
+                configStore: configStore,
+                authProfileStore: AuthProfileStore(authDirectory: paths.authDirectory),
+                output: OutputDouble(isInteractive: false),
+                claudeModelClient: models
+            )
+
+            await XCTAssertThrowsErrorAsync(
+                try await command.run(arguments: ["routing", "claude-models", target])
+            ) { error in
+                XCTAssertEqual(error as? CLIProxyManagerCommandError, .prerequisite(message))
+            }
+            XCTAssertTrue(models.requests.isEmpty, "Unexpected lookup for \(target)")
+        }
+    }
+
+    func testLegacyClaudeRoutingRequiresExactlyOneEnabledPrefixedClaudeProfile() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox)
+        let configStore = AppConfigStore(paths: paths)
+        try configStore.save(.default)
+        try FileManager.default.createDirectory(at: paths.authDirectory, withIntermediateDirectories: true)
+        try Data(#"{"type":"claude","prefix":"claude-work","disabled":false}"#.utf8)
+            .write(to: paths.authDirectory.appendingPathComponent("claude-work.json"))
+        let models = StubClaudeModelListing(optionsByPrefix: [
+            "claude-work": [
+                .init(id: "claude-opus-4-8"),
+                .init(id: "claude-sonnet-5"),
+                .init(id: "claude-haiku-4-5")
+            ]
+        ])
+        let output = OutputDouble(isInteractive: false)
+        let command = CLIProxyManagerCommand(
+            secretStore: InMemorySecretStore(),
+            configStore: configStore,
+            authProfileStore: AuthProfileStore(authDirectory: paths.authDirectory),
+            output: output,
+            claudeModelClient: models
+        )
+
+        try await command.run(arguments: ["routing", "claude-models", "--legacy"])
+
+        XCTAssertEqual(models.requests.map { "\($0.port):\($0.prefix)" }, ["18318:claude-work"])
+        XCTAssertTrue(output.stdout.joined().contains("claude-work/claude-opus-4-8"))
+    }
+
+    func testLegacyClaudeRoutingRejectsMultipleProfilesWithoutQueryingModels() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox)
+        try AppConfigStore(paths: paths).save(.default)
+        try FileManager.default.createDirectory(at: paths.authDirectory, withIntermediateDirectories: true)
+        for id in ["claude-a", "claude-b"] {
+            try Data(#"{"type":"claude","prefix":"prefix","disabled":false}"#.utf8)
+                .write(to: paths.authDirectory.appendingPathComponent("\(id).json"))
+        }
+        let models = StubClaudeModelListing(optionsByPrefix: [:])
+        let command = CLIProxyManagerCommand(
+            secretStore: InMemorySecretStore(),
+            configStore: AppConfigStore(paths: paths),
+            authProfileStore: AuthProfileStore(authDirectory: paths.authDirectory),
+            output: OutputDouble(isInteractive: false),
+            claudeModelClient: models
+        )
+
+        await XCTAssertThrowsErrorAsync(try await command.run(arguments: ["routing", "claude-models", "--legacy"])) { error in
+            XCTAssertEqual(
+                error as? CLIProxyManagerCommandError,
+                .prerequisite("Multiple Claude OAuth accounts are enabled. Save an account-specific command in the app, then retry.")
+            )
+        }
+        XCTAssertTrue(models.requests.isEmpty)
+    }
+
     private func makeRuntimeCommand(
         output: OutputDouble = OutputDouble(isInteractive: false),
         services: RuntimeServicesDouble,
@@ -405,6 +770,20 @@ private final class CommandManagementKeyStore: SubscriptionUsageManagementKeyCon
     }
     func setManagementKey(_ value: String) throws { key = value }
     func deleteManagementKey() throws { key = nil }
+}
+
+private final class StubClaudeModelListing: ClaudeModelListing, @unchecked Sendable {
+    private(set) var requests: [(port: Int, prefix: String)] = []
+    var optionsByPrefix: [String: [ClaudeModelOption]]
+
+    init(optionsByPrefix: [String: [ClaudeModelOption]]) {
+        self.optionsByPrefix = optionsByPrefix
+    }
+
+    func claudeModelOptions(port: Int, modelPrefix: String) async throws -> [ClaudeModelOption] {
+        requests.append((port, modelPrefix))
+        return optionsByPrefix[modelPrefix] ?? []
+    }
 }
 
 private final class OutputDouble: CLICommandOutputWriting, @unchecked Sendable {

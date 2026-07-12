@@ -110,10 +110,6 @@ public struct CLIProxyAPISubscriptionQuotaClient: SubscriptionQuotaFetching {
                 states[profile.id] = .unavailable(.credentialDisabled)
                 continue
             }
-            if isExpired(profile) {
-                states[profile.id] = .unavailable(.credentialExpired)
-                continue
-            }
             guard let credential = credentialRecords.first(where: {
                 $0.name == profile.fileName && $0.provider == profile.type.rawValue
             }) else {
@@ -124,7 +120,7 @@ public struct CLIProxyAPISubscriptionQuotaClient: SubscriptionQuotaFetching {
                 states[profile.id] = .unavailable(.credentialDisabled)
                 continue
             }
-            if credential.status == "expired" || credential.status == "error" {
+            if credential.status == "expired" {
                 states[profile.id] = .unavailable(.credentialExpired)
                 continue
             }
@@ -379,11 +375,6 @@ public struct CLIProxyAPISubscriptionQuotaClient: SubscriptionQuotaFetching {
         }
     }
 
-    private func isExpired(_ profile: AuthProfile) -> Bool {
-        guard let expiration = profile.expired,
-              let date = ISO8601DateFormatter().date(from: expiration) else { return false }
-        return date <= now()
-    }
 }
 
 private struct AuthFilesResponse: Decodable {

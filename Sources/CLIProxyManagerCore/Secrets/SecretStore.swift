@@ -2,6 +2,7 @@ import Foundation
 
 public enum SecretKey: String, Sendable {
     case claudeAPIKey = "claude-api-key"
+    case codexAPIKey = "codex-api-key"
 }
 
 public enum SecretStoreError: Error, Equatable, CustomStringConvertible {

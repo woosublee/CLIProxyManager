@@ -13,10 +13,11 @@ final class AppConfigStoreTests: XCTestCase {
         XCTAssertEqual(config.commands.cc, "")
         XCTAssertEqual(config.commands.ccapi, "")
         XCTAssertEqual(config.commands.ccodex, "")
-        XCTAssertEqual(config.ccapi.model, "claude-opus-4-8")
-        XCTAssertEqual(config.ccodex.opus, AppConfig.CodexRole(model: "gpt-5.5", reasoning: .xhigh, contextWindow: .auto))
-        XCTAssertEqual(config.ccodex.sonnet, AppConfig.CodexRole(model: "gpt-5.5", reasoning: .medium, contextWindow: .auto))
-        XCTAssertEqual(config.ccodex.haiku, AppConfig.CodexRole(model: "gpt-5.5", reasoning: .low, contextWindow: .auto))
+        XCTAssertEqual(config.ccapi.connectionMode, .proxy)
+        XCTAssertFalse(config.ccapi.dangerousPermissionsEnabled)
+        XCTAssertEqual(config.ccodex.opus, AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .xhigh, contextWindow: .auto))
+        XCTAssertEqual(config.ccodex.sonnet, AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .medium, contextWindow: .auto))
+        XCTAssertEqual(config.ccodex.haiku, AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .low, contextWindow: .auto))
         XCTAssertEqual(config.roundRobinProfiles, [])
         XCTAssertFalse(config.subscriptionUsage.isEnabled)
     }
@@ -59,7 +60,7 @@ final class AppConfigStoreTests: XCTestCase {
         var config = AppConfig(
             port: 18_888,
             commands: AppConfig.Commands(cc: "mine", ccapi: "mineapi", ccodex: "minecodex"),
-            ccapi: AppConfig.ClaudeAPI(model: "claude-sonnet-4-6"),
+            ccapi: AppConfig.ClaudeAPI(dangerousPermissionsEnabled: true),
             ccodex: AppConfig.Codex(
                 opus: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .xhigh, contextWindow: .context1m),
                 sonnet: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .medium, contextWindow: .context400k),

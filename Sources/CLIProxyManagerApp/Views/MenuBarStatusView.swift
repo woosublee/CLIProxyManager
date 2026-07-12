@@ -208,30 +208,46 @@ private struct MenuBarAccountRow: View {
 
     @ViewBuilder
     private var subscriptionUsage: some View {
-        switch provider.subscriptionUsageState {
-        case .disabled, .managementKeyNotConfigured:
+        if case .unavailable(.proxyUnavailable) = provider.subscriptionUsageState {
             EmptyView()
-        case .loading:
-            Text("Checking subscription usage…")
-                .font(.system(size: 10.5))
-                .foregroundStyle(.tertiary)
-        case .unavailable(.proxyUnavailable):
-            EmptyView()
-        case .unavailable(let issue):
-            Text("Usage unavailable — \(issue.message)")
-                .font(.system(size: 10.5))
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-        case .available(let snapshot):
-            if snapshot.windows.isEmpty {
-                Text("Usage details unavailable")
+        } else {
+            switch subscriptionUsageDisplayState(for: provider.subscriptionUsageState) {
+            case .hidden:
+                EmptyView()
+            case .loading(let message):
+                Text(message)
                     .font(.system(size: 10.5))
                     .foregroundStyle(.tertiary)
-            } else {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(snapshot.windows) { window in
-                        usageWindow(window)
+            case .unavailable(let message):
+                Text(message)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            case .snapshot(let snapshot, let warning):
+                HStack(alignment: .top, spacing: 6) {
+                    snapshotUsage(snapshot)
+                    if let warning {
+                        SubscriptionUsageWarningIcon(
+                            issue: warning,
+                            lastUpdatedAt: snapshot.fetchedAt
+                        )
+                        .padding(.top, 1)
                     }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func snapshotUsage(_ snapshot: SubscriptionUsageSnapshot) -> some View {
+        if snapshot.windows.isEmpty {
+            Text("Usage details unavailable")
+                .font(.system(size: 10.5))
+                .foregroundStyle(.tertiary)
+        } else {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(snapshot.windows) { window in
+                    usageWindow(window)
                 }
             }
         }

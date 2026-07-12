@@ -15,6 +15,14 @@ public struct ManagedPaths: Equatable, Sendable {
         rootDirectory.appendingPathComponent("config.json")
     }
 
+    public var apiKeysDirectory: URL {
+        rootDirectory.appendingPathComponent("api-keys", isDirectory: true)
+    }
+
+    public func apiKeyFile(for key: SecretKey) -> URL {
+        apiKeysDirectory.appendingPathComponent("\(key.rawValue).json")
+    }
+
     public var roundRobinStateFile: URL {
         rootDirectory.appendingPathComponent("round-robin-state.json")
     }
@@ -25,6 +33,10 @@ public struct ManagedPaths: Equatable, Sendable {
 
     public var subscriptionUsageSnapshotCacheFile: URL {
         rootDirectory.appendingPathComponent("subscription-usage-snapshots.json")
+    }
+
+    public var claudeModelOptionsCacheFile: URL {
+        rootDirectory.appendingPathComponent("claude-model-options.json")
     }
 
     public var cpmInstallationRecordFile: URL {

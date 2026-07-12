@@ -89,13 +89,36 @@ public enum AccountSubscriptionUsageState: Equatable, Sendable {
     case managementKeyNotConfigured
     case loading
     case available(SubscriptionUsageSnapshot)
+    case stale(SubscriptionUsageSnapshot, SubscriptionUsageIssue)
     case unavailable(SubscriptionUsageIssue)
+
+    public var snapshot: SubscriptionUsageSnapshot? {
+        switch self {
+        case .available(let snapshot), .stale(let snapshot, _):
+            snapshot
+        case .disabled, .managementKeyNotConfigured, .loading, .unavailable:
+            nil
+        }
+    }
+
+    public var issue: SubscriptionUsageIssue? {
+        switch self {
+        case .stale(_, let issue), .unavailable(let issue):
+            issue
+        case .disabled, .managementKeyNotConfigured, .loading, .available:
+            nil
+        }
+    }
+
+    public var stopsAutomaticPolling: Bool {
+        issue?.stopsPolling ?? false
+    }
 
     public var shouldDisplayInMenuBar: Bool {
         switch self {
         case .disabled, .managementKeyNotConfigured, .unavailable(.proxyUnavailable):
             false
-        case .loading, .available, .unavailable:
+        case .loading, .available, .stale, .unavailable:
             true
         }
     }

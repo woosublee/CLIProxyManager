@@ -18,6 +18,7 @@ struct DashboardAccountSnapshot: Equatable, Identifiable {
     let showsMoreMenu: Bool
     let isAccountDetailHidden: Bool
     let showsAccountPrivacyToggle: Bool
+    let isAPIKeyProfile: Bool
 
     var headerCommandSlug: String {
         commandSlug
@@ -44,6 +45,7 @@ struct DashboardAccountSnapshot: Equatable, Identifiable {
         primaryActionTitle = status == .disconnected ? "Connect" : "Settings"
         showsMoreMenu = status != .disconnected
         isAccountDetailHidden = provider.accountDetailHidden
-        showsAccountPrivacyToggle = status != .disconnected
+        isAPIKeyProfile = provider.id == .claudeAPI || provider.id == .codexAPI
+        showsAccountPrivacyToggle = status != .disconnected && !isAPIKeyProfile
     }
 }

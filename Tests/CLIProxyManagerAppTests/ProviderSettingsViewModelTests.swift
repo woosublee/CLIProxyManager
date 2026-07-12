@@ -10,23 +10,166 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: []),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         XCTAssertEqual(viewModel.providerRows, [])
     }
 
-    func testAddProviderShowsClaudeAPIHiddenMessage() {
+    func testConfiguredAPIKeysAppearAsProviderRows() {
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: .default),
             shellInstaller: StubShellInstaller(),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore(values: [.claudeAPIKey: "claude-key", .codexAPIKey: "codex-key"])
         )
 
-        viewModel.addProvider()
+        let apiRows = viewModel.providerRows.filter { $0.id == .claudeAPI || $0.id == .codexAPI }
+        XCTAssertEqual(apiRows.map { $0.id.rawValue }, ["claude-api", "codex-api"])
+        XCTAssertEqual(apiRows.map { $0.name }, ["Claude API Key", "OpenAI API Key"])
+        XCTAssertEqual(apiRows.map { $0.subscriptionUsageState }, [.disabled, .disabled])
+    }
 
-        XCTAssertEqual(viewModel.settingsMessage, "Claude API profiles are hidden from the default account list in this version.")
+    func testConfiguredAPIKeyRowsExposePersistedNicknames() {
+        var config = AppConfig.default
+        config.ccapi = .init(nickname: "Anthropic Work")
+        config.codexAPI = .init(codex: config.ccodex, nickname: "OpenAI Personal")
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore(values: [.claudeAPIKey: "claude-key", .codexAPIKey: "codex-key"])
+        )
+
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .claudeAPI }?.nickname, "Anthropic Work")
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codexAPI }?.nickname, "OpenAI Personal")
+    }
+
+    func testSaveClaudeAPIKeyDoesNotPersistKeyInAppConfig() throws {
+        let store = StubConfigStore(config: .default)
+        let secretStore = InMemorySecretStore()
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: secretStore
+        )
+
+        try viewModel.saveClaudeAPISettings(
+            functionName: "ccapi",
+            nickname: "Anthropic Work",
+            dangerousPermissionsEnabled: true,
+            key: "secret-value"
+        )
+
+        XCTAssertEqual(try secretStore.get(.claudeAPIKey), "secret-value")
+        XCTAssertEqual(store.config.commands.ccapi, "ccapi")
+        XCTAssertEqual(store.config.ccapi.nickname, "Anthropic Work")
+        XCTAssertEqual(store.config.ccapi.connectionMode, .proxy)
+        XCTAssertTrue(store.config.ccapi.dangerousPermissionsEnabled)
+        XCTAssertFalse(String(data: try JSONEncoder().encode(store.config), encoding: .utf8)!.contains("secret-value"))
+    }
+
+    func testClaudeAPISettingsRestorePreviousKeyWhenConfigSaveFails() throws {
+        let store = StubConfigStore(config: .default, saveError: NSError(domain: "test", code: 1))
+        let secretStore = InMemorySecretStore(values: [.claudeAPIKey: "old-key"])
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: secretStore
+        )
+
+        XCTAssertThrowsError(try viewModel.saveClaudeAPISettings(
+            functionName: "ccapi",
+            dangerousPermissionsEnabled: false,
+            key: "new-key"
+        ))
+
+        XCTAssertEqual(try secretStore.get(.claudeAPIKey), "old-key")
+    }
+
+    func testRemoveAPIProviderRestoresKeyWhenConfigSaveFails() throws {
+        var config = AppConfig.default
+        config.commands.ccapi = "ccapi"
+        let store = StubConfigStore(config: config, saveError: NSError(domain: "test", code: 1))
+        let secretStore = InMemorySecretStore(values: [.claudeAPIKey: "old-key"])
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: secretStore
+        )
+
+        viewModel.removeAPIProvider(.claudeAPI)
+
+        XCTAssertEqual(try secretStore.get(.claudeAPIKey), "old-key")
+        XCTAssertEqual(viewModel.config.commands.ccapi, "ccapi")
+    }
+
+    func testSaveCodexAPISettingsNormalizesPrefixedModelsBeforePersisting() throws {
+        let store = StubConfigStore(config: .default)
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
+        )
+        let routing = AppConfig.Codex(
+            opus: .init(model: "cpm-codex-api/gpt-5.6(xhigh)", reasoning: .xhigh, contextWindow: .context1m),
+            sonnet: .init(model: "codex-work/gpt-5.6", reasoning: .medium, contextWindow: .context400k),
+            haiku: .init(model: "openai/gpt-5.6-mini(low)", reasoning: .low, contextWindow: .context200k)
+        )
+
+        try viewModel.saveCodexAPISettings(
+            functionName: "ccodexapi",
+            codex: routing,
+            dangerousPermissionsEnabled: false,
+            key: nil
+        )
+
+        XCTAssertEqual(store.config.codexAPI.codex.opus.model, "gpt-5.6")
+        XCTAssertEqual(store.config.codexAPI.codex.sonnet.model, "gpt-5.6")
+        XCTAssertEqual(store.config.codexAPI.codex.haiku.model, "gpt-5.6-mini")
+    }
+
+    func testSaveCodexAPISettingsPersistsRoleRoutingAndItsOwnSkipPermissionSetting() throws {
+        let store = StubConfigStore(config: .default)
+        let secretStore = InMemorySecretStore()
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: secretStore
+        )
+        let routing = AppConfig.Codex(
+            opus: .init(model: "gpt-5.6", reasoning: .xhigh, contextWindow: .context1m),
+            sonnet: .init(model: "gpt-5.6", reasoning: .medium, contextWindow: .context400k),
+            haiku: .init(model: "gpt-5.6-mini", reasoning: .low, contextWindow: .context200k)
+        )
+
+        try viewModel.saveCodexAPISettings(
+            functionName: "ccodexapi",
+            nickname: "OpenAI Personal",
+            codex: routing,
+            dangerousPermissionsEnabled: true,
+            key: "codex-secret"
+        )
+
+        XCTAssertEqual(try secretStore.get(.codexAPIKey), "codex-secret")
+        XCTAssertEqual(store.config.commands.ccodexapi, "ccodexapi")
+        XCTAssertEqual(store.config.codexAPI.nickname, "OpenAI Personal")
+        XCTAssertEqual(store.config.codexAPI.codex, routing)
+        XCTAssertTrue(store.config.codexAPI.dangerousPermissionsEnabled)
+        XCTAssertFalse(store.config.includeDangerouslySkipPermissions)
     }
 
     func testRollbackLegacyFallbackProviderRowsUseUniqueIDsForMultipleSameProviderAuthProfiles() {
@@ -39,7 +182,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
                 AuthProfile(fileName: "claude-personal.json", type: .claude, email: "personal@example.com", accountID: nil, expired: nil, disabled: false)
             ]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         XCTAssertThrowsError(try viewModel.saveClaudeOAuthSettings(provider: .claude, functionName: "ccwork", nickname: "", dangerousPermissionsEnabled: false))
@@ -59,7 +203,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         try viewModel.saveClaudeFunctionName("myclaude")
@@ -76,7 +221,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         XCTAssertThrowsError(try viewModel.saveClaudeFunctionName("//")) { error in
@@ -94,7 +240,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         XCTAssertThrowsError(try viewModel.saveClaudeOAuthSettings(functionName: "//", nickname: "", dangerousPermissionsEnabled: false)) { error in
@@ -113,7 +260,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: installer,
             authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         XCTAssertThrowsError(try viewModel.saveClaudeOAuthSettings(functionName: "cc", nickname: "", dangerousPermissionsEnabled: true)) { error in
@@ -200,7 +348,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: [claudeProfile(), codexProfile()]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         let availability = await viewModel.commandNameAvailability(provider: .claude, functionName: "myclaude")
@@ -214,7 +363,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         let availability = await viewModel.commandNameAvailability(provider: .claude, functionName: "//")
@@ -229,7 +379,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: installer,
             authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         let availability = await viewModel.commandNameAvailability(provider: .claude, functionName: "myclaude")
@@ -245,7 +396,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: installer,
             authProfileStore: StubAuthProfileStore(profiles: [claudeProfile(), codexProfile()]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
         installer.reset()
 
@@ -263,7 +415,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: [claudeProfile(), codexProfile()]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         let availability = await viewModel.commandNameAvailability(provider: .claude, functionName: "same")
@@ -287,7 +440,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: [claudeProfile(), codexProfile()]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         let availability = await viewModel.commandNameAvailability(provider: .claude, functionName: "same")
@@ -304,7 +458,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: [claudeProfile(), codexProfile()]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         XCTAssertThrowsError(try viewModel.saveClaudeOAuthSettings(functionName: "same", nickname: "", dangerousPermissionsEnabled: false)) { error in
@@ -321,7 +476,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         try viewModel.saveClaudeOAuthSettings(functionName: " myclaude ", nickname: "", dangerousPermissionsEnabled: false)
@@ -339,7 +495,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         try viewModel.saveClaudeOAuthSettings(functionName: "myclaude", nickname: "", dangerousPermissionsEnabled: false)
@@ -359,11 +516,12 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: installer,
             authProfileStore: StubAuthProfileStore(profiles: []),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
         installer.reset()
 
-        XCTAssertThrowsError(try viewModel.saveClaudeAPISettings(functionName: "ccapi", model: "claude-opus-4-8")) { error in
+        XCTAssertThrowsError(try viewModel.saveClaudeAPISettings(functionName: "ccapi", dangerousPermissionsEnabled: false, key: nil)) { error in
             XCTAssertEqual(error as? ShellProfileInstallerError, .functionNameConflicts(["ccapi"]))
         }
 
@@ -371,7 +529,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(store.savedConfigs, [])
     }
 
-    func testSaveClaudeAPISettingsPersistsExplicitCommandNameAndModel() throws {
+    func testSaveClaudeAPISettingsPersistsExplicitCommandNameAndSkipPermissionSetting() throws {
         let store = StubConfigStore(config: .default)
         let installer = StubShellInstaller()
         let viewModel = DashboardViewModel(
@@ -379,14 +537,27 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: installer,
             authProfileStore: StubAuthProfileStore(profiles: []),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
         installer.reset()
 
-        try viewModel.saveClaudeAPISettings(functionName: " myapi ", model: "claude-sonnet-4-6")
+        let routing = ClaudeRouting(
+            opus: .model("claude-opus-4-8"),
+            sonnet: .automatic,
+            haiku: .model("claude-haiku-4-5")
+        )
+        try viewModel.saveClaudeAPISettings(
+            functionName: " myapi ",
+            claudeRouting: routing,
+            dangerousPermissionsEnabled: true,
+            key: nil
+        )
 
         XCTAssertEqual(store.savedConfigs.last?.commands.ccapi, "myapi")
-        XCTAssertEqual(store.savedConfigs.last?.ccapi.model, "claude-sonnet-4-6")
+        XCTAssertEqual(store.savedConfigs.last?.ccapi.connectionMode, .proxy)
+        XCTAssertEqual(store.savedConfigs.last?.ccapi.claude, routing)
+        XCTAssertTrue(store.savedConfigs.last?.ccapi.dangerousPermissionsEnabled ?? false)
     }
 
     func testSaveClaudeAPISettingsAllowsBlankCommandNameToDisableFunction() throws {
@@ -399,14 +570,20 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: installer,
             authProfileStore: StubAuthProfileStore(profiles: []),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
         installer.reset()
 
-        try viewModel.saveClaudeAPISettings(functionName: "   ", model: "claude-opus-4-8")
+        try viewModel.saveClaudeAPISettings(
+            functionName: "   ",
+            dangerousPermissionsEnabled: false,
+            key: nil
+        )
 
         XCTAssertEqual(store.savedConfigs.last?.commands.ccapi, "")
-        XCTAssertEqual(store.savedConfigs.last?.ccapi.model, "claude-opus-4-8")
+        XCTAssertEqual(store.savedConfigs.last?.ccapi.connectionMode, .proxy)
+        XCTAssertFalse(store.savedConfigs.last?.ccapi.dangerousPermissionsEnabled ?? true)
         XCTAssertEqual(installer.validatedFunctionNames, [])
     }
 
@@ -417,7 +594,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: [codexProfile()]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         try viewModel.saveCodexSettings(functionName: " mycodex ", nickname: "", codex: testCodex(), dangerousPermissionsEnabled: false)
@@ -436,7 +614,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: [claudeProfile(), codexProfile()]),
             automaticShellInstallService: automaticInstaller,
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
         installer.reset()
 
@@ -459,7 +638,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: [claudeProfile(), codexProfile()]),
             automaticShellInstallService: automaticInstaller,
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         XCTAssertEqual(installer.validatedFunctionNames, [])
@@ -490,7 +670,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             ]),
             automaticShellInstallService: automaticInstaller,
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         XCTAssertEqual(installer.installedFunctionNames, ["ccodex"])
@@ -513,7 +694,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
                 AuthProfile(fileName: "codex-deep.json", type: .codex, email: "deep@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-deep")
             ]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         let state = viewModel.roundRobinSettings(for: .codex)
@@ -523,6 +705,34 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(state.profile.commandName, "")
         XCTAssertEqual(state.profile.includedAuthProfileIDs, ["codex-fast.json", "codex-deep.json"])
         XCTAssertEqual(state.availability, .available(count: 2))
+    }
+
+    func testRoundRobinSettingsExcludesDirectClaudeAccountsAndMakesStoredGroupUnavailable() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            .init(id: "claude-proxy", provider: .claude, authProfileID: "claude-proxy.json", commandName: "ccproxy", modelPrefix: "proxy"),
+            .init(id: "claude-direct", provider: .claude, authProfileID: "claude-direct.json", commandName: "ccdirect", modelPrefix: "direct", connectionMode: .direct)
+        ]
+        config.roundRobinProfiles = [
+            .init(id: "claude-default", provider: .claude, isEnabled: true, commandName: "cc", includedAuthProfileIDs: ["claude-proxy.json", "claude-direct.json"])
+        ]
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                .init(fileName: "claude-proxy.json", type: .claude, email: "proxy@example.com", accountID: nil, expired: nil, disabled: false, prefix: "proxy"),
+                .init(fileName: "claude-direct.json", type: .claude, email: "direct@example.com", accountID: nil, expired: nil, disabled: false, prefix: "direct")
+            ]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
+        )
+
+        let state = viewModel.roundRobinSettings(for: .claude)
+
+        XCTAssertEqual(state.accountOptions.map(\.id), ["claude-proxy.json"])
+        XCTAssertEqual(state.availability, .insufficientProviderAccounts(count: 1))
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.first { $0.id == "claude-direct" }?.connectionMode, .direct)
     }
 
     func testRoundRobinSettingsUnavailableForOneSelectedProfile() {
@@ -542,7 +752,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
                 AuthProfile(fileName: "codex-deep.json", type: .codex, email: "deep@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-deep")
             ]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         XCTAssertEqual(viewModel.roundRobinSettings(for: .codex).availability, .insufficientSelectedAccounts(count: 1))
@@ -565,7 +776,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
                 AuthProfile(fileName: "codex-deep.json", type: .codex, email: "deep@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-deep")
             ]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
         var profile = viewModel.roundRobinSettings(for: .codex).profile
         profile.includedAuthProfileIDs.append("codex-deep.json")
@@ -587,7 +799,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
                 AuthProfile(fileName: "codex-deep.json", type: .codex, email: "deep@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-deep")
             ]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         XCTAssertEqual(viewModel.roundRobinSettings(for: .codex).availability, .available(count: 2))
@@ -608,7 +821,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
                 AuthProfile(fileName: "codex-deep.json", type: .codex, email: "deep@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-deep")
             ]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         XCTAssertEqual(viewModel.roundRobinSettings(for: .codex).availability, .available(count: 2))
@@ -628,7 +842,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
                 AuthProfile(fileName: "codex-deep.json", type: .codex, email: "deep@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-deep")
             ]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         XCTAssertEqual(viewModel.roundRobinSettings(for: .codex).profile.codex, config.ccodex)
@@ -649,7 +864,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
                 AuthProfile(fileName: "codex-deep.json", type: .codex, email: "deep@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-deep")
             ]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
         var state = viewModel.roundRobinSettings(for: .codex)
         state.profile.isEnabled = true
@@ -680,7 +896,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
                 AuthProfile(fileName: "codex-deep.json", type: .codex, email: "deep@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-deep")
             ]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
         var state = viewModel.roundRobinSettings(for: .codex)
         state.profile.isEnabled = true
@@ -708,7 +925,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
                 AuthProfile(fileName: "codex-deep.json", type: .codex, email: "deep@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-deep")
             ]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         XCTAssertEqual(viewModel.roundRobinSettings(for: .codex).profile.commandName, "")
@@ -738,7 +956,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
                 AuthProfile(fileName: "codex-deep.json", type: .codex, email: "deep@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-deep")
             ]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
         var state = viewModel.roundRobinSettings(for: .codex)
         state.profile.isEnabled = false
@@ -762,7 +981,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
                 AuthProfile(fileName: "codex-deep.json", type: .codex, email: "deep@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-deep")
             ]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
         var state = viewModel.roundRobinSettings(for: .codex)
         state.profile.isEnabled = true
@@ -773,6 +993,46 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.settingsMessage, "Round-robin settings saved.")
     }
 
+    func testSaveClaudeOAuthSettingsPersistsRoutingAndDirectModeWithoutDiscardingPolicy() throws {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            .init(
+                id: "claude-work",
+                provider: .claude,
+                authProfileID: "claude-work.json",
+                commandName: "ccwork",
+                modelPrefix: "claude-work"
+            )
+        ]
+        let store = StubConfigStore(config: config)
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
+        )
+        let routing = ClaudeRouting(
+            opus: .model("claude-opus-4-8"),
+            sonnet: .automatic,
+            haiku: .model("claude-haiku-4-5")
+        )
+
+        try viewModel.saveClaudeOAuthSettings(
+            provider: .init(rawValue: "claude-work"),
+            functionName: "ccwork",
+            nickname: "Work",
+            dangerousPermissionsEnabled: false,
+            connectionMode: .direct,
+            claudeRouting: routing
+        )
+
+        let saved = try XCTUnwrap(store.savedConfigs.last?.oauthCommandProfiles.first)
+        XCTAssertEqual(saved.claude, routing)
+        XCTAssertEqual(saved.connectionMode, .direct)
+    }
+
     func testSaveClaudeOAuthSettingsPersistsFunctionNameAndPermission() throws {
         let store = StubConfigStore(config: .default)
         let viewModel = DashboardViewModel(
@@ -780,7 +1040,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         try viewModel.saveClaudeOAuthSettings(functionName: "myclaude", nickname: "", dangerousPermissionsEnabled: true)
@@ -797,7 +1058,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: [codexProfile()]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
         let codex = testCodex()
 
@@ -830,7 +1092,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: StubShellInstaller(),
             authProfileStore: authStore,
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         try viewModel.saveClaudeOAuthSettings(
@@ -867,7 +1130,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: StubShellInstaller(),
             authProfileStore: authStore,
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         try viewModel.saveCodexSettings(
@@ -908,7 +1172,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: installer,
             authProfileStore: authStore,
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
         let initialConfig = viewModel.config
         installer.reset()
@@ -962,7 +1227,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: installer,
             authProfileStore: authStore,
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
         let initialConfig = viewModel.config
         installer.reset()
@@ -1011,7 +1277,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             authProfileStore: authStore,
             automaticShellInstallService: automaticInstaller,
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
         let initialConfig = viewModel.config
         installer.reset()
@@ -1042,7 +1309,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: installer,
             authProfileStore: StubAuthProfileStore(profiles: [codexProfile()]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
         installer.reset()
 
@@ -1062,7 +1330,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: [codexProfile()]),
             automaticShellInstallService: automaticInstaller,
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
         let initialConfig = viewModel.config
         let codex = testCodex()
@@ -1083,7 +1352,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: [codexProfile()]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
         let initialConfig = viewModel.config
         let codex = testCodex()
@@ -1107,7 +1377,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         viewModel.removeProvider(.claude)
@@ -1133,7 +1404,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: [codexProfile()]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         viewModel.removeProvider(.codex)
@@ -1160,7 +1432,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             authProfileStore: authStore,
             automaticShellInstallService: automaticInstaller,
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
         installer.reset()
 
@@ -1170,7 +1443,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             authProfileStore: authStore,
             automaticShellInstallService: automaticInstaller,
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
         installer.reset()
 
@@ -1189,7 +1463,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: installer,
             authProfileStore: authStore,
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
         installer.reset()
 
@@ -1208,7 +1483,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
                 AuthProfile(fileName: "claude-personal.json", type: .claude, email: "personal@example.com", accountID: nil, expired: nil, disabled: false)
             ]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         XCTAssertEqual(viewModel.providerRows.map(\.id), [
@@ -1255,7 +1531,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
                 AuthProfile(fileName: "codex-dntjqdlekd-gmail-com-pro.json", type: .codex, email: "personal@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-codex-dntjqdlekd-gmail-com-pro-json")
             ]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         XCTAssertEqual(viewModel.config.oauthCommandProfiles.map(\.modelPrefix), [
@@ -1284,7 +1561,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
                 AuthProfile(fileName: "codex-18c2ca10-woosub-classting-com-team.json", type: .codex, email: "team@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-codex-18c2ca10-woosub-classting-com-team-json")
             ]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         XCTAssertEqual(viewModel.config.oauthCommandProfiles.map(\.modelPrefix), ["codex-18c2ca10"])
@@ -1306,7 +1584,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: StubShellInstaller(),
             authProfileStore: authStore,
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         viewModel.removeProvider(ProviderRowState.ID(rawValue: "claude-work"))
@@ -1344,7 +1623,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: installer,
             authProfileStore: authStore,
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
         installer.reset()
 
@@ -1370,7 +1650,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: StubShellInstaller(),
             authProfileStore: authStore,
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         viewModel.disconnectProvider(ProviderRowState.ID(rawValue: "claude-work"))
@@ -1408,7 +1689,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: installer,
             authProfileStore: authStore,
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
         installer.reset()
 
@@ -1417,6 +1699,56 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(store.savedConfigs.last?.roundRobinProfiles, config.roundRobinProfiles)
         XCTAssertEqual(viewModel.config.roundRobinProfiles, config.roundRobinProfiles)
         XCTAssertFalse(installer.installedFunctionNames.contains("ccodex"))
+    }
+
+    func testDormantAPICommandDoesNotBlockOAuthCommandValidationWhenKeyIsMissing() async {
+        var config = AppConfig.default
+        config.commands.ccapi = "shared"
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
+        )
+
+        let availability = await viewModel.commandNameAvailability(provider: .claude, functionName: "shared")
+
+        XCTAssertEqual(availability, .available)
+    }
+
+    func testClaudeAPICommandNameAvailabilityChecksAgainstOAuthCommands() async {
+        var config = AppConfig.default
+        config.commands.cc = "claudeoauth"
+        config.commands.ccapi = "claudeapi"
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore(values: [.claudeAPIKey: "secret"])
+        )
+
+        let availability = await viewModel.commandNameAvailability(provider: .claudeAPI, functionName: "claudeoauth")
+
+        XCTAssertEqual(availability, .unavailable("Command name `claudeoauth` is already used by another provider."))
+    }
+
+    func testCodexAPICommandNameAvailabilityChecksAgainstOAuthCommands() async {
+        var config = AppConfig.default
+        config.commands.ccodex = "codexoauth"
+        config.commands.ccodexapi = "codexapi"
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore(values: [.codexAPIKey: "secret"])
+        )
+
+        let availability = await viewModel.commandNameAvailability(provider: .codexAPI, functionName: "codexoauth")
+
+        XCTAssertEqual(availability, .unavailable("Command name `codexoauth` is already used by another provider."))
     }
 
     func testCommandNameAvailabilityChecksAllOAuthCommandProfilesForDuplicates() async {
@@ -1433,7 +1765,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
                 AuthProfile(fileName: "claude-personal.json", type: .claude, email: "personal@example.com", accountID: nil, expired: nil, disabled: false)
             ]),
             proxyService: StubProxyService(),
-            claudeConnector: connectedClaudeConnector()
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
         )
 
         let availability = await viewModel.commandNameAvailability(

@@ -29,20 +29,26 @@ public enum RoundRobinSelectionError: Error, Equatable, LocalizedError {
 public struct RoundRobinSelectionService: Sendable {
     private struct Candidate: Sendable {
         let authProfileID: String
+        let commandProfile: AppConfig.OAuthCommandProfile
         let modelPrefix: String
     }
 
     private let stateSelector: any RoundRobinStateSelecting
+    private let claudeModelClient: any ClaudeModelListing
 
-    public init(stateSelector: any RoundRobinStateSelecting = RoundRobinStateStore()) {
+    public init(
+        stateSelector: any RoundRobinStateSelecting = RoundRobinStateStore(),
+        claudeModelClient: any ClaudeModelListing = ProxyModelClient()
+    ) {
         self.stateSelector = stateSelector
+        self.claudeModelClient = claudeModelClient
     }
 
     public func shellEnvironmentAssignments(
         profileID: String,
         config: AppConfig,
         authProfiles: [AuthProfile]
-    ) throws -> String {
+    ) async throws -> String {
         guard let profile = config.roundRobinProfiles.first(where: { $0.id == profileID }) else {
             throw RoundRobinSelectionError.profileNotFound(profileID)
         }
@@ -66,7 +72,27 @@ public struct RoundRobinSelectionService: Sendable {
             throw RoundRobinSelectionError.missingModelPrefix(selectedID)
         }
 
-        let models = modelIdentifiers(for: profile, prefix: selected.modelPrefix, fallbackCodex: config.ccodex)
+        let models: (opus: String, sonnet: String, haiku: String)
+        switch profile.provider {
+        case .claude:
+            let options = try await claudeModelClient.claudeModelOptions(
+                port: config.port,
+                modelPrefix: selected.modelPrefix
+            )
+            let resolved = try ClaudeModelResolver.resolve(
+                routing: selected.commandProfile.effectiveClaudeRouting,
+                options: options,
+                prefix: selected.modelPrefix
+            )
+            models = (resolved.opus, resolved.sonnet, resolved.haiku)
+        case .codex:
+            let codex = profile.codex ?? config.ccodex
+            models = (
+                OAuthModelDefaults.prefixedModel(codex.opus.modelIdentifier, prefix: selected.modelPrefix),
+                OAuthModelDefaults.prefixedModel(codex.sonnet.modelIdentifier, prefix: selected.modelPrefix),
+                OAuthModelDefaults.prefixedModel(codex.haiku.modelIdentifier, prefix: selected.modelPrefix)
+            )
+        }
         return [
             shellAssignment(name: "ANTHROPIC_DEFAULT_OPUS_MODEL", value: models.opus),
             shellAssignment(name: "ANTHROPIC_DEFAULT_SONNET_MODEL", value: models.sonnet),
@@ -91,7 +117,9 @@ public struct RoundRobinSelectionService: Sendable {
             }
 
             let matchingCommandProfiles = (commandProfilesByAuthID[authProfileID] ?? []).filter { commandProfile in
-                commandProfile.provider == profile.provider && commandProfile.isEnabled
+                commandProfile.provider == profile.provider
+                    && commandProfile.isEnabled
+                    && (profile.provider != .claude || commandProfile.connectionMode == .proxy)
             }
             guard !matchingCommandProfiles.isEmpty else { return nil }
             guard matchingCommandProfiles.count == 1, let commandProfile = matchingCommandProfiles.first else {
@@ -102,28 +130,10 @@ public struct RoundRobinSelectionService: Sendable {
                 ? (authProfile.prefix ?? "")
                 : commandProfile.modelPrefix
             guard !prefix.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-            return Candidate(authProfileID: authProfileID, modelPrefix: prefix)
-        }
-    }
-
-    private func modelIdentifiers(
-        for profile: AppConfig.RoundRobinProfile,
-        prefix: String,
-        fallbackCodex: AppConfig.Codex
-    ) -> (opus: String, sonnet: String, haiku: String) {
-        switch profile.provider {
-        case .claude:
-            return (
-                OAuthModelDefaults.prefixedModel(OAuthModelDefaults.claudeOpusModel, prefix: prefix),
-                OAuthModelDefaults.prefixedModel(OAuthModelDefaults.claudeSonnetModel, prefix: prefix),
-                OAuthModelDefaults.prefixedModel(OAuthModelDefaults.claudeHaikuModel, prefix: prefix)
-            )
-        case .codex:
-            let codex = profile.codex ?? fallbackCodex
-            return (
-                OAuthModelDefaults.prefixedModel(codex.opus.modelIdentifier, prefix: prefix),
-                OAuthModelDefaults.prefixedModel(codex.sonnet.modelIdentifier, prefix: prefix),
-                OAuthModelDefaults.prefixedModel(codex.haiku.modelIdentifier, prefix: prefix)
+            return Candidate(
+                authProfileID: authProfileID,
+                commandProfile: commandProfile,
+                modelPrefix: prefix
             )
         }
     }

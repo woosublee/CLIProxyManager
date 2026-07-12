@@ -6,9 +6,17 @@ struct AutomaticShellInstallService: Sendable {
         var claudeOAuth: Bool
         var codex: Bool
         var claudeAPI: Bool
+        var codexAPI: Bool
 
-        static let none = EnabledFunctions(claudeOAuth: false, codex: false, claudeAPI: false)
-        static let allOAuth = EnabledFunctions(claudeOAuth: true, codex: true, claudeAPI: false)
+        init(claudeOAuth: Bool, codex: Bool, claudeAPI: Bool, codexAPI: Bool = false) {
+            self.claudeOAuth = claudeOAuth
+            self.codex = codex
+            self.claudeAPI = claudeAPI
+            self.codexAPI = codexAPI
+        }
+
+        static let none = EnabledFunctions(claudeOAuth: false, codex: false, claudeAPI: false, codexAPI: false)
+        static let allOAuth = EnabledFunctions(claudeOAuth: true, codex: true, claudeAPI: false, codexAPI: false)
     }
 
     private let installer: any ShellFunctionInstalling
@@ -18,7 +26,7 @@ struct AutomaticShellInstallService: Sendable {
 
     init(
         installer: any ShellFunctionInstalling,
-        secretStore: any SecretStore = KeychainSecretStore(),
+        secretStore: any SecretStore = FileSecretStore(),
         helperCommand: String = "/usr/local/bin/cliproxy-manager",
         isEnabled: Bool = true
     ) {
@@ -28,8 +36,15 @@ struct AutomaticShellInstallService: Sendable {
         self.isEnabled = isEnabled
     }
 
-    static func runtimeDefault(installer: any ShellFunctionInstalling) -> AutomaticShellInstallService {
-        AutomaticShellInstallService(installer: installer, helperCommand: resolvedDefaultHelperCommand())
+    static func runtimeDefault(
+        installer: any ShellFunctionInstalling,
+        secretStore: any SecretStore = FileSecretStore()
+    ) -> AutomaticShellInstallService {
+        AutomaticShellInstallService(
+            installer: installer,
+            secretStore: secretStore,
+            helperCommand: resolvedDefaultHelperCommand()
+        )
     }
 
     static func resolvedDefaultHelperCommand(
@@ -69,18 +84,23 @@ struct AutomaticShellInstallService: Sendable {
         let includeCodex = shouldIncludeOAuth(provider: .codex, config: config, enabled: enabledFunctions.codex)
         let includeClaudeAPI = try enabledFunctions.claudeAPI
             && !config.commands.ccapi.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && hasClaudeAPIKey()
+            && hasAPIKey(.claudeAPIKey)
+        let includeCodexAPI = try enabledFunctions.codexAPI
+            && !config.commands.ccodexapi.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && hasAPIKey(.codexAPIKey)
         let script = try ShellFunctionRenderer(
             config: config,
             helperCommand: helperCommand ?? defaultHelperCommand,
             enabledFunctions: ShellFunctionRenderer.EnabledFunctions(
                 claudeOAuth: includeClaudeOAuth,
                 codex: includeCodex,
-                claudeAPI: includeClaudeAPI
+                claudeAPI: includeClaudeAPI,
+                codexAPI: includeCodexAPI
             )
         ).render()
         var functionNames = oauthFunctionNames(config: config, includeClaudeOAuth: includeClaudeOAuth, includeCodex: includeCodex)
         if includeClaudeAPI { functionNames.append(config.commands.ccapi) }
+        if includeCodexAPI { functionNames.append(config.commands.ccodexapi) }
         try installer.install(functionScript: script, functionNames: functionNames)
     }
 
@@ -133,9 +153,9 @@ struct AutomaticShellInstallService: Sendable {
         return names
     }
 
-    private func hasClaudeAPIKey() throws -> Bool {
+    private func hasAPIKey(_ key: SecretKey) throws -> Bool {
         do {
-            return try !secretStore.get(.claudeAPIKey).isEmpty
+            return try !secretStore.get(key).isEmpty
         } catch SecretStoreError.missingSecret {
             return false
         }
