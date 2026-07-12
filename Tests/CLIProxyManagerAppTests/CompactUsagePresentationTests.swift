@@ -88,4 +88,14 @@ final class CompactUsagePresentationTests: XCTestCase {
             .warning(message: "Credential needs attention. Showing usage last updated 12 minutes ago.")
         )
     }
+
+    func testIndicatorsExposeStableSymbolsAndMessages() {
+        let warning = CompactUsageIndicator.warning(message: "Needs attention")
+        let loading = CompactUsageIndicator.loading(message: "Loading")
+
+        XCTAssertEqual(warning.symbolName, "exclamationmark.triangle.fill")
+        XCTAssertEqual(warning.message, "Needs attention")
+        XCTAssertEqual(loading.symbolName, "clock.arrow.circlepath")
+        XCTAssertEqual(loading.message, "Loading")
+    }
 }

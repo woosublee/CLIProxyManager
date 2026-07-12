@@ -3,8 +3,33 @@ import SwiftUI
 
 struct UsageOverlayView: View {
     @ObservedObject var viewModel: DashboardViewModel
+    @ObservedObject var presentationState: UsageOverlayPresentationState
+    var onToggleDisplayMode: () -> Void = {}
     var onClose: () -> Void = {}
     @State private var refreshStatusReferenceDate = Date()
+
+    init(
+        viewModel: DashboardViewModel,
+        presentationState: UsageOverlayPresentationState,
+        onToggleDisplayMode: @escaping () -> Void = {},
+        onClose: @escaping () -> Void = {}
+    ) {
+        self.viewModel = viewModel
+        self.presentationState = presentationState
+        self.onToggleDisplayMode = onToggleDisplayMode
+        self.onClose = onClose
+    }
+
+    init(
+        viewModel: DashboardViewModel,
+        onClose: @escaping () -> Void = {}
+    ) {
+        self.init(
+            viewModel: viewModel,
+            presentationState: UsageOverlayPresentationState(displayMode: .expanded),
+            onClose: onClose
+        )
+    }
 
     private var providers: [MenuBarConnectedProvider] {
         MenuBarStatusSnapshot(
@@ -16,28 +41,36 @@ struct UsageOverlayView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            header
+        VStack(alignment: .leading, spacing: presentationState.displayMode == .expanded ? 12 : 4) {
+            UsageOverlayChrome(
+                displayMode: presentationState.displayMode,
+                onToggleDisplayMode: onToggleDisplayMode,
+                onClose: onClose
+            )
 
-            if providers.isEmpty {
-                Text("No connected accounts")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 140, alignment: .center)
-            } else {
-                VStack(alignment: .leading, spacing: 14) {
-                    ForEach(providers) { provider in
-                        UsageOverlayAccountView(provider: provider)
-                    }
-                }
+            switch presentationState.displayMode {
+            case .expanded:
+                ExpandedUsageOverlayContent(
+                    viewModel: viewModel,
+                    providers: providers,
+                    refreshStatus: refreshStatus
+                )
+                .transition(.opacity)
+            case .compact:
+                CompactUsageOverlayView(
+                    providers: providers,
+                    maximumAccountHeight: presentationState.compactAccountMaximumHeight
+                )
+                .transition(.opacity)
             }
         }
-        .padding(16)
-        .frame(width: AppWindowMetrics.usageOverlayWidth, alignment: .top)
+        .padding(presentationState.displayMode == .expanded ? 16 : 10)
+        .frame(width: overlayWidth, alignment: .top)
         .fixedSize(horizontal: false, vertical: true)
+        .animation(.easeOut(duration: 0.12), value: presentationState.displayMode)
         .background(.regularMaterial.opacity(viewModel.config.usageOverlay.backgroundOpacity))
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: presentationState.displayMode == .expanded ? 14 : 18, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: presentationState.displayMode == .expanded ? 14 : 18, style: .continuous))
         .gesture(WindowDragGesture())
         .allowsWindowActivationEvents(true)
         .task { await viewModel.refresh() }
@@ -49,21 +82,71 @@ struct UsageOverlayView: View {
         }
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Spacer()
-                Button(action: onClose) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .semibold))
-                        .frame(width: 20, height: 20)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .accessibilityLabel("Hide usage window")
-            }
-            .frame(height: 20)
+    private var overlayWidth: CGFloat {
+        presentationState.displayMode == .expanded
+            ? AppWindowMetrics.usageOverlayExpandedWidth
+            : AppWindowMetrics.usageOverlayCompactWidth
+    }
 
+    private var refreshStatus: String {
+        if viewModel.isSubscriptionUsageRefreshInProgress {
+            return "REFRESHING"
+        }
+        guard let refreshedAt = viewModel.lastSuccessfulSubscriptionUsageRefreshAt else {
+            return "NOT YET REFRESHED"
+        }
+        let minutes = max(0, Int(refreshStatusReferenceDate.timeIntervalSince(refreshedAt) / 60))
+        return minutes == 0 ? "UPDATED NOW" : "UPDATED \(minutes)M AGO"
+    }
+}
+
+private struct UsageOverlayChrome: View {
+    let displayMode: AppConfig.UsageOverlay.DisplayMode
+    let onToggleDisplayMode: () -> Void
+    let onClose: () -> Void
+
+    var body: some View {
+        HStack(spacing: 2) {
+            Spacer()
+            chromeButton(
+                symbol: displayMode.toggleSymbolName,
+                accessibilityLabel: displayMode.toggleAccessibilityLabel,
+                action: onToggleDisplayMode
+            )
+            chromeButton(
+                symbol: "xmark",
+                accessibilityLabel: "Hide usage window",
+                action: onClose
+            )
+        }
+        .frame(height: 24)
+    }
+
+    private func chromeButton(
+        symbol: String,
+        accessibilityLabel: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 10, weight: .semibold))
+                .frame(width: 24, height: 24)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .accessibilityLabel(accessibilityLabel)
+        .help(accessibilityLabel)
+    }
+}
+
+private struct ExpandedUsageOverlayContent: View {
+    @ObservedObject var viewModel: DashboardViewModel
+    let providers: [MenuBarConnectedProvider]
+    let refreshStatus: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Subscription Usage")
@@ -82,23 +165,26 @@ struct UsageOverlayView: View {
                 .buttonStyle(.plain)
                 .disabled(!viewModel.canRefreshSubscriptionUsage || viewModel.isSubscriptionUsageRefreshInProgress)
                 .opacity(viewModel.canRefreshSubscriptionUsage ? 1 : 0.45)
+                .accessibilityLabel("Reload subscription usage")
+            }
+
+            if providers.isEmpty {
+                Text("No connected accounts")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 140, alignment: .center)
+            } else {
+                VStack(alignment: .leading, spacing: 14) {
+                    ForEach(providers) { provider in
+                        ExpandedUsageOverlayAccountView(provider: provider)
+                    }
+                }
             }
         }
     }
-
-    private var refreshStatus: String {
-        if viewModel.isSubscriptionUsageRefreshInProgress {
-            return "REFRESHING"
-        }
-        guard let refreshedAt = viewModel.lastSuccessfulSubscriptionUsageRefreshAt else {
-            return "NOT YET REFRESHED"
-        }
-        let minutes = max(0, Int(refreshStatusReferenceDate.timeIntervalSince(refreshedAt) / 60))
-        return minutes == 0 ? "UPDATED NOW" : "UPDATED \(minutes)M AGO"
-    }
 }
 
-private struct UsageOverlayAccountView: View {
+private struct ExpandedUsageOverlayAccountView: View {
     let provider: MenuBarConnectedProvider
 
     var body: some View {
@@ -112,7 +198,6 @@ private struct UsageOverlayAccountView: View {
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(.tertiary)
             }
-
             usageContent
         }
     }
@@ -162,14 +247,14 @@ private struct UsageOverlayAccountView: View {
         } else {
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(snapshot.windows) { window in
-                    UsageOverlayProgressRow(window: window)
+                    ExpandedUsageOverlayProgressRow(window: window)
                 }
             }
         }
     }
 }
 
-private struct UsageOverlayProgressRow: View {
+private struct ExpandedUsageOverlayProgressRow: View {
     let window: UsageWindow
 
     var body: some View {
