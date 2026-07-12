@@ -23,4 +23,18 @@ final class UsageOverlayPresentationStateTests: XCTestCase {
         XCTAssertEqual(state.displayMode, .compact)
         XCTAssertEqual(state.compactAccountMaximumHeight, 420)
     }
+
+    func testModeAnimationPolicyDisablesAnimationForReduceMotion() {
+        XCTAssertNil(usageOverlayModeAnimation(reduceMotion: true))
+        XCTAssertNotNil(usageOverlayModeAnimation(reduceMotion: false))
+    }
+
+    func testCompactMeasurementRequestsResizeOnlyForNewPositiveHeight() {
+        var state = CompactUsageMeasurementState()
+
+        XCTAssertFalse(state.record(height: 0))
+        XCTAssertTrue(state.record(height: 180))
+        XCTAssertFalse(state.record(height: 180))
+        XCTAssertTrue(state.record(height: 220))
+    }
 }

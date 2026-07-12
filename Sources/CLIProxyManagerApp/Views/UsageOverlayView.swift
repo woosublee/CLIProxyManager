@@ -5,18 +5,22 @@ struct UsageOverlayView: View {
     @ObservedObject var viewModel: DashboardViewModel
     @ObservedObject var presentationState: UsageOverlayPresentationState
     var onToggleDisplayMode: () -> Void = {}
+    var onContentSizeInvalidated: () -> Void = {}
     var onClose: () -> Void = {}
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var refreshStatusReferenceDate = Date()
 
     init(
         viewModel: DashboardViewModel,
         presentationState: UsageOverlayPresentationState,
         onToggleDisplayMode: @escaping () -> Void = {},
+        onContentSizeInvalidated: @escaping () -> Void = {},
         onClose: @escaping () -> Void = {}
     ) {
         self.viewModel = viewModel
         self.presentationState = presentationState
         self.onToggleDisplayMode = onToggleDisplayMode
+        self.onContentSizeInvalidated = onContentSizeInvalidated
         self.onClose = onClose
     }
 
@@ -59,7 +63,8 @@ struct UsageOverlayView: View {
             case .compact:
                 CompactUsageOverlayView(
                     providers: providers,
-                    maximumAccountHeight: presentationState.compactAccountMaximumHeight
+                    maximumAccountHeight: presentationState.compactAccountMaximumHeight,
+                    onMeasurementChange: onContentSizeInvalidated
                 )
                 .transition(.opacity)
             }
@@ -67,7 +72,7 @@ struct UsageOverlayView: View {
         .padding(presentationState.displayMode == .expanded ? 16 : 10)
         .frame(width: overlayWidth, alignment: .top)
         .fixedSize(horizontal: false, vertical: true)
-        .animation(.easeOut(duration: 0.12), value: presentationState.displayMode)
+        .animation(usageOverlayModeAnimation(reduceMotion: reduceMotion), value: presentationState.displayMode)
         .background(.regularMaterial.opacity(viewModel.config.usageOverlay.backgroundOpacity))
         .clipShape(RoundedRectangle(cornerRadius: presentationState.displayMode == .expanded ? 14 : 18, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: presentationState.displayMode == .expanded ? 14 : 18, style: .continuous))

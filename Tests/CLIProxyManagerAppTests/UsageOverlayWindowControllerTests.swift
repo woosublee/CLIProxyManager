@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import XCTest
 @testable import CLIProxyManagerApp
 @testable import CLIProxyManagerCore
@@ -189,6 +190,75 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         XCTAssertEqual(panel.frame.maxX, firstAnchor.x)
         XCTAssertEqual(panel.frame.maxY, firstAnchor.y)
         XCTAssertEqual(panel.frame.height, 420)
+    }
+
+    func testFailedPersistenceIgnoresDeferredTargetAndRollbackEmissions() async {
+        let subject = PassthroughSubject<AppConfig.UsageOverlay, Never>()
+        let panel = makePanel(x: 500, y: 400, width: 300, height: 260)
+        let controller = UsageOverlayWindowController(
+            panel: panel,
+            initialDisplayMode: .expanded,
+            persistDisplayMode: { target in
+                subject.send(.init(isVisible: true, displayMode: target))
+                subject.send(.init(isVisible: true, displayMode: .expanded))
+                return false
+            },
+            usageOverlayPublisher: subject.eraseToAnyPublisher(),
+            shouldReduceMotion: { true },
+            visibleFrameProvider: visibleFrame
+        )
+
+        controller.toggleDisplayMode()
+        await drainMainQueue()
+
+        XCTAssertEqual(controller.displayMode, .compact)
+    }
+
+    func testModeTransitionCoordinatorPreservesAnimationAcrossOrdinaryResizeRequests() {
+        var coordinator = UsageOverlayResizeCoordinator()
+        coordinator.beginModeTransition()
+
+        XCTAssertTrue(coordinator.requestResize(animated: true))
+        XCTAssertFalse(coordinator.requestResize(animated: false))
+        XCTAssertTrue(coordinator.consumeResizeAnimation())
+    }
+
+    func testToggleKeepsFrameUnchangedUntilScheduledResizeUsesLayoutTarget() {
+        let panel = makePanel(x: 500, y: 400, width: 300, height: 260)
+        let original = panel.frame
+        let controller = UsageOverlayWindowController(
+            panel: panel,
+            initialDisplayMode: .expanded,
+            persistDisplayMode: { _ in true },
+            shouldReduceMotion: { true },
+            visibleFrameProvider: visibleFrame
+        )
+
+        controller.toggleDisplayMode()
+
+        XCTAssertEqual(panel.frame, original)
+    }
+
+    func testCompactResizeClampsToScreenAndKeepsSafeRightTopAnchor() {
+        let panel = makePanel(x: 1390, y: 850, width: 300, height: 260)
+        let controller = makeCompactController(panel: panel)
+
+        controller.updateContentSize(CGSize(width: 108, height: 420), animated: true)
+
+        XCTAssertEqual(panel.frame.maxX, 1424)
+        XCTAssertEqual(panel.frame.maxY, 884)
+        XCTAssertGreaterThanOrEqual(panel.frame.minX, 16)
+        XCTAssertGreaterThanOrEqual(panel.frame.minY, 16)
+    }
+
+    private func drainMainQueue() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async {
+                DispatchQueue.main.async {
+                    continuation.resume()
+                }
+            }
+        }
     }
 
     private func makePanel(

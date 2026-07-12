@@ -1,6 +1,7 @@
 import CLIProxyManagerCore
 import Combine
 import CoreGraphics
+import SwiftUI
 
 @MainActor
 final class UsageOverlayPresentationState: ObservableObject {
@@ -13,6 +14,20 @@ final class UsageOverlayPresentationState: ObservableObject {
     ) {
         self.displayMode = displayMode
         self.compactAccountMaximumHeight = compactAccountMaximumHeight
+    }
+}
+
+func usageOverlayModeAnimation(reduceMotion: Bool) -> Animation? {
+    reduceMotion ? nil : .easeOut(duration: 0.12)
+}
+
+struct CompactUsageMeasurementState {
+    private(set) var height: CGFloat = 0
+
+    mutating func record(height newHeight: CGFloat) -> Bool {
+        guard newHeight > 0, abs(newHeight - height) > 0.5 else { return false }
+        height = newHeight
+        return true
     }
 }
 

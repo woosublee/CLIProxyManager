@@ -4,7 +4,9 @@ import SwiftUI
 struct CompactUsageOverlayView: View {
     let providers: [MenuBarConnectedProvider]
     let maximumAccountHeight: CGFloat
+    var onMeasurementChange: () -> Void = {}
     @State private var naturalAccountHeight: CGFloat = 1
+    @State private var measurementState = CompactUsageMeasurementState()
 
     var body: some View {
         Group {
@@ -41,8 +43,12 @@ struct CompactUsageOverlayView: View {
                     .scrollDisabled(!needsScrolling)
                     .frame(height: viewportHeight)
                 }
-                .onPreferenceChange(CompactAccountHeightPreferenceKey.self) {
-                    naturalAccountHeight = max(1, $0)
+                .onPreferenceChange(CompactAccountHeightPreferenceKey.self) { height in
+                    let measuredHeight = max(1, height)
+                    naturalAccountHeight = measuredHeight
+                    if measurementState.record(height: measuredHeight) {
+                        onMeasurementChange()
+                    }
                 }
             }
         }

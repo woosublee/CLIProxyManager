@@ -4,6 +4,29 @@ import Combine
 import QuartzCore
 import SwiftUI
 
+struct UsageOverlayResizeCoordinator {
+    private var pendingAnimation = false
+    private var resizeScheduled = false
+
+    mutating func beginModeTransition() {
+        pendingAnimation = true
+    }
+
+    mutating func requestResize(animated: Bool) -> Bool {
+        pendingAnimation = pendingAnimation || animated
+        guard !resizeScheduled else { return false }
+        resizeScheduled = true
+        return true
+    }
+
+    mutating func consumeResizeAnimation() -> Bool {
+        resizeScheduled = false
+        let animated = pendingAnimation
+        pendingAnimation = false
+        return animated
+    }
+}
+
 @MainActor
 final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDelegate {
     private let panel: NSPanel
@@ -11,8 +34,16 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     private let persistDisplayMode: (AppConfig.UsageOverlay.DisplayMode) -> Bool
     private let shouldReduceMotion: () -> Bool
     private let visibleFrameProvider: () -> CGRect?
+    private struct PersistenceTransaction {
+        let target: AppConfig.UsageOverlay.DisplayMode
+        let original: AppConfig.UsageOverlay.DisplayMode
+        var didObserveTarget = false
+        var didObserveRollback = false
+    }
+
     private var failedPersistenceOverride: AppConfig.UsageOverlay.DisplayMode?
-    private var isApplyingLocalModePersistence = false
+    private var persistenceTransaction: PersistenceTransaction?
+    private var resizeCoordinator = UsageOverlayResizeCoordinator()
     private var configObservation: AnyCancellable?
     private var contentObservation: AnyCancellable?
 
@@ -25,6 +56,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         viewModel: DashboardViewModel? = nil,
         initialDisplayMode: AppConfig.UsageOverlay.DisplayMode? = nil,
         persistDisplayMode: ((AppConfig.UsageOverlay.DisplayMode) -> Bool)? = nil,
+        usageOverlayPublisher: AnyPublisher<AppConfig.UsageOverlay, Never>? = nil,
         shouldReduceMotion: @escaping () -> Bool = {
             NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         },
@@ -57,7 +89,10 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             defer: false
         )
         super.init()
-        configurePanelAndContent(viewModel: viewModel)
+        configurePanelAndContent(
+            viewModel: viewModel,
+            usageOverlayPublisher: usageOverlayPublisher
+        )
         if let suppliedPanelFrame {
             self.panel.setFrame(suppliedPanelFrame, display: false)
         }
@@ -72,16 +107,17 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     }
 
     func toggleDisplayMode() {
-        let target = displayMode.opposite
-        failedPersistenceOverride = target
+        let original = displayMode
+        let target = original.opposite
         presentationState.displayMode = target
         updatePanelConstraints(for: target)
+        resizeCoordinator.beginModeTransition()
 
-        isApplyingLocalModePersistence = true
+        persistenceTransaction = PersistenceTransaction(target: target, original: original)
         let didPersist = persistDisplayMode(target)
-        isApplyingLocalModePersistence = false
-        if didPersist {
-            failedPersistenceOverride = nil
+        failedPersistenceOverride = didPersist ? nil : target
+        if persistenceTransaction?.didObserveRollback == true || !didPersist {
+            persistenceTransaction = nil
         }
 
         resizeToFittingContent(animated: true)
@@ -134,14 +170,21 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             window: panel,
             alwaysOnTop: preferences.alwaysOnTop
         )
-        if !isApplyingLocalModePersistence {
-            if preferences.displayMode == failedPersistenceOverride {
-                failedPersistenceOverride = nil
+        if var transaction = persistenceTransaction {
+            if preferences.displayMode == transaction.target, !transaction.didObserveTarget {
+                transaction.didObserveTarget = true
+                persistenceTransaction = transaction
+            } else if transaction.didObserveTarget,
+                      preferences.displayMode == transaction.original,
+                      !transaction.didObserveRollback {
+                transaction.didObserveRollback = true
+                persistenceTransaction = transaction
+            } else {
+                persistenceTransaction = nil
+                applyPersistedDisplayModeIfAllowed(preferences.displayMode)
             }
-            if failedPersistenceOverride == nil, presentationState.displayMode != preferences.displayMode {
-                presentationState.displayMode = preferences.displayMode
-                updatePanelConstraints(for: preferences.displayMode)
-            }
+        } else {
+            applyPersistedDisplayModeIfAllowed(preferences.displayMode)
         }
         if preferences.isVisible {
             restoreSavedFrameIfUsable()
@@ -159,7 +202,10 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         return false
     }
 
-    private func configurePanelAndContent(viewModel: DashboardViewModel?) {
+    private func configurePanelAndContent(
+        viewModel: DashboardViewModel?,
+        usageOverlayPublisher: AnyPublisher<AppConfig.UsageOverlay, Never>?
+    ) {
         panel.delegate = self
         panel.title = "Usage"
         panel.isReleasedWhenClosed = false
@@ -167,23 +213,28 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         panel.setFrameAutosaveName("usage-overlay")
         updatePanelConstraints(for: displayMode)
 
-        guard let viewModel else { return }
-        panel.contentView = NSHostingView(
-            rootView: UsageOverlayView(
-                viewModel: viewModel,
-                presentationState: presentationState,
-                onToggleDisplayMode: { [weak self] in self?.toggleDisplayMode() },
-                onClose: { [weak self] in self?.hideForCurrentSession() }
-            )
-        )
-        configObservation = viewModel.$config
-            .map(\.usageOverlay)
+        let publisher = usageOverlayPublisher
+            ?? viewModel?.$config.map(\.usageOverlay).eraseToAnyPublisher()
+        configObservation = publisher?
             .removeDuplicates()
             .sink { [weak self] preferences in
                 DispatchQueue.main.async {
                     self?.update(preferences)
                 }
             }
+
+        guard let viewModel else { return }
+        panel.contentView = NSHostingView(
+            rootView: UsageOverlayView(
+                viewModel: viewModel,
+                presentationState: presentationState,
+                onToggleDisplayMode: { [weak self] in self?.toggleDisplayMode() },
+                onContentSizeInvalidated: { [weak self] in
+                    self?.resizeToFittingContent(animated: false)
+                },
+                onClose: { [weak self] in self?.hideForCurrentSession() }
+            )
+        )
         contentObservation = viewModel.objectWillChange
             .sink { [weak self] in
                 DispatchQueue.main.async {
@@ -201,29 +252,25 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         }
     }
 
+    private func applyPersistedDisplayModeIfAllowed(_ mode: AppConfig.UsageOverlay.DisplayMode) {
+        guard failedPersistenceOverride == nil, presentationState.displayMode != mode else { return }
+        presentationState.displayMode = mode
+        updatePanelConstraints(for: mode)
+    }
+
     private func updatePanelConstraints(for mode: AppConfig.UsageOverlay.DisplayMode) {
-        let currentFrame = panel.frame
-        let width = mode == .expanded
-            ? AppWindowMetrics.usageOverlayExpandedWidth
-            : AppWindowMetrics.usageOverlayCompactWidth
         let visibleHeight = currentVisibleFrame()?.height ?? AppWindowMetrics.usageOverlayMaximumHeight
         let maximumHeight = min(
             AppWindowMetrics.usageOverlayMaximumHeight,
             max(72, visibleHeight - AppWindowMetrics.usageOverlayScreenMargin * 2)
         )
-        let minimumHeight = mode == .expanded ? AppWindowMetrics.usageOverlayExpandedMinimumHeight : 72
 
-        panel.contentMinSize = CGSize(width: width, height: minimumHeight)
-        panel.contentMaxSize = CGSize(width: width, height: maximumHeight)
-        let preservedHeight = min(max(currentFrame.height, minimumHeight), maximumHeight)
-        panel.setFrame(
-            CGRect(
-                x: currentFrame.maxX - width,
-                y: currentFrame.maxY - preservedHeight,
-                width: width,
-                height: preservedHeight
-            ),
-            display: false
+        // NSPanel applies width constraints immediately. Keep the current frame untouched so
+        // the single layout target owns the visible width/height transition.
+        panel.contentMinSize = CGSize(width: 1, height: 1)
+        panel.contentMaxSize = CGSize(
+            width: max(AppWindowMetrics.usageOverlayExpandedWidth, AppWindowMetrics.usageOverlayCompactWidth),
+            height: maximumHeight
         )
         presentationState.compactAccountMaximumHeight = max(72, maximumHeight - 52)
     }
@@ -235,9 +282,12 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     }
 
     private func resizeToFittingContent(animated: Bool) {
+        guard resizeCoordinator.requestResize(animated: animated) else { return }
         DispatchQueue.main.async { [weak self] in
-            guard let self, let contentView = self.panel.contentView else { return }
-            self.updateContentSize(contentView.fittingSize, animated: animated)
+            guard let self else { return }
+            let shouldAnimate = self.resizeCoordinator.consumeResizeAnimation()
+            guard let contentView = self.panel.contentView else { return }
+            self.updateContentSize(contentView.fittingSize, animated: shouldAnimate)
         }
     }
 }
