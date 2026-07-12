@@ -1492,20 +1492,25 @@ final class DashboardViewModel: ObservableObject {
 
         codexModelLoadingState = .startingServer
         do {
-            try await prepareModelServer()
+            guard try await prepareModelServer() else {
+                codexModelLoadingState = .idle
+                return
+            }
             await loadCodexModels()
         } catch {
             handleCodexModelLoadingFailure(error)
         }
     }
 
-    private func prepareModelServer() async throws {
-        guard !serverControlState.isRunning else { return }
+    private func prepareModelServer() async throws -> Bool {
+        if serverControlState.isRunning { return true }
+        guard !isServerActionInProgress else { return false }
         isServerActionInProgress = true
         defer { isServerActionInProgress = false }
         try await proxyService.start(port: config.port)
         await refreshUntilServerIsReady()
         serverControlState = serverStatus.severity == .ready ? .running : .stopped
+        return serverControlState.isRunning
     }
 
     func loadCodexModels() async {
@@ -1562,8 +1567,8 @@ final class DashboardViewModel: ObservableObject {
 
     func prepareClaudeModels(for provider: ProviderRowState.ID) async {
         if provider == .claudeAPI {
-            guard availableClaudeAPIModelOptions.isEmpty else { return }
-            try? await prepareModelServer()
+            guard availableClaudeAPIModelOptions.isEmpty,
+                  (try? await prepareModelServer()) == true else { return }
             _ = try? await claudeAPIModels()
             return
         }
@@ -1571,8 +1576,8 @@ final class DashboardViewModel: ObservableObject {
         guard availableClaudeModelOptionsByProvider[provider]?.isEmpty != false,
               config.oauthCommandProfiles.contains(where: {
                   $0.id == provider.rawValue && $0.provider == .claude && $0.connectionMode == .proxy
-              }) else { return }
-        try? await prepareModelServer()
+              }),
+              (try? await prepareModelServer()) == true else { return }
         _ = try? await claudeModels(for: provider)
     }
 

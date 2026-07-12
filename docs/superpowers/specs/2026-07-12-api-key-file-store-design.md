@@ -4,7 +4,7 @@
 
 API Key 기능을 기존 OAuth 설정 흐름과 일관되게 마무리한다.
 
-- Claude API Key: 모델 설정 없이 connection mode와 명령별 권한 건너뛰기만 설정한다.
+- Claude API Key: CLIProxyAPI 경로에서 Automatic 또는 역할별 명시 모델을 선택하는 Claude 모델 라우팅과 명령별 권한 건너뛰기를 설정한다.
 - OpenAI API Key: Codex OAuth의 모델 매핑과 명령별 권한 건너뛰기를 재사용한다.
 - API Key는 macOS Keychain 대신 로컬 파일에 저장한다.
 
