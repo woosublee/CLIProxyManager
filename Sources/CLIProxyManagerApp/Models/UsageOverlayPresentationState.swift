@@ -24,6 +24,14 @@ func usageOverlayModeAnimation(reduceMotion: Bool) -> Animation? {
 struct CompactUsageMeasurementState {
     static let estimatedHeight: CGFloat = 120
     private(set) var height: CGFloat = 0
+    private var providerIDs: [String] = []
+
+    mutating func updateProviderIDs(_ newProviderIDs: [String]) -> Bool {
+        guard providerIDs != newProviderIDs else { return false }
+        providerIDs = newProviderIDs
+        height = 0
+        return true
+    }
 
     mutating func record(height newHeight: CGFloat) -> Bool {
         guard newHeight > 0, abs(newHeight - height) > 0.5 else { return false }

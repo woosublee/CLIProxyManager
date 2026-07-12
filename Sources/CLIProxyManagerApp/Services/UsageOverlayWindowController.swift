@@ -72,6 +72,8 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     private let shouldReduceMotion: () -> Bool
     private let visibleFrameProvider: () -> CGRect?
     private let screenVisibleFrameProvider: () -> CGRect?
+    private let deferredScreenResizeScheduler: (@escaping () -> Void) -> Void
+    private let fittingSizeProvider: (() -> CGSize)?
     private struct PersistenceTransaction {
         let generation: Int
         let target: AppConfig.UsageOverlay.DisplayMode
@@ -90,6 +92,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     private var failedPersistenceOverride: FailedPersistenceOverride?
     private var persistenceTransaction: PersistenceTransaction?
     private var resizeCoordinator = UsageOverlayResizeCoordinator()
+    private var screenGeometryGeneration = 0
     private var configObservation: AnyCancellable?
     private var contentObservation: AnyCancellable?
     private var screenParametersObservation: NSObjectProtocol?
@@ -109,7 +112,9 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         },
         visibleFrameProvider: (() -> CGRect?)? = nil,
-        screenVisibleFrameProvider: (() -> CGRect?)? = nil
+        screenVisibleFrameProvider: (() -> CGRect?)? = nil,
+        deferredScreenResizeScheduler: ((@escaping () -> Void) -> Void)? = nil,
+        fittingSizeProvider: (() -> CGSize)? = nil
     ) {
         let suppliedPanelFrame = panel?.frame
         let mode = initialDisplayMode ?? viewModel?.config.usageOverlay.displayMode ?? .expanded
@@ -117,6 +122,12 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         self.shouldReduceMotion = shouldReduceMotion
         self.visibleFrameProvider = visibleFrameProvider ?? { nil }
         self.screenVisibleFrameProvider = screenVisibleFrameProvider ?? { nil }
+        self.deferredScreenResizeScheduler = deferredScreenResizeScheduler ?? { action in
+            DispatchQueue.main.async {
+                action()
+            }
+        }
+        self.fittingSizeProvider = fittingSizeProvider
         self.persistDisplayMode = persistDisplayMode ?? { [weak viewModel] mode in
             guard let viewModel else { return true }
             var usageOverlay = viewModel.config.usageOverlay
@@ -301,10 +312,14 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
 
     func handleScreenGeometryChange() {
         updatePanelConstraints(for: displayMode)
-        if let contentView = panel.contentView {
-            updateContentSize(contentView.fittingSize, animated: false)
-        } else {
-            updateContentSize(panel.frame.size, animated: false)
+        screenGeometryGeneration += 1
+        let generation = screenGeometryGeneration
+        deferredScreenResizeScheduler { [weak self] in
+            guard let self, generation == self.screenGeometryGeneration else { return }
+            let fittingSize = self.fittingSizeProvider?()
+                ?? self.panel.contentView?.fittingSize
+                ?? self.panel.frame.size
+            self.updateContentSize(fittingSize, animated: false)
         }
     }
 

@@ -51,4 +51,32 @@ final class UsageOverlayPresentationStateTests: XCTestCase {
         XCTAssertEqual(state.viewportHeight(maximumHeight: 500), 220)
         XCTAssertEqual(state.viewportHeight(maximumHeight: 180), 180)
     }
+
+    func testProviderIdentityChangeResetsPreviousMeasurement() {
+        var state = CompactUsageMeasurementState()
+        XCTAssertTrue(state.updateProviderIDs(["one", "two"]))
+        XCTAssertTrue(state.record(height: 600))
+
+        XCTAssertTrue(state.updateProviderIDs(["one"]))
+        XCTAssertEqual(state.height, 0)
+        XCTAssertEqual(state.viewportHeight(maximumHeight: 500), 120)
+    }
+
+    func testEmptyToProviderTransitionStartsUnmeasured() {
+        var state = CompactUsageMeasurementState()
+        XCTAssertFalse(state.updateProviderIDs([]))
+        XCTAssertTrue(state.record(height: 72))
+
+        XCTAssertTrue(state.updateProviderIDs(["one"]))
+        XCTAssertEqual(state.height, 0)
+    }
+
+    func testSameProviderIdentityDoesNotResetMeasurement() {
+        var state = CompactUsageMeasurementState()
+        XCTAssertTrue(state.updateProviderIDs(["one"]))
+        XCTAssertTrue(state.record(height: 220))
+
+        XCTAssertFalse(state.updateProviderIDs(["one"]))
+        XCTAssertEqual(state.height, 220)
+    }
 }

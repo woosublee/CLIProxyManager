@@ -370,6 +370,37 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         XCTAssertLessThanOrEqual(panel.frame.maxY, 484)
     }
 
+    func testScreenGeometryResizeDefersAndCoalescesToLatestGeneration() {
+        var callbacks: [() -> Void] = []
+        var fittingSizeReads = 0
+        var visibleFrame = CGRect(x: 0, y: 0, width: 800, height: 500)
+        let panel = makePanel(x: 600, y: 300, width: 108, height: 300)
+        let controller = UsageOverlayWindowController(
+            panel: panel,
+            initialDisplayMode: .compact,
+            shouldReduceMotion: { true },
+            visibleFrameProvider: { visibleFrame },
+            deferredScreenResizeScheduler: { callbacks.append($0) },
+            fittingSizeProvider: {
+                fittingSizeReads += 1
+                return CGSize(width: 108, height: visibleFrame.height - 100)
+            }
+        )
+
+        controller.handleScreenGeometryChange()
+        visibleFrame = CGRect(x: 0, y: 0, width: 1440, height: 900)
+        controller.handleScreenGeometryChange()
+
+        XCTAssertEqual(fittingSizeReads, 0)
+        XCTAssertEqual(callbacks.count, 2)
+
+        callbacks[0]()
+        XCTAssertEqual(fittingSizeReads, 0)
+        callbacks[1]()
+        XCTAssertEqual(fittingSizeReads, 1)
+        XCTAssertEqual(panel.frame.height, 720)
+    }
+
     func testNilVisibleFrameUsesCompactMetricsAndCurrentAnchor() {
         let panel = makePanel(x: 500, y: 400, width: 300, height: 260)
         let originalAnchor = CGPoint(x: panel.frame.maxX, y: panel.frame.maxY)

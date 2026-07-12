@@ -50,6 +50,15 @@ struct CompactUsageOverlayView: View {
                 }
             }
         }
+        .onChange(of: providerIDs, initial: true) { _, providerIDs in
+            if measurementState.updateProviderIDs(providerIDs) {
+                onMeasurementChange()
+            }
+        }
+    }
+
+    private var providerIDs: [String] {
+        providers.map(\.id.rawValue)
     }
 
     private var viewportHeight: CGFloat {
