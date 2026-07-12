@@ -43,16 +43,28 @@ final class SettingsNavigationTests: XCTestCase {
         XCTAssertEqual(ProviderSettingsSheetMetrics.codexHeight, 720)
     }
 
-    func testLegacyCodexModelsSheetPreservesFastModeCapability() {
-        let option = CodexModelOption(id: "gpt-5.5", supportsFastMode: true)
+    func testLegacyCodexModelsSheetPreservesFastModeThroughSaveNormalization() {
+        let supportedOption = CodexModelOption(id: "gpt-5.5", supportsFastMode: true)
+        let unsupportedOption = CodexModelOption(id: "custom-model", supportsFastMode: false)
         let sheet = ModelsSettingsSheet(
             config: .default,
-            availableModels: [option],
+            availableModels: [supportedOption, unsupportedOption],
             refreshModels: {},
             save: { _ in }
         )
+        let codex = AppConfig.Codex(
+            opus: .init(model: "gpt-5.5", reasoning: .medium, contextWindow: .auto, fastModeEnabled: true),
+            sonnet: .init(model: "custom-model", reasoning: .medium, contextWindow: .auto, fastModeEnabled: true),
+            haiku: .init(model: "gpt-5.5", reasoning: .medium, contextWindow: .auto, fastModeEnabled: false)
+        )
 
-        XCTAssertTrue(sheet.availableModels.first?.supportsFastMode == true)
+        let normalized = CodexRoleRoutingOptions.normalizedCodex(
+            codex,
+            options: sheet.availableModels
+        )
+
+        XCTAssertTrue(normalized.opus.fastModeEnabled)
+        XCTAssertFalse(normalized.sonnet.fastModeEnabled)
     }
 }
 
