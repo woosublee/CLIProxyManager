@@ -497,11 +497,23 @@ final class ShellFunctionRendererTests: XCTestCase {
     func testCodexAPICommandPrefixesFastAliasBeforeReasoning() throws {
         var config = configuredCommands()
         config.commands.ccodexapi = "ccodexapi"
-        config.codexAPI.codex.opus = .init(
-            model: "gpt-5.6-terra",
-            reasoning: .max,
-            contextWindow: .auto,
-            fastModeEnabled: true
+        config.codexAPI.codex = .init(
+            opus: .init(
+                model: "gpt-5.6-terra",
+                reasoning: .max,
+                contextWindow: .auto,
+                fastModeEnabled: true
+            ),
+            sonnet: .init(
+                model: "gpt-5.6-sol",
+                reasoning: .medium,
+                contextWindow: .auto
+            ),
+            haiku: .init(
+                model: "gpt-5.5",
+                reasoning: .auto,
+                contextWindow: .auto
+            )
         )
 
         let script = try ShellFunctionRenderer(
@@ -511,6 +523,8 @@ final class ShellFunctionRendererTests: XCTestCase {
         ).render()
 
         XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='cpm-codex-api/gpt-5.6-terra-cpm-fast(max)'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL='cpm-codex-api/gpt-5.6-sol(medium)'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL='cpm-codex-api/gpt-5.5'"))
     }
 
     func testCodexAPICommandUsesItsOwnRoutingAndSkipFlag() throws {
