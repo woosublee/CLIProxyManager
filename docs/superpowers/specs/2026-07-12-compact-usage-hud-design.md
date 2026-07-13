@@ -70,8 +70,8 @@ public struct UsageOverlay: Codable, Equatable, Sendable {
 정책은 다음과 같다.
 
 - 기존 설정 파일처럼 `displayMode`가 없으면 `.expanded`로 decode한다.
-- `UsageOverlayWindowController`는 `@Published private(set) var displayMode`로 현재 세션의 mode를 소유하며, 초기값은 저장된 `config.usageOverlay.displayMode`에서 가져온다.
-- `UsageOverlayView`는 controller의 session mode를 전달받아 렌더링한다. 저장 중 `DashboardViewModel.config`가 rollback되더라도 표시 중인 창이 반대로 되돌아가지 않게 persisted config와 session UI state를 분리한다.
+- `UsageOverlayPresentationState`가 `@Published var displayMode`로 현재 세션의 mode를 소유하며, 초기값은 저장된 `config.usageOverlay.displayMode`에서 가져온다. mode 변화를 관찰해야 하는 코드는 presentation state의 publisher를 구독한다.
+- `UsageOverlayWindowController`는 presentation state를 관리하고 현재 mode를 computed property로 노출한다. `UsageOverlayView`는 같은 presentation state를 관찰해 렌더링하며, 저장 중 `DashboardViewModel.config`가 rollback되더라도 표시 중인 창이 반대로 되돌아가지 않게 persisted config와 session UI state를 분리한다.
 - 사용자가 전환 버튼을 누르면 controller의 session mode와 화면 상태를 먼저 바꾸고 새 모드를 설정에 저장한다.
 - 저장에 실패하면 현재 세션의 화면 전환은 유지한다. 다음 실행에는 마지막으로 성공적으로 저장된 모드가 복원될 수 있으며, 오류는 기존 `saveSetting` 경로를 통해 `settingsMessage`에 전달한다.
 - 외부 설정 변경으로 저장 config의 mode가 바뀌면 전환 animation이 진행 중이지 않을 때 controller의 session mode와 동기화한다.

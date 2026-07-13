@@ -89,6 +89,27 @@ final class CompactUsagePresentationTests: XCTestCase {
         )
     }
 
+    func testStaleEmptySnapshotPreservesWarningInsteadOfGenericUnavailableState() {
+        let snapshot = SubscriptionUsageSnapshot(
+            profileID: "codex.json",
+            provider: .codex,
+            windows: [],
+            fetchedAt: Date(timeIntervalSince1970: 60)
+        )
+
+        let presentation = compactUsagePresentation(
+            for: .stale(snapshot, .credentialExpired),
+            now: Date(timeIntervalSince1970: 780)
+        )
+
+        XCTAssertEqual(presentation.rows, [])
+        XCTAssertEqual(presentation.placeholder, "—")
+        XCTAssertEqual(
+            presentation.indicator,
+            .warning(message: "Credential needs attention. Showing usage last updated 12 minutes ago.")
+        )
+    }
+
     func testIndicatorsExposeStableSymbolsAndMessages() {
         let warning = CompactUsageIndicator.warning(message: "Needs attention")
         let loading = CompactUsageIndicator.loading(message: "Loading")

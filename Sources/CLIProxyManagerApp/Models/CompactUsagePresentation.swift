@@ -99,10 +99,16 @@ private func compactSnapshotPresentation(
     now: Date
 ) -> CompactUsagePresentation {
     guard !snapshot.windows.isEmpty else {
-        return .placeholder(
-            "—",
-            indicator: .unavailable(message: "Usage details unavailable.")
-        )
+        let indicator = warning.map { issue in
+            CompactUsageIndicator.warning(
+                message: SubscriptionUsageWarningPresentation.message(
+                    issue: issue,
+                    lastUpdatedAt: snapshot.fetchedAt,
+                    now: now
+                )
+            )
+        } ?? .unavailable(message: "Usage details unavailable.")
+        return .placeholder("—", indicator: indicator)
     }
 
     let rows = snapshot.windows.map { window in
