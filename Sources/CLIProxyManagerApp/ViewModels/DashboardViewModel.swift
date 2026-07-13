@@ -753,6 +753,53 @@ final class DashboardViewModel: ObservableObject {
         settingsMessage = nil
     }
 
+    func canMoveAccountUp(_ id: ProviderRowState.ID) -> Bool {
+        guard let index = providerRows.firstIndex(where: { $0.id == id }) else { return false }
+        return index > providerRows.startIndex
+    }
+
+    func canMoveAccountDown(_ id: ProviderRowState.ID) -> Bool {
+        guard let index = providerRows.firstIndex(where: { $0.id == id }) else { return false }
+        return index < providerRows.index(before: providerRows.endIndex)
+    }
+
+    func moveAccountUp(_ id: ProviderRowState.ID) {
+        guard let index = providerRows.firstIndex(where: { $0.id == id }), index > 0 else { return }
+        moveAccount(id, before: providerRows[index - 1].id)
+    }
+
+    func moveAccountDown(_ id: ProviderRowState.ID) {
+        guard let index = providerRows.firstIndex(where: { $0.id == id }),
+              index + 1 < providerRows.count else { return }
+        let targetID = index + 2 < providerRows.count ? providerRows[index + 2].id : nil
+        moveAccount(id, before: targetID)
+    }
+
+    func moveAccount(
+        _ id: ProviderRowState.ID,
+        before targetID: ProviderRowState.ID?
+    ) {
+        let movedRows = AccountOrdering.moving(providerRows, id: id, before: targetID)
+        guard movedRows != providerRows else { return }
+
+        let oldRows = providerRows
+        let oldConfig = config
+        var updatedConfig = config
+        updatedConfig.accountOrder = movedRows.map(\.id.rawValue)
+
+        providerRows = movedRows
+        config = updatedConfig
+
+        do {
+            try configStore.save(updatedConfig)
+            lastPersistedConfig = updatedConfig
+        } catch {
+            providerRows = oldRows
+            config = oldConfig
+            settingsMessage = "Account order could not be saved: \(error.localizedDescription)"
+        }
+    }
+
     func startOAuthLogin(_ provider: ProviderRowState.ID) {
         startOAuthLogin(providerType: oauthProviderType(for: provider))
     }
@@ -1953,7 +2000,7 @@ final class DashboardViewModel: ObservableObject {
         let persistedConfig = preservingUnavailableRoundRobinProfiles
             ? updatedConfig
             : removingUnavailableRoundRobinProfiles(from: updatedConfig)
-        let updatedConfig = Self.persistedConfig(persistedConfig)
+        var updatedConfig = Self.persistedConfig(persistedConfig)
         if validateShellFunctions {
             let activeNames = activeFunctionNames(in: updatedConfig)
             try ShellCommandNameValidator.validate(activeNames)
@@ -1975,6 +2022,7 @@ final class DashboardViewModel: ObservableObject {
         cards = ProfileCard.makeDefaultCards(config: updatedConfig)
         rebuildOptionRows()
         rebuildProviderRows(claudeStatus: nil, codexStatus: nil)
+        updatedConfig = config
 
         var prefixRollbacks: [AuthProfilePrefixRollback] = []
         var didApplyShellInstall = false
@@ -2290,7 +2338,9 @@ final class DashboardViewModel: ObservableObject {
                 showsSubscriptionUsage: false
             ))
         }
-        providerRows = rows
+        let orderedRows = AccountOrdering.orderedRows(rows, storedIDs: config.accountOrder)
+        providerRows = orderedRows
+        config.accountOrder = orderedRows.map(\.id.rawValue)
     }
 
     private func rebuildOptionRows() {
