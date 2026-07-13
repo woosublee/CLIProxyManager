@@ -319,25 +319,41 @@ public struct AppConfig: Codable, Equatable, Sendable {
     }
 
     public struct UsageOverlay: Codable, Equatable, Sendable {
+        public enum DisplayMode: String, Codable, Equatable, Sendable {
+            case expanded
+            case compact
+        }
+
         public var isVisible: Bool
         public var alwaysOnTop: Bool
         public var backgroundOpacity: Double
+        public var displayMode: DisplayMode
 
-        public init(isVisible: Bool = false, alwaysOnTop: Bool = false, backgroundOpacity: Double = 0.9) {
+        public init(
+            isVisible: Bool = false,
+            alwaysOnTop: Bool = false,
+            backgroundOpacity: Double = 0.9,
+            displayMode: DisplayMode = .expanded
+        ) {
             self.isVisible = isVisible
             self.alwaysOnTop = alwaysOnTop
             self.backgroundOpacity = min(max(backgroundOpacity, 0.2), 1)
+            self.displayMode = displayMode
         }
 
         private enum CodingKeys: String, CodingKey {
-            case isVisible, alwaysOnTop, backgroundOpacity
+            case isVisible, alwaysOnTop, backgroundOpacity, displayMode
         }
 
         public init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             self.isVisible = try container.decodeIfPresent(Bool.self, forKey: .isVisible) ?? false
             self.alwaysOnTop = try container.decodeIfPresent(Bool.self, forKey: .alwaysOnTop) ?? false
-            self.backgroundOpacity = min(max(try container.decodeIfPresent(Double.self, forKey: .backgroundOpacity) ?? 0.9, 0.2), 1)
+            self.backgroundOpacity = min(
+                max(try container.decodeIfPresent(Double.self, forKey: .backgroundOpacity) ?? 0.9, 0.2),
+                1
+            )
+            self.displayMode = try container.decodeIfPresent(DisplayMode.self, forKey: .displayMode) ?? .expanded
         }
     }
 

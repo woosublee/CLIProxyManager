@@ -3,7 +3,7 @@ import CLIProxyManagerCore
 struct MenuBarConnectedProvider: Equatable, Identifiable {
     let id: ProviderRowState.ID
     let name: String           // Provider type, e.g. "Claude OAuth"
-    let displayName: String    // Account identifier — email when known, else provider name
+    let displayName: String    // Trimmed account nickname, or provider name fallback
     let functionName: String
     let connectionDetail: String
     let accountDetailHidden: Bool
@@ -11,7 +11,7 @@ struct MenuBarConnectedProvider: Equatable, Identifiable {
     let showsSubscriptionUsage: Bool
 
     var menuBarDisplayName: String {
-        accountDetailHidden ? name : displayName
+        displayName
     }
 
     var usageOverlayDisplayName: String {

@@ -38,6 +38,7 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
         XCTAssertEqual(snapshot.serverActionTitle, "Stop Server")
         XCTAssertEqual(snapshot.endpointTitle, "localhost:18317")
         XCTAssertEqual(snapshot.connectedProviders.map { $0.name }, ["Claude OAuth", "Codex OAuth"])
+        XCTAssertEqual(snapshot.connectedProviders.map { $0.menuBarDisplayName }, ["Claude OAuth", "Codex OAuth"])
         XCTAssertEqual(snapshot.connectedProviders.map { $0.functionName }, ["ccm", "ccmcodex"])
         XCTAssertEqual(snapshot.connectedProviders.map { $0.connectionDetail }, ["claude@example.com", "codex@example.com"])
     }
@@ -71,13 +72,14 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
             return XCTFail("Expected connected provider")
         }
         XCTAssertFalse(provider.accountDetailHidden)
+        XCTAssertEqual(provider.menuBarConnectionDetail, "claude@example.com")
         guard case let .available(usage) = provider.subscriptionUsageState else {
             return XCTFail("Expected subscription usage")
         }
         XCTAssertEqual(usage.windows.map(\.id), ["five_hour"])
     }
 
-    func testSnapshotHidesAccountIdentifiersWithoutHidingUsage() {
+    func testSnapshotKeepsNicknameVisibleWhileHidingConnectionDetail() {
         let snapshot = MenuBarStatusSnapshot(
             serverStatus: DiagnosticStatus(severity: .ready, title: "CLIProxyAPI Running", message: "Ready"),
             providers: [
@@ -103,7 +105,7 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
         )
 
         let provider = try! XCTUnwrap(snapshot.connectedProviders.first)
-        XCTAssertEqual(provider.menuBarDisplayName, "Claude OAuth")
+        XCTAssertEqual(provider.menuBarDisplayName, "Personal")
         XCTAssertEqual(provider.usageOverlayDisplayName, "Personal")
         XCTAssertNil(provider.menuBarConnectionDetail)
         guard case let .available(usage) = provider.subscriptionUsageState else {
@@ -229,7 +231,14 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
             showsSubscriptionUsage: true
         )
 
-        XCTAssertNil(usageOverlaySubscriptionUsageDisplayState(for: try XCTUnwrap(snapshot.connectedProviders.first)))
+        let provider = try XCTUnwrap(snapshot.connectedProviders.first)
+        XCTAssertEqual(
+            expandedUsageContentPresentation(
+                showsSubscriptionUsage: provider.showsSubscriptionUsage,
+                subscriptionUsageState: provider.subscriptionUsageState
+            ),
+            .headerOnly
+        )
     }
 
     func testUsageOverlaySnapshotUsesProviderCapabilityIndependentlyOfMenuBarPreference() throws {
@@ -445,7 +454,30 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
 
         XCTAssertEqual(snapshot.connectedProviders.map(\.id), [.claudeAPI])
         XCTAssertEqual(snapshot.connectedProviders.first?.displayName, "Work API")
+        XCTAssertEqual(snapshot.connectedProviders.first?.menuBarDisplayName, "Work API")
         XCTAssertEqual(snapshot.connectedProviders.first?.subscriptionUsageState, .disabled)
+        XCTAssertEqual(snapshot.connectedProviders.first?.showsSubscriptionUsage, false)
+    }
+
+    func testSnapshotPropagatesSubscriptionUsageCapabilityForOAuthAccounts() {
+        let snapshot = MenuBarStatusSnapshot(
+            serverStatus: DiagnosticStatus(severity: .ready, title: "CLIProxyAPI Running", message: "Ready"),
+            providers: [
+                ProviderRowState(
+                    id: .claude,
+                    name: "Claude OAuth",
+                    nickname: "Personal",
+                    functionName: "ccm",
+                    connectionTitle: "Connected",
+                    connectionDetail: "claude@example.com",
+                    isConnected: true,
+                    subscriptionUsageState: .disabled,
+                    showsSubscriptionUsage: true
+                )
+            ]
+        )
+
+        XCTAssertEqual(snapshot.connectedProviders.first?.showsSubscriptionUsage, true)
     }
 
     func testSnapshotShowsEmptyMessageWhenNoProviderIsConnected() {

@@ -32,6 +32,7 @@ final class AppConfigTests: XCTestCase {
         XCTAssertFalse(config.usageOverlay.isVisible)
         XCTAssertFalse(config.usageOverlay.alwaysOnTop)
         XCTAssertEqual(config.usageOverlay.backgroundOpacity, 0.9)
+        XCTAssertEqual(config.usageOverlay.displayMode, .expanded)
         XCTAssertFalse(config.roundRobinEnabled)
         XCTAssertEqual(config.roundRobinProfiles, [])
     }
@@ -70,6 +71,36 @@ final class AppConfigTests: XCTestCase {
             AppConfig.UsageOverlay(backgroundOpacity: 1.1).backgroundOpacity,
             1
         )
+    }
+
+    func testUsageOverlayDefaultsToExpandedDisplayMode() {
+        XCTAssertEqual(AppConfig.UsageOverlay().displayMode, .expanded)
+        XCTAssertEqual(AppConfig.default.usageOverlay.displayMode, .expanded)
+    }
+
+    func testUsageOverlayDisplayModeRoundTrips() throws {
+        let overlay = AppConfig.UsageOverlay(
+            isVisible: true,
+            alwaysOnTop: true,
+            backgroundOpacity: 0.45,
+            displayMode: .compact
+        )
+
+        let data = try JSONEncoder().encode(overlay)
+        let decoded = try JSONDecoder().decode(AppConfig.UsageOverlay.self, from: data)
+
+        XCTAssertEqual(decoded, overlay)
+        XCTAssertEqual(decoded.displayMode, .compact)
+    }
+
+    func testUsageOverlayMissingDisplayModeDecodesAsExpanded() throws {
+        let data = Data(#"{"isVisible":true,"alwaysOnTop":false,"backgroundOpacity":0.7}"#.utf8)
+
+        let decoded = try JSONDecoder().decode(AppConfig.UsageOverlay.self, from: data)
+
+        XCTAssertEqual(decoded.displayMode, .expanded)
+        XCTAssertTrue(decoded.isVisible)
+        XCTAssertEqual(decoded.backgroundOpacity, 0.7)
     }
 
     func testDecodedConfigPreservesSavedCommandNamesAndClaudeAPIModel() throws {
