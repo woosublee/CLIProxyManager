@@ -1354,6 +1354,45 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(proxyService.restartPorts, [config.port])
     }
 
+    func testPendingUpdateReadinessFailureDoesNotReportSuccess() async throws {
+        var config = AppConfig.default
+        config.commands.ccodex = "ccodex"
+        let proxyService = StubProxyServiceStarter()
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyHealthClient: ProxyHealthClient(
+                httpClient: StubHTTPClient(result: .failure(URLError(.cannotConnectToHost))),
+                timeout: 0.1
+            ),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            serverStatusRetryDelayNanoseconds: 0,
+            settingsMessageAutoClearDelayNanoseconds: 60_000_000_000
+        )
+        viewModel.serverControlState = .running
+        let sandbox = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DashboardPendingUpdateReadinessTests")
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: sandbox) }
+        let updateStore = DashboardUpdateBinaryStore()
+        let updateService = CLIProxyAPIUpdateService(
+            paths: ManagedPaths(rootDirectory: sandbox),
+            checker: DashboardUpdateChecker(),
+            store: updateStore
+        )
+
+        await viewModel.applyCLIProxyAPIPendingUpdate(using: updateService)
+
+        XCTAssertEqual(proxyService.restartPorts, [config.port])
+        XCTAssertEqual(viewModel.serverStatus.severity, .error)
+        XCTAssertTrue(viewModel.settingsMessage?.hasPrefix("CLIProxyAPI update failed:") == true)
+        XCTAssertNotEqual(viewModel.settingsMessage, "CLIProxyAPI binary updated. Restarting the app is not required.")
+    }
+
     func testPendingUpdateWaitsForConfigurationRestartThenPerformsRequiredRestartBeforeSuccess() async throws {
         var config = AppConfig.default
         config.commands.ccodex = "ccodex"
@@ -1406,7 +1445,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.settingsMessage, "CLIProxyAPI binary updated. Restarting the app is not required.")
     }
 
-    func testManualServerActionsAreIgnoredWhileConfigurationRestartIsInProgress() async throws {
+    func testManualStopQueuedDuringConfigurationRestartRunsAfterRestart() async throws {
         var config = AppConfig.default
         config.commands.ccodex = "ccodex"
         let proxyService = StubProxyServiceStarter(suspendedRestartCount: 1)
@@ -1429,12 +1468,48 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let reachedRestart = await proxyService.reachesRestartCount(1)
         XCTAssertTrue(reachedRestart)
 
-        await viewModel.stopServer()
-        await viewModel.restartServer()
+        let stopTask = Task { await viewModel.stopServer() }
+        for _ in 0..<20 { await Task.yield() }
 
         XCTAssertEqual(proxyService.stopCount, 0)
-        XCTAssertEqual(proxyService.restartPorts, [config.port])
         proxyService.releaseRestart(1)
+        await stopTask.value
+
+        XCTAssertEqual(proxyService.restartPorts, [config.port])
+        XCTAssertEqual(proxyService.stopCount, 1)
+    }
+
+    func testManualRestartQueuedDuringConfigurationRestartRunsAfterRestart() async throws {
+        var config = AppConfig.default
+        config.commands.ccodex = "ccodex"
+        let proxyService = StubProxyServiceStarter(suspendedRestartCount: 1)
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            serverStatusRetryDelayNanoseconds: 0
+        )
+        viewModel.serverControlState = .running
+        var codex = config.ccodex
+        codex.opus.fastModeEnabled = true
+
+        try viewModel.saveCodexSettings(functionName: "ccodex", codex: codex)
+        let reachedRestart = await proxyService.reachesRestartCount(1)
+        XCTAssertTrue(reachedRestart)
+
+        let restartTask = Task { await viewModel.restartServer() }
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertEqual(proxyService.restartPorts, [config.port])
+
+        proxyService.releaseRestart(1)
+        await restartTask.value
+
+        XCTAssertEqual(proxyService.restartPorts, [config.port, config.port])
     }
 
     func testStoppedProxyDoesNotRestartAfterFastModeSave() throws {
@@ -2481,6 +2556,82 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         ])
     }
 
+    func testRoundRobinModelPrefixesUseRoutingPrefixFallback() {
+        let authProfiles = [
+            AuthProfile(fileName: "work.json", type: .codex, email: nil, accountID: nil, expired: nil, disabled: false, prefix: " auth-work "),
+            AuthProfile(fileName: "personal.json", type: .codex, email: nil, accountID: nil, expired: nil, disabled: false, prefix: "auth-personal")
+        ]
+        let commandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "work", provider: .codex, authProfileID: "work.json", modelPrefix: "   "),
+            AppConfig.OAuthCommandProfile(id: "personal", provider: .codex, authProfileID: "personal.json", modelPrefix: "command-personal")
+        ]
+        let profile = AppConfig.RoundRobinProfile(
+            id: "codex-round-robin",
+            provider: .codex,
+            includedAuthProfileIDs: ["work.json", "personal.json"]
+        )
+
+        XCTAssertEqual(
+            DashboardViewModel.roundRobinModelPrefixes(
+                for: profile,
+                authProfiles: authProfiles,
+                commandProfiles: commandProfiles
+            ),
+            ["auth-work", "command-personal"]
+        )
+    }
+
+    func testRoundRobinCodexModelsMarkKnownEmptyReasoningIntersectionAuthoritatively() async throws {
+        let modelClient = StubProxyModelClient(optionsByPrefix: [
+            "codex-work": [CodexModelOption(id: "gpt-5.6", supportedReasoning: [.low])],
+            "codex-personal": [CodexModelOption(id: "gpt-5.6", supportedReasoning: [.high])]
+        ])
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            .init(id: "work", provider: .codex, authProfileID: "work.json", modelPrefix: "codex-work"),
+            .init(id: "personal", provider: .codex, authProfileID: "personal.json", modelPrefix: "codex-personal")
+        ]
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            modelClient: modelClient,
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "work.json", type: .codex, email: nil, accountID: nil, expired: nil, disabled: false, prefix: "codex-work"),
+                AuthProfile(fileName: "personal.json", type: .codex, email: nil, accountID: nil, expired: nil, disabled: false, prefix: "codex-personal")
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
+        )
+        let profile = AppConfig.RoundRobinProfile(
+            id: "codex-round-robin",
+            provider: .codex,
+            includedAuthProfileIDs: ["work.json", "personal.json"]
+        )
+
+        let models = try await viewModel.codexModels(forRoundRobinProfile: profile)
+        let model = try XCTUnwrap(models.first)
+
+        XCTAssertEqual(
+            CodexRoleRoutingOptions.normalizedReasoning(
+                currentReasoning: .xhigh,
+                model: model.id,
+                options: [model]
+            ),
+            .auto
+        )
+        XCTAssertEqual(
+            CodexRoleRoutingOptions.reasoningValues(
+                currentReasoning: .xhigh,
+                model: model.id,
+                options: [model]
+            ),
+            [.auto]
+        )
+    }
+
     func testRoundRobinCodexModelsKeepFirstDuplicateInsteadOfCrashing() async throws {
         let first = CodexModelOption(id: "gpt-5.6", supportedReasoning: [.low, .high], defaultReasoning: .high)
         let duplicate = CodexModelOption(id: "gpt-5.6", supportedReasoning: [.low], defaultReasoning: .low)
@@ -2580,7 +2731,13 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         let models = try await viewModel.codexModels(forRoundRobinProfile: profile)
 
-        XCTAssertEqual(models, [CodexModelOption(id: "gpt-5.5")])
+        XCTAssertEqual(models, [
+            CodexModelOption(
+                id: "gpt-5.5",
+                supportedReasoning: [],
+                defaultReasoning: .auto
+            )
+        ])
         XCTAssertEqual(modelClient.prefixRequests, [
             PrefixModelRequest(port: viewModel.config.port, prefix: "codex-work"),
             PrefixModelRequest(port: viewModel.config.port, prefix: "codex-personal")

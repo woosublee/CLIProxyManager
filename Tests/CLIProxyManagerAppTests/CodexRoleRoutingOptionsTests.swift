@@ -1,4 +1,5 @@
 import XCTest
+import SwiftUI
 import CLIProxyManagerCore
 @testable import CLIProxyManagerApp
 
@@ -127,7 +128,7 @@ final class CodexRoleRoutingOptionsTests: XCTestCase {
         )
     }
 
-    func testNormalizedCodexTurnsOffFastForUnsupportedAndUnknownModels() {
+    func testNormalizedCodexPreservesFastForUnknownCapabilityButDisablesAuthoritativeUnsupported() {
         let codex = AppConfig.Codex(
             opus: .init(model: "gpt-5.5", reasoning: .xhigh, contextWindow: .auto, fastModeEnabled: true),
             sonnet: .init(model: "custom-model", reasoning: .medium, contextWindow: .auto, fastModeEnabled: true),
@@ -135,10 +136,50 @@ final class CodexRoleRoutingOptionsTests: XCTestCase {
         )
 
         let normalized = CodexRoleRoutingOptions.normalizedCodex(codex, options: options)
+        let normalizedWithoutOptions = CodexRoleRoutingOptions.normalizedCodex(codex, options: [])
 
         XCTAssertTrue(normalized.opus.fastModeEnabled)
         XCTAssertFalse(normalized.sonnet.fastModeEnabled)
-        XCTAssertFalse(normalized.haiku.fastModeEnabled)
+        XCTAssertTrue(normalized.haiku.fastModeEnabled)
+        XCTAssertTrue(normalizedWithoutOptions.opus.fastModeEnabled)
+        XCTAssertTrue(normalizedWithoutOptions.sonnet.fastModeEnabled)
+        XCTAssertTrue(normalizedWithoutOptions.haiku.fastModeEnabled)
+    }
+
+    func testFastModeBindingCannotEnableUnknownCapabilityButPreservesStoredTrue() {
+        var role = AppConfig.CodexRole(
+            model: "missing-model",
+            reasoning: .auto,
+            contextWindow: .auto,
+            fastModeEnabled: true
+        )
+        let binding = CodexRoleRoutingOptions.fastModeBinding(
+            role: Binding(get: { role }, set: { role = $0 }),
+            options: options
+        )
+
+        XCTAssertTrue(binding.wrappedValue)
+        binding.wrappedValue = false
+        XCTAssertFalse(role.fastModeEnabled)
+        binding.wrappedValue = true
+        XCTAssertFalse(role.fastModeEnabled)
+    }
+
+    func testModelChangeDisablesFastWhenNewCapabilityIsUnknown() {
+        let role = AppConfig.CodexRole(
+            model: "gpt-5.5",
+            reasoning: .xhigh,
+            contextWindow: .auto,
+            fastModeEnabled: true
+        )
+
+        XCTAssertFalse(
+            CodexRoleRoutingOptions.normalizedRole(
+                role,
+                model: "missing-model",
+                options: options
+            ).fastModeEnabled
+        )
     }
 
     func testFastModeHelpTextMentionsSpeedAndUsage() {

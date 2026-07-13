@@ -1782,7 +1782,7 @@ final class DashboardViewModel: ObservableObject {
                 } else if let currentDefault = current.defaultReasoning, supported.contains(currentDefault) {
                     defaultReasoning = currentDefault
                 } else {
-                    defaultReasoning = nil
+                    defaultReasoning = supported.isEmpty ? .auto : nil
                 }
                 return CodexModelOption(
                     id: current.id,
@@ -1796,10 +1796,29 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func roundRobinModelPrefixes(for profile: AppConfig.RoundRobinProfile) -> [String] {
-        let commandProfilesByAuthID = commandProfilesByAuthID(in: config)
+        Self.roundRobinModelPrefixes(
+            for: profile,
+            authProfiles: authProfiles,
+            commandProfiles: config.oauthCommandProfiles
+        )
+    }
+
+    static func roundRobinModelPrefixes(
+        for profile: AppConfig.RoundRobinProfile,
+        authProfiles: [AuthProfile],
+        commandProfiles: [AppConfig.OAuthCommandProfile]
+    ) -> [String] {
+        let authProfilesByID = Dictionary(uniqueKeysWithValues: authProfiles.map { ($0.id, $0) })
+        let commandProfilesByAuthID = commandProfiles.reduce(into: [:]) { result, commandProfile in
+            result[commandProfile.authProfileID] = commandProfile
+        }
         return profile.includedAuthProfileIDs.compactMap { authProfileID in
-            commandProfilesByAuthID[authProfileID]?.modelPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
-        }.filter { !$0.isEmpty }
+            guard let authProfile = authProfilesByID[authProfileID] else { return nil }
+            return routingPrefix(
+                authProfile: authProfile,
+                commandProfile: commandProfilesByAuthID[authProfileID]
+            )
+        }
     }
 
     private func handleCodexModelLoadingFailure(_ error: Error? = nil) {
@@ -2409,6 +2428,13 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func routingPrefix(authProfile: AuthProfile, commandProfile: AppConfig.OAuthCommandProfile?) -> String? {
+        Self.routingPrefix(authProfile: authProfile, commandProfile: commandProfile)
+    }
+
+    private static func routingPrefix(
+        authProfile: AuthProfile,
+        commandProfile: AppConfig.OAuthCommandProfile?
+    ) -> String? {
         let commandPrefix = commandProfile?.modelPrefix.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !commandPrefix.isEmpty { return commandPrefix }
         let authPrefix = authProfile.prefix?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -2530,7 +2556,10 @@ final class DashboardViewModel: ObservableObject {
         waitForReady: Bool = false,
         action: () async throws -> Void
     ) async {
-        guard isServerActionInProgress == false, proxyConfigurationRestartTask == nil else { return }
+        await waitForConfigurationRestartIfNeeded()
+        while isServerActionInProgress {
+            await waitForServerActionCompletion()
+        }
         _ = await executeServerAction(
             title: title,
             transitionState: transitionState,
@@ -2589,9 +2618,13 @@ final class DashboardViewModel: ObservableObject {
             try await action()
             if waitForReady {
                 await refreshUntilServerIsReady()
-                if serverStatus.severity == .ready {
-                    await refreshSubscriptionUsage()
+                guard serverStatus.severity == .ready else {
+                    let message = serverStatus.message.isEmpty
+                        ? "Could not connect to the server."
+                        : serverStatus.message
+                    throw ProxyRestartReadinessError(message: message)
                 }
+                await refreshSubscriptionUsage()
             } else {
                 await refresh()
             }

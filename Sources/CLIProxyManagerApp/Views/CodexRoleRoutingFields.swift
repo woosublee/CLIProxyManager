@@ -23,15 +23,8 @@ struct CodexRoleRoutingFields: View {
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 14)
         }
-        .onChange(of: availableModels) { _, models in
-            guard !models.isEmpty else { return }
-            let normalized = CodexRoleRoutingOptions.normalizedCodex(
-                AppConfig.Codex(opus: opus, sonnet: sonnet, haiku: haiku),
-                options: models
-            )
-            opus = normalized.opus
-            sonnet = normalized.sonnet
-            haiku = normalized.haiku
+        .task(id: availableModels) {
+            normalizeRoles(for: availableModels)
         }
     }
 
@@ -123,9 +116,20 @@ struct CodexRoleRoutingFields: View {
         }
     }
 
+    private func normalizeRoles(for models: [CodexModelOption]) {
+        guard !models.isEmpty else { return }
+        let normalized = CodexRoleRoutingOptions.normalizedCodex(
+            AppConfig.Codex(opus: opus, sonnet: sonnet, haiku: haiku),
+            options: models
+        )
+        opus = normalized.opus
+        sonnet = normalized.sonnet
+        haiku = normalized.haiku
+    }
+
     private func modelBinding(for role: Binding<AppConfig.CodexRole>) -> Binding<String> {
         Binding(
-            get: { role.wrappedValue.model },
+            get: { CodexFastMode.canonicalModel(from: role.wrappedValue.model) },
             set: { model in
                 role.wrappedValue = CodexRoleRoutingOptions.normalizedRole(
                     role.wrappedValue,
@@ -137,21 +141,6 @@ struct CodexRoleRoutingFields: View {
     }
 
     private func fastModeBinding(for role: Binding<AppConfig.CodexRole>) -> Binding<Bool> {
-        Binding(
-            get: {
-                CodexRoleRoutingOptions.supportsFastMode(
-                    model: role.wrappedValue.model,
-                    options: availableModels
-                ) && role.wrappedValue.fastModeEnabled
-            },
-            set: { enabled in
-                var updated = role.wrappedValue
-                updated.fastModeEnabled = enabled && CodexRoleRoutingOptions.supportsFastMode(
-                    model: updated.model,
-                    options: availableModels
-                )
-                role.wrappedValue = updated
-            }
-        )
+        CodexRoleRoutingOptions.fastModeBinding(role: role, options: availableModels)
     }
 }

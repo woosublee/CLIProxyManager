@@ -43,6 +43,27 @@ final class SettingsNavigationTests: XCTestCase {
         XCTAssertEqual(ProviderSettingsSheetMetrics.codexHeight, 720)
     }
 
+    func testCodexRoleRoutingFieldsNormalizeInitialAuthoritativeOptionsAndCanonicalizePickers() throws {
+        let source = try String(
+            contentsOf: repositoryRoot().appendingPathComponent(
+                "Sources/CLIProxyManagerApp/Views/CodexRoleRoutingFields.swift"
+            ),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains(".task(id: availableModels)"))
+        XCTAssertTrue(source.contains("normalizeRoles(for: availableModels)"))
+        XCTAssertTrue(source.contains("get: { CodexFastMode.canonicalModel(from: role.wrappedValue.model) }"))
+        XCTAssertTrue(source.contains("CodexRoleRoutingOptions.fastModeBinding(role: role, options: availableModels)"))
+    }
+
+    private func repositoryRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
     func testLegacyCodexModelsSheetPreservesFastModeThroughSaveNormalization() {
         let supportedOption = CodexModelOption(id: "gpt-5.5", supportsFastMode: true)
         let unsupportedOption = CodexModelOption(id: "custom-model", supportsFastMode: false)
