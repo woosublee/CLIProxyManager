@@ -62,6 +62,8 @@ GitHub Releases에서 직접 내려받은 배포본만 사용하세요.
 - 메뉴바에서 HUD를 다시 표시하거나 숨길 수 있습니다.
 - Claude와 Codex 계정별 사용량·초기화 시각을 보여 줍니다.
 - Codex는 API가 보고한 실제 기간을 표시합니다. 일반 계정은 `5h`·`7d`, Team 플랜의 월간 윈도우는 `1mo`로 표시됩니다.
+- HUD 우측 상단의 축소·확장 버튼으로 300pt 폭의 전체 보기와 108pt 폭의 compact 보기를 전환할 수 있습니다.
+- compact 보기는 계정 avatar·이름과 기간별 사용률을 세로로 표시합니다. loading·unavailable·disabled·stale 상태에서는 `—`와 상태 indicator를 표시하며, 선택한 보기 상태는 앱 재실행 후에도 유지됩니다.
 
 ## 터미널과 SSH에서 사용하기
 

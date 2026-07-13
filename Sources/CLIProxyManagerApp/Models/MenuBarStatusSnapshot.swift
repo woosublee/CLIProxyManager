@@ -8,6 +8,7 @@ struct MenuBarConnectedProvider: Equatable, Identifiable {
     let connectionDetail: String
     let accountDetailHidden: Bool
     let subscriptionUsageState: AccountSubscriptionUsageState
+    let showsSubscriptionUsage: Bool
 
     var menuBarDisplayName: String {
         accountDetailHidden ? name : displayName
@@ -65,7 +66,8 @@ struct MenuBarStatusSnapshot: Equatable {
                     functionName: provider.functionName,
                     connectionDetail: provider.connectionDetail,
                     accountDetailHidden: provider.accountDetailHidden,
-                    subscriptionUsageState: provider.subscriptionUsageState
+                    subscriptionUsageState: provider.subscriptionUsageState,
+                    showsSubscriptionUsage: provider.showsSubscriptionUsage
                 )
             }
         erroredCount = providers.filter(\.isErrored).count
