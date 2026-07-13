@@ -3029,6 +3029,190 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertTrue(viewModel.isServerActionInProgress)
     }
 
+    func testEnablingHUDAsFirstConsumerCreatesKeyAndRestartsReadyProxy() async throws {
+        let config = AppConfig.default
+        let store = StubConfigStore(config: config)
+        let keyStore = SubscriptionUsageManagementKeyDouble()
+        let proxy = StubProxyServiceStarter()
+        let viewModel = subscriptionUsageViewModel(config: config, configStore: store, keyStore: keyStore, proxyService: proxy)
+        await viewModel.refresh()
+
+        try viewModel.saveUsageOverlay(.init(isVisible: true, alwaysOnTop: false, backgroundOpacity: 0.9))
+        await waitForRestart(proxy)
+
+        XCTAssertTrue(viewModel.config.usageOverlay.isVisible)
+        XCTAssertFalse(viewModel.config.subscriptionUsage.showInMenuBar)
+        XCTAssertTrue(viewModel.config.isSubscriptionUsageEnabled)
+        XCTAssertEqual(keyStore.createCallCount, 1)
+        XCTAssertEqual(proxy.restartPorts, [config.port])
+    }
+
+    func testEnablingUsageDuringDelayedStartQueuesExactlyOneRestart() async throws {
+        let config = AppConfig.default
+        let proxyService = StubProxyServiceStarter(startDelayNanoseconds: 50_000_000)
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(),
+            proxyService: proxyService
+        )
+
+        let startTask = Task { await viewModel.startServer() }
+        await waitForServerAction(viewModel)
+        try viewModel.saveSubscriptionUsageMenuBarVisible(true)
+        await startTask.value
+
+        XCTAssertTrue(viewModel.config.isSubscriptionUsageEnabled)
+        XCTAssertEqual(proxyService.restartPorts, [config.port])
+    }
+
+    func testDisablingUsageDuringDelayedStartQueuesExactlyOneRestart() async throws {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let proxyService = StubProxyServiceStarter(startDelayNanoseconds: 50_000_000)
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: proxyService
+        )
+
+        let startTask = Task { await viewModel.startServer() }
+        await waitForServerAction(viewModel)
+        try viewModel.saveSubscriptionUsageMenuBarVisible(false)
+        await startTask.value
+
+        XCTAssertFalse(viewModel.config.isSubscriptionUsageEnabled)
+        XCTAssertEqual(proxyService.restartPorts, [config.port])
+    }
+
+    func testTurningOffMenuBarKeepsBackendWhenHUDIsVisible() throws {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        config.usageOverlay.isVisible = true
+        let keyStore = SubscriptionUsageManagementKeyDouble(isConfiguredValue: true)
+        let proxy = StubProxyServiceStarter()
+        let cache = SubscriptionUsageSnapshotCacheDouble(snapshots: ["saved": .init(
+            profileID: "saved", provider: .codex, windows: [], fetchedAt: .distantPast
+        )])
+        let profile = AuthProfile(fileName: "saved", type: .codex, email: nil, accountID: nil, expired: nil, disabled: false)
+        let viewModel = subscriptionUsageViewModel(
+            config: config, configStore: StubConfigStore(config: config), keyStore: keyStore,
+            proxyService: proxy, profiles: [profile], subscriptionUsageSnapshotCache: cache
+        )
+
+        try viewModel.saveSubscriptionUsageMenuBarVisible(false)
+
+        XCTAssertFalse(viewModel.config.subscriptionUsage.showInMenuBar)
+        XCTAssertTrue(viewModel.config.usageOverlay.isVisible)
+        XCTAssertTrue(viewModel.config.isSubscriptionUsageEnabled)
+        XCTAssertEqual(keyStore.deleteCallCount, 0)
+        XCTAssertTrue(keyStore.isConfigured())
+        XCTAssertTrue(proxy.restartPorts.isEmpty)
+        XCTAssertFalse(cache.isEmpty)
+    }
+
+    func testTurningOffHUDKeepsBackendWhenMenuBarIsVisible() throws {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        config.usageOverlay.isVisible = true
+        let keyStore = SubscriptionUsageManagementKeyDouble(isConfiguredValue: true)
+        let proxy = StubProxyServiceStarter()
+        let viewModel = subscriptionUsageViewModel(
+            config: config, configStore: StubConfigStore(config: config), keyStore: keyStore, proxyService: proxy
+        )
+
+        try viewModel.saveUsageOverlay(.init(isVisible: false, alwaysOnTop: false, backgroundOpacity: 0.9))
+
+        XCTAssertTrue(viewModel.config.subscriptionUsage.showInMenuBar)
+        XCTAssertFalse(viewModel.config.usageOverlay.isVisible)
+        XCTAssertTrue(viewModel.config.isSubscriptionUsageEnabled)
+        XCTAssertEqual(keyStore.deleteCallCount, 0)
+        XCTAssertTrue(proxy.restartPorts.isEmpty)
+    }
+
+    func testTurningOffLastConsumerDeletesKeyClearsCacheAndRestarts() async throws {
+        var config = AppConfig.default
+        config.usageOverlay.isVisible = true
+        let keyStore = SubscriptionUsageManagementKeyDouble(isConfiguredValue: true)
+        let proxy = StubProxyServiceStarter()
+        let cache = SubscriptionUsageSnapshotCacheDouble(snapshots: ["saved": .init(
+            profileID: "saved", provider: .codex, windows: [], fetchedAt: .distantPast
+        )])
+        let viewModel = subscriptionUsageViewModel(
+            config: config, configStore: StubConfigStore(config: config), keyStore: keyStore,
+            proxyService: proxy, subscriptionUsageSnapshotCache: cache
+        )
+        await viewModel.refresh()
+
+        try viewModel.saveUsageOverlay(.init(isVisible: false, alwaysOnTop: false, backgroundOpacity: 0.9))
+        await waitForRestart(proxy)
+
+        XCTAssertFalse(viewModel.config.isSubscriptionUsageEnabled)
+        XCTAssertEqual(keyStore.deleteCallCount, 1)
+        XCTAssertTrue(cache.isEmpty)
+        XCTAssertEqual(proxy.restartPorts, [config.port])
+    }
+
+    func testPrepareSubscriptionUsageRepairsHUDOnlyEnabledConfigWithMissingKey() async throws {
+        var config = AppConfig.default
+        config.usageOverlay.isVisible = true
+        let keyStore = SubscriptionUsageManagementKeyDouble()
+        let proxy = StubProxyServiceStarter()
+        let viewModel = subscriptionUsageViewModel(
+            config: config, configStore: StubConfigStore(config: config), keyStore: keyStore, proxyService: proxy
+        )
+        await viewModel.refresh()
+
+        await viewModel.prepareSubscriptionUsage()
+        await waitForRestart(proxy)
+
+        XCTAssertTrue(viewModel.config.isSubscriptionUsageEnabled)
+        XCTAssertTrue(keyStore.isConfigured())
+        XCTAssertEqual(keyStore.createCallCount, 1)
+    }
+
+    func testResetAllSettingsTurnsOffBothUsageDisplaysAndDeletesKey() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        config.usageOverlay = .init(isVisible: true, alwaysOnTop: true, backgroundOpacity: 0.45)
+        let keyStore = SubscriptionUsageManagementKeyDouble(isConfiguredValue: true)
+        let proxy = StubProxyServiceStarter()
+        let viewModel = subscriptionUsageViewModel(
+            config: config, configStore: StubConfigStore(config: config), keyStore: keyStore, proxyService: proxy
+        )
+        await viewModel.refresh()
+
+        viewModel.resetAllSettings()
+        await waitForRestart(proxy)
+
+        XCTAssertFalse(viewModel.config.subscriptionUsage.showInMenuBar)
+        XCTAssertFalse(viewModel.config.usageOverlay.isVisible)
+        XCTAssertFalse(viewModel.config.isSubscriptionUsageEnabled)
+        XCTAssertFalse(keyStore.isConfigured())
+    }
+
+    func testResetAllSettingsRestartsRunningServerWhenPortReturnsToDefaultWithoutUsageKey() async {
+        var config = AppConfig.default
+        config.port = 18_888
+        let keyStore = SubscriptionUsageManagementKeyDouble()
+        let proxy = StubProxyServiceStarter()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: keyStore,
+            proxyService: proxy
+        )
+        await viewModel.refresh()
+
+        viewModel.resetAllSettings()
+        await waitForRestart(proxy)
+
+        XCTAssertEqual(viewModel.config.port, AppConfig.default.port)
+        XCTAssertEqual(keyStore.deleteCallCount, 0)
+        XCTAssertEqual(proxy.restartPorts, [AppConfig.default.port])
+    }
+
     func testEnablingSubscriptionUsageCreatesMissingKeyPersistsConfigAndRestartsReadyProxy() async throws {
         let config = AppConfig.default
         let configStore = StubConfigStore(config: config)
@@ -3042,13 +3226,13 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         )
         await viewModel.refresh()
 
-        try viewModel.saveSubscriptionUsageEnabled(true)
+        try viewModel.saveSubscriptionUsageMenuBarVisible(true)
         await waitForRestart(proxyService)
 
         XCTAssertEqual(keyStore.createCallCount, 1)
         XCTAssertEqual(keyStore.deleteCallCount, 0)
-        XCTAssertTrue(viewModel.config.subscriptionUsage.isEnabled)
-        XCTAssertTrue(configStore.savedConfigs.last?.subscriptionUsage.isEnabled ?? false)
+        XCTAssertTrue(viewModel.config.subscriptionUsage.showInMenuBar)
+        XCTAssertTrue(configStore.savedConfigs.last?.subscriptionUsage.showInMenuBar ?? false)
         XCTAssertEqual(proxyService.restartPorts, [config.port])
         XCTAssertNil(viewModel.settingsMessage)
     }
@@ -3066,20 +3250,20 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         )
         await viewModel.refresh()
 
-        try viewModel.saveSubscriptionUsageEnabled(true)
+        try viewModel.saveSubscriptionUsageMenuBarVisible(true)
         await waitForRestart(proxyService)
 
         XCTAssertEqual(keyStore.createCallCount, 1)
         XCTAssertEqual(keyStore.deleteCallCount, 0)
         XCTAssertTrue(keyStore.isConfigured())
-        XCTAssertTrue(viewModel.config.subscriptionUsage.isEnabled)
-        XCTAssertTrue(configStore.savedConfigs.last?.subscriptionUsage.isEnabled ?? false)
+        XCTAssertTrue(viewModel.config.subscriptionUsage.showInMenuBar)
+        XCTAssertTrue(configStore.savedConfigs.last?.subscriptionUsage.showInMenuBar ?? false)
         XCTAssertEqual(proxyService.restartPorts, [config.port])
     }
 
     func testDisablingSubscriptionUsageDeletesKeyPersistsDisabledConfigAndRestartsProxy() async throws {
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         let configStore = StubConfigStore(config: config)
         let keyStore = SubscriptionUsageManagementKeyDouble(isConfiguredValue: true)
         let proxyService = StubProxyServiceStarter()
@@ -3091,21 +3275,21 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         )
         await viewModel.refresh()
 
-        try viewModel.saveSubscriptionUsageEnabled(false)
+        try viewModel.saveSubscriptionUsageMenuBarVisible(false)
         await waitForRestart(proxyService)
 
         XCTAssertEqual(keyStore.createCallCount, 0)
         XCTAssertEqual(keyStore.deleteCallCount, 1)
         XCTAssertFalse(keyStore.isConfigured())
-        XCTAssertFalse(viewModel.config.subscriptionUsage.isEnabled)
-        XCTAssertFalse(configStore.savedConfigs.last?.subscriptionUsage.isEnabled ?? true)
+        XCTAssertFalse(viewModel.config.subscriptionUsage.showInMenuBar)
+        XCTAssertFalse(configStore.savedConfigs.last?.subscriptionUsage.showInMenuBar ?? true)
         XCTAssertEqual(proxyService.restartPorts, [config.port])
         XCTAssertNil(viewModel.settingsMessage)
     }
 
     func testDisablingSubscriptionUsagePreservesKeyAndEnabledConfigWhenConfigSaveFails() {
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         let keyStore = SubscriptionUsageManagementKeyDouble(isConfiguredValue: true)
         let viewModel = subscriptionUsageViewModel(
             config: config,
@@ -3117,9 +3301,9 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             proxyService: StubProxyServiceStarter()
         )
 
-        XCTAssertThrowsError(try viewModel.saveSubscriptionUsageEnabled(false))
+        XCTAssertThrowsError(try viewModel.saveSubscriptionUsageMenuBarVisible(false))
 
-        XCTAssertTrue(viewModel.config.subscriptionUsage.isEnabled)
+        XCTAssertTrue(viewModel.config.subscriptionUsage.showInMenuBar)
         XCTAssertTrue(keyStore.isConfigured())
         XCTAssertEqual(keyStore.deleteCallCount, 0)
     }
@@ -3152,7 +3336,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testResetAllSettingsPreservesKeyAndEnabledConfigWhenConfigSaveFails() {
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         let keyStore = SubscriptionUsageManagementKeyDouble(isConfiguredValue: true)
         let viewModel = subscriptionUsageViewModel(
             config: config,
@@ -3166,36 +3350,98 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         viewModel.resetAllSettings()
 
-        XCTAssertTrue(viewModel.config.subscriptionUsage.isEnabled)
+        XCTAssertTrue(viewModel.config.subscriptionUsage.showInMenuBar)
         XCTAssertTrue(keyStore.isConfigured())
         XCTAssertEqual(keyStore.deleteCallCount, 0)
         XCTAssertTrue(viewModel.settingsMessage?.hasPrefix("Reset failed:") == true)
     }
 
-    func testDisablingSubscriptionUsageKeepsDisabledConfigWhenKeyDeletionFails() {
+    func testDisablingLastUsageConsumerFinishesCleanupAndRestartWhenKeyDeletionFails() async {
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
+        let profile = AuthProfile(fileName: "codex.json", type: .codex, email: nil, accountID: nil, expired: nil, disabled: false)
+        let snapshot = SubscriptionUsageSnapshot(
+            profileID: profile.id,
+            provider: .codex,
+            windows: [],
+            fetchedAt: Date(timeIntervalSince1970: 60)
+        )
         let configStore = StubConfigStore(config: config)
         let keyStore = SubscriptionUsageManagementKeyDouble(isConfiguredValue: true)
         keyStore.deleteError = NSError(domain: "SubscriptionUsage", code: 2)
+        let proxyService = StubProxyServiceStarter()
+        let cache = SubscriptionUsageSnapshotCacheDouble(snapshots: [profile.id: snapshot])
         let viewModel = subscriptionUsageViewModel(
             config: config,
             configStore: configStore,
             keyStore: keyStore,
-            proxyService: StubProxyServiceStarter()
+            proxyService: proxyService,
+            profiles: [profile],
+            subscriptionUsageSnapshotCache: cache
         )
+        await viewModel.refresh()
 
-        XCTAssertThrowsError(try viewModel.saveSubscriptionUsageEnabled(false))
+        XCTAssertThrowsError(try viewModel.saveSubscriptionUsageMenuBarVisible(false))
+        await waitForRestart(proxyService)
 
-        XCTAssertFalse(viewModel.config.subscriptionUsage.isEnabled)
-        XCTAssertFalse(configStore.savedConfigs.last?.subscriptionUsage.isEnabled ?? true)
+        XCTAssertFalse(viewModel.config.subscriptionUsage.showInMenuBar)
+        XCTAssertFalse(configStore.savedConfigs.last?.subscriptionUsage.showInMenuBar ?? true)
         XCTAssertTrue(keyStore.isConfigured())
         XCTAssertEqual(keyStore.deleteCallCount, 1)
+        XCTAssertEqual(viewModel.subscriptionUsageStates[profile.id], .disabled)
+        XCTAssertTrue(cache.isEmpty)
+        XCTAssertNil(viewModel.lastSuccessfulSubscriptionUsageRefreshAt)
+        XCTAssertEqual(proxyService.restartPorts, [config.port])
+    }
+
+    func testResetAllSettingsFinishesHUDOnlyCleanupWhenKeyDeletionFails() async {
+        var config = AppConfig.default
+        config.showDockIcon = false
+        config.appearance = .dark
+        config.usageOverlay.isVisible = true
+        let profile = AuthProfile(fileName: "codex.json", type: .codex, email: nil, accountID: nil, expired: nil, disabled: false)
+        let snapshot = SubscriptionUsageSnapshot(
+            profileID: profile.id,
+            provider: .codex,
+            windows: [],
+            fetchedAt: Date(timeIntervalSince1970: 60)
+        )
+        let keyStore = SubscriptionUsageManagementKeyDouble(isConfiguredValue: true)
+        keyStore.deleteError = NSError(
+            domain: "SubscriptionUsage",
+            code: 3,
+            userInfo: [NSLocalizedDescriptionKey: "Key cleanup failed"]
+        )
+        let proxyService = StubProxyServiceStarter()
+        let cache = SubscriptionUsageSnapshotCacheDouble(snapshots: [profile.id: snapshot])
+        let appearance = RecordingAppAppearanceService()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: keyStore,
+            proxyService: proxyService,
+            profiles: [profile],
+            subscriptionUsageSnapshotCache: cache,
+            appAppearanceService: appearance
+        )
+        await viewModel.refresh()
+
+        viewModel.resetAllSettings()
+        await waitForRestart(proxyService)
+
+        XCTAssertFalse(viewModel.config.isSubscriptionUsageEnabled)
+        XCTAssertEqual(viewModel.subscriptionUsageStates[profile.id], .disabled)
+        XCTAssertTrue(cache.isEmpty)
+        XCTAssertNil(viewModel.lastSuccessfulSubscriptionUsageRefreshAt)
+        XCTAssertEqual(appearance.showDockIconValues.last, AppConfig.default.showDockIcon)
+        XCTAssertEqual(appearance.appearanceValues.last, AppConfig.default.appearance)
+        XCTAssertEqual(proxyService.restartPorts, [config.port])
+        XCTAssertEqual(viewModel.settingsMessage, "Reset failed: Key cleanup failed")
     }
 
     func testStartApplicationRefreshesUsageWhenProxyIsAlreadyReadyWithoutDashboard() async {
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         let profile = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
         let quotaClient = RecordingSubscriptionQuotaClient(reports: [availableUsageReport(for: profile)])
         let viewModel = subscriptionUsageViewModel(
@@ -3215,7 +3461,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testPrepareSubscriptionUsageRepairsEnabledConfigWithMissingKeyBeforeFirstRefresh() async throws {
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         let keyStore = SubscriptionUsageManagementKeyDouble()
         let proxyService = StubProxyServiceStarter()
         let viewModel = subscriptionUsageViewModel(
@@ -3232,7 +3478,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(keyStore.createCallCount, 1)
         XCTAssertEqual(keyStore.deleteCallCount, 0)
         XCTAssertTrue(keyStore.isConfigured())
-        XCTAssertTrue(viewModel.config.subscriptionUsage.isEnabled)
+        XCTAssertTrue(viewModel.config.subscriptionUsage.showInMenuBar)
         XCTAssertEqual(proxyService.restartPorts, [config.port])
         XCTAssertNil(viewModel.settingsMessage)
     }
@@ -3254,14 +3500,14 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(keyStore.createCallCount, 0)
         XCTAssertEqual(keyStore.deleteCallCount, 1)
         XCTAssertFalse(keyStore.isConfigured())
-        XCTAssertFalse(viewModel.config.subscriptionUsage.isEnabled)
+        XCTAssertFalse(viewModel.config.subscriptionUsage.showInMenuBar)
         XCTAssertEqual(proxyService.restartPorts, [config.port])
         XCTAssertNil(viewModel.settingsMessage)
     }
 
     func testResetAllSettingsDeletesManagementKeyWhenUsageWasEnabled() async {
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         let configStore = StubConfigStore(config: config)
         let keyStore = SubscriptionUsageManagementKeyDouble(isConfiguredValue: true)
         let proxyService = StubProxyServiceStarter()
@@ -3278,8 +3524,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         XCTAssertEqual(keyStore.deleteCallCount, 1)
         XCTAssertFalse(keyStore.isConfigured())
-        XCTAssertFalse(viewModel.config.subscriptionUsage.isEnabled)
-        XCTAssertFalse(configStore.savedConfigs.last?.subscriptionUsage.isEnabled ?? true)
+        XCTAssertFalse(viewModel.config.subscriptionUsage.showInMenuBar)
+        XCTAssertFalse(configStore.savedConfigs.last?.subscriptionUsage.showInMenuBar ?? true)
         XCTAssertEqual(proxyService.restartPorts, [config.port])
         XCTAssertEqual(viewModel.settingsMessage, "Settings reset to defaults.")
     }
@@ -3296,11 +3542,11 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             proxyService: StubProxyServiceStarter()
         )
 
-        XCTAssertThrowsError(try viewModel.saveSubscriptionUsageEnabled(true))
+        XCTAssertThrowsError(try viewModel.saveSubscriptionUsageMenuBarVisible(true))
 
         XCTAssertEqual(keyStore.createCallCount, 1)
         XCTAssertEqual(keyStore.deleteCallCount, 0)
-        XCTAssertFalse(viewModel.config.subscriptionUsage.isEnabled)
+        XCTAssertFalse(viewModel.config.subscriptionUsage.showInMenuBar)
         XCTAssertTrue(configStore.savedConfigs.isEmpty)
     }
 
@@ -3315,12 +3561,12 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             proxyService: StubProxyServiceStarter()
         )
 
-        XCTAssertThrowsError(try viewModel.saveSubscriptionUsageEnabled(true))
+        XCTAssertThrowsError(try viewModel.saveSubscriptionUsageMenuBarVisible(true))
 
         XCTAssertEqual(keyStore.createCallCount, 1)
         XCTAssertEqual(keyStore.deleteCallCount, 1)
         XCTAssertFalse(keyStore.isConfigured())
-        XCTAssertFalse(viewModel.config.subscriptionUsage.isEnabled)
+        XCTAssertFalse(viewModel.config.subscriptionUsage.showInMenuBar)
     }
 
     func testSubscriptionUsageConfigSaveFailurePreservesPreexistingKey() {
@@ -3334,17 +3580,17 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             proxyService: StubProxyServiceStarter()
         )
 
-        XCTAssertThrowsError(try viewModel.saveSubscriptionUsageEnabled(true))
+        XCTAssertThrowsError(try viewModel.saveSubscriptionUsageMenuBarVisible(true))
 
         XCTAssertEqual(keyStore.createCallCount, 1)
         XCTAssertEqual(keyStore.deleteCallCount, 0)
         XCTAssertTrue(keyStore.isConfigured())
-        XCTAssertFalse(viewModel.config.subscriptionUsage.isEnabled)
+        XCTAssertFalse(viewModel.config.subscriptionUsage.showInMenuBar)
     }
 
     func testRestartFailureKeepsDisabledUsageConfigAndDeletedKey() async throws {
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         let configStore = StubConfigStore(config: config)
         let keyStore = SubscriptionUsageManagementKeyDouble(isConfiguredValue: true)
         let proxyService = StubProxyServiceStarter(error: NSError(domain: "SubscriptionUsage", code: 1, userInfo: [NSLocalizedDescriptionKey: "Restart failed"]))
@@ -3356,19 +3602,19 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         )
         await viewModel.refresh()
 
-        try viewModel.saveSubscriptionUsageEnabled(false)
+        try viewModel.saveSubscriptionUsageMenuBarVisible(false)
         await waitForRestart(proxyService)
         try await Task.sleep(nanoseconds: 50_000_000)
 
-        XCTAssertFalse(viewModel.config.subscriptionUsage.isEnabled)
-        XCTAssertFalse(configStore.savedConfigs.last?.subscriptionUsage.isEnabled ?? true)
+        XCTAssertFalse(viewModel.config.subscriptionUsage.showInMenuBar)
+        XCTAssertFalse(configStore.savedConfigs.last?.subscriptionUsage.showInMenuBar ?? true)
         XCTAssertFalse(keyStore.isConfigured())
         XCTAssertEqual(viewModel.serverStatus.title, "Failed to restart CLIProxyAPI")
     }
 
     func testMenuRefreshDoesNotStartSubscriptionUsageFetch() async {
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         let profile = AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
         let quotaClient = RecordingSubscriptionQuotaClient(reports: [availableUsageReport(for: profile)])
         let sleeper = SubscriptionUsageSleepRecorder()
@@ -3390,7 +3636,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testRefreshAfterServerStopsMarksUsageStaleRetriesAndRecovers() async {
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         let profile = AuthProfile(
             fileName: "claude.json",
             type: .claude,
@@ -3455,7 +3701,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testStartingReadyProxyStartsInitialSubscriptionUsageFetch() async {
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         let profile = AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
         let quotaClient = RecordingSubscriptionQuotaClient(reports: [availableUsageReport(for: profile)])
         let sleeper = SubscriptionUsageSleepRecorder()
@@ -3477,7 +3723,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testForcedSubscriptionUsageRefreshRunsAfterInFlightRefresh() async {
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         let profile = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
         let quotaClient = SuspendedSubscriptionQuotaClient()
         let sleeper = SubscriptionUsageSleepRecorder()
@@ -3512,7 +3758,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testAutomaticUsageRefreshKeepsExistingUsageUntilSuccessfulReplacement() async {
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         let profile = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
         let initialState = availableUsageState(for: profile)
         let refreshedState: AccountSubscriptionUsageState = .available(
@@ -3553,7 +3799,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testRemovingExplicitAccountDuringUsageRefreshCannotRestoreStateOrCache() async {
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         config.oauthCommandProfiles = [
             AppConfig.OAuthCommandProfile(
                 id: "claude-work",
@@ -3607,7 +3853,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testRemovingAccountDuringColdAutomaticRefreshImmediatelyRestartsRemainingAccount() async {
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         let claude = AuthProfile(fileName: "claude-work.json", type: .claude, email: nil, accountID: nil, expired: nil, disabled: false)
         let codex = AuthProfile(fileName: "codex-work.json", type: .codex, email: nil, accountID: nil, expired: nil, disabled: false)
         config.oauthCommandProfiles = [
@@ -3646,7 +3892,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testNotFoundRemovalDuringUsageRefreshImmediatelyRestartsCurrentAccount() async {
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         let profile = AuthProfile(fileName: "claude-work.json", type: .claude, email: nil, accountID: nil, expired: nil, disabled: false)
         config.oauthCommandProfiles = [
             .init(id: "claude-work", provider: .claude, authProfileID: profile.id, commandName: "ccwork")
@@ -3680,7 +3926,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testQueuedForcedUsageRefreshSurvivesRemovalAndIncludesRemainingTerminalProfile() async {
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         let claude = AuthProfile(fileName: "claude-work.json", type: .claude, email: nil, accountID: nil, expired: nil, disabled: false)
         let codex = AuthProfile(fileName: "codex-work.json", type: .codex, email: nil, accountID: nil, expired: nil, disabled: false)
         config.oauthCommandProfiles = [
@@ -3725,7 +3971,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testActiveForcedUsageRefreshRemovalRestartsWithForceForRemainingTerminalProfile() async {
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         let claude = AuthProfile(fileName: "claude-work.json", type: .claude, email: nil, accountID: nil, expired: nil, disabled: false)
         let codex = AuthProfile(fileName: "codex-work.json", type: .codex, email: nil, accountID: nil, expired: nil, disabled: false)
         config.oauthCommandProfiles = [
@@ -3769,7 +4015,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testAutomaticUsageRefreshKeepsSnapshotAndMarksTransientFailureStale() async {
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         let profile = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
         let initialState = availableUsageState(for: profile)
         let quotaClient = RecordingSubscriptionQuotaClient(reports: [
@@ -3797,7 +4043,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testStaleUsageRefreshBecomesAvailableAfterSuccessfulReplacement() async {
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         let profile = AuthProfile(fileName: "claude.json", type: .claude, email: nil, accountID: nil, expired: nil, disabled: false)
         let initialState = availableUsageState(for: profile)
         let refreshedSnapshot = SubscriptionUsageSnapshot(
@@ -3831,7 +4077,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testStaleUsageRefreshRetainsSnapshotAndUpdatesIssue() async {
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         let profile = AuthProfile(fileName: "claude.json", type: .claude, email: nil, accountID: nil, expired: nil, disabled: false)
         let initialState = availableUsageState(for: profile)
         let snapshot = try! XCTUnwrap(initialState.snapshot)
@@ -3860,7 +4106,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testAutomaticUsageRefreshKeepsSnapshotAndCacheAfterTerminalFailure() async {
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         let profile = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
         let initialState = availableUsageState(for: profile)
         let quotaClient = RecordingSubscriptionQuotaClient(reports: [
@@ -3889,7 +4135,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testInitializationRestoresLastSuccessfulUsageBeforeNextRefresh() {
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         let profile = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
         let snapshot = SubscriptionUsageSnapshot(
             profileID: profile.id,
@@ -3912,7 +4158,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testManualUsageRefreshKeepsExistingUsageUntilSuccessfulReplacement() async {
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         let profile = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
         let initialState: AccountSubscriptionUsageState = .available(
             SubscriptionUsageSnapshot(
@@ -3960,7 +4206,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testManualUsageRefreshKeepsSnapshotAndMarksFailureStale() async {
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         let profile = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
         let initialState = availableUsageState(for: profile)
         let quotaClient = RecordingSubscriptionQuotaClient(reports: [
@@ -3988,7 +4234,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testManualUsageRefreshWaitsForAutomaticRefreshThenRetriesNonRetriableProfile() async {
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         let claude = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
         let codex = AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
         let initialReport = SubscriptionUsageReport(
@@ -4036,7 +4282,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testSuccessfulUsageRefreshSchedulesFiveMinutePoll() async {
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         let profile = AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
         let quotaClient = RecordingSubscriptionQuotaClient(reports: [availableUsageReport(for: profile)])
         let sleeper = SubscriptionUsageSleepRecorder()
@@ -4060,7 +4306,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testTransientStaleUsageRefreshUpdatesIssueAndDoublesRetryDelay() async {
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         let profile = AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
         let initialState = availableUsageState(for: profile)
         let snapshot = try! XCTUnwrap(initialState.snapshot)
@@ -4093,7 +4339,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testManualUsageRefreshRetriesSchemaMismatchProfileAndRestoresFiveMinutePolling() async {
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         let claude = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
         let codex = AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
         let initialReport = SubscriptionUsageReport(
@@ -4137,7 +4383,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testUsageRefreshReportsManualReloadAvailabilityAndProgress() async {
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         let profile = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
         let quotaClient = SuspendedSubscriptionQuotaClient()
         let viewModel = subscriptionUsageViewModel(
@@ -4165,7 +4411,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testTerminalStaleProfileIsExcludedAutomaticallyAndForceRefreshRecoversIt() async {
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         let claude = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
         let codex = AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
         let initialClaudeState = availableUsageState(for: claude)
@@ -4207,7 +4453,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testDisablingSubscriptionUsageInvalidatesInFlightRefreshResult() async throws {
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         let profile = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
         let keyStore = SubscriptionUsageManagementKeyDouble(isConfiguredValue: true)
         let quotaClient = SuspendedSubscriptionQuotaClient()
@@ -4225,7 +4471,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         let refresh = Task { await viewModel.refreshSubscriptionUsage() }
         await waitForUsageFetches(quotaClient, expectedCount: 1)
-        try viewModel.saveSubscriptionUsageEnabled(false)
+        try viewModel.saveSubscriptionUsageMenuBarVisible(false)
         await quotaClient.resolveAll(with: availableUsageReport(for: profile))
         await refresh.value
 
@@ -4282,6 +4528,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         authProfileStore: (any AuthProfileManaging)? = nil,
         quotaClient: any SubscriptionQuotaFetching = StubSubscriptionQuotaClient(),
         subscriptionUsageSnapshotCache: any SubscriptionUsageSnapshotCaching = SubscriptionUsageSnapshotCacheDouble(),
+        appAppearanceService: (any AppAppearanceApplying)? = nil,
         subscriptionUsageSleep: @escaping @Sendable (UInt64) async throws -> Void = { delay in
             try await Task.sleep(nanoseconds: delay)
         }
@@ -4295,6 +4542,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
             proxyService: proxyService,
             claudeConnector: connectedClaudeConnector(),
+            appAppearanceService: appAppearanceService ?? RecordingAppAppearanceService(),
             subscriptionQuotaClient: quotaClient,
             subscriptionUsageKeyStore: keyStore,
             subscriptionUsageSnapshotCache: subscriptionUsageSnapshotCache,
@@ -4352,6 +4600,14 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTFail("Expected subscription usage state \(expected).")
     }
 
+    private func waitForServerAction(_ viewModel: DashboardViewModel) async {
+        for _ in 0..<100 {
+            if viewModel.isServerActionInProgress { return }
+            await Task.yield()
+        }
+        XCTFail("Expected server action to start.")
+    }
+
     private func waitForRestart(_ proxyService: StubProxyServiceStarter, expectedCount: Int = 1) async {
         for _ in 0..<100 {
             if proxyService.restartPorts.count >= expectedCount {
@@ -4368,6 +4624,291 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: ""),
             ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: "")
         ], count: 4).flatMap { $0 }))
+    }
+}
+
+@MainActor
+final class DashboardAccountOrderingTests: XCTestCase {
+    func testProviderRowsApplyStoredOrderAcrossOAuthAndAPIKeyAccounts() throws {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            commandProfile(id: "claude-work", authProfileID: "claude.json", provider: .claude),
+            commandProfile(id: "codex-work", authProfileID: "codex.json", provider: .codex)
+        ]
+        config.accountOrder = ["codex-api", "claude-work", "claude-api", "codex-work"]
+        let secrets = InMemorySecretStore()
+        try secrets.set("claude-key", for: .claudeAPIKey)
+        try secrets.set("codex-key", for: .codexAPIKey)
+
+        let viewModel = makeViewModel(
+            config: config,
+            profiles: [profile("claude.json", type: .claude), profile("codex.json", type: .codex)],
+            secretStore: secrets
+        )
+
+        XCTAssertEqual(
+            viewModel.providerRows.map(\.id.rawValue),
+            ["codex-api", "claude-work", "claude-api", "codex-work"]
+        )
+    }
+
+    func testProviderRowsNormalizeMissingDuplicateAndNewAccountIDs() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            commandProfile(id: "claude-work", authProfileID: "claude.json", provider: .claude),
+            commandProfile(id: "codex-work", authProfileID: "codex.json", provider: .codex)
+        ]
+        config.accountOrder = ["missing", "codex-work", "codex-work"]
+
+        let viewModel = makeViewModel(
+            config: config,
+            profiles: [profile("claude.json", type: .claude), profile("codex.json", type: .codex)]
+        )
+
+        XCTAssertEqual(viewModel.providerRows.map(\.id.rawValue), ["codex-work", "claude-work"])
+        XCTAssertEqual(viewModel.config.accountOrder, ["codex-work", "claude-work"])
+    }
+
+    func testMoveAccountPersistsNewOrderWithoutChangingOtherConfig() {
+        let config = threeAccountConfig()
+        let store = StubConfigStore(config: config)
+        let viewModel = makeViewModel(
+            config: config,
+            profiles: threeProfiles(),
+            configStore: store
+        )
+
+        viewModel.moveAccount("c", before: "a")
+
+        XCTAssertEqual(viewModel.providerRows.map(\.id.rawValue), ["c", "a", "b"])
+        XCTAssertEqual(viewModel.config.accountOrder, ["c", "a", "b"])
+        XCTAssertEqual(store.savedConfigs.last?.accountOrder, ["c", "a", "b"])
+        XCTAssertEqual(store.savedConfigs.last?.port, config.port)
+    }
+
+    func testMoveUpAndDownRespectBoundaries() {
+        let config = threeAccountConfig()
+        let viewModel = makeViewModel(config: config, profiles: threeProfiles())
+
+        XCTAssertFalse(viewModel.canMoveAccountUp("a"))
+        XCTAssertFalse(viewModel.canMoveAccountDown("c"))
+        XCTAssertTrue(viewModel.canMoveAccountUp("b"))
+        XCTAssertTrue(viewModel.canMoveAccountDown("b"))
+
+        viewModel.moveAccountUp("b")
+        XCTAssertEqual(viewModel.providerRows.map(\.id.rawValue), ["b", "a", "c"])
+
+        viewModel.moveAccountDown("a")
+        XCTAssertEqual(viewModel.providerRows.map(\.id.rawValue), ["b", "c", "a"])
+    }
+
+    func testMoveAccountRollsBackWhenSavingFails() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            commandProfile(id: "a", authProfileID: "a.json", provider: .claude),
+            commandProfile(id: "b", authProfileID: "b.json", provider: .codex)
+        ]
+        let store = StubConfigStore(
+            config: config,
+            saveError: NSError(
+                domain: "AccountOrder",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Disk full"]
+            )
+        )
+        let viewModel = makeViewModel(
+            config: config,
+            profiles: [profile("a.json", type: .claude), profile("b.json", type: .codex)],
+            configStore: store
+        )
+        let originalOrder = viewModel.providerRows.map(\.id.rawValue)
+        let originalConfigOrder = viewModel.config.accountOrder
+
+        viewModel.moveAccount("b", before: "a")
+
+        XCTAssertEqual(viewModel.providerRows.map(\.id.rawValue), originalOrder)
+        XCTAssertEqual(viewModel.config.accountOrder, originalConfigOrder)
+        XCTAssertEqual(viewModel.settingsMessage, "Account order could not be saved: Disk full")
+    }
+
+    func testNoOpMovesDoNotSave() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            commandProfile(id: "a", authProfileID: "a.json", provider: .claude),
+            commandProfile(id: "b", authProfileID: "b.json", provider: .codex)
+        ]
+        let store = StubConfigStore(config: config)
+        let viewModel = makeViewModel(
+            config: config,
+            profiles: [profile("a.json", type: .claude), profile("b.json", type: .codex)],
+            configStore: store
+        )
+
+        viewModel.moveAccount("a", before: "a")
+        viewModel.moveAccountUp("a")
+        viewModel.moveAccountDown("b")
+
+        XCTAssertTrue(store.savedConfigs.isEmpty)
+    }
+
+    func testNewAccountIsAppendedWithoutChangingExistingRelativeOrder() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            commandProfile(id: "a", authProfileID: "a.json", provider: .claude),
+            commandProfile(id: "b", authProfileID: "b.json", provider: .codex)
+        ]
+        config.accountOrder = ["b", "a"]
+        let authStore = StubAuthProfileStore(
+            profiles: [profile("a.json", type: .claude), profile("b.json", type: .codex)]
+        )
+        let viewModel = makeViewModel(
+            config: config,
+            profiles: [],
+            authProfileStore: authStore
+        )
+        authStore.nextProfiles = [
+            profile("a.json", type: .claude),
+            profile("b.json", type: .codex),
+            profile("c.json", type: .claude)
+        ]
+
+        viewModel.refreshProfiles()
+
+        XCTAssertEqual(Array(viewModel.providerRows.map(\.id.rawValue).prefix(2)), ["b", "a"])
+        XCTAssertEqual(viewModel.providerRows.last?.authProfileID, "c.json")
+    }
+
+    func testDeletingAccountRemovesItsIDAndPreservesSurvivorOrder() {
+        var config = threeAccountConfig()
+        config.accountOrder = ["c", "b", "a"]
+        let store = StubConfigStore(config: config)
+        let authStore = StubAuthProfileStore(profiles: threeProfiles(), supportsIDDelete: true)
+        let viewModel = makeViewModel(
+            config: config,
+            profiles: [],
+            configStore: store,
+            authProfileStore: authStore
+        )
+
+        viewModel.removeProvider("b")
+
+        XCTAssertEqual(viewModel.providerRows.map(\.id.rawValue), ["c", "a"])
+        XCTAssertEqual(store.savedConfigs.last?.accountOrder, ["c", "a"])
+    }
+
+    func testAPIKeyReRegistrationAppendsAfterSurvivingAccounts() throws {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            commandProfile(id: "a", authProfileID: "a.json", provider: .claude)
+        ]
+        config.accountOrder = ["claude-api", "a"]
+        let store = StubConfigStore(config: config)
+        let secrets = InMemorySecretStore()
+        try secrets.set("old-key", for: .claudeAPIKey)
+        let viewModel = makeViewModel(
+            config: config,
+            profiles: [profile("a.json", type: .claude)],
+            configStore: store,
+            secretStore: secrets
+        )
+
+        viewModel.removeAPIProvider(.claudeAPI)
+        XCTAssertEqual(viewModel.config.accountOrder, ["a"])
+        XCTAssertEqual(store.savedConfigs.last?.accountOrder, ["a"])
+
+        try viewModel.saveClaudeAPISettings(
+            functionName: "ccapi",
+            nickname: "API",
+            dangerousPermissionsEnabled: false,
+            key: "new-key"
+        )
+
+        XCTAssertEqual(viewModel.providerRows.map(\.id.rawValue), ["a", "claude-api"])
+        XCTAssertEqual(store.savedConfigs.last?.accountOrder, ["a", "claude-api"])
+    }
+
+    private func threeAccountConfig() -> AppConfig {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            commandProfile(id: "a", authProfileID: "a.json", provider: .claude),
+            commandProfile(id: "b", authProfileID: "b.json", provider: .codex),
+            commandProfile(id: "c", authProfileID: "c.json", provider: .claude)
+        ]
+        return config
+    }
+
+    private func threeProfiles() -> [AuthProfile] {
+        [
+            profile("a.json", type: .claude),
+            profile("b.json", type: .codex),
+            profile("c.json", type: .claude)
+        ]
+    }
+
+    private func profile(_ id: String, type: AuthProfileType) -> AuthProfile {
+        AuthProfile(
+            fileName: id,
+            type: type,
+            email: "\(id)@example.com",
+            accountID: nil,
+            expired: nil,
+            disabled: false
+        )
+    }
+
+    private func commandProfile(
+        id: String,
+        authProfileID: String,
+        provider: AuthProfileType
+    ) -> AppConfig.OAuthCommandProfile {
+        AppConfig.OAuthCommandProfile(
+            id: id,
+            provider: provider,
+            authProfileID: authProfileID,
+            commandName: "cmd\(id)",
+            nickname: id,
+            isEnabled: true
+        )
+    }
+
+    private func makeViewModel(
+        config: AppConfig,
+        profiles: [AuthProfile],
+        configStore: StubConfigStore? = nil,
+        authProfileStore: (any AuthProfileManaging)? = nil,
+        secretStore: any SecretStore = InMemorySecretStore()
+    ) -> DashboardViewModel {
+        DashboardViewModel(
+            config: config,
+            configStore: configStore ?? StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: authProfileStore ?? StubAuthProfileStore(profiles: profiles),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: secretStore
+        )
+    }
+
+    private func connectedClaudeConnector() -> ClaudeConnector {
+        ClaudeConnector(runner: StubProcessRunner(results: Array(repeating: [
+            ProcessResult(exitCode: 0, stdout: "/usr/local/bin/claude\n", stderr: ""),
+            ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: ""),
+            ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: "")
+        ], count: 4).flatMap { $0 }))
+    }
+}
+
+private final class RecordingAppAppearanceService: AppAppearanceApplying, @unchecked Sendable {
+    private(set) var showDockIconValues: [Bool] = []
+    private(set) var appearanceValues: [AppearanceMode] = []
+
+    func apply(showDockIcon: Bool) {
+        showDockIconValues.append(showDockIcon)
+    }
+
+    func apply(appearance: AppearanceMode) {
+        appearanceValues.append(appearance)
     }
 }
 
@@ -4488,6 +5029,8 @@ private final class SubscriptionUsageSnapshotCacheDouble: SubscriptionUsageSnaps
     init(snapshots: [String: SubscriptionUsageSnapshot] = [:]) {
         self.snapshots = snapshots
     }
+
+    var isEmpty: Bool { snapshots.isEmpty }
 
     func load() -> [String: SubscriptionUsageSnapshot] { snapshots }
     func save(_ snapshots: [String: SubscriptionUsageSnapshot]) throws { self.snapshots = snapshots }

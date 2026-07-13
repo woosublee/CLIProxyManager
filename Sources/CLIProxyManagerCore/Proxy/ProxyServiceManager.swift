@@ -271,7 +271,7 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
             fileManager: fileManager,
             managementKeyProvider: managementKeyProvider ?? { try? SubscriptionUsageManagementKeyFileStore(paths: paths).managementKey() },
             subscriptionUsageEnabledProvider: subscriptionUsageEnabledProvider ?? {
-                (try? AppConfigStore(paths: paths).load().subscriptionUsage.isEnabled) ?? false
+                (try? AppConfigStore(paths: paths).load().isSubscriptionUsageEnabled) ?? false
             },
             claudeAPIKeyProvider: claudeAPIKeyProvider ?? { try? FileSecretStore(paths: paths).get(.claudeAPIKey) },
             codexAPIKeyProvider: codexAPIKeyProvider ?? { try? FileSecretStore(paths: paths).get(.codexAPIKey) },
@@ -301,7 +301,7 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         self.fileManager = fileManager
         self.managementKeyProvider = managementKeyProvider ?? { try? SubscriptionUsageManagementKeyFileStore(paths: paths).managementKey() }
         self.subscriptionUsageEnabledProvider = subscriptionUsageEnabledProvider ?? {
-            (try? AppConfigStore(paths: paths).load().subscriptionUsage.isEnabled) ?? false
+            (try? AppConfigStore(paths: paths).load().isSubscriptionUsageEnabled) ?? false
         }
         self.claudeAPIKeyProvider = claudeAPIKeyProvider ?? { try? FileSecretStore(paths: paths).get(.claudeAPIKey) }
         self.codexAPIKeyProvider = codexAPIKeyProvider ?? { try? FileSecretStore(paths: paths).get(.codexAPIKey) }

@@ -32,8 +32,46 @@ final class AppConfigTests: XCTestCase {
         XCTAssertFalse(config.usageOverlay.isVisible)
         XCTAssertFalse(config.usageOverlay.alwaysOnTop)
         XCTAssertEqual(config.usageOverlay.backgroundOpacity, 0.9)
+        XCTAssertEqual(config.usageOverlay.displayMode, .expanded)
         XCTAssertFalse(config.roundRobinEnabled)
         XCTAssertEqual(config.roundRobinProfiles, [])
+        XCTAssertEqual(config.accountOrder, [])
+    }
+
+    func testDefaultConfigHasNoStoredAccountOrder() {
+        XCTAssertEqual(AppConfig.default.accountOrder, [])
+    }
+
+    func testDecodedConfigDefaultsMissingAccountOrderToEmpty() throws {
+        let data = Data(#"""
+        {
+          "port": 18317,
+          "commands": { "cc": "", "ccapi": "", "ccodex": "" },
+          "ccapi": {},
+          "ccodex": {
+            "opus": { "model": "gpt-5.6-terra", "reasoning": "xhigh", "contextWindow": "auto" },
+            "sonnet": { "model": "gpt-5.6-terra", "reasoning": "medium", "contextWindow": "auto" },
+            "haiku": { "model": "gpt-5.6-terra", "reasoning": "low", "contextWindow": "auto" }
+          },
+          "includeDangerouslySkipPermissions": false,
+          "startAtLogin": false,
+          "showDockIcon": true,
+          "showMenuBarIcon": true
+        }
+        """#.utf8)
+
+        let config = try JSONDecoder().decode(AppConfig.self, from: data)
+
+        XCTAssertEqual(config.accountOrder, [])
+    }
+
+    func testAccountOrderRoundTripsThroughCodable() throws {
+        var config = AppConfig.default
+        config.accountOrder = ["codex-api", "claude-work", "claude-api"]
+
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))
+
+        XCTAssertEqual(decoded.accountOrder, ["codex-api", "claude-work", "claude-api"])
     }
 
     func testDefaultCodexRoutingUsesTerraWithRoleSpecificReasoning() {
@@ -93,6 +131,36 @@ final class AppConfigTests: XCTestCase {
             AppConfig.UsageOverlay(backgroundOpacity: 1.1).backgroundOpacity,
             1
         )
+    }
+
+    func testUsageOverlayDefaultsToExpandedDisplayMode() {
+        XCTAssertEqual(AppConfig.UsageOverlay().displayMode, .expanded)
+        XCTAssertEqual(AppConfig.default.usageOverlay.displayMode, .expanded)
+    }
+
+    func testUsageOverlayDisplayModeRoundTrips() throws {
+        let overlay = AppConfig.UsageOverlay(
+            isVisible: true,
+            alwaysOnTop: true,
+            backgroundOpacity: 0.45,
+            displayMode: .compact
+        )
+
+        let data = try JSONEncoder().encode(overlay)
+        let decoded = try JSONDecoder().decode(AppConfig.UsageOverlay.self, from: data)
+
+        XCTAssertEqual(decoded, overlay)
+        XCTAssertEqual(decoded.displayMode, .compact)
+    }
+
+    func testUsageOverlayMissingDisplayModeDecodesAsExpanded() throws {
+        let data = Data(#"{"isVisible":true,"alwaysOnTop":false,"backgroundOpacity":0.7}"#.utf8)
+
+        let decoded = try JSONDecoder().decode(AppConfig.UsageOverlay.self, from: data)
+
+        XCTAssertEqual(decoded.displayMode, .expanded)
+        XCTAssertTrue(decoded.isVisible)
+        XCTAssertEqual(decoded.backgroundOpacity, 0.7)
     }
 
     func testDecodedConfigPreservesSavedCommandNamesAndClaudeAPIModel() throws {
@@ -688,5 +756,72 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(decoded.claude, routing)
         XCTAssertEqual(decoded.effectiveClaudeRouting, routing)
         XCTAssertEqual(decoded.connectionMode, .direct)
+    }
+
+    func testLegacySubscriptionUsageEnabledMigratesToMenuBarVisibility() throws {
+        let enabled = try decodeConfig(subscriptionUsageJSON: #"{"isEnabled":true}"#, usageOverlayJSON: #"{"isVisible":false}"#)
+        let disabled = try decodeConfig(subscriptionUsageJSON: #"{"isEnabled":false}"#, usageOverlayJSON: #"{"isVisible":false}"#)
+
+        XCTAssertTrue(enabled.subscriptionUsage.showInMenuBar)
+        XCTAssertFalse(disabled.subscriptionUsage.showInMenuBar)
+    }
+
+    func testNewMenuBarVisibilityTakesPrecedenceOverLegacyEnabledField() throws {
+        let config = try decodeConfig(
+            subscriptionUsageJSON: #"{"showInMenuBar":false,"isEnabled":true}"#,
+            usageOverlayJSON: #"{"isVisible":false}"#
+        )
+
+        XCTAssertFalse(config.subscriptionUsage.showInMenuBar)
+        XCTAssertFalse(config.isSubscriptionUsageEnabled)
+    }
+
+    func testSubscriptionUsageEnabledIsComputedFromEitherDisplayPreference() {
+        var config = AppConfig.default
+        XCTAssertFalse(config.isSubscriptionUsageEnabled)
+
+        config.subscriptionUsage.showInMenuBar = true
+        XCTAssertTrue(config.isSubscriptionUsageEnabled)
+
+        config.subscriptionUsage.showInMenuBar = false
+        config.usageOverlay.isVisible = true
+        XCTAssertTrue(config.isSubscriptionUsageEnabled)
+
+        config.subscriptionUsage.showInMenuBar = true
+        config.usageOverlay.isVisible = true
+        XCTAssertTrue(config.isSubscriptionUsageEnabled)
+    }
+
+    func testSubscriptionUsageEncodesOnlyNewMenuBarVisibilityField() throws {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(config)) as? [String: Any])
+        let usage = try XCTUnwrap(object["subscriptionUsage"] as? [String: Any])
+
+        XCTAssertEqual(usage["showInMenuBar"] as? Bool, true)
+        XCTAssertNil(usage["isEnabled"])
+    }
+
+    private func decodeConfig(subscriptionUsageJSON: String, usageOverlayJSON: String) throws -> AppConfig {
+        let json = """
+        {
+          "port": 18317,
+          "commands": {"cc":"","ccapi":"","ccodex":""},
+          "ccapi": {"model":"claude-opus-4-8"},
+          "ccodex": {
+            "opus": {"model":"gpt-5.5","reasoning":"xhigh","contextWindow":"auto"},
+            "sonnet": {"model":"gpt-5.5","reasoning":"medium","contextWindow":"auto"},
+            "haiku": {"model":"gpt-5.5","reasoning":"low","contextWindow":"auto"}
+          },
+          "includeDangerouslySkipPermissions": false,
+          "startAtLogin": false,
+          "showDockIcon": true,
+          "showMenuBarIcon": true,
+          "subscriptionUsage": \(subscriptionUsageJSON),
+          "usageOverlay": \(usageOverlayJSON)
+        }
+        """
+        return try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
     }
 }

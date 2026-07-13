@@ -310,42 +310,68 @@ public struct AppConfig: Codable, Equatable, Sendable {
     }
 
     public struct SubscriptionUsage: Codable, Equatable, Sendable {
-        public var isEnabled: Bool
+        public var showInMenuBar: Bool
 
-        public init(isEnabled: Bool = false) {
-            self.isEnabled = isEnabled
+        public init(showInMenuBar: Bool = false) {
+            self.showInMenuBar = showInMenuBar
         }
 
         private enum CodingKeys: String, CodingKey {
+            case showInMenuBar
             case isEnabled
         }
 
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
-            self.isEnabled = try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
+            if let showInMenuBar = try c.decodeIfPresent(Bool.self, forKey: .showInMenuBar) {
+                self.showInMenuBar = showInMenuBar
+            } else {
+                self.showInMenuBar = try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
+            }
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(showInMenuBar, forKey: .showInMenuBar)
         }
     }
 
     public struct UsageOverlay: Codable, Equatable, Sendable {
+        public enum DisplayMode: String, Codable, Equatable, Sendable {
+            case expanded
+            case compact
+        }
+
         public var isVisible: Bool
         public var alwaysOnTop: Bool
         public var backgroundOpacity: Double
+        public var displayMode: DisplayMode
 
-        public init(isVisible: Bool = false, alwaysOnTop: Bool = false, backgroundOpacity: Double = 0.9) {
+        public init(
+            isVisible: Bool = false,
+            alwaysOnTop: Bool = false,
+            backgroundOpacity: Double = 0.9,
+            displayMode: DisplayMode = .expanded
+        ) {
             self.isVisible = isVisible
             self.alwaysOnTop = alwaysOnTop
             self.backgroundOpacity = min(max(backgroundOpacity, 0.2), 1)
+            self.displayMode = displayMode
         }
 
         private enum CodingKeys: String, CodingKey {
-            case isVisible, alwaysOnTop, backgroundOpacity
+            case isVisible, alwaysOnTop, backgroundOpacity, displayMode
         }
 
         public init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             self.isVisible = try container.decodeIfPresent(Bool.self, forKey: .isVisible) ?? false
             self.alwaysOnTop = try container.decodeIfPresent(Bool.self, forKey: .alwaysOnTop) ?? false
-            self.backgroundOpacity = min(max(try container.decodeIfPresent(Double.self, forKey: .backgroundOpacity) ?? 0.9, 0.2), 1)
+            self.backgroundOpacity = min(
+                max(try container.decodeIfPresent(Double.self, forKey: .backgroundOpacity) ?? 0.9, 0.2),
+                1
+            )
+            self.displayMode = try container.decodeIfPresent(DisplayMode.self, forKey: .displayMode) ?? .expanded
         }
     }
 
@@ -384,8 +410,14 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var accountPrivacy: AccountPrivacy
     public var subscriptionUsage: SubscriptionUsage
     public var usageOverlay: UsageOverlay
+
+    public var isSubscriptionUsageEnabled: Bool {
+        subscriptionUsage.showInMenuBar || usageOverlay.isVisible
+    }
+
     public var oauthCommandProfiles: [OAuthCommandProfile]
     public var roundRobinProfiles: [RoundRobinProfile]
+    public var accountOrder: [String]
     public var bindAddress: String
     public var autostartServer: Bool
     public var roundRobinEnabled: Bool
@@ -409,6 +441,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         usageOverlay: UsageOverlay = UsageOverlay(),
         oauthCommandProfiles: [OAuthCommandProfile] = [],
         roundRobinProfiles: [RoundRobinProfile] = [],
+        accountOrder: [String] = [],
         bindAddress: String = "127.0.0.1",
         autostartServer: Bool = false,
         roundRobinEnabled: Bool = false,
@@ -431,6 +464,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         self.usageOverlay = usageOverlay
         self.oauthCommandProfiles = oauthCommandProfiles
         self.roundRobinProfiles = roundRobinProfiles
+        self.accountOrder = accountOrder
         self.bindAddress = bindAddress
         self.autostartServer = autostartServer
         self.roundRobinEnabled = roundRobinEnabled
@@ -449,6 +483,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         case usageOverlay
         case oauthCommandProfiles
         case roundRobinProfiles
+        case accountOrder
         case bindAddress, autostartServer, roundRobinEnabled
         case logLevel
     }
@@ -485,6 +520,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         self.usageOverlay = try c.decodeIfPresent(UsageOverlay.self, forKey: .usageOverlay) ?? UsageOverlay()
         self.oauthCommandProfiles = try c.decodeIfPresent([OAuthCommandProfile].self, forKey: .oauthCommandProfiles) ?? []
         self.roundRobinProfiles = try c.decodeIfPresent([RoundRobinProfile].self, forKey: .roundRobinProfiles) ?? []
+        self.accountOrder = try c.decodeIfPresent([String].self, forKey: .accountOrder) ?? []
         self.bindAddress = try c.decodeIfPresent(String.self, forKey: .bindAddress) ?? "127.0.0.1"
         self.autostartServer = try c.decodeIfPresent(Bool.self, forKey: .autostartServer) ?? false
         self.roundRobinEnabled = false

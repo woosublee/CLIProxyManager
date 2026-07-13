@@ -66,6 +66,8 @@ Enable **Server Settings → Subscription Usage**, then use **General → Usage 
 - Show or hide the HUD from the menu bar.
 - See per-account usage and reset times for Claude and Codex.
 - Codex shows the actual period reported by the API: `5h` and `7d` for typical accounts, and `1mo` for Team plan monthly windows.
+- Use the compact/expand control in the HUD header to switch between the 300pt-wide full view and the 108pt-wide compact view.
+- Compact view shows the account avatar, name, and period usage percentages in a vertical layout. Loading, unavailable, disabled, and stale states show `—` with a status indicator, and the selected view is restored after relaunch.
 
 ## Terminal and SSH
 

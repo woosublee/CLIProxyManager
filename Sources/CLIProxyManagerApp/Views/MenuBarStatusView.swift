@@ -25,7 +25,8 @@ struct MenuBarStatusView: View {
             serverStatus: viewModel.serverStatus,
             serverControlState: viewModel.serverControlState,
             providers: viewModel.providerRows,
-            port: viewModel.config.port
+            port: viewModel.config.port,
+            showsSubscriptionUsage: viewModel.config.subscriptionUsage.showInMenuBar
         )
     }
 
@@ -208,7 +209,9 @@ private struct MenuBarAccountRow: View {
 
     @ViewBuilder
     private var subscriptionUsage: some View {
-        if case .unavailable(.proxyUnavailable) = provider.subscriptionUsageState {
+        if !provider.showsSubscriptionUsage {
+            EmptyView()
+        } else if case .unavailable(.proxyUnavailable) = provider.subscriptionUsageState {
             EmptyView()
         } else {
             switch subscriptionUsageDisplayState(for: provider.subscriptionUsageState) {

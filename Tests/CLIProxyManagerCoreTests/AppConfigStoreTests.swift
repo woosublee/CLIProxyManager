@@ -19,7 +19,8 @@ final class AppConfigStoreTests: XCTestCase {
         XCTAssertEqual(config.ccodex.sonnet, AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .medium, contextWindow: .auto))
         XCTAssertEqual(config.ccodex.haiku, AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .low, contextWindow: .auto))
         XCTAssertEqual(config.roundRobinProfiles, [])
-        XCTAssertFalse(config.subscriptionUsage.isEnabled)
+        XCTAssertFalse(config.subscriptionUsage.showInMenuBar)
+        XCTAssertFalse(config.isSubscriptionUsageEnabled)
     }
 
     func testStoreReturnsDefaultWhenConfigFileDoesNotExist() throws {
@@ -51,7 +52,8 @@ final class AppConfigStoreTests: XCTestCase {
 
         let config = try JSONDecoder().decode(AppConfig.self, from: Data(legacyJSON.utf8))
 
-        XCTAssertFalse(config.subscriptionUsage.isEnabled)
+        XCTAssertFalse(config.subscriptionUsage.showInMenuBar)
+        XCTAssertFalse(config.isSubscriptionUsageEnabled)
     }
 
     func testStoreSavesAndLoadsConfig() throws {
@@ -71,6 +73,7 @@ final class AppConfigStoreTests: XCTestCase {
             showDockIcon: false,
             showMenuBarIcon: true
         )
+        config.subscriptionUsage.showInMenuBar = true
         config.oauthCommandProfiles = [
             AppConfig.OAuthCommandProfile(
                 id: "claude-work",
@@ -100,10 +103,14 @@ final class AppConfigStoreTests: XCTestCase {
                 isEnabled: false
             )
         ]
+        config.accountOrder = ["codex-personal", "claude-api", "claude-work"]
 
         try store.save(config)
 
-        XCTAssertEqual(try store.load(), config)
+        let loaded = try store.load()
+        XCTAssertEqual(loaded, config)
+        XCTAssertTrue(loaded.subscriptionUsage.showInMenuBar)
+        XCTAssertTrue(loaded.isSubscriptionUsageEnabled)
     }
 
     private func makeSandbox() throws -> URL {

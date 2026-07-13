@@ -13,9 +13,24 @@ final class SettingsNavigationTests: XCTestCase {
         XCTAssertEqual(aboutVersionText(bundle: bundle), "Version 0.1.2 (6)")
     }
 
-    func testSettingsTabsAreGeneralServerAdvancedAndAbout() {
-        XCTAssertEqual(SettingsTab.allCases.map(\.title), ["General", "Server", "Advanced", "About"])
-        XCTAssertEqual(SettingsTab.allCases.map(\.systemImage), ["slider.horizontal.3", "server.rack", "wrench.and.screwdriver", "info.circle"])
+    func testSettingsTabsIncludeDedicatedUsageTab() {
+        XCTAssertEqual(
+            SettingsTab.allCases.map(\.title),
+            ["General", "Usage", "Server", "Advanced", "About"]
+        )
+        XCTAssertEqual(
+            SettingsTab.allCases.map(\.systemImage),
+            ["slider.horizontal.3", "chart.bar.xaxis", "server.rack", "wrench.and.screwdriver", "info.circle"]
+        )
+    }
+
+    func testUsageSettingsCopyExplainsAutomaticSharedBackend() {
+        XCTAssertEqual(UsageSettingsCopy.menuBarLabel, "Show subscription usage")
+        XCTAssertEqual(UsageSettingsCopy.hudLabel, "Show usage HUD")
+        XCTAssertEqual(
+            UsageSettingsCopy.footer,
+            "Usage data is fetched whenever the menu bar display or Usage HUD is enabled. CLIProxyManager manages the local management key automatically."
+        )
     }
 
     func testOAuthCompletionTransitionsAddProviderSheetToInitialProviderSettings() {

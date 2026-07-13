@@ -107,6 +107,7 @@ enum CodexModelLoadingState: Equatable, Sendable {
 final class DashboardViewModel: ObservableObject {
     private enum ProxyConfigurationRestartReason: Hashable {
         case apiKey
+        case configuration
         case fastMode
     }
 
@@ -190,7 +191,7 @@ final class DashboardViewModel: ObservableObject {
     @Published private(set) var isCPMInstallationActionInProgress = false
 
     var canRefreshSubscriptionUsage: Bool {
-        config.subscriptionUsage.isEnabled
+        config.isSubscriptionUsageEnabled
             && subscriptionUsageKeyStore.isConfigured()
             && serverStatus.severity == .ready
     }
@@ -326,10 +327,57 @@ final class DashboardViewModel: ObservableObject {
         config.usageOverlay.backgroundOpacity = min(max(opacity, 0.2), 1)
     }
 
+    func saveSubscriptionUsageMenuBarVisible(_ isVisible: Bool) throws {
+        var updatedConfig = config
+        updatedConfig.subscriptionUsage.showInMenuBar = isVisible
+        try saveUsageDisplayConfig(updatedConfig)
+    }
+
     func saveUsageOverlay(_ usageOverlay: AppConfig.UsageOverlay) throws {
         var updatedConfig = config
         updatedConfig.usageOverlay = usageOverlay
-        try savePrivacyOnlyConfig(updatedConfig)
+        try saveUsageDisplayConfig(updatedConfig)
+    }
+
+    private func saveUsageDisplayConfig(_ updatedConfig: AppConfig) throws {
+        let wasEnabled = config.isSubscriptionUsageEnabled
+        let willBeEnabled = updatedConfig.isSubscriptionUsageEnabled
+
+        if !wasEnabled && willBeEnabled {
+            let createdKey = try subscriptionUsageKeyStore.createManagementKeyIfNeeded()
+            do {
+                try savePrivacyOnlyConfig(updatedConfig)
+            } catch {
+                if createdKey { try? subscriptionUsageKeyStore.deleteManagementKey() }
+                throw error
+            }
+        } else {
+            try savePrivacyOnlyConfig(updatedConfig)
+            if wasEnabled && !willBeEnabled {
+                cancelSubscriptionUsageWork()
+                let cleanupError: Error?
+                do {
+                    try subscriptionUsageKeyStore.deleteManagementKey()
+                    cleanupError = nil
+                } catch {
+                    cleanupError = error
+                }
+                setSubscriptionUsageStates(.disabled)
+                clearSubscriptionUsageSnapshots()
+                lastSuccessfulSubscriptionUsageRefreshAt = nil
+                requestServerRestartAfterConfigChange()
+                if let cleanupError { throw cleanupError }
+                return
+            }
+        }
+
+        guard wasEnabled != willBeEnabled else { return }
+        requestServerRestartAfterConfigChange()
+        if !serverControlState.isRunning, !isServerActionInProgress, !serverControlState.isTransitioning {
+            Task { [weak self] in
+                await self?.refreshSubscriptionUsage()
+            }
+        }
     }
 
     func saveShowNotifications(_ enabled: Bool) throws {
@@ -381,26 +429,31 @@ final class DashboardViewModel: ObservableObject {
         updatedConfig.codexAPI = config.codexAPI
         updatedConfig.nicknames = config.nicknames
         updatedConfig.includeDangerouslySkipPermissions = config.includeDangerouslySkipPermissions
+        let shouldDeleteManagementKey = config.isSubscriptionUsageEnabled || subscriptionUsageKeyStore.isConfigured()
         do {
-            let shouldDeleteManagementKey = config.subscriptionUsage.isEnabled || subscriptionUsageKeyStore.isConfigured()
             try saveConfig(updatedConfig)
-            if shouldDeleteManagementKey {
-                cancelSubscriptionUsageWork()
-                try subscriptionUsageKeyStore.deleteManagementKey()
-            }
-            setSubscriptionUsageStates(.disabled)
-            clearSubscriptionUsageSnapshots()
-            appAppearanceService.apply(showDockIcon: updatedConfig.showDockIcon)
-            appAppearanceService.apply(appearance: updatedConfig.appearance)
-            settingsMessage = "Settings reset to defaults."
-            if serverControlState.isRunning {
-                Task { [weak self] in
-                    await self?.restartServerAfterRequiredChange()
-                }
-            }
         } catch {
             settingsMessage = "Reset failed: \(error.localizedDescription)"
+            return
         }
+
+        var cleanupError: Error?
+        if shouldDeleteManagementKey {
+            cancelSubscriptionUsageWork()
+            do {
+                try subscriptionUsageKeyStore.deleteManagementKey()
+            } catch {
+                cleanupError = error
+            }
+        }
+        setSubscriptionUsageStates(.disabled)
+        clearSubscriptionUsageSnapshots()
+        lastSuccessfulSubscriptionUsageRefreshAt = nil
+        appAppearanceService.apply(showDockIcon: updatedConfig.showDockIcon)
+        appAppearanceService.apply(appearance: updatedConfig.appearance)
+        settingsMessage = cleanupError.map { "Reset failed: \($0.localizedDescription)" }
+            ?? "Settings reset to defaults."
+        requestServerRestartAfterConfigChange()
     }
 
     func startApplication() async {
@@ -420,42 +473,9 @@ final class DashboardViewModel: ObservableObject {
         updateStatuses(serverStatus: updatedServerStatus, claudeStatus: claudeStatus)
     }
 
-    func saveSubscriptionUsageEnabled(_ enabled: Bool) throws {
-        if enabled {
-            let createdKey = try subscriptionUsageKeyStore.createManagementKeyIfNeeded()
-            var updatedConfig = config
-            updatedConfig.subscriptionUsage.isEnabled = true
-            do {
-                try saveConfig(updatedConfig)
-            } catch {
-                if createdKey {
-                    try? subscriptionUsageKeyStore.deleteManagementKey()
-                }
-                throw error
-            }
-        } else {
-            var updatedConfig = config
-            updatedConfig.subscriptionUsage.isEnabled = false
-            try saveConfig(updatedConfig)
-            cancelSubscriptionUsageWork()
-            try subscriptionUsageKeyStore.deleteManagementKey()
-            setSubscriptionUsageStates(.disabled)
-            clearSubscriptionUsageSnapshots()
-        }
-
-        Task { [weak self] in
-            guard let self else { return }
-            if self.serverControlState.isRunning {
-                await self.restartServerAfterRequiredChange()
-            } else {
-                await self.refreshSubscriptionUsage()
-            }
-        }
-    }
-
     func prepareSubscriptionUsage() async {
         do {
-            if config.subscriptionUsage.isEnabled {
+            if config.isSubscriptionUsageEnabled {
                 let createdKey = try subscriptionUsageKeyStore.createManagementKeyIfNeeded()
                 if createdKey, serverControlState.isRunning {
                     await restartServerAfterRequiredChange()
@@ -476,7 +496,7 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func restoreSubscriptionUsageSnapshots() {
-        guard config.subscriptionUsage.isEnabled else { return }
+        guard config.isSubscriptionUsageEnabled else { return }
         let enabledProfileIDs = Set(authProfiles.filter(isSubscriptionUsageEnabled(for:)).map(\.id))
         let snapshots = subscriptionUsageSnapshotCache.load().filter { enabledProfileIDs.contains($0.key) }
         guard !snapshots.isEmpty else { return }
@@ -559,7 +579,7 @@ final class DashboardViewModel: ObservableObject {
             }
             return
         }
-        guard config.subscriptionUsage.isEnabled else {
+        guard config.isSubscriptionUsageEnabled else {
             setSubscriptionUsageStates(.disabled)
             return
         }
@@ -594,7 +614,7 @@ final class DashboardViewModel: ObservableObject {
             let report = await quotaClient.fetchUsage(port: port, profiles: profiles)
             guard !Task.isCancelled,
                   let self,
-                  self.config.subscriptionUsage.isEnabled,
+                  self.config.isSubscriptionUsageEnabled,
                   self.subscriptionUsageKeyStore.isConfigured(),
                   self.subscriptionUsageRefreshGeneration == generation else {
                 return
@@ -687,7 +707,7 @@ final class DashboardViewModel: ObservableObject {
 
     private func scheduleSubscriptionUsagePollingIfNeeded() {
         subscriptionUsagePollingTask?.cancel()
-        guard config.subscriptionUsage.isEnabled,
+        guard config.isSubscriptionUsageEnabled,
               subscriptionUsageKeyStore.isConfigured() else {
             return
         }
@@ -804,6 +824,53 @@ final class DashboardViewModel: ObservableObject {
         settingsMessageAutoClearTask?.cancel()
         settingsMessageAutoClearTask = nil
         settingsMessage = nil
+    }
+
+    func canMoveAccountUp(_ id: ProviderRowState.ID) -> Bool {
+        guard let index = providerRows.firstIndex(where: { $0.id == id }) else { return false }
+        return index > providerRows.startIndex
+    }
+
+    func canMoveAccountDown(_ id: ProviderRowState.ID) -> Bool {
+        guard let index = providerRows.firstIndex(where: { $0.id == id }) else { return false }
+        return index < providerRows.index(before: providerRows.endIndex)
+    }
+
+    func moveAccountUp(_ id: ProviderRowState.ID) {
+        guard let index = providerRows.firstIndex(where: { $0.id == id }), index > 0 else { return }
+        moveAccount(id, before: providerRows[index - 1].id)
+    }
+
+    func moveAccountDown(_ id: ProviderRowState.ID) {
+        guard let index = providerRows.firstIndex(where: { $0.id == id }),
+              index + 1 < providerRows.count else { return }
+        let targetID = index + 2 < providerRows.count ? providerRows[index + 2].id : nil
+        moveAccount(id, before: targetID)
+    }
+
+    func moveAccount(
+        _ id: ProviderRowState.ID,
+        before targetID: ProviderRowState.ID?
+    ) {
+        let movedRows = AccountOrdering.moving(providerRows, id: id, before: targetID)
+        guard movedRows != providerRows else { return }
+
+        let oldRows = providerRows
+        let oldConfig = config
+        var updatedConfig = config
+        updatedConfig.accountOrder = movedRows.map(\.id.rawValue)
+
+        providerRows = movedRows
+        config = updatedConfig
+
+        do {
+            try configStore.save(updatedConfig)
+            lastPersistedConfig = updatedConfig
+        } catch {
+            providerRows = oldRows
+            config = oldConfig
+            settingsMessage = "Account order could not be saved: \(error.localizedDescription)"
+        }
     }
 
     func startOAuthLogin(_ provider: ProviderRowState.ID) {
@@ -1389,6 +1456,10 @@ final class DashboardViewModel: ObservableObject {
         }
         pendingProxyConfigurationRestartReasons.insert(reason)
         schedulePendingProxyConfigurationRestartIfNeeded()
+    }
+
+    private func requestServerRestartAfterConfigChange() {
+        requestProxyConfigurationRestart(reason: .configuration)
     }
 
     private func restartForPendingConfigurationChanges() async {
@@ -2178,7 +2249,7 @@ final class DashboardViewModel: ObservableObject {
         let persistedConfig = preservingUnavailableRoundRobinProfiles
             ? updatedConfig
             : removingUnavailableRoundRobinProfiles(from: updatedConfig)
-        let updatedConfig = Self.persistedConfig(persistedConfig)
+        var updatedConfig = Self.persistedConfig(persistedConfig)
         _ = try CodexFastConfiguration(config: updatedConfig)
         let oldFastInput = codexFastConfigurationInput(config: config)
         let newFastInput = codexFastConfigurationInput(config: updatedConfig)
@@ -2211,6 +2282,7 @@ final class DashboardViewModel: ObservableObject {
         cards = ProfileCard.makeDefaultCards(config: updatedConfig)
         rebuildOptionRows()
         rebuildProviderRows(claudeStatus: nil, codexStatus: nil)
+        updatedConfig = config
 
         var prefixRollbacks: [AuthProfilePrefixRollback] = []
         var didApplyShellInstall = false
@@ -2461,7 +2533,7 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private var defaultSubscriptionUsageState: AccountSubscriptionUsageState {
-        config.subscriptionUsage.isEnabled ? .managementKeyNotConfigured : .disabled
+        config.isSubscriptionUsageEnabled ? .managementKeyNotConfigured : .disabled
     }
 
     private func rebuildProviderRows(claudeStatus: DiagnosticStatus?, codexStatus: DiagnosticStatus?) {
@@ -2537,7 +2609,9 @@ final class DashboardViewModel: ObservableObject {
                 showsSubscriptionUsage: false
             ))
         }
-        providerRows = rows
+        let orderedRows = AccountOrdering.orderedRows(rows, storedIDs: config.accountOrder)
+        providerRows = orderedRows
+        config.accountOrder = orderedRows.map(\.id.rawValue)
     }
 
     private func rebuildOptionRows() {
