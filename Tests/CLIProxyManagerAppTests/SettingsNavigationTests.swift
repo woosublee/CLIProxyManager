@@ -58,6 +58,17 @@ final class SettingsNavigationTests: XCTestCase {
         XCTAssertEqual(ProviderSettingsSheetMetrics.codexHeight, 720)
     }
 
+    func testLegacyCodexModelsSheetUsesFastColumnWidth() throws {
+        let source = try String(
+            contentsOf: repositoryRoot().appendingPathComponent(
+                "Sources/CLIProxyManagerApp/Views/SettingsSheets.swift"
+            ),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains(".frame(width: ProviderSettingsSheetMetrics.codexWidth)"))
+    }
+
     func testCodexRoleRoutingFieldsNormalizeInitialAuthoritativeOptionsAndCanonicalizePickers() throws {
         let source = try String(
             contentsOf: repositoryRoot().appendingPathComponent(

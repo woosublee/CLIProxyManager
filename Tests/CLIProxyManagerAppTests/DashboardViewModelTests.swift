@@ -3004,9 +3004,9 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertFalse(viewModel.isServerActionInProgress)
     }
 
-    func testLifecycleActionInProgressPreventsOverlappingActions() async {
+    func testLifecycleActionsRunSequentiallyWithoutOverlapping() async {
         let config = AppConfig.default
-        let proxyService = StubProxyServiceStarter()
+        let proxyService = StubProxyServiceStarter(startDelayNanoseconds: 50_000_000)
         let viewModel = DashboardViewModel(
             config: config,
             configStore: StubConfigStore(config: config),
@@ -3015,18 +3015,19 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
             proxyService: proxyService,
-            claudeConnector: ClaudeConnector(runner: StubProcessRunner(results: [
-                ProcessResult(exitCode: 0, stdout: "/usr/local/bin/claude\n", stderr: ""),
-                ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: ""),
-                ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: "")
-            ]))
+            claudeConnector: connectedClaudeConnector(),
+            serverStatusRetryDelayNanoseconds: 0
         )
 
-        viewModel.isServerActionInProgress = true
-        await viewModel.startServer()
+        let startTask = Task { await viewModel.startServer() }
+        await waitForServerAction(viewModel)
+        let stopTask = Task { await viewModel.stopServer() }
+        await startTask.value
+        await stopTask.value
 
-        XCTAssertEqual(proxyService.ports, [])
-        XCTAssertTrue(viewModel.isServerActionInProgress)
+        XCTAssertEqual(proxyService.ports, [config.port])
+        XCTAssertEqual(proxyService.stopCount, 1)
+        XCTAssertFalse(viewModel.isServerActionInProgress)
     }
 
     func testEnablingHUDAsFirstConsumerCreatesKeyAndRestartsReadyProxy() async throws {
