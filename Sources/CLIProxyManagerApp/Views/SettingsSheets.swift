@@ -192,7 +192,7 @@ struct ModelsSettingsSheet: View {
             }
         }
         .padding(24)
-        .frame(width: 620)
+        .frame(width: ProviderSettingsSheetMetrics.codexWidth)
         .settingsErrorAlert(message: $errorMessage)
     }
 }

@@ -1869,7 +1869,7 @@ Expected: `Build complete!` and exit status 0.
 프로젝트의 `run` skill을 사용해 development app을 실행한다. 다음을 직접 확인한다.
 
 1. Codex OAuth 설정에서 Opus만 Fast를 켤 수 있다.
-2. 지원 모델은 toggle enabled, `gpt-5.4-mini` 또는 custom model은 disabled다.
+2. 지원 모델은 toggle enabled이며, `gpt-5.4-mini` 또는 Fast capability metadata가 없는 custom model은 disabled다. Fast metadata가 명시된 custom model은 enabled다.
 3. Fast toggle 아래에 정확한 안내 문구가 보인다.
 4. 저장 후 실행 중 proxy가 한 번 restart되고 ready로 복귀한다.
 5. 관리 config 경로의 `config.yaml`에 다음 형태가 생긴다.
