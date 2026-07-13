@@ -115,7 +115,7 @@ final class AppConfigTests: XCTestCase {
             fastModeEnabled: true
         )
 
-        XCTAssertEqual(role.modelIdentifier, "gpt-5.6-sol-cpm-fast(max)")
+        XCTAssertEqual(role.modelIdentifier, "gpt-5.6-sol-fast(max)")
         XCTAssertEqual(
             try JSONDecoder().decode(AppConfig.CodexRole.self, from: JSONEncoder().encode(role)),
             role

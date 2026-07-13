@@ -73,7 +73,7 @@ final class ProviderSettingsSheetMetricsTests: XCTestCase {
     func testCodexAPIModelsCanonicalizeManagedFastAliases() {
         XCTAssertEqual(
             CodexAPIModelOptions.baseModels(from: [
-                "cpm-codex-api/gpt-5.6-sol-cpm-fast(xhigh)",
+                "cpm-codex-api/gpt-5.6-sol-fast(xhigh)",
                 "gpt-5.6-sol"
             ]),
             ["gpt-5.6-sol"]

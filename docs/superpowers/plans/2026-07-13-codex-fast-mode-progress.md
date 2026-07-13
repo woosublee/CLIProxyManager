@@ -7,7 +7,7 @@ Codex의 Opus·Sonnet·Haiku 역할별 Fast mode 구현과 development build를 
 ## 완료된 작업
 
 - `CodexRole.fastModeEnabled` 저장 및 기존 JSON 하위 호환 decode
-- 앱 관리 Fast alias `-cpm-fast`와 reasoning suffix 조합
+- 앱 관리 Fast alias `-fast`와 reasoning suffix 조합
 - Codex model metadata의 Fast capability 조회와 fallback allowlist
 - managed alias metadata 제외 및 case-insensitive metadata 결합
 - OAuth, OpenAI API Key, round-robin, legacy 설정 화면의 역할별 Fast toggle
@@ -18,19 +18,16 @@ Codex의 Opus·Sonnet·Haiku 역할별 Fast mode 구현과 development build를 
 - legacy, OAuth, API Key, round-robin shell routing 테스트
 - Fast 설정 변경 시 proxy restart와 API Key 변경 coalescing
 - restart generation drain, lifecycle 직렬화, readiness/error/recovery 처리
-- reserved `-cpm-fast` suffix collision 검증
+- reserved `-fast` suffix collision 검증
 - 한국어·영어 README 문서화
 
 ## 자동 검증
 
-- 최종 통합 Core/UI Fast focused suites: 87 tests, 0 failures
-- 최종 통합 lifecycle regression suites: 8 tests, 0 failures
-- Core review-fix isolated full suite: 767 tests, 0 failures
-- lifecycle 최종 수정 전 통합 full suite: 762 tests, 0 failures
-- development build: `swift build -c debug --product CLIProxyManager` 성공
-- `git diff --check main...HEAD`: 통과
-
-최종 두 review-fix 커밋을 통합한 뒤 전체 suite를 두 번 실행했으나 XCTest 프로세스가 중간에 정지해 10분 제한으로 종료됐다. 정지 지점의 테스트와 변경 관련 suite는 단독·focused 실행에서 모두 통과했으며, 전체 suite를 추가 반복하지 않았다.
+- 전체 suite: 877 tests, 0 failures
+- development app bundle: `make verify CONFIGURATION=debug BUILD_DIR=build/development` 성공
+- 생성 shell function: Fast 역할이 `-fast(reasoning)` 형식을 사용하고 `ANTHROPIC_DEFAULT_*_MODEL_NAME`을 포함하지 않음
+- Claude Code status-line stdin: `codex-personal/gpt-5.6-terra-fast(xhigh)[1m]`, context window 1,000,000 확인
+- `git diff --check`: 통과
 
 ## 수동 검증
 
@@ -43,7 +40,7 @@ Codex의 Opus·Sonnet·Haiku 역할별 Fast mode 구현과 development build를 
 3. 저장 후 실행 중 proxy가 restart되고 ready로 복귀한다.
 4. 생성 YAML에 OAuth/API Key alias와 `service_tier: priority`가 추가된다.
 5. Fast를 모두 끄면 관리 alias와 payload section이 제거된다.
-6. shell function의 Fast 역할은 `-cpm-fast(reasoning)` 순서를 사용한다.
+6. shell function의 Fast 역할은 `-fast(reasoning)` 순서를 사용한다.
 
 ## 관련 문서
 

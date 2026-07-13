@@ -1934,7 +1934,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         var config = AppConfig.default
         config.commands.ccodex = "ccodex"
         config.ccodex.opus = .init(
-            model: "gpt-5.6-sol-cpm-fast",
+            model: "gpt-5.6-sol-fast",
             reasoning: .high,
             contextWindow: .auto,
             fastModeEnabled: true
@@ -1955,7 +1955,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         updated.opus.reasoning = .max
 
         XCTAssertThrowsError(try viewModel.saveCodexSettings(functionName: "ccodex", codex: updated)) { error in
-            XCTAssertEqual(error as? CodexFastConfigurationError, .managedAliasCollision("gpt-5.6-sol-cpm-fast"))
+            XCTAssertEqual(error as? CodexFastConfigurationError, .managedAliasCollision("gpt-5.6-sol-fast"))
         }
         for _ in 0..<20 { await Task.yield() }
 
@@ -1967,7 +1967,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         var config = AppConfig.default
         config.commands.ccodex = "ccodex"
         config.ccodex.opus = .init(
-            model: "gpt-5.6-sol-cpm-fast",
+            model: "gpt-5.6-sol-fast",
             reasoning: .high,
             contextWindow: .auto,
             fastModeEnabled: true
@@ -2011,14 +2011,14 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         )
         var invalid = config.ccodex
         invalid.opus = .init(
-            model: "gpt-5.6-sol-cpm-fast",
+            model: "gpt-5.6-sol-fast",
             reasoning: .high,
             contextWindow: .auto,
             fastModeEnabled: true
         )
 
         XCTAssertThrowsError(try viewModel.saveCodexSettings(functionName: "ccodex", codex: invalid)) { error in
-            XCTAssertEqual(error as? CodexFastConfigurationError, .managedAliasCollision("gpt-5.6-sol-cpm-fast"))
+            XCTAssertEqual(error as? CodexFastConfigurationError, .managedAliasCollision("gpt-5.6-sol-fast"))
         }
         XCTAssertTrue(store.savedConfigs.isEmpty)
     }
@@ -2026,7 +2026,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     func testUnrelatedSaveRejectsExistingManagedAliasCollision() throws {
         var config = AppConfig.default
         config.ccodex.opus = .init(
-            model: "gpt-5.6-sol-cpm-fast",
+            model: "gpt-5.6-sol-fast",
             reasoning: .high,
             contextWindow: .auto,
             fastModeEnabled: true
@@ -2043,7 +2043,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         )
 
         XCTAssertThrowsError(try viewModel.saveLogLevel(.debug)) { error in
-            XCTAssertEqual(error as? CodexFastConfigurationError, .managedAliasCollision("gpt-5.6-sol-cpm-fast"))
+            XCTAssertEqual(error as? CodexFastConfigurationError, .managedAliasCollision("gpt-5.6-sol-fast"))
         }
         XCTAssertTrue(store.savedConfigs.isEmpty)
     }

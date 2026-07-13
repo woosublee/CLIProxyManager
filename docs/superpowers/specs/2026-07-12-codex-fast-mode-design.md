@@ -36,7 +36,8 @@ Codex의 Fast mode는 모델 자체가 아니라 요청의 service tier를 바�
 - CLIProxyAPI 자체 source 수정
 - 모델별 속도나 크레딧 배율의 실시간 측정
 - Fast mode가 실제 upstream 계정에서 허용되는지 과금 요청으로 사전 검사
-- Fast와 reasoning을 결합한 별도 모델 목록을 사용자에게 노출
+- Fast와 reasoning을 결합한 별도 모델 목록을 설정 UI에 노출
+- Claude Code status-line command를 교체하거나 stdin JSON을 보정하는 기능
 
 ## 사용자 선택
 
@@ -74,8 +75,8 @@ Fast 여부와 내부 alias 규칙은 Core의 단일 helper에서 관리한다.
 
 ```text
 canonical model:     gpt-5.6-sol
-managed Fast alias:  gpt-5.6-sol-cpm-fast
-reasoning 포함:      gpt-5.6-sol-cpm-fast(xhigh)
+managed Fast alias:  gpt-5.6-sol-fast
+reasoning 포함:      gpt-5.6-sol-fast(xhigh)
 ```
 
 일반 모드는 기존처럼 다음 식별자를 사용한다.
@@ -84,7 +85,9 @@ reasoning 포함:      gpt-5.6-sol-cpm-fast(xhigh)
 gpt-5.6-sol(xhigh)
 ```
 
-내부 suffix는 `-cpm-fast`로 고정한다. 일반적인 upstream `-fast` 이름과 구분하고 앱이 소유하는 alias임을 명확히 하기 위해서다.
+관리 suffix는 `-fast`로 고정한다. Fast 상태가 Claude Code의 `/model` picker와 status-line에 동일하고 간결하게 드러나도록 하며, 별도의 표시명 보정이나 status-line wrapper는 두지 않는다.
+
+Claude Code에는 이 alias가 실제 요청 모델 ID로 전달된다. 따라서 Fast 역할은 `codex-personal/gpt-5.6-sol-fast(xhigh)[1m]`처럼 표시되고, 일반 역할은 기존 canonical 표기를 유지한다. `/model` picker 전용 표시명 환경 변수나 status-line별 예외 처리는 사용하지 않는다.
 
 helper는 다음 책임만 가진다.
 
@@ -148,7 +151,7 @@ CLIProxyAPI `v7.2.66`은 template에 존재하지 않는 prefixed 모델을 Code
 
 ### 내부 alias 필터링
 
-앱이 만든 `*-cpm-fast` alias는 CLIProxyAPI의 `/v1/models` 목록에 다시 나타날 수 있다. 모델 picker에는 canonical 모델만 보여야 하므로 `ProxyModelClient`가 모델 목록과 metadata를 결합하기 전에 관리 alias를 제외한다.
+앱이 만든 `*-fast` alias는 CLIProxyAPI의 `/v1/models` 목록에 다시 나타날 수 있다. 모델 picker에는 canonical 모델만 보여야 하므로 `ProxyModelClient`가 모델 목록과 metadata를 결합하기 전에 관리 alias를 제외한다.
 
 현재 저장 모델이 내부 alias인 비정상·중간 상태에서도 picker에 별도 모델로 추가하지 않고 canonical 모델로 정규화한다.
 
@@ -220,7 +223,7 @@ OAuth, legacy, round-robin에서 Fast로 사용하는 canonical 모델을 중복
 oauth-model-alias:
   codex:
     - name: "gpt-5.6-sol"
-      alias: "gpt-5.6-sol-cpm-fast"
+      alias: "gpt-5.6-sol-fast"
       fork: true
 ```
 
@@ -245,7 +248,7 @@ codex-api-key:
     prefix: "cpm-codex-api"
     models:
       - name: "gpt-5.6-sol"
-        alias: "gpt-5.6-sol-cpm-fast"
+        alias: "gpt-5.6-sol-fast"
 ```
 
 API Key가 없으면 기존처럼 `codex-api-key` block 자체를 만들지 않는다.
@@ -258,7 +261,7 @@ OAuth와 API Key에서 사용되는 모든 Fast alias를 중복 제거해 한 ru
 payload:
   override:
     - models:
-        - name: "gpt-5.6-sol-cpm-fast"
+        - name: "gpt-5.6-sol-fast"
           protocol: "codex"
       params:
         service_tier: priority
@@ -374,7 +377,7 @@ OAuth command profile이 없는 기존 설정은 `ccodex` 역할 값을 사용�
 - metadata 기반 Fast 지원
 - fallback allowlist 기반 Fast 지원
 - `gpt-5.4-mini`와 custom 모델 미지원
-- `*-cpm-fast` 관리 alias 필터링
+- `*-fast` 관리 alias 필터링
 - prefixed 모델의 capability fallback
 
 ### `CodexRoleRoutingOptionsTests`
