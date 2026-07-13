@@ -48,7 +48,6 @@ final class UsageOverlayWindowConfigurator {
         window.standardWindowButton(.zoomButton)?.isHidden = true
         window.isMovableByWindowBackground = true
         window.hasShadow = true
-        window.setFrameAutosaveName("usage-overlay")
     }
 }
 

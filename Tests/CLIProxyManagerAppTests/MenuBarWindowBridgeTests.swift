@@ -39,6 +39,39 @@ final class MenuBarWindowBridgeTests: XCTestCase {
         XCTAssertTrue(window.standardWindowButton(.zoomButton)?.isHidden == true)
     }
 
+    func testUsageOverlayConfiguratorDoesNotRestoreAutosavedFrameWhenReconfigured() {
+        let defaults = UserDefaults.standard
+        let autosaveKey = "NSWindow Frame usage-overlay"
+        let previousValue = defaults.object(forKey: autosaveKey)
+        defer {
+            if let previousValue {
+                defaults.set(previousValue, forKey: autosaveKey)
+            } else {
+                defaults.removeObject(forKey: autosaveKey)
+            }
+        }
+
+        let screenFrame = NSScreen.main?.frame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
+        defaults.set(
+            "\(screenFrame.minX + 40) \(screenFrame.minY + 40) 290 120 "
+                + "\(screenFrame.minX) \(screenFrame.minY) \(screenFrame.width) \(screenFrame.height) ",
+            forKey: autosaveKey
+        )
+        let window = makeWindow(fittingHeight: 120)
+        let currentFrame = CGRect(
+            x: screenFrame.midX,
+            y: screenFrame.midY,
+            width: 290,
+            height: 420
+        )
+        window.setFrame(currentFrame, display: false)
+        let configurator = UsageOverlayWindowConfigurator()
+
+        configurator.configure(window: window, alwaysOnTop: true)
+
+        XCTAssertEqual(window.frame, currentFrame)
+    }
+
     private func makeWindow(fittingHeight: CGFloat) -> NSWindow {
         let contentView = FixedFittingSizeView(fittingSize: NSSize(width: 290, height: fittingHeight))
         let window = NSWindow(

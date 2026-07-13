@@ -45,34 +45,50 @@ struct UsageOverlayView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: presentationState.displayMode == .expanded ? 12 : 4) {
-            UsageOverlayChrome(
-                displayMode: presentationState.displayMode,
-                onToggleDisplayMode: onToggleDisplayMode,
-                onClose: onClose
-            )
+        ZStack(alignment: .topTrailing) {
+            VStack(alignment: .leading, spacing: presentationState.presentedDisplayMode == .expanded ? 12 : 4) {
+                Color.clear
+                    .frame(height: 24)
 
-            switch presentationState.displayMode {
-            case .expanded:
-                ExpandedUsageOverlayContent(
-                    viewModel: viewModel,
-                    providers: providers,
-                    refreshStatus: refreshStatus
-                )
-            case .compact:
-                CompactUsageOverlayView(
-                    providers: providers,
-                    maximumAccountHeight: presentationState.compactAccountMaximumHeight,
-                    onMeasurementChange: onContentSizeInvalidated
-                )
+                Group {
+                    switch presentationState.presentedDisplayMode {
+                    case .expanded:
+                        ExpandedUsageOverlayContent(
+                            viewModel: viewModel,
+                            providers: providers,
+                            refreshStatus: refreshStatus
+                        )
+                    case .compact:
+                        CompactUsageOverlayView(
+                            providers: providers,
+                            maximumAccountHeight: presentationState.compactAccountMaximumHeight,
+                            onMeasurementChange: onContentSizeInvalidated
+                        )
+                    }
+                }
+                .blur(radius: presentationState.contentBlurRadius)
+                .opacity(presentationState.contentOpacity)
+                .animation(.easeInOut(duration: 0.14), value: presentationState.isContentHiddenForModeTransition)
+            }
+
+            if presentationState.displayMode == .compact,
+               presentationState.presentedDisplayMode == .expanded {
+                compactMeasurementContent
             }
         }
-        .padding(presentationState.displayMode == .expanded ? 16 : 10)
+        .padding(presentationState.presentedDisplayMode == .expanded ? 16 : 10)
         .frame(width: overlayWidth, alignment: .top)
         .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
         .background(.regularMaterial.opacity(viewModel.config.usageOverlay.backgroundOpacity))
-        .clipShape(RoundedRectangle(cornerRadius: presentationState.displayMode == .expanded ? 14 : 18, style: .continuous))
-        .contentShape(RoundedRectangle(cornerRadius: presentationState.displayMode == .expanded ? 14 : 18, style: .continuous))
+        .contentShape(
+            RoundedRectangle(
+                cornerRadius: presentationState.presentedDisplayMode == .expanded
+                    ? UsageOverlaySurfaceLayout.expandedCornerRadius
+                    : UsageOverlaySurfaceLayout.compactCornerRadius,
+                style: .continuous
+            )
+        )
         .gesture(WindowDragGesture())
         .allowsWindowActivationEvents(true)
         .task { await viewModel.refresh() }
@@ -84,8 +100,41 @@ struct UsageOverlayView: View {
         }
     }
 
+    private var compactMeasurementContent: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            UsageOverlayChrome(
+                displayMode: .compact,
+                onToggleDisplayMode: {},
+                onClose: {}
+            )
+            CompactUsageOverlayView(
+                providers: providers,
+                maximumAccountHeight: presentationState.compactAccountMaximumHeight,
+                onMeasurementChange: onContentSizeInvalidated
+            )
+        }
+        .padding(10)
+        .frame(width: AppWindowMetrics.usageOverlayCompactWidth, alignment: .top)
+        .fixedSize(horizontal: false, vertical: true)
+        .hidden()
+        .background(
+            GeometryReader { proxy in
+                Color.clear.preference(
+                    key: CompactUsageOverlayFittingSizePreferenceKey.self,
+                    value: proxy.size
+                )
+            }
+        )
+        .onPreferenceChange(CompactUsageOverlayFittingSizePreferenceKey.self) { size in
+            if presentationState.recordCompactFittingSize(size) {
+                onContentSizeInvalidated()
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
     private var overlayWidth: CGFloat {
-        presentationState.displayMode == .expanded
+        presentationState.presentedDisplayMode == .expanded
             ? AppWindowMetrics.usageOverlayExpandedWidth
             : AppWindowMetrics.usageOverlayCompactWidth
     }
@@ -102,7 +151,18 @@ struct UsageOverlayView: View {
     }
 }
 
-private struct UsageOverlayChrome: View {
+private struct CompactUsageOverlayFittingSizePreferenceKey: PreferenceKey {
+    static let defaultValue = CGSize.zero
+
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+        let next = nextValue()
+        if next.width > 0, next.height > 0 {
+            value = next
+        }
+    }
+}
+
+struct UsageOverlayChrome: View {
     let displayMode: AppConfig.UsageOverlay.DisplayMode
     let onToggleDisplayMode: () -> Void
     let onClose: () -> Void

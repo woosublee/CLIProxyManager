@@ -4,6 +4,37 @@ import XCTest
 
 @MainActor
 final class UsageOverlayPresentationStateTests: XCTestCase {
+    func testChromeRemainsVisibleWhileModeContentIsHidden() {
+        let state = UsageOverlayPresentationState(displayMode: .expanded)
+
+        state.displayMode = .compact
+        state.isContentHiddenForModeTransition = true
+
+        XCTAssertEqual(state.chromeOpacity, 1)
+        XCTAssertEqual(state.chromeDisplayMode, .compact)
+        XCTAssertEqual(state.contentOpacity, 0)
+    }
+
+    func testAnimatedModeTransitionHidesContentInBothDirections() {
+        let state = UsageOverlayPresentationState(displayMode: .expanded)
+
+        XCTAssertEqual(state.contentBlurRadius, 0)
+        XCTAssertEqual(state.contentOpacity, 1)
+
+        state.isContentHiddenForModeTransition = true
+        XCTAssertEqual(state.contentBlurRadius, 8)
+        XCTAssertEqual(state.contentOpacity, 0)
+
+        state.presentedDisplayMode = .compact
+        state.isContentHiddenForModeTransition = false
+        XCTAssertEqual(state.contentBlurRadius, 0)
+        XCTAssertEqual(state.contentOpacity, 1)
+
+        state.isContentHiddenForModeTransition = true
+        XCTAssertEqual(state.contentBlurRadius, 8)
+        XCTAssertEqual(state.contentOpacity, 0)
+    }
+
     func testModePresentationUsesAvailableMacOS15SymbolsAndLabels() {
         XCTAssertEqual(AppConfig.UsageOverlay.DisplayMode.expanded.toggleSymbolName, "arrow.down.right.and.arrow.up.left")
         XCTAssertEqual(AppConfig.UsageOverlay.DisplayMode.expanded.toggleAccessibilityLabel, "Show compact usage window")
