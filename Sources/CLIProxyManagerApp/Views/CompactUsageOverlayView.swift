@@ -66,7 +66,7 @@ struct CompactUsageOverlayView: View {
     }
 
     private var needsScrolling: Bool {
-        measurementState.height > maximumAccountHeight
+        measurementState.needsScrolling(maximumHeight: maximumAccountHeight)
     }
 
     private var measurementAccountStack: some View {
