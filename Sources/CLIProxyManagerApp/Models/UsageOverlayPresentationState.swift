@@ -18,7 +18,7 @@ final class UsageOverlayPresentationState: ObservableObject {
 }
 
 struct CompactUsageMeasurementState {
-    static let estimatedHeight: CGFloat = 120
+    static let estimatedAccountHeight: CGFloat = 120
     private(set) var height: CGFloat = 0
     private var providerIDs: [String] = []
 
@@ -36,7 +36,18 @@ struct CompactUsageMeasurementState {
     }
 
     func viewportHeight(maximumHeight: CGFloat) -> CGFloat {
-        min(height > 0 ? height : Self.estimatedHeight, maximumHeight)
+        min(contentHeight, maximumHeight)
+    }
+
+    func needsScrolling(maximumHeight: CGFloat) -> Bool {
+        contentHeight > maximumHeight
+    }
+
+    private var contentHeight: CGFloat {
+        if height > 0 {
+            return height
+        }
+        return CGFloat(providerIDs.count) * Self.estimatedAccountHeight
     }
 }
 

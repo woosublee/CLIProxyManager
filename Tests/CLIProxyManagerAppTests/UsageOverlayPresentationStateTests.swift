@@ -53,24 +53,61 @@ final class UsageOverlayPresentationStateTests: XCTestCase {
         XCTAssertTrue(state.record(height: 220))
     }
 
-    func testCompactViewportUsesStableEstimateUntilMeasurementIsReady() {
+    func testCompactViewportIsZeroWithoutProviders() {
         let state = CompactUsageMeasurementState()
 
+        XCTAssertEqual(state.viewportHeight(maximumHeight: 500), 0)
+        XCTAssertFalse(state.needsScrolling(maximumHeight: 500))
+    }
+
+    func testCompactViewportEstimatesHeightForOneProvider() {
+        var state = CompactUsageMeasurementState()
+        XCTAssertTrue(state.updateProviderIDs(["one"]))
+
         XCTAssertEqual(state.viewportHeight(maximumHeight: 500), 120)
+        XCTAssertFalse(state.needsScrolling(maximumHeight: 500))
+    }
+
+    func testCompactViewportEstimatesHeightForMultipleProviders() {
+        var state = CompactUsageMeasurementState()
+        XCTAssertTrue(state.updateProviderIDs(["one", "two", "three"]))
+
+        XCTAssertEqual(state.viewportHeight(maximumHeight: 500), 360)
+        XCTAssertFalse(state.needsScrolling(maximumHeight: 500))
+    }
+
+    func testCompactViewportClampsEstimateAndEnablesScrollingOnSmallScreen() {
+        var state = CompactUsageMeasurementState()
+        XCTAssertTrue(state.updateProviderIDs(["one", "two", "three", "four"]))
+
+        XCTAssertEqual(state.viewportHeight(maximumHeight: 300), 300)
+        XCTAssertTrue(state.needsScrolling(maximumHeight: 300))
     }
 
     func testCompactViewportUsesMeasuredHeightAfterMeasurement() {
         var state = CompactUsageMeasurementState()
+        XCTAssertTrue(state.updateProviderIDs(["one", "two"]))
         XCTAssertTrue(state.record(height: 220))
 
         XCTAssertEqual(state.viewportHeight(maximumHeight: 500), 220)
         XCTAssertEqual(state.viewportHeight(maximumHeight: 180), 180)
+        XCTAssertTrue(state.needsScrolling(maximumHeight: 180))
     }
 
-    func testProviderIdentityChangeResetsPreviousMeasurement() {
+    func testProviderAdditionResetsMeasurementAndUsesNewEstimate() {
         var state = CompactUsageMeasurementState()
-        XCTAssertTrue(state.updateProviderIDs(["one", "two"]))
-        XCTAssertTrue(state.record(height: 600))
+        XCTAssertTrue(state.updateProviderIDs(["one"]))
+        XCTAssertTrue(state.record(height: 110))
+
+        XCTAssertTrue(state.updateProviderIDs(["one", "two", "three"]))
+        XCTAssertEqual(state.height, 0)
+        XCTAssertEqual(state.viewportHeight(maximumHeight: 500), 360)
+    }
+
+    func testProviderRemovalResetsMeasurementAndUsesNewEstimate() {
+        var state = CompactUsageMeasurementState()
+        XCTAssertTrue(state.updateProviderIDs(["one", "two", "three"]))
+        XCTAssertTrue(state.record(height: 330))
 
         XCTAssertTrue(state.updateProviderIDs(["one"]))
         XCTAssertEqual(state.height, 0)
