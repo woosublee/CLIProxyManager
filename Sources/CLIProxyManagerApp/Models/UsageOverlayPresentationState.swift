@@ -24,7 +24,9 @@ struct CompactUsageMeasurementState {
 
     mutating func updateProviderIDs(_ newProviderIDs: [String]) -> Bool {
         guard providerIDs != newProviderIDs else { return false }
+        let accountSetChanged = Set(providerIDs) != Set(newProviderIDs)
         providerIDs = newProviderIDs
+        guard accountSetChanged else { return false }
         height = 0
         return true
     }
@@ -35,8 +37,21 @@ struct CompactUsageMeasurementState {
         return true
     }
 
+    mutating func record(height newHeight: CGFloat, providerIDs newProviderIDs: [String]) -> Bool {
+        providerIDs = newProviderIDs
+        return record(height: newHeight)
+    }
+
     func viewportHeight(maximumHeight: CGFloat) -> CGFloat {
-        min(height > 0 ? height : Self.estimatedHeight, maximumHeight)
+        min(contentHeight, maximumHeight)
+    }
+
+    func needsScrolling(maximumHeight: CGFloat) -> Bool {
+        contentHeight > maximumHeight
+    }
+
+    private var contentHeight: CGFloat {
+        height > 0 ? height : Self.estimatedHeight
     }
 }
 

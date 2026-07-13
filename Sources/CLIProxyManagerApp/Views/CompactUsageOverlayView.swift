@@ -44,7 +44,7 @@ struct CompactUsageOverlayView: View {
                 }
                 .onPreferenceChange(CompactAccountHeightPreferenceKey.self) { height in
                     let measuredHeight = max(1, height)
-                    if measurementState.record(height: measuredHeight) {
+                    if measurementState.record(height: measuredHeight, providerIDs: providerIDs) {
                         onMeasurementChange()
                     }
                 }
@@ -66,7 +66,7 @@ struct CompactUsageOverlayView: View {
     }
 
     private var needsScrolling: Bool {
-        measurementState.height > maximumAccountHeight
+        measurementState.needsScrolling(maximumHeight: maximumAccountHeight)
     }
 
     private var measurementAccountStack: some View {
