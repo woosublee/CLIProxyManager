@@ -1,7 +1,7 @@
 import Foundation
 
 public enum CodexFastMode {
-    public static let managedAliasSuffix = "-cpm-fast"
+    public static let managedAliasSuffix = "-fast"
 
     public static func alias(for canonicalModel: String) -> String {
         self.canonicalModel(from: canonicalModel) + managedAliasSuffix

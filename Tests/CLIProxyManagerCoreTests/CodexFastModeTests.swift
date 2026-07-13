@@ -3,20 +3,20 @@ import XCTest
 
 final class CodexFastModeTests: XCTestCase {
     func testManagedAliasRoundTripsCanonicalModel() {
-        XCTAssertEqual(CodexFastMode.alias(for: "gpt-5.6-sol"), "gpt-5.6-sol-cpm-fast")
-        XCTAssertTrue(CodexFastMode.isManagedAlias("gpt-5.6-sol-cpm-fast"))
-        XCTAssertEqual(CodexFastMode.canonicalModel(from: "gpt-5.6-sol-cpm-fast"), "gpt-5.6-sol")
-        XCTAssertEqual(CodexFastMode.canonicalModel(from: "gpt-5.6-sol-cpm-fast(xhigh)"), "gpt-5.6-sol")
+        XCTAssertEqual(CodexFastMode.alias(for: "gpt-5.6-sol"), "gpt-5.6-sol-fast")
+        XCTAssertTrue(CodexFastMode.isManagedAlias("gpt-5.6-sol-fast"))
+        XCTAssertEqual(CodexFastMode.canonicalModel(from: "gpt-5.6-sol-fast"), "gpt-5.6-sol")
+        XCTAssertEqual(CodexFastMode.canonicalModel(from: "gpt-5.6-sol-fast(xhigh)"), "gpt-5.6-sol")
     }
 
     func testModelIdentifierAppliesFastAliasBeforeReasoningSuffix() {
         XCTAssertEqual(
             CodexFastMode.modelIdentifier(model: "gpt-5.6-sol", reasoning: .xhigh, fastModeEnabled: true),
-            "gpt-5.6-sol-cpm-fast(xhigh)"
+            "gpt-5.6-sol-fast(xhigh)"
         )
         XCTAssertEqual(
             CodexFastMode.modelIdentifier(model: "gpt-5.6-sol", reasoning: .auto, fastModeEnabled: true),
-            "gpt-5.6-sol-cpm-fast"
+            "gpt-5.6-sol-fast"
         )
         XCTAssertEqual(
             CodexFastMode.modelIdentifier(model: "gpt-5.6-sol", reasoning: .medium, fastModeEnabled: false),
@@ -24,11 +24,11 @@ final class CodexFastModeTests: XCTestCase {
         )
         XCTAssertEqual(
             CodexFastMode.modelIdentifier(
-                model: "upstream-cpm-fast",
+                model: "upstream-fast",
                 reasoning: .medium,
                 fastModeEnabled: false
             ),
-            "upstream-cpm-fast(medium)"
+            "upstream-fast(medium)"
         )
     }
 
@@ -77,10 +77,10 @@ final class CodexFastModeTests: XCTestCase {
         XCTAssertEqual(snapshot.oauthCanonicalModels, ["gpt-5.4", "gpt-5.5", "gpt-5.6-sol"])
         XCTAssertEqual(snapshot.apiKeyCanonicalModels, ["gpt-5.6-terra"])
         XCTAssertEqual(snapshot.allAliases, [
-            "gpt-5.4-cpm-fast",
-            "gpt-5.5-cpm-fast",
-            "gpt-5.6-sol-cpm-fast",
-            "gpt-5.6-terra-cpm-fast"
+            "gpt-5.4-fast",
+            "gpt-5.5-fast",
+            "gpt-5.6-sol-fast",
+            "gpt-5.6-terra-fast"
         ])
     }
 
@@ -107,28 +107,28 @@ final class CodexFastModeTests: XCTestCase {
     func testFastConfigurationRejectsManagedAliasCollision() {
         var config = AppConfig.default
         config.ccodex.opus = .init(
-            model: "gpt-5.6-sol-cpm-fast",
+            model: "gpt-5.6-sol-fast",
             reasoning: .xhigh,
             contextWindow: .auto,
             fastModeEnabled: true
         )
 
         XCTAssertThrowsError(try CodexFastConfiguration(config: config)) { error in
-            XCTAssertEqual(error as? CodexFastConfigurationError, .managedAliasCollision("gpt-5.6-sol-cpm-fast"))
+            XCTAssertEqual(error as? CodexFastConfigurationError, .managedAliasCollision("gpt-5.6-sol-fast"))
         }
     }
 
     func testFastConfigurationRejectsManagedAliasWhenFastModeIsDisabled() {
         var config = AppConfig.default
         config.ccodex.opus = .init(
-            model: "upstream-cpm-fast",
+            model: "upstream-fast",
             reasoning: .medium,
             contextWindow: .auto,
             fastModeEnabled: false
         )
 
         XCTAssertThrowsError(try CodexFastConfiguration(config: config)) { error in
-            XCTAssertEqual(error as? CodexFastConfigurationError, .managedAliasCollision("upstream-cpm-fast"))
+            XCTAssertEqual(error as? CodexFastConfigurationError, .managedAliasCollision("upstream-fast"))
         }
     }
 
@@ -141,7 +141,7 @@ final class CodexFastModeTests: XCTestCase {
                 authProfileID: "disabled.json",
                 commandName: "ccdisabled",
                 codex: codex(
-                    opus: "upstream-cpm-fast",
+                    opus: "upstream-fast",
                     sonnet: "gpt-5.5",
                     haiku: "gpt-5.5"
                 ),
@@ -151,7 +151,7 @@ final class CodexFastModeTests: XCTestCase {
         ]
 
         XCTAssertThrowsError(try CodexFastConfiguration(config: config)) { error in
-            XCTAssertEqual(error as? CodexFastConfigurationError, .managedAliasCollision("upstream-cpm-fast"))
+            XCTAssertEqual(error as? CodexFastConfigurationError, .managedAliasCollision("upstream-fast"))
         }
     }
 

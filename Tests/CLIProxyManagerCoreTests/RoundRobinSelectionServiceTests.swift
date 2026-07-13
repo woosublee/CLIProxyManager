@@ -70,9 +70,12 @@ final class RoundRobinSelectionServiceTests: XCTestCase {
             ]
         )
 
-        XCTAssertTrue(output.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='codex-b/gpt-5.6-sol-cpm-fast(xhigh)'"))
+        XCTAssertTrue(output.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='codex-b/gpt-5.6-sol-fast(xhigh)'"))
         XCTAssertTrue(output.contains("ANTHROPIC_DEFAULT_SONNET_MODEL='codex-b/gpt-5.6-sol(medium)'"))
-        XCTAssertTrue(output.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL='codex-b/gpt-5.5-cpm-fast(low)'"))
+        XCTAssertTrue(output.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL='codex-b/gpt-5.5-fast(low)'"))
+        XCTAssertFalse(output.contains("ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"))
+        XCTAssertFalse(output.contains("ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"))
+        XCTAssertFalse(output.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME"))
     }
 
     func testClaudeSelectionResolvesModelsForActuallySelectedAccount() async throws {

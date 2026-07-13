@@ -157,9 +157,12 @@ final class ShellFunctionRendererTests: XCTestCase {
 
         let script = try ShellFunctionRenderer(config: config, helperCommand: "/usr/local/bin/cpm").render()
 
-        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='gpt-5.6-sol-cpm-fast(xhigh)'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='gpt-5.6-sol-fast(xhigh)'"))
         XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL='gpt-5.6-sol(medium)'"))
-        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL='gpt-5.5-cpm-fast'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL='gpt-5.5-fast'"))
+        XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"))
+        XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"))
+        XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME"))
     }
 
     func testRenderUsesMultipleOAuthCommandProfilesWithModelPrefixesAndCodexProfileMapping() throws {
@@ -325,8 +328,9 @@ final class ShellFunctionRendererTests: XCTestCase {
         XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='gpt-5.5(xhigh)'"))
         XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL='gpt-5.5(medium)'"))
         XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL='gpt-5.5'"))
-        XCTAssertFalse(script.contains("1m"))
-        XCTAssertFalse(script.contains("400k"))
+        XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"))
+        XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"))
+        XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME"))
     }
 
     func testCodexPrecheckUsesLocalAPIKeyHeader() throws {
@@ -490,8 +494,11 @@ final class ShellFunctionRendererTests: XCTestCase {
 
         let script = try ShellFunctionRenderer(config: config, helperCommand: "/usr/local/bin/cpm").render()
 
-        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='codex-work/gpt-5.6-sol-cpm-fast(xhigh)'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='codex-work/gpt-5.6-sol-fast(xhigh)'"))
         XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL='codex-work/gpt-5.5(medium)'"))
+        XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"))
+        XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"))
+        XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME"))
     }
 
     func testCodexAPICommandPrefixesFastAliasBeforeReasoning() throws {
@@ -501,7 +508,7 @@ final class ShellFunctionRendererTests: XCTestCase {
             opus: .init(
                 model: "gpt-5.6-terra",
                 reasoning: .max,
-                contextWindow: .auto,
+                contextWindow: .context1m,
                 fastModeEnabled: true
             ),
             sonnet: .init(
@@ -522,9 +529,12 @@ final class ShellFunctionRendererTests: XCTestCase {
             enabledFunctions: .init(claudeOAuth: false, codex: false, claudeAPI: false, codexAPI: true)
         ).render()
 
-        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='cpm-codex-api/gpt-5.6-terra-cpm-fast(max)'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='cpm-codex-api/gpt-5.6-terra-fast(max)'"))
         XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL='cpm-codex-api/gpt-5.6-sol(medium)'"))
         XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL='cpm-codex-api/gpt-5.5'"))
+        XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"))
+        XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"))
+        XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME"))
     }
 
     func testCodexAPICommandUsesItsOwnRoutingAndSkipFlag() throws {
@@ -627,8 +637,31 @@ final class ShellFunctionRendererTests: XCTestCase {
     }
 
     func testDefaultGeneratedScriptPassesZshSyntaxCheck() throws {
+        try assertValidZshScript(for: configuredCommands())
+    }
+
+    func testCodexRoundRobinGeneratedScriptPassesZshSyntaxCheck() throws {
+        var config = configuredCommands()
+        config.oauthCommandProfiles = [
+            .init(id: "codex-a", provider: .codex, authProfileID: "a.json", commandName: "cca", modelPrefix: "codex-a"),
+            .init(id: "codex-b", provider: .codex, authProfileID: "b.json", commandName: "ccb", modelPrefix: "codex-b")
+        ]
+        config.roundRobinProfiles = [
+            .init(
+                id: "codex-default",
+                provider: .codex,
+                isEnabled: true,
+                commandName: "ccodex",
+                includedAuthProfileIDs: ["a.json", "b.json"]
+            )
+        ]
+
+        try assertValidZshScript(for: config)
+    }
+
+    private func assertValidZshScript(for config: AppConfig) throws {
         let script = try ShellFunctionRenderer(
-            config: configuredCommands(),
+            config: config,
             helperCommand: "/usr/local/bin/cliproxy-manager"
         ).render()
         let tempURL = FileManager.default.temporaryDirectory

@@ -249,7 +249,7 @@ final class ProxyModelClientTests: XCTestCase {
     }
 
     func testCodexModelOptionsHideManagedFastAliases() async throws {
-        let regular = Data(#"{"data":[{"id":"codex-work/gpt-5.6-sol-cpm-fast","owned_by":"openai","created":400},{"id":"codex-work/gpt-5.6-sol","owned_by":"openai","created":300}]}"#.utf8)
+        let regular = Data(#"{"data":[{"id":"codex-work/gpt-5.6-sol-fast","owned_by":"openai","created":400},{"id":"codex-work/gpt-5.6-sol","owned_by":"openai","created":300}]}"#.utf8)
         let metadata = Data(#"{"models":[]}"#.utf8)
         let client = ProxyModelClient(httpClient: StubHTTPClient(results: [.success(regular), .success(metadata)]))
 
@@ -260,7 +260,7 @@ final class ProxyModelClientTests: XCTestCase {
 
     func testCodexModelOptionsIgnoreManagedAliasMetadata() async throws {
         let regular = Data(#"{"data":[{"id":"codex-work/gpt-5.6-sol","owned_by":"openai","created":300}]}"#.utf8)
-        let metadata = Data(#"{"models":[{"slug":"codex-work/gpt-5.6-sol-cpm-fast","supported_reasoning_levels":[{"effort":"low"}],"additional_speed_tiers":["fast"]},{"slug":"codex-work/gpt-5.6-sol","supported_reasoning_levels":[{"effort":"xhigh"}]}]}"#.utf8)
+        let metadata = Data(#"{"models":[{"slug":"codex-work/gpt-5.6-sol-fast","supported_reasoning_levels":[{"effort":"low"}],"additional_speed_tiers":["fast"]},{"slug":"codex-work/gpt-5.6-sol","supported_reasoning_levels":[{"effort":"xhigh"}]}]}"#.utf8)
         let client = ProxyModelClient(httpClient: StubHTTPClient(results: [.success(regular), .success(metadata)]))
 
         let models = try await client.codexModelOptions(port: 18_317, modelPrefix: "codex-work")

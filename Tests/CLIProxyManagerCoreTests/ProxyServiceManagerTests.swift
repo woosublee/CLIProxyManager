@@ -88,14 +88,14 @@ final class ProxyServiceManagerTests: XCTestCase {
         let yaml = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
         XCTAssertTrue(yaml.contains("oauth-model-alias:"))
         XCTAssertTrue(yaml.contains("name: \"gpt-5.6-sol\""))
-        XCTAssertTrue(yaml.contains("alias: \"gpt-5.6-sol-cpm-fast\""))
+        XCTAssertTrue(yaml.contains("alias: \"gpt-5.6-sol-fast\""))
         XCTAssertTrue(yaml.contains("fork: true"))
         XCTAssertTrue(yaml.contains("models:"))
         XCTAssertTrue(yaml.contains("name: \"gpt-5.5\""))
-        XCTAssertTrue(yaml.contains("alias: \"gpt-5.5-cpm-fast\""))
+        XCTAssertTrue(yaml.contains("alias: \"gpt-5.5-fast\""))
         XCTAssertTrue(yaml.contains("payload:"))
         XCTAssertTrue(yaml.contains("service_tier: priority"))
-        XCTAssertEqual(yaml.components(separatedBy: "alias: \"gpt-5.6-sol-cpm-fast\"").count - 1, 1)
+        XCTAssertEqual(yaml.components(separatedBy: "alias: \"gpt-5.6-sol-fast\"").count - 1, 1)
     }
 
     func testStartReadsCodexAPIKeyOnceAndOmitsAPIKeyFastModelsWithoutCredential() async throws {
@@ -121,7 +121,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         let yaml = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
         XCTAssertEqual(callCounter.value, 1)
         XCTAssertFalse(yaml.contains("codex-api-key:"))
-        XCTAssertFalse(yaml.contains("gpt-5.6-terra-cpm-fast"))
+        XCTAssertFalse(yaml.contains("gpt-5.6-terra-fast"))
     }
 
     func testStartKeepsNoFastCodexAPIYAMLByteCompatibleWithMainRenderer() async throws {
@@ -168,7 +168,7 @@ final class ProxyServiceManagerTests: XCTestCase {
 
         let yaml = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
         XCTAssertFalse(yaml.contains("oauth-model-alias:"))
-        XCTAssertFalse(yaml.contains("-cpm-fast"))
+        XCTAssertFalse(yaml.contains("-fast"))
         XCTAssertFalse(yaml.contains("payload:"))
     }
 
