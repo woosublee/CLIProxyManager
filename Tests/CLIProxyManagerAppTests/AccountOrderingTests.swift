@@ -25,6 +25,19 @@ final class AccountOrderingTests: XCTestCase {
         XCTAssertEqual(ordered.map(\.id.rawValue), ["codex-work", "claude-work", "claude-api"])
     }
 
+    func testDuplicateRowIDsKeepTheFirstRowWithoutCrashing() {
+        let first = row("duplicate", detail: "first")
+        let second = row("duplicate", detail: "second")
+
+        let ordered = AccountOrdering.orderedRows(
+            [first, second, row("other")],
+            storedIDs: ["duplicate", "other"]
+        )
+
+        XCTAssertEqual(ordered.map(\.id.rawValue), ["duplicate", "other"])
+        XCTAssertEqual(ordered.first?.connectionDetail, "first")
+    }
+
     func testEmptyStoredOrderKeepsSourceOrder() {
         let rows = [row("claude-work"), row("codex-work"), row("claude-api")]
 
@@ -83,14 +96,14 @@ final class AccountOrderingTests: XCTestCase {
         )
     }
 
-    private func row(_ id: String) -> ProviderRowState {
+    private func row(_ id: String, detail: String? = nil) -> ProviderRowState {
         ProviderRowState(
             id: ProviderRowState.ID(rawValue: id),
             name: id,
             nickname: "",
             functionName: id,
             connectionTitle: "Connected",
-            connectionDetail: id,
+            connectionDetail: detail ?? id,
             isConnected: true
         )
     }

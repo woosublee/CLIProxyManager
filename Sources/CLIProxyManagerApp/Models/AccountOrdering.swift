@@ -3,7 +3,10 @@ enum AccountOrdering {
         _ rows: [ProviderRowState],
         storedIDs: [String]
     ) -> [ProviderRowState] {
-        let rowsByID = Dictionary(uniqueKeysWithValues: rows.map { ($0.id.rawValue, $0) })
+        let rowsByID = Dictionary(
+            rows.map { ($0.id.rawValue, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
         var seen: Set<String> = []
         var ordered: [ProviderRowState] = []
 
