@@ -9,19 +9,37 @@ final class CodexFastModeTests: XCTestCase {
         XCTAssertEqual(CodexFastMode.canonicalModel(from: "gpt-5.6-sol-fast(xhigh)"), "gpt-5.6-sol")
     }
 
-    func testModelIdentifierAppliesFastAliasBeforeReasoningSuffix() {
-        XCTAssertEqual(
-            CodexFastMode.modelIdentifier(model: "gpt-5.6-sol", reasoning: .xhigh, fastModeEnabled: true),
-            "gpt-5.6-sol-fast(xhigh)"
-        )
-        XCTAssertEqual(
-            CodexFastMode.modelIdentifier(model: "gpt-5.6-sol", reasoning: .auto, fastModeEnabled: true),
-            "gpt-5.6-sol-fast"
-        )
-        XCTAssertEqual(
-            CodexFastMode.modelIdentifier(model: "gpt-5.6-sol", reasoning: .medium, fastModeEnabled: false),
-            "gpt-5.6-sol(medium)"
-        )
+    func testModelIdentifierCoversEveryReasoningLevelWithFastModeOnAndOff() {
+        let cases: [(reasoning: AppConfig.CodexReasoning, suffix: String)] = [
+            (.auto, ""),
+            (.low, "(low)"),
+            (.medium, "(medium)"),
+            (.high, "(high)"),
+            (.xhigh, "(xhigh)"),
+            (.max, "(max)")
+        ]
+
+        for testCase in cases {
+            XCTAssertEqual(
+                CodexFastMode.modelIdentifier(
+                    model: "gpt-5.6-sol",
+                    reasoning: testCase.reasoning,
+                    fastModeEnabled: true
+                ),
+                "gpt-5.6-sol-fast\(testCase.suffix)",
+                "Fast mode should preserve \(testCase.reasoning.rawValue) reasoning"
+            )
+            XCTAssertEqual(
+                CodexFastMode.modelIdentifier(
+                    model: "gpt-5.6-sol",
+                    reasoning: testCase.reasoning,
+                    fastModeEnabled: false
+                ),
+                "gpt-5.6-sol\(testCase.suffix)",
+                "Regular mode should preserve \(testCase.reasoning.rawValue) reasoning"
+            )
+        }
+
         XCTAssertEqual(
             CodexFastMode.modelIdentifier(
                 model: "upstream-fast",

@@ -508,7 +508,7 @@ final class ShellFunctionRendererTests: XCTestCase {
             opus: .init(
                 model: "gpt-5.6-terra",
                 reasoning: .max,
-                contextWindow: .context1m,
+                contextWindow: .auto,
                 fastModeEnabled: true
             ),
             sonnet: .init(
