@@ -1,12 +1,13 @@
 import XCTest
 
 final class AccountReorderingUITests: XCTestCase {
-    func testDashboardUsesDedicatedDragHandleAndStringDropDestination() throws {
+    func testDashboardUsesDedicatedDragHandleAndWholeListDropDestination() throws {
         let source = try dashboardSource()
 
         XCTAssertTrue(source.contains("line.3.horizontal"))
-        XCTAssertTrue(source.contains(".draggable(account.id.rawValue)"))
-        XCTAssertTrue(source.contains(".dropDestination(for: String.self)"))
+        XCTAssertTrue(source.contains(".onDrag"))
+        XCTAssertTrue(source.contains("AccountReorderDropDelegate"))
+        XCTAssertTrue(source.contains(".onDrop("))
         XCTAssertTrue(source.contains("Reorder account"))
     }
 
@@ -23,8 +24,10 @@ final class AccountReorderingUITests: XCTestCase {
         let source = try dashboardSource()
 
         XCTAssertTrue(source.contains("activeDropIndex"))
+        XCTAssertTrue(source.contains("previewAccountIDs"))
+        XCTAssertTrue(source.contains("AccountFramePreferenceKey"))
+        XCTAssertTrue(source.contains("AccountOrdering.insertionIndex"))
         XCTAssertTrue(source.contains("accessibilityReduceMotion"))
-        XCTAssertTrue(source.contains("AccountReorderDropZone"))
     }
 
     private func dashboardSource() throws -> String {
