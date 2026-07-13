@@ -482,12 +482,15 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         )
 
         await drainMainQueue()
-        try? await Task.sleep(for: .milliseconds(200))
+        let didResize = await waitUntil {
+            abs(panel.frame.height - 245) < 0.5
+        }
 
         guard let surfaceView = panel.contentView as? UsageOverlaySurfaceView else {
             return XCTFail("Expected usage overlay surface")
         }
         surfaceView.layoutSubtreeIfNeeded()
+        XCTAssertTrue(didResize, "Compact HUD did not reach its measured two-account height")
         XCTAssertEqual(panel.frame.height, 245, accuracy: 0.5)
         XCTAssertEqual(panel.frame.maxX, 608)
         XCTAssertEqual(panel.frame.maxY, 568)
@@ -1135,6 +1138,17 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
                 }
             }
         }
+    }
+
+    private func waitUntil(
+        attempts: Int = 200,
+        condition: @escaping @MainActor () -> Bool
+    ) async -> Bool {
+        for _ in 0..<attempts {
+            if condition() { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return condition()
     }
 
     private func makePanel(
