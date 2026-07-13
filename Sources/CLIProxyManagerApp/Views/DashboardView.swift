@@ -24,7 +24,9 @@ struct DashboardView: View {
     @ObservedObject var cliProxyAPIUpdateService: CLIProxyAPIUpdateService
     let openSettings: () -> Void
     let quit: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @State private var activeSheet: DashboardSheet?
+    @State private var activeDropIndex: Int?
     @State private var copiedEndpoint: Bool = false
     @State private var showCLIProxyAPIUpdatePrompt = false
     @State private var showCLIProxyAPIApplyPrompt = false
@@ -60,9 +62,30 @@ struct DashboardView: View {
                         trailing: "\(viewModel.providerRows.filter(\.isConnected).count) connected"
                     )
 
-                    ForEach(viewModel.providerRows.map { DashboardAccountSnapshot(provider: $0) }) { account in
+                    let accounts = viewModel.providerRows.map { DashboardAccountSnapshot(provider: $0) }
+                    ForEach(Array(accounts.enumerated()), id: \.element.id) { index, account in
+                        AccountReorderDropZone(
+                            isActive: activeDropIndex == index,
+                            setTargeted: { isTargeted in
+                                if isTargeted {
+                                    activeDropIndex = index
+                                } else if activeDropIndex == index {
+                                    activeDropIndex = nil
+                                }
+                            },
+                            drop: { draggedID in
+                                viewModel.moveAccount(
+                                    ProviderRowState.ID(rawValue: draggedID),
+                                    before: account.id
+                                )
+                                activeDropIndex = nil
+                            }
+                        )
+
                         ProviderAccountCardView(
                             account: account,
+                            canReorder: accounts.count > 1,
+                            isDropTarget: activeDropIndex == index,
                             connect: {
                                 if account.isAPIKeyProfile {
                                     openProviderSettings(account.id, isInitialSetup: false)
@@ -71,10 +94,13 @@ struct DashboardView: View {
                                     viewModel.startOAuthLogin(account.id)
                                 }
                             },
-
                             settings: { openProviderSettings(account.id, isInitialSetup: false) },
                             toggleAccountDetailVisibility: { viewModel.toggleAccountDetailVisibility(account.id) },
                             setEnabled: { enabled in viewModel.setProviderEnabled(account.id, enabled: enabled) },
+                            moveUp: { viewModel.moveAccountUp(account.id) },
+                            moveDown: { viewModel.moveAccountDown(account.id) },
+                            canMoveUp: viewModel.canMoveAccountUp(account.id),
+                            canMoveDown: viewModel.canMoveAccountDown(account.id),
                             remove: {
                                 if account.isAPIKeyProfile {
                                     viewModel.removeAPIProvider(account.id)
@@ -83,7 +109,26 @@ struct DashboardView: View {
                                 }
                             }
                         )
+                        .animation(
+                            accessibilityReduceMotion ? nil : .easeInOut(duration: 0.16),
+                            value: viewModel.providerRows.map(\.id)
+                        )
                     }
+
+                    AccountReorderDropZone(
+                        isActive: activeDropIndex == accounts.count,
+                        setTargeted: { isTargeted in
+                            if isTargeted {
+                                activeDropIndex = accounts.count
+                            } else if activeDropIndex == accounts.count {
+                                activeDropIndex = nil
+                            }
+                        },
+                        drop: { draggedID in
+                            viewModel.moveAccount(ProviderRowState.ID(rawValue: draggedID), before: nil)
+                            activeDropIndex = nil
+                        }
+                    )
 
                     AddProviderCard {
                         activeSheet = .addProvider
@@ -560,16 +605,33 @@ private struct ServerHeroView: View {
 
 private struct ProviderAccountCardView: View {
     let account: DashboardAccountSnapshot
+    let canReorder: Bool
+    let isDropTarget: Bool
     let connect: () -> Void
     let settings: () -> Void
     let toggleAccountDetailVisibility: () -> Void
     let setEnabled: (Bool) -> Void
+    let moveUp: () -> Void
+    let moveDown: () -> Void
+    let canMoveUp: Bool
+    let canMoveDown: Bool
     let remove: () -> Void
     @State private var hovering: Bool = false
     @State private var confirmRemove: Bool = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "line.3.horizontal")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.tertiary)
+                .frame(width: 18, height: 28)
+                .contentShape(Rectangle())
+                .draggable(account.id.rawValue)
+                .disabled(!canReorder)
+                .opacity(canReorder ? 1 : 0.35)
+                .accessibilityLabel("Reorder account")
+                .accessibilityHint("Change the position of \(account.title) in the account list")
+
             ProviderAvatar(providerID: account.id, providerType: account.providerType)
 
             VStack(alignment: .leading, spacing: 4) {
@@ -593,7 +655,11 @@ private struct ProviderAccountCardView: View {
         .padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.primary.opacity(hovering ? 0.07 : 0.04))
+                .fill(
+                    isDropTarget
+                        ? BrandPalette.accent.opacity(0.10)
+                        : Color.primary.opacity(hovering ? 0.07 : 0.04)
+                )
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -663,6 +729,11 @@ private struct ProviderAccountCardView: View {
                 .buttonStyle(.plain)
 
                 Menu {
+                    Button("Move Up", action: moveUp)
+                        .disabled(!canMoveUp)
+                    Button("Move Down", action: moveDown)
+                        .disabled(!canMoveDown)
+                    Divider()
                     if !account.isAPIKeyProfile {
                         Button {
                             setEnabled(false)
@@ -698,6 +769,11 @@ private struct ProviderAccountCardView: View {
                 .buttonStyle(.plain)
 
                 Menu {
+                    Button("Move Up", action: moveUp)
+                        .disabled(!canMoveUp)
+                    Button("Move Down", action: moveDown)
+                        .disabled(!canMoveDown)
+                    Divider()
                     Button {
                         setEnabled(true)
                     } label: {
@@ -735,6 +811,11 @@ private struct ProviderAccountCardView: View {
                 .buttonStyle(.plain)
 
                 Menu {
+                    Button("Move Up", action: moveUp)
+                        .disabled(!canMoveUp)
+                    Button("Move Down", action: moveDown)
+                        .disabled(!canMoveDown)
+                    Divider()
                     Button(role: .destructive) {
                         confirmRemove = true
                     } label: {
@@ -753,6 +834,27 @@ private struct ProviderAccountCardView: View {
         }
     }
 
+}
+
+private struct AccountReorderDropZone: View {
+    let isActive: Bool
+    let setTargeted: (Bool) -> Void
+    let drop: (String) -> Void
+
+    var body: some View {
+        Rectangle()
+            .fill(isActive ? BrandPalette.accent : .clear)
+            .frame(height: isActive ? 3 : 6)
+            .contentShape(Rectangle())
+            .dropDestination(for: String.self) { items, _ in
+                guard let draggedID = items.first else { return false }
+                drop(draggedID)
+                return true
+            } isTargeted: { targeted in
+                setTargeted(targeted)
+            }
+            .animation(.easeOut(duration: 0.12), value: isActive)
+    }
 }
 
 // MARK: - Add provider card
