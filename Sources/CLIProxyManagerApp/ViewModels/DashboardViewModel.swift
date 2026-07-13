@@ -111,9 +111,39 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private struct CodexFastConfigurationInput: Equatable {
-        let oauth: [AppConfig.Codex]
-        let roundRobin: [AppConfig.Codex]
-        let apiKey: AppConfig.Codex
+        struct Role: Equatable {
+            let model: String
+            let fastModeEnabled: Bool
+
+            init(_ role: AppConfig.CodexRole) {
+                model = role.model
+                fastModeEnabled = role.fastModeEnabled
+            }
+
+            var codexRole: AppConfig.CodexRole {
+                .init(model: model, reasoning: .auto, contextWindow: .auto, fastModeEnabled: fastModeEnabled)
+            }
+        }
+
+        struct Configuration: Equatable {
+            let opus: Role
+            let sonnet: Role
+            let haiku: Role
+
+            init(_ codex: AppConfig.Codex) {
+                opus = Role(codex.opus)
+                sonnet = Role(codex.sonnet)
+                haiku = Role(codex.haiku)
+            }
+
+            var codex: AppConfig.Codex {
+                .init(opus: opus.codexRole, sonnet: sonnet.codexRole, haiku: haiku.codexRole)
+            }
+        }
+
+        let oauth: [Configuration]
+        let roundRobin: [Configuration]
+        let apiKey: Configuration
     }
 
     private struct ProxyRestartReadinessError: LocalizedError {
@@ -2048,47 +2078,47 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func codexFastConfigurationInput(config: AppConfig) -> CodexFastConfigurationInput {
-        let oauth: [AppConfig.Codex]
+        let oauth: [CodexFastConfigurationInput.Configuration]
         if config.oauthCommandProfiles.isEmpty {
-            oauth = [config.ccodex]
+            oauth = [.init(config.ccodex)]
         } else {
             oauth = config.oauthCommandProfiles.compactMap { profile in
                 guard profile.provider == .codex, profile.isEnabled else { return nil }
-                return profile.codex ?? config.ccodex
+                return .init(profile.codex ?? config.ccodex)
             }
         }
-        let roundRobin: [AppConfig.Codex] = config.roundRobinProfiles.compactMap { profile in
+        let roundRobin: [CodexFastConfigurationInput.Configuration] = config.roundRobinProfiles.compactMap { profile in
             guard profile.provider == .codex, profile.isEnabled else { return nil }
-            return profile.codex ?? config.ccodex
+            return .init(profile.codex ?? config.ccodex)
         }
         return CodexFastConfigurationInput(
             oauth: oauth,
             roundRobin: roundRobin,
-            apiKey: config.codexAPI.codex
+            apiKey: .init(config.codexAPI.codex)
         )
     }
 
     private func codexFastConfiguration(from input: CodexFastConfigurationInput) throws -> CodexFastConfiguration {
         var snapshotConfig = AppConfig.default
-        snapshotConfig.ccodex = input.oauth.first ?? AppConfig.default.ccodex
-        snapshotConfig.oauthCommandProfiles = input.oauth.enumerated().map { index, codex in
+        snapshotConfig.ccodex = input.oauth.first?.codex ?? AppConfig.default.ccodex
+        snapshotConfig.oauthCommandProfiles = input.oauth.enumerated().map { index, configuration in
             .init(
                 id: "fast-snapshot-oauth-\(index)",
                 provider: .codex,
                 authProfileID: "fast-snapshot-oauth-\(index).json",
-                codex: codex,
+                codex: configuration.codex,
                 modelPrefix: "fast-snapshot-oauth-\(index)"
             )
         }
-        snapshotConfig.roundRobinProfiles = input.roundRobin.enumerated().map { index, codex in
+        snapshotConfig.roundRobinProfiles = input.roundRobin.enumerated().map { index, configuration in
             .init(
                 id: "fast-snapshot-round-robin-\(index)",
                 provider: .codex,
                 isEnabled: true,
-                codex: codex
+                codex: configuration.codex
             )
         }
-        snapshotConfig.codexAPI.codex = input.apiKey
+        snapshotConfig.codexAPI.codex = input.apiKey.codex
         return try CodexFastConfiguration(config: snapshotConfig)
     }
 
@@ -2471,7 +2501,7 @@ final class DashboardViewModel: ObservableObject {
         waitForReady: Bool = false,
         action: () async throws -> Void
     ) async {
-        guard isServerActionInProgress == false else { return }
+        guard isServerActionInProgress == false, proxyConfigurationRestartTask == nil else { return }
 
         isServerActionInProgress = true
         serverControlState = transitionState

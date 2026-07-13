@@ -1354,6 +1354,37 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(proxyService.restartPorts, [config.port])
     }
 
+    func testManualServerActionsAreIgnoredWhileConfigurationRestartIsInProgress() async throws {
+        var config = AppConfig.default
+        config.commands.ccodex = "ccodex"
+        let proxyService = StubProxyServiceStarter(suspendedRestartCount: 1)
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            serverStatusRetryDelayNanoseconds: 0
+        )
+        viewModel.serverControlState = .running
+        var codex = config.ccodex
+        codex.opus.fastModeEnabled = true
+
+        try viewModel.saveCodexSettings(functionName: "ccodex", codex: codex)
+        let reachedRestart = await proxyService.reachesRestartCount(1)
+        XCTAssertTrue(reachedRestart)
+
+        await viewModel.stopServer()
+        await viewModel.restartServer()
+
+        XCTAssertEqual(proxyService.stopCount, 0)
+        XCTAssertEqual(proxyService.restartPorts, [config.port])
+        proxyService.releaseRestart(1)
+    }
+
     func testStoppedProxyDoesNotRestartAfterFastModeSave() throws {
         var config = AppConfig.default
         config.commands.ccodex = "ccodex"
@@ -1686,7 +1717,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(proxyService.restartPorts, [])
     }
 
-    func testFastAliasRecoverySaveSucceedsWhenOldSnapshotIsInvalid() throws {
+    func testReasoningOnlySaveSucceedsWithoutRestartWhenExistingFastAliasIsInvalid() async throws {
         var config = AppConfig.default
         config.commands.ccodex = "ccodex"
         config.ccodex.opus = .init(
@@ -1695,6 +1726,64 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             contextWindow: .auto,
             fastModeEnabled: true
         )
+        let proxyService = StubProxyServiceStarter()
+        let store = StubConfigStore(config: config)
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector()
+        )
+        viewModel.serverControlState = .running
+        var updated = config.ccodex
+        updated.opus.reasoning = .max
+
+        XCTAssertNoThrow(try viewModel.saveCodexSettings(functionName: "ccodex", codex: updated))
+        for _ in 0..<20 { await Task.yield() }
+
+        XCTAssertEqual(store.savedConfigs.last?.ccodex.opus.reasoning, .max)
+        XCTAssertEqual(proxyService.restartPorts, [])
+    }
+
+    func testFastAliasRecoverySaveSucceedsAndRequestsRestart() async throws {
+        var config = AppConfig.default
+        config.commands.ccodex = "ccodex"
+        config.ccodex.opus = .init(
+            model: "gpt-5.6-sol-cpm-fast",
+            reasoning: .high,
+            contextWindow: .auto,
+            fastModeEnabled: true
+        )
+        let store = StubConfigStore(config: config)
+        let proxyService = StubProxyServiceStarter()
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            serverStatusRetryDelayNanoseconds: 0
+        )
+        viewModel.serverControlState = .running
+        var repaired = config.ccodex
+        repaired.opus.model = "gpt-5.6-sol"
+
+        XCTAssertNoThrow(try viewModel.saveCodexSettings(functionName: "ccodex", codex: repaired))
+        await waitForRestart(proxyService)
+
+        XCTAssertEqual(store.savedConfigs.last?.ccodex.opus.model, "gpt-5.6-sol")
+        XCTAssertEqual(proxyService.restartPorts, [config.port])
+    }
+
+    func testNewFastAliasCollisionThrows() throws {
+        var config = AppConfig.default
+        config.commands.ccodex = "ccodex"
         let store = StubConfigStore(config: config)
         let viewModel = DashboardViewModel(
             config: config,
@@ -1705,11 +1794,18 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             proxyService: StubProxyServiceStarter(),
             claudeConnector: connectedClaudeConnector()
         )
-        var repaired = config.ccodex
-        repaired.opus.model = "gpt-5.6-sol"
+        var invalid = config.ccodex
+        invalid.opus = .init(
+            model: "gpt-5.6-sol-cpm-fast",
+            reasoning: .high,
+            contextWindow: .auto,
+            fastModeEnabled: true
+        )
 
-        XCTAssertNoThrow(try viewModel.saveCodexSettings(functionName: "ccodex", codex: repaired))
-        XCTAssertEqual(store.savedConfigs.last?.ccodex.opus.model, "gpt-5.6-sol")
+        XCTAssertThrowsError(try viewModel.saveCodexSettings(functionName: "ccodex", codex: invalid)) { error in
+            XCTAssertEqual(error as? CodexFastConfigurationError, .managedAliasCollision("gpt-5.6-sol-cpm-fast"))
+        }
+        XCTAssertTrue(store.savedConfigs.isEmpty)
     }
 
     func testUnrelatedSaveSucceedsWhenExistingFastSnapshotIsInvalid() throws {
