@@ -24,7 +24,9 @@ struct CompactUsageMeasurementState {
 
     mutating func updateProviderIDs(_ newProviderIDs: [String]) -> Bool {
         guard providerIDs != newProviderIDs else { return false }
+        let accountSetChanged = Set(providerIDs) != Set(newProviderIDs)
         providerIDs = newProviderIDs
+        guard accountSetChanged else { return false }
         height = 0
         return true
     }

@@ -131,4 +131,13 @@ final class UsageOverlayPresentationStateTests: XCTestCase {
         XCTAssertFalse(state.updateProviderIDs(["one"]))
         XCTAssertEqual(state.height, 220)
     }
+
+    func testProviderReorderingPreservesMeasurement() {
+        var state = CompactUsageMeasurementState()
+        XCTAssertTrue(state.updateProviderIDs(["one", "two", "three"]))
+        XCTAssertTrue(state.record(height: 360))
+
+        XCTAssertFalse(state.updateProviderIDs(["three", "one", "two"]))
+        XCTAssertEqual(state.height, 360)
+    }
 }
