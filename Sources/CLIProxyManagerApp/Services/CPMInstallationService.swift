@@ -124,7 +124,8 @@ final class CPMInstallationService: CPMInstallationManaging {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             digest = try container.decode(String.self, forKey: .digest)
             appVersion = try container.decodeIfPresent(String.self, forKey: .appVersion)
-                ?? container.decode(String.self, forKey: .version)
+                ?? container.decodeIfPresent(String.self, forKey: .version)
+                ?? "Unknown"
             cpmRevision = try container.decodeIfPresent(Int.self, forKey: .cpmRevision)
         }
 

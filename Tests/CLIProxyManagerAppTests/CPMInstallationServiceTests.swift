@@ -88,6 +88,25 @@ final class CPMInstallationServiceTests: XCTestCase {
         )
     }
 
+    func testRecordWithoutVersionAllowsOneUpdateWhenDigestMatches() throws {
+        let fixture = try Fixture()
+        try Data("installed cpm".utf8).write(to: fixture.target)
+        let digest = try fixture.sha256(of: fixture.target)
+        try FileManager.default.createDirectory(
+            at: fixture.paths.rootDirectory,
+            withIntermediateDirectories: true
+        )
+        let record = """
+        {"digest":"\(digest)"}
+        """
+        try Data(record.utf8).write(to: fixture.paths.cpmInstallationRecordFile)
+
+        XCTAssertEqual(
+            fixture.makeService(bundledVersion: "0.1.17", currentRevision: 1).status(),
+            .installedOutdated(installedVersion: "Unknown", availableVersion: "0.1.17")
+        )
+    }
+
     func testInstallRecordsAppVersionAndCompatibilityRevision() async throws {
         let fixture = try Fixture()
         try await fixture.makeService(
