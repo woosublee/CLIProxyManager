@@ -228,6 +228,8 @@ final class DashboardViewModel: ObservableObject {
     private var pendingForcedSubscriptionUsageRefresh = false
     private var pendingProxyConfigurationRestartReasons: Set<ProxyConfigurationRestartReason> = []
     private var proxyConfigurationRestartTask: Task<Void, Never>?
+    private var serverActionCompletionWaiters: [CheckedContinuation<Void, Never>] = []
+    private var ownedFastRestartFailureMessage: String?
     private var subscriptionUsageRefreshGeneration = 0
     private var subscriptionUsageRetryDelayNanoseconds: UInt64 = 60_000_000_000
 
@@ -393,7 +395,7 @@ final class DashboardViewModel: ObservableObject {
             settingsMessage = "Settings reset to defaults."
             if serverControlState.isRunning {
                 Task { [weak self] in
-                    await self?.restartServer()
+                    await self?.restartServerAfterRequiredChange()
                 }
             }
         } catch {
@@ -444,7 +446,7 @@ final class DashboardViewModel: ObservableObject {
         Task { [weak self] in
             guard let self else { return }
             if self.serverControlState.isRunning {
-                await self.restartServer()
+                await self.restartServerAfterRequiredChange()
             } else {
                 await self.refreshSubscriptionUsage()
             }
@@ -456,13 +458,13 @@ final class DashboardViewModel: ObservableObject {
             if config.subscriptionUsage.isEnabled {
                 let createdKey = try subscriptionUsageKeyStore.createManagementKeyIfNeeded()
                 if createdKey, serverControlState.isRunning {
-                    await restartServer()
+                    await restartServerAfterRequiredChange()
                     return
                 }
             } else if subscriptionUsageKeyStore.isConfigured() {
                 try subscriptionUsageKeyStore.deleteManagementKey()
                 if serverControlState.isRunning {
-                    await restartServer()
+                    await restartServerAfterRequiredChange()
                     return
                 }
             }
@@ -770,7 +772,10 @@ final class DashboardViewModel: ObservableObject {
         do {
             try service.applyPendingNow()
             if serverControlState.isRunning {
-                await restartServer()
+                guard await restartServerAfterRequiredChange() else {
+                    settingsMessage = "CLIProxyAPI update failed: \(serverStatus.message)"
+                    return
+                }
             }
             settingsMessage = "CLIProxyAPI binary updated. Restarting the app is not required."
         } catch {
@@ -1346,7 +1351,14 @@ final class DashboardViewModel: ObservableObject {
         replacement: String?,
         operation: () throws -> Void
     ) throws -> Bool {
-        let previousValue = try? secretStore.get(key)
+        let previousValue: String?
+        do {
+            previousValue = try secretStore.get(key)
+        } catch SecretStoreError.missingSecret {
+            previousValue = nil
+        } catch {
+            throw error
+        }
         let normalizedReplacement = replacement?.trimmingCharacters(in: .whitespacesAndNewlines)
         let credentialChanged = normalizedReplacement != previousValue
         do {
@@ -1393,6 +1405,7 @@ final class DashboardViewModel: ObservableObject {
             pendingProxyConfigurationRestartReasons.removeAll()
             do {
                 try await restartProxyAndRefresh()
+                clearOwnedFastRestartFailureMessageIfNeeded(for: reasons)
             } catch {
                 handleProxyConfigurationRestartFailure(error, reasons: reasons)
                 if !pendingProxyConfigurationRestartReasons.isEmpty {
@@ -1429,8 +1442,21 @@ final class DashboardViewModel: ObservableObject {
         )
         serverControlState = .error(message)
         if reasons.contains(.fastMode) {
-            settingsMessage = "Fast mode settings were saved, but CLIProxyAPI could not restart: \(message)"
+            let failureMessage = "Fast mode settings were saved, but CLIProxyAPI could not restart: \(message)"
+            ownedFastRestartFailureMessage = failureMessage
+            settingsMessage = failureMessage
         }
+    }
+
+    private func clearOwnedFastRestartFailureMessageIfNeeded(
+        for reasons: Set<ProxyConfigurationRestartReason>
+    ) {
+        guard reasons.contains(.fastMode),
+              let ownedFastRestartFailureMessage else { return }
+        if settingsMessage == ownedFastRestartFailureMessage {
+            settingsMessage = nil
+        }
+        self.ownedFastRestartFailureMessage = nil
     }
 
     func removeAPIProvider(_ provider: ProviderRowState.ID) {
@@ -1601,7 +1627,9 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func refreshCodexModels() async {
-        guard !codexModelLoadingState.isLoading, !isServerActionInProgress else { return }
+        guard !codexModelLoadingState.isLoading else { return }
+        await waitForConfigurationRestartIfNeeded()
+        guard !isServerActionInProgress else { return }
 
         if serverControlState.isRunning {
             await loadCodexModels()
@@ -2502,10 +2530,59 @@ final class DashboardViewModel: ObservableObject {
         action: () async throws -> Void
     ) async {
         guard isServerActionInProgress == false, proxyConfigurationRestartTask == nil else { return }
+        _ = await executeServerAction(
+            title: title,
+            transitionState: transitionState,
+            waitForReady: waitForReady,
+            action: action
+        )
+    }
 
+    @discardableResult
+    private func restartServerAfterRequiredChange() async -> Bool {
+        await waitForConfigurationRestartIfNeeded()
+        while isServerActionInProgress {
+            await waitForServerActionCompletion()
+        }
+        return await executeServerAction(
+            title: "Failed to restart CLIProxyAPI",
+            transitionState: .starting,
+            waitForReady: true
+        ) {
+            try await proxyService.restart(port: config.port)
+        }
+    }
+
+    private func waitForConfigurationRestartIfNeeded() async {
+        if let proxyConfigurationRestartTask {
+            await proxyConfigurationRestartTask.value
+        }
+    }
+
+    private func waitForServerActionCompletion() async {
+        guard isServerActionInProgress else { return }
+        await withCheckedContinuation { continuation in
+            serverActionCompletionWaiters.append(continuation)
+        }
+    }
+
+    private func finishServerAction() {
+        isServerActionInProgress = false
+        let waiters = serverActionCompletionWaiters
+        serverActionCompletionWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
+    @discardableResult
+    private func executeServerAction(
+        title: String,
+        transitionState: ServerControlState,
+        waitForReady: Bool,
+        action: () async throws -> Void
+    ) async -> Bool {
         isServerActionInProgress = true
         serverControlState = transitionState
-        defer { isServerActionInProgress = false }
+        defer { finishServerAction() }
 
         do {
             try await action()
@@ -2524,6 +2601,7 @@ final class DashboardViewModel: ObservableObject {
             } else {
                 pendingProxyConfigurationRestartReasons.removeAll()
             }
+            return true
         } catch {
             pendingProxyConfigurationRestartReasons.removeAll()
             let message = error.localizedDescription
@@ -2536,6 +2614,7 @@ final class DashboardViewModel: ObservableObject {
                 claudeStatus: nil
             )
             serverControlState = .error(message)
+            return false
         }
     }
 
