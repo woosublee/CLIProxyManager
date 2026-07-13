@@ -2,6 +2,10 @@ import CLIProxyManagerCore
 import CryptoKit
 import Foundation
 
+enum CPMCompatibility {
+    static let currentRevision = 1
+}
+
 enum CPMInstallationStatus: Equatable {
     case notInstalled
     case installedCurrent(version: String)
@@ -100,13 +104,44 @@ struct AppleScriptPrivilegedCPMCommandRunner: PrivilegedCPMCommandRunning {
 final class CPMInstallationService: CPMInstallationManaging {
     private struct InstallationRecord: Codable {
         let digest: String
-        let version: String
+        let appVersion: String
+        let cpmRevision: Int?
+
+        private enum CodingKeys: String, CodingKey {
+            case digest
+            case appVersion
+            case cpmRevision
+            case version
+        }
+
+        init(digest: String, appVersion: String, cpmRevision: Int) {
+            self.digest = digest
+            self.appVersion = appVersion
+            self.cpmRevision = cpmRevision
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            digest = try container.decode(String.self, forKey: .digest)
+            appVersion = try container.decodeIfPresent(String.self, forKey: .appVersion)
+                ?? container.decodeIfPresent(String.self, forKey: .version)
+                ?? "Unknown"
+            cpmRevision = try container.decodeIfPresent(Int.self, forKey: .cpmRevision)
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(digest, forKey: .digest)
+            try container.encode(appVersion, forKey: .appVersion)
+            try container.encodeIfPresent(cpmRevision, forKey: .cpmRevision)
+        }
     }
 
     private let sourceURL: URL
     private let targetURL: URL
     private let bundledVersion: String
     private let availableVersion: () -> String
+    private let currentRevision: Int
     private let paths: ManagedPaths
     private let runner: any PrivilegedCPMCommandRunning
     private let fileManager: FileManager
@@ -121,6 +156,7 @@ final class CPMInstallationService: CPMInstallationManaging {
         self.targetURL = URL(fileURLWithPath: "/usr/local/bin/cpm")
         self.bundledVersion = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown"
         self.availableVersion = { bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown" }
+        self.currentRevision = CPMCompatibility.currentRevision
         self.paths = paths
         self.runner = runner
         self.fileManager = fileManager
@@ -131,6 +167,7 @@ final class CPMInstallationService: CPMInstallationManaging {
         targetURL: URL,
         bundledVersion: String,
         availableVersion: @escaping () -> String,
+        currentRevision: Int,
         paths: ManagedPaths,
         runner: any PrivilegedCPMCommandRunning,
         fileManager: FileManager = .default
@@ -139,6 +176,7 @@ final class CPMInstallationService: CPMInstallationManaging {
         self.targetURL = targetURL
         self.bundledVersion = bundledVersion
         self.availableVersion = availableVersion
+        self.currentRevision = currentRevision
         self.paths = paths
         self.runner = runner
         self.fileManager = fileManager
@@ -148,16 +186,25 @@ final class CPMInstallationService: CPMInstallationManaging {
         guard fileManager.fileExists(atPath: targetURL.path) else {
             return .notInstalled
         }
-        guard let record = readRecord(), let targetDigest = try? digest(of: targetURL), targetDigest == record.digest else {
+        guard let record = readRecord(),
+              let targetDigest = try? digest(of: targetURL),
+              targetDigest == record.digest else {
             return .unmanaged
         }
-        guard let sourceDigest = try? digest(of: sourceURL) else {
-            return .installedOutdated(installedVersion: record.version, availableVersion: availableVersion())
+        guard let installedRevision = record.cpmRevision,
+              installedRevision >= 0 else {
+            return .installedOutdated(
+                installedVersion: record.appVersion,
+                availableVersion: availableVersion()
+            )
         }
-        if sourceDigest == targetDigest {
-            return .installedCurrent(version: record.version)
+        if installedRevision < currentRevision {
+            return .installedOutdated(
+                installedVersion: record.appVersion,
+                availableVersion: availableVersion()
+            )
         }
-        return .installedOutdated(installedVersion: record.version, availableVersion: availableVersion())
+        return .installedCurrent(version: record.appVersion)
     }
 
     func installOrUpdate() async throws {
@@ -180,7 +227,11 @@ final class CPMInstallationService: CPMInstallationManaging {
             throw CPMInstallationError.installationFailed
         }
 
-        let record = InstallationRecord(digest: targetDigest, version: bundledVersion)
+        let record = InstallationRecord(
+            digest: targetDigest,
+            appVersion: bundledVersion,
+            cpmRevision: currentRevision
+        )
         try JSONEncoder().encode(record).write(to: paths.cpmInstallationRecordFile, options: .atomic)
     }
 

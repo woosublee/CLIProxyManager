@@ -1,6 +1,21 @@
 import CLIProxyManagerCore
 import SwiftUI
 
+enum CPMInstallationPresentation {
+    static func description(for status: CPMInstallationStatus) -> String {
+        switch status {
+        case .notInstalled:
+            "Install cpm so it is available in Terminal and SSH sessions."
+        case .installedCurrent(let version):
+            "Installed at /usr/local/bin/cpm (from app \(version))."
+        case .installedOutdated(let installedVersion, let availableVersion):
+            "Installed from app \(installedVersion); cpm update included with app \(availableVersion)."
+        case .unmanaged:
+            "An existing cpm file is managed outside CLIProxyManager."
+        }
+    }
+}
+
 struct GeneralSettingsView: View {
     @ObservedObject var viewModel: DashboardViewModel
     @State private var confirmRemoveCPM = false
@@ -95,16 +110,7 @@ struct GeneralSettingsView: View {
     }
 
     private var cpmDescription: String {
-        switch viewModel.cpmInstallationStatus {
-        case .notInstalled:
-            "Install cpm so it is available in Terminal and SSH sessions."
-        case .installedCurrent(let version):
-            "Installed at /usr/local/bin/cpm (version \(version))."
-        case .installedOutdated(let installedVersion, let availableVersion):
-            "Installed version \(installedVersion); app includes \(availableVersion)."
-        case .unmanaged:
-            "An existing cpm file is managed outside CLIProxyManager."
-        }
+        CPMInstallationPresentation.description(for: viewModel.cpmInstallationStatus)
     }
 }
 
