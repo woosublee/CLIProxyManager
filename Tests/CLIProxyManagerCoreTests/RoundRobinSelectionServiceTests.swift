@@ -37,6 +37,44 @@ final class RoundRobinSelectionServiceTests: XCTestCase {
         XCTAssertTrue(output.contains("CLIPROXY_ROUND_ROBIN_PROFILE='codex-deep.json'"))
     }
 
+    func testCodexRoundRobinPrefixesFastAliasForOnlyEnabledRoles() async throws {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            .init(id: "codex-a", provider: .codex, authProfileID: "a.json", commandName: "cca", modelPrefix: "codex-a"),
+            .init(id: "codex-b", provider: .codex, authProfileID: "b.json", commandName: "ccb", modelPrefix: "codex-b")
+        ]
+        config.roundRobinProfiles = [
+            .init(
+                id: "codex-default",
+                provider: .codex,
+                isEnabled: true,
+                commandName: "ccodex",
+                includedAuthProfileIDs: ["a.json", "b.json"],
+                codex: .init(
+                    opus: .init(model: "gpt-5.6-sol", reasoning: .xhigh, contextWindow: .auto, fastModeEnabled: true),
+                    sonnet: .init(model: "gpt-5.6-sol", reasoning: .medium, contextWindow: .auto),
+                    haiku: .init(model: "gpt-5.5", reasoning: .low, contextWindow: .auto, fastModeEnabled: true)
+                )
+            )
+        ]
+        let service = RoundRobinSelectionService(
+            stateSelector: StubRoundRobinStateSelector(selections: ["b.json"])
+        )
+
+        let output = try await service.shellEnvironmentAssignments(
+            profileID: "codex-default",
+            config: config,
+            authProfiles: [
+                .init(fileName: "a.json", type: .codex, email: nil, accountID: nil, expired: nil, disabled: false, prefix: "codex-a"),
+                .init(fileName: "b.json", type: .codex, email: nil, accountID: nil, expired: nil, disabled: false, prefix: "codex-b")
+            ]
+        )
+
+        XCTAssertTrue(output.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='codex-b/gpt-5.6-sol-cpm-fast(xhigh)'"))
+        XCTAssertTrue(output.contains("ANTHROPIC_DEFAULT_SONNET_MODEL='codex-b/gpt-5.6-sol(medium)'"))
+        XCTAssertTrue(output.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL='codex-b/gpt-5.5-cpm-fast(low)'"))
+    }
+
     func testClaudeSelectionResolvesModelsForActuallySelectedAccount() async throws {
         var config = AppConfig.default
         config.port = 18_888

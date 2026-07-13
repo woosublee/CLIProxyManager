@@ -38,6 +38,16 @@ final class ProxyServiceManagerTests: XCTestCase {
         XCTAssertTrue(authIsDirectory.boolValue)
 
         let config = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
+        XCTAssertEqual(config, """
+        port: 8317
+        auth-dir: "\(paths.authDirectory.path)"
+        logging-to-file: true
+        debug: false
+        api-keys:
+          - sk-dummy
+
+
+        """)
         XCTAssertTrue(config.contains("port: 8317"))
         XCTAssertTrue(config.contains("auth-dir: \"\(paths.authDirectory.path)\""))
         XCTAssertFalse(config.contains("~/.cli-proxy-api"))
@@ -56,6 +66,130 @@ final class ProxyServiceManagerTests: XCTestCase {
                 arguments: ["--config", paths.clipProxyConfigFile.path]
             )
         ])
+    }
+
+    func testStartWritesOAuthAndAPIKeyFastAliasesWithPriorityPayload() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        var config = AppConfig.default
+        config.ccodex.opus = .init(model: "gpt-5.6-sol", reasoning: .xhigh, contextWindow: .auto, fastModeEnabled: true)
+        config.codexAPI.codex.sonnet = .init(model: "gpt-5.5", reasoning: .medium, contextWindow: .auto, fastModeEnabled: true)
+        let configuredAppConfig = config
+        let manager = ProxyServiceManager(
+            paths: paths,
+            launcher: FakeProcessLauncher(),
+            codexAPIKeyProvider: { "codex-key" },
+            appConfigProvider: { configuredAppConfig }
+        )
+
+        try await manager.start(port: 8317)
+
+        let yaml = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
+        XCTAssertTrue(yaml.contains("oauth-model-alias:"))
+        XCTAssertTrue(yaml.contains("name: \"gpt-5.6-sol\""))
+        XCTAssertTrue(yaml.contains("alias: \"gpt-5.6-sol-cpm-fast\""))
+        XCTAssertTrue(yaml.contains("fork: true"))
+        XCTAssertTrue(yaml.contains("models:"))
+        XCTAssertTrue(yaml.contains("name: \"gpt-5.5\""))
+        XCTAssertTrue(yaml.contains("alias: \"gpt-5.5-cpm-fast\""))
+        XCTAssertTrue(yaml.contains("payload:"))
+        XCTAssertTrue(yaml.contains("service_tier: priority"))
+        XCTAssertEqual(yaml.components(separatedBy: "alias: \"gpt-5.6-sol-cpm-fast\"").count - 1, 1)
+    }
+
+    func testStartReadsCodexAPIKeyOnceAndOmitsAPIKeyFastModelsWithoutCredential() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        var config = AppConfig.default
+        config.codexAPI.codex.opus.fastModeEnabled = true
+        let configuredAppConfig = config
+        let callCounter = ProviderCallCounter()
+        let manager = ProxyServiceManager(
+            paths: paths,
+            launcher: FakeProcessLauncher(),
+            codexAPIKeyProvider: {
+                callCounter.increment()
+                return nil
+            },
+            appConfigProvider: { configuredAppConfig }
+        )
+
+        try await manager.start(port: 8317)
+
+        let yaml = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
+        XCTAssertEqual(callCounter.value, 1)
+        XCTAssertFalse(yaml.contains("codex-api-key:"))
+        XCTAssertFalse(yaml.contains("gpt-5.6-terra-cpm-fast"))
+    }
+
+    func testStartKeepsNoFastCodexAPIYAMLByteCompatibleWithMainRenderer() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let manager = ProxyServiceManager(
+            paths: paths,
+            launcher: FakeProcessLauncher(),
+            codexAPIKeyProvider: { "codex-key" },
+            appConfigProvider: { .default }
+        )
+
+        try await manager.start(port: 8317)
+
+        XCTAssertEqual(try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8), """
+        port: 8317
+        auth-dir: "\(paths.authDirectory.path)"
+        logging-to-file: true
+        debug: false
+        api-keys:
+          - sk-dummy
+
+
+        codex-api-key:
+          - api-key: "codex-key"
+            base-url: "https://api.openai.com/v1"
+            prefix: "cpm-codex-api"
+        """)
+    }
+
+    func testStartOmitsFastSectionsWhenNoRolesUseFastMode() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let manager = ProxyServiceManager(
+            paths: paths,
+            launcher: FakeProcessLauncher(),
+            codexAPIKeyProvider: { "codex-key" },
+            appConfigProvider: { .default }
+        )
+
+        try await manager.start(port: 8317)
+
+        let yaml = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
+        XCTAssertFalse(yaml.contains("oauth-model-alias:"))
+        XCTAssertFalse(yaml.contains("-cpm-fast"))
+        XCTAssertFalse(yaml.contains("payload:"))
+    }
+
+    func testStartPropagatesAppConfigLoadFailureWithoutWritingYAML() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let loadError = CocoaError(.fileReadCorruptFile)
+        let manager = ProxyServiceManager(
+            paths: paths,
+            launcher: FakeProcessLauncher(),
+            appConfigProvider: { throw loadError }
+        )
+
+        do {
+            try await manager.start(port: 8317)
+            XCTFail("Expected config load failure")
+        } catch let error as ProxyServiceError {
+            XCTAssertEqual(error, .writeFailed(loadError.localizedDescription))
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.clipProxyConfigFile.path))
     }
 
     func testStartAddsConfiguredAPIKeysWithOfficialBaseURLsAndFixedPrefixes() async throws {
@@ -676,6 +810,19 @@ final class ProxyServiceManagerTests: XCTestCase {
             value = expression()
         }
         XCTAssertEqual(value, expected, file: file, line: line)
+    }
+}
+
+private final class ProviderCallCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var value: Int {
+        lock.withLock { count }
+    }
+
+    func increment() {
+        lock.withLock { count += 1 }
     }
 }
 

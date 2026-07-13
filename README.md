@@ -17,6 +17,7 @@ CLIProxyManager는 여러 Claude·Codex OAuth 계정과 로컬 CLIProxyAPI 서�
 - Claude와 OpenAI API Key를 추가하고 API Key별 명령어·별칭·모델 매핑·권한 설정 관리
 - 모든 API Key 명령은 OAuth 구독 로그인과 분리된 로컬 CLIProxyAPI 경로로 실행
 - 계정별 명령어·별칭·모델 설정
+- 지원되는 Codex 모델에서 Opus·Sonnet·Haiku 역할별 Fast mode 설정
 - 로컬 CLIProxyAPI 서버 시작·중지·상태·로그 확인
 - 메뉴바와 별도 HUD에서 구독 사용량 확인
 - **cpm Command Line Tool**로 터미널이나 SSH 환경에서도 프록시·앱·사용량 관리
@@ -41,6 +42,9 @@ GitHub Releases에서 직접 내려받은 배포본만 사용하세요.
 
 1. 앱에서 **Add Provider**를 눌러 Claude/Codex의 OAuth subscription 또는 API Key를 추가합니다.
 2. 계정별 Settings에서 원하는 명령어를 지정합니다. 예: `claude-work`, `codex-personal`
+
+   Codex 계정과 OpenAI API Key에서는 각 Claude 역할에 매핑할 GPT 모델, reasoning, context window, Fast mode를 설정할 수 있습니다. Fast mode는 지원 모델에서만 활성화되며 약 1.5배 빠를 수 있지만 사용량이나 크레딧 소비가 늘어날 수 있습니다.
+
 3. 새 터미널을 열거나 다음 명령을 실행합니다.
 
    ```zsh

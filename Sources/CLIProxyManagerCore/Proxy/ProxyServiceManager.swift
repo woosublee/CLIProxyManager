@@ -246,6 +246,7 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
     private let subscriptionUsageEnabledProvider: @Sendable () -> Bool
     private let claudeAPIKeyProvider: @Sendable () -> String?
     private let codexAPIKeyProvider: @Sendable () -> String?
+    private let appConfigProvider: @Sendable () throws -> AppConfig
     private let processState = LockedProcessState()
     private let lifecycleLock = NSLock()
 
@@ -258,7 +259,8 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         managementKeyProvider: (@Sendable () -> String?)? = nil,
         subscriptionUsageEnabledProvider: (@Sendable () -> Bool)? = nil,
         claudeAPIKeyProvider: (@Sendable () -> String?)? = nil,
-        codexAPIKeyProvider: (@Sendable () -> String?)? = nil
+        codexAPIKeyProvider: (@Sendable () -> String?)? = nil,
+        appConfigProvider: (@Sendable () throws -> AppConfig)? = nil
     ) {
         self.init(
             paths: paths,
@@ -272,7 +274,8 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
                 (try? AppConfigStore(paths: paths).load().isSubscriptionUsageEnabled) ?? false
             },
             claudeAPIKeyProvider: claudeAPIKeyProvider ?? { try? FileSecretStore(paths: paths).get(.claudeAPIKey) },
-            codexAPIKeyProvider: codexAPIKeyProvider ?? { try? FileSecretStore(paths: paths).get(.codexAPIKey) }
+            codexAPIKeyProvider: codexAPIKeyProvider ?? { try? FileSecretStore(paths: paths).get(.codexAPIKey) },
+            appConfigProvider: appConfigProvider ?? { try AppConfigStore(paths: paths).load() }
         )
     }
 
@@ -286,7 +289,8 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         managementKeyProvider: (@Sendable () -> String?)? = nil,
         subscriptionUsageEnabledProvider: (@Sendable () -> Bool)? = nil,
         claudeAPIKeyProvider: (@Sendable () -> String?)? = nil,
-        codexAPIKeyProvider: (@Sendable () -> String?)? = nil
+        codexAPIKeyProvider: (@Sendable () -> String?)? = nil,
+        appConfigProvider: (@Sendable () throws -> AppConfig)? = nil
     ) {
         self.paths = paths
         self.bundledBinaryURL = bundledBinaryURL
@@ -301,6 +305,7 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         }
         self.claudeAPIKeyProvider = claudeAPIKeyProvider ?? { try? FileSecretStore(paths: paths).get(.claudeAPIKey) }
         self.codexAPIKeyProvider = codexAPIKeyProvider ?? { try? FileSecretStore(paths: paths).get(.codexAPIKey) }
+        self.appConfigProvider = appConfigProvider ?? { try AppConfigStore(paths: paths).load() }
     }
 
     public func prepare(port: Int) throws {
@@ -339,7 +344,7 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
             let temporaryConfigURL = paths.clipProxyConfigFile
                 .deletingLastPathComponent()
                 .appendingPathComponent(".config-\(UUID().uuidString).yaml")
-            let configData = Data(config(for: port).utf8)
+            let configData = Data(try config(for: port).utf8)
             guard fileManager.createFile(
                 atPath: temporaryConfigURL.path,
                 contents: configData,
@@ -514,7 +519,14 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         }
     }
 
-    private func config(for port: Int) -> String {
+    private func config(for port: Int) throws -> String {
+        let appConfig = try appConfigProvider()
+        let codexAPIKey = nonEmpty(codexAPIKeyProvider())
+        let fastConfiguration = try CodexFastConfiguration(
+            config: appConfig,
+            includeAPIKeyModels: codexAPIKey != nil
+        )
+
         let managementConfiguration: String
         if subscriptionUsageEnabledProvider(),
            let key = managementKeyProvider()?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -540,28 +552,96 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         }
 
         let codexAPIConfiguration: String
-        if let key = nonEmpty(codexAPIKeyProvider()) {
-            codexAPIConfiguration = """
-            codex-api-key:
-              - api-key: \(yamlDoubleQuoted(key))
-                base-url: \(yamlDoubleQuoted("https://api.openai.com/v1"))
-                prefix: \(yamlDoubleQuoted("cpm-codex-api"))
-            """
+        if let codexAPIKey {
+            let entries = codexAPIModelsConfiguration(models: fastConfiguration.apiKeyCanonicalModels)
+            let models = entries.isEmpty ? "" : "\n    models:\n\(entries)"
+            codexAPIConfiguration = [
+                "codex-api-key:",
+                "  - api-key: \(yamlDoubleQuoted(codexAPIKey))",
+                "    base-url: \(yamlDoubleQuoted("https://api.openai.com/v1"))",
+                "    prefix: \(yamlDoubleQuoted("cpm-codex-api"))\(models)"
+            ].joined(separator: "\n")
         } else {
             codexAPIConfiguration = ""
         }
 
-        return """
-        port: \(port)
-        auth-dir: \(yamlDoubleQuoted(paths.authDirectory.path))
-        logging-to-file: true
-        debug: false
-        api-keys:
-          - sk-dummy
-        \(managementConfiguration)
-        \(claudeAPIConfiguration)
-        \(codexAPIConfiguration)
-        """
+        let oauthFastConfiguration = oauthFastAliasConfiguration(
+            models: fastConfiguration.oauthCanonicalModels
+        )
+        let payloadConfiguration = fastPayloadConfiguration(
+            aliases: fastConfiguration.allAliases
+        )
+
+        guard !fastConfiguration.allAliases.isEmpty else {
+            let baseConfiguration = """
+            port: \(port)
+            auth-dir: \(yamlDoubleQuoted(paths.authDirectory.path))
+            logging-to-file: true
+            debug: false
+            api-keys:
+              - sk-dummy
+            """
+            guard !managementConfiguration.isEmpty || !claudeAPIConfiguration.isEmpty || !codexAPIConfiguration.isEmpty else {
+                return baseConfiguration + "\n\n"
+            }
+            return """
+            \(baseConfiguration)
+            \(managementConfiguration)
+            \(claudeAPIConfiguration)
+            \(codexAPIConfiguration)
+            """
+        }
+
+        var sections = [
+            """
+            port: \(port)
+            auth-dir: \(yamlDoubleQuoted(paths.authDirectory.path))
+            logging-to-file: true
+            debug: false
+            api-keys:
+              - sk-dummy
+            """
+        ]
+        sections.append(contentsOf: [
+            managementConfiguration,
+            claudeAPIConfiguration,
+            codexAPIConfiguration,
+            oauthFastConfiguration,
+            payloadConfiguration
+        ].filter { !$0.isEmpty })
+        return sections.joined(separator: "\n") + "\n\n"
+    }
+
+    private func oauthFastAliasConfiguration(models: [String]) -> String {
+        guard !models.isEmpty else { return "" }
+        var lines = ["oauth-model-alias:", "  codex:"]
+        for model in models {
+            lines.append("    - name: \(yamlDoubleQuoted(model))")
+            lines.append("      alias: \(yamlDoubleQuoted(CodexFastMode.alias(for: model)))")
+            lines.append("      fork: true")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func codexAPIModelsConfiguration(models: [String]) -> String {
+        var lines: [String] = []
+        for model in models {
+            lines.append("      - name: \(yamlDoubleQuoted(model))")
+            lines.append("        alias: \(yamlDoubleQuoted(CodexFastMode.alias(for: model)))")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func fastPayloadConfiguration(aliases: [String]) -> String {
+        guard !aliases.isEmpty else { return "" }
+        var lines = ["payload:", "  override:", "    - models:"]
+        for alias in aliases {
+            lines.append("        - name: \(yamlDoubleQuoted(alias))")
+            lines.append("          protocol: \(yamlDoubleQuoted("codex"))")
+        }
+        lines.append("      params:")
+        lines.append("        service_tier: priority")
+        return lines.joined(separator: "\n")
     }
 
     private func nonEmpty(_ value: String?) -> String? {

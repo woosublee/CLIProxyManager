@@ -17,6 +17,7 @@ CLIProxyManager is a macOS menu bar app for managing multiple Claude and Codex O
 - Add Claude and OpenAI API keys with per-command nicknames, model mapping, and permission settings.
 - Run every API key command through the local CLIProxyAPI path, isolated from OAuth subscription logins.
 - Configure a command name, nickname, and model settings per account.
+- Configure Fast mode per Opus, Sonnet, and Haiku role on supported Codex models.
 - Start, stop, inspect, and view logs for the local CLIProxyAPI server.
 - Check subscription usage in the menu bar or a separate HUD window.
 - Use the **cpm Command Line Tool** to manage the proxy, app, and usage from Terminal or SSH.
@@ -41,6 +42,9 @@ Only use release builds downloaded directly from GitHub Releases.
 
 1. In the app, select **Add Provider** and add a Claude or Codex OAuth subscription or API key.
 2. In each account's Settings, choose a command name, such as `claude-work` or `codex-personal`.
+
+   For Codex accounts and OpenAI API keys, each Claude role can select a GPT model, reasoning effort, context window, and Fast mode. Fast mode is available only on supported models and can be about 1.5× faster while consuming more usage or credits.
+
 3. Open a new Terminal window, or run:
 
    ```zsh

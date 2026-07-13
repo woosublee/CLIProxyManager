@@ -216,6 +216,72 @@ final class ProxyModelClientTests: XCTestCase {
         XCTAssertEqual(models, [CodexModelOption(id: "gpt-5.5", supportedReasoning: [.medium], defaultReasoning: nil)])
     }
 
+    func testCodexModelOptionsDecodeFastServiceTierMetadata() async throws {
+        let regular = Data(#"{"data":[{"id":"codex-work/custom-fast-model","owned_by":"openai","created":300}]}"#.utf8)
+        let metadata = Data(#"{"models":[{"slug":"codex-work/custom-fast-model","service_tiers":[{"id":"priority","name":"Fast"}],"additional_speed_tiers":["fast"]}]}"#.utf8)
+        let client = ProxyModelClient(httpClient: StubHTTPClient(results: [.success(regular), .success(metadata)]))
+
+        let models = try await client.codexModelOptions(port: 18_317, modelPrefix: "codex-work")
+
+        XCTAssertEqual(models, [CodexModelOption(id: "custom-fast-model", supportsFastMode: true)])
+    }
+
+    func testCodexModelOptionsUseConservativeFastFallbackForKnownModels() async throws {
+        let regular = Data(#"{"data":[{"id":"codex-work/gpt-5.6-sol","owned_by":"openai","created":300},{"id":"codex-work/gpt-5.4-mini","owned_by":"openai","created":200},{"id":"codex-work/custom-model","owned_by":"openai","created":100}]}"#.utf8)
+        let metadata = Data(#"{"models":[]}"#.utf8)
+        let client = ProxyModelClient(httpClient: StubHTTPClient(results: [.success(regular), .success(metadata)]))
+
+        let models = try await client.codexModelOptions(port: 18_317, modelPrefix: "codex-work")
+
+        XCTAssertEqual(models.map(\.id), ["gpt-5.6-sol", "gpt-5.4-mini", "custom-model"])
+        XCTAssertEqual(models.map(\.supportsFastMode), [true, false, false])
+    }
+
+    func testCodexModelOptionsApplyFastFallbackToRoutingPrefixedModels() async throws {
+        let regular = Data(#"{"data":[{"id":"codex-work/gpt-5.6-sol","owned_by":"openai","created":300},{"id":"codex-work/gpt-5.4-mini","owned_by":"openai","created":200},{"id":"codex-work/custom-model","owned_by":"openai","created":100}]}"#.utf8)
+        let metadata = Data(#"{"models":[]}"#.utf8)
+        let client = ProxyModelClient(httpClient: StubHTTPClient(results: [.success(regular), .success(metadata)]))
+
+        let models = try await client.codexModelOptions(port: 18_317)
+
+        XCTAssertEqual(models.map(\.id), ["codex-work/gpt-5.6-sol", "codex-work/gpt-5.4-mini", "codex-work/custom-model"])
+        XCTAssertEqual(models.map(\.supportsFastMode), [true, false, false])
+    }
+
+    func testCodexModelOptionsHideManagedFastAliases() async throws {
+        let regular = Data(#"{"data":[{"id":"codex-work/gpt-5.6-sol-cpm-fast","owned_by":"openai","created":400},{"id":"codex-work/gpt-5.6-sol","owned_by":"openai","created":300}]}"#.utf8)
+        let metadata = Data(#"{"models":[]}"#.utf8)
+        let client = ProxyModelClient(httpClient: StubHTTPClient(results: [.success(regular), .success(metadata)]))
+
+        let models = try await client.codexModelOptions(port: 18_317, modelPrefix: "codex-work")
+
+        XCTAssertEqual(models, [CodexModelOption(id: "gpt-5.6-sol", supportsFastMode: true)])
+    }
+
+    func testCodexModelOptionsIgnoreManagedAliasMetadata() async throws {
+        let regular = Data(#"{"data":[{"id":"codex-work/gpt-5.6-sol","owned_by":"openai","created":300}]}"#.utf8)
+        let metadata = Data(#"{"models":[{"slug":"codex-work/gpt-5.6-sol-cpm-fast","supported_reasoning_levels":[{"effort":"low"}],"additional_speed_tiers":["fast"]},{"slug":"codex-work/gpt-5.6-sol","supported_reasoning_levels":[{"effort":"xhigh"}]}]}"#.utf8)
+        let client = ProxyModelClient(httpClient: StubHTTPClient(results: [.success(regular), .success(metadata)]))
+
+        let models = try await client.codexModelOptions(port: 18_317, modelPrefix: "codex-work")
+
+        XCTAssertEqual(models, [
+            CodexModelOption(id: "gpt-5.6-sol", supportedReasoning: [.xhigh], defaultReasoning: nil, supportsFastMode: true)
+        ])
+    }
+
+    func testCodexModelOptionsMatchMetadataCaseInsensitivelyAndPreserveRegularIDCasing() async throws {
+        let regular = Data(#"{"data":[{"id":"codex-work/GPT-5.6-Sol","owned_by":"openai","created":300}]}"#.utf8)
+        let metadata = Data(#"{"models":[{"slug":"CODEX-WORK/gpt-5.6-sol","supported_reasoning_levels":[{"effort":"high"}]}]}"#.utf8)
+        let client = ProxyModelClient(httpClient: StubHTTPClient(results: [.success(regular), .success(metadata)]))
+
+        let models = try await client.codexModelOptions(port: 18_317, modelPrefix: "codex-work")
+
+        XCTAssertEqual(models, [
+            CodexModelOption(id: "GPT-5.6-Sol", supportedReasoning: [.high], defaultReasoning: nil, supportsFastMode: true)
+        ])
+    }
+
     func testModelsRejectsInvalidPortBeforeRequestingModels() async throws {
         let httpClient = StubHTTPClient(result: .success(Data(#"{"data":[]}"#.utf8)))
         let client = ProxyModelClient(httpClient: httpClient)

@@ -6,7 +6,8 @@ import SwiftUI
 enum ProviderSettingsSheetMetrics {
     static let defaultMinHeight: CGFloat = 360
     static let defaultMaxHeight: CGFloat = 720
-    static let codexHeight: CGFloat = 700
+    static let codexWidth: CGFloat = 680
+    static let codexHeight: CGFloat = 720
     static let claudeHeight: CGFloat = 620
     static let claudeModelPickerWidth: CGFloat = 225
     static let footerActionButtonControlSize = ControlSize.regular
@@ -42,8 +43,9 @@ enum CodexAPIModelOptions {
                 with: "",
                 options: .regularExpression
             ).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !baseModel.isEmpty, seen.insert(baseModel).inserted else { return nil }
-            return baseModel
+            let canonicalModel = CodexFastMode.canonicalModel(from: baseModel)
+            guard !canonicalModel.isEmpty, seen.insert(canonicalModel).inserted else { return nil }
+            return canonicalModel
         }
     }
 
@@ -812,7 +814,7 @@ struct CodexProviderSettingsSheet: View {
             providerID: providerID,
             providerType: .codex,
             title: "Account Settings",
-            width: 600,
+            width: ProviderSettingsSheetMetrics.codexWidth,
             minHeight: ProviderSettingsSheetMetrics.codexHeight,
             onClose: {
                 onCancel()
@@ -899,10 +901,14 @@ struct CodexProviderSettingsSheet: View {
                 },
                 onSave: {
                     do {
+                        let codex = CodexRoleRoutingOptions.normalizedCodex(
+                            AppConfig.Codex(opus: opus, sonnet: sonnet, haiku: haiku),
+                            options: scopedAvailableModels
+                        )
                         try save(
                             functionName,
                             nickname,
-                            AppConfig.Codex(opus: opus, sonnet: sonnet, haiku: haiku),
+                            codex,
                             dangerousPermissionsEnabled
                         )
                         dismiss()
@@ -1206,7 +1212,7 @@ struct CodexAPIProviderSettingsSheet: View {
     }
 
     var body: some View {
-        AccountSheetChrome(providerID: .codexAPI, providerType: .codex, title: "OpenAI API Key", width: 600, minHeight: ProviderSettingsSheetMetrics.codexHeight, onClose: { dismiss() }) {
+        AccountSheetChrome(providerID: .codexAPI, providerType: .codex, title: "OpenAI API Key", width: ProviderSettingsSheetMetrics.codexWidth, minHeight: ProviderSettingsSheetMetrics.codexHeight, onClose: { dismiss() }) {
             Text(isConfigured ? "API key configured" : "Add an OpenAI API key")
                 .font(.system(size: 12.5, weight: .medium))
                 .foregroundStyle(isConfigured ? BrandPalette.statusRunning : .secondary)
@@ -1285,10 +1291,14 @@ struct CodexAPIProviderSettingsSheet: View {
                 onCancel: { dismiss() },
                 onSave: {
                     do {
+                        let codex = CodexRoleRoutingOptions.normalizedCodex(
+                            CodexAPIModelOptions.normalized(AppConfig.Codex(opus: opus, sonnet: sonnet, haiku: haiku)),
+                            options: scopedAvailableModels
+                        )
                         try save(
                             functionName,
                             nickname,
-                            CodexAPIModelOptions.normalized(AppConfig.Codex(opus: opus, sonnet: sonnet, haiku: haiku)),
+                            codex,
                             dangerousPermissionsEnabled,
                             apiKey.isEmpty ? nil : apiKey
                         )

@@ -99,6 +99,29 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(decoded, role)
     }
 
+    func testCodexRoleDefaultsMissingFastModeToFalse() throws {
+        let data = Data(#"{"model":"gpt-5.5","reasoning":"xhigh","contextWindow":"auto"}"#.utf8)
+
+        let role = try JSONDecoder().decode(AppConfig.CodexRole.self, from: data)
+
+        XCTAssertFalse(role.fastModeEnabled)
+    }
+
+    func testCodexRoleFastModeRoundTripsAndRendersManagedAlias() throws {
+        let role = AppConfig.CodexRole(
+            model: "gpt-5.6-sol",
+            reasoning: .max,
+            contextWindow: .auto,
+            fastModeEnabled: true
+        )
+
+        XCTAssertEqual(role.modelIdentifier, "gpt-5.6-sol-cpm-fast(max)")
+        XCTAssertEqual(
+            try JSONDecoder().decode(AppConfig.CodexRole.self, from: JSONEncoder().encode(role)),
+            role
+        )
+    }
+
     func testUsageOverlayInitializerClampsBackgroundOpacity() {
         XCTAssertEqual(
             AppConfig.UsageOverlay(backgroundOpacity: 0.1).backgroundOpacity,

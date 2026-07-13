@@ -102,20 +102,38 @@ public struct AppConfig: Codable, Equatable, Sendable {
         public var model: String
         public var reasoning: CodexReasoning
         public var contextWindow: CodexContextWindow
+        public var fastModeEnabled: Bool
 
-        public init(model: String, reasoning: CodexReasoning, contextWindow: CodexContextWindow) {
+        public init(
+            model: String,
+            reasoning: CodexReasoning,
+            contextWindow: CodexContextWindow,
+            fastModeEnabled: Bool = false
+        ) {
             self.model = model
             self.reasoning = reasoning
             self.contextWindow = contextWindow
+            self.fastModeEnabled = fastModeEnabled
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case model, reasoning, contextWindow, fastModeEnabled
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            model = try container.decode(String.self, forKey: .model)
+            reasoning = try container.decode(CodexReasoning.self, forKey: .reasoning)
+            contextWindow = try container.decode(CodexContextWindow.self, forKey: .contextWindow)
+            fastModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .fastModeEnabled) ?? false
         }
 
         public var modelIdentifier: String {
-            switch reasoning {
-            case .auto:
-                model
-            case .low, .medium, .high, .xhigh, .max:
-                "\(model)(\(reasoning.rawValue))"
-            }
+            CodexFastMode.modelIdentifier(
+                model: model,
+                reasoning: reasoning,
+                fastModeEnabled: fastModeEnabled
+            )
         }
     }
 

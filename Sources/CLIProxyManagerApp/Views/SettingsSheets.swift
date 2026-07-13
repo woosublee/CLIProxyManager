@@ -135,13 +135,13 @@ struct ModelsSettingsSheet: View {
     @State private var sonnet: AppConfig.CodexRole
     @State private var haiku: AppConfig.CodexRole
     @State private var errorMessage: String?
-    let availableModels: [String]
+    let availableModels: [CodexModelOption]
     let refreshModels: () -> Void
     let save: (AppConfig.Codex) throws -> Void
 
     init(
         config: AppConfig,
-        availableModels: [String],
+        availableModels: [CodexModelOption],
         refreshModels: @escaping () -> Void,
         save: @escaping (AppConfig.Codex) throws -> Void
     ) {
@@ -162,9 +162,12 @@ struct ModelsSettingsSheet: View {
                 Button("Refresh model list", action: refreshModels)
             }
 
-            roleEditor(title: "Opus role", role: $opus)
-            roleEditor(title: "Sonnet role", role: $sonnet)
-            roleEditor(title: "Haiku role", role: $haiku)
+            CodexRoleRoutingFields(
+                opus: $opus,
+                sonnet: $sonnet,
+                haiku: $haiku,
+                availableModels: availableModels
+            )
 
             Text("1M context passes the requested value only. Actual support depends on the Codex account, model, OAuth session, and CLIProxyAPI support.")
                 .font(.callout)
@@ -175,7 +178,11 @@ struct ModelsSettingsSheet: View {
                 Button("Cancel") { dismiss() }
                 Button("Save") {
                     do {
-                        try save(AppConfig.Codex(opus: opus, sonnet: sonnet, haiku: haiku))
+                        let codex = CodexRoleRoutingOptions.normalizedCodex(
+                            AppConfig.Codex(opus: opus, sonnet: sonnet, haiku: haiku),
+                            options: availableModels
+                        )
+                        try save(codex)
                         dismiss()
                     } catch {
                         errorMessage = error.localizedDescription
@@ -187,40 +194,6 @@ struct ModelsSettingsSheet: View {
         .padding(24)
         .frame(width: 620)
         .settingsErrorAlert(message: $errorMessage)
-    }
-
-    private func roleEditor(title: String, role: Binding<AppConfig.CodexRole>) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.headline)
-            HStack {
-                if availableModels.isEmpty {
-                    TextField("Model", text: role.model)
-                        .textFieldStyle(.roundedBorder)
-                } else {
-                    Picker("Model", selection: role.model) {
-                        ForEach(availableModels, id: \.self) { model in
-                            Text(model).tag(model)
-                        }
-                    }
-                    .frame(width: 180)
-                }
-
-                Picker("Reasoning", selection: role.reasoning) {
-                    ForEach(AppConfig.CodexReasoning.allCases, id: \.self) { reasoning in
-                        Text(reasoning.rawValue).tag(reasoning)
-                    }
-                }
-                .frame(width: 170)
-
-                Picker("Context", selection: role.contextWindow) {
-                    ForEach(AppConfig.CodexContextWindow.allCases, id: \.self) { context in
-                        Text(context.rawValue).tag(context)
-                    }
-                }
-                .frame(width: 140)
-            }
-        }
     }
 }
 

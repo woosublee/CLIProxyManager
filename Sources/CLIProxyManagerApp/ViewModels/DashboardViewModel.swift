@@ -105,6 +105,54 @@ enum CodexModelLoadingState: Equatable, Sendable {
 
 @MainActor
 final class DashboardViewModel: ObservableObject {
+    private enum ProxyConfigurationRestartReason: Hashable {
+        case apiKey
+        case configuration
+        case fastMode
+    }
+
+    private struct CodexFastConfigurationInput: Equatable {
+        struct Role: Equatable {
+            let model: String
+            let fastModeEnabled: Bool
+
+            init(_ role: AppConfig.CodexRole) {
+                model = role.model
+                fastModeEnabled = role.fastModeEnabled
+            }
+
+            var codexRole: AppConfig.CodexRole {
+                .init(model: model, reasoning: .auto, contextWindow: .auto, fastModeEnabled: fastModeEnabled)
+            }
+        }
+
+        struct Configuration: Equatable {
+            let opus: Role
+            let sonnet: Role
+            let haiku: Role
+
+            init(_ codex: AppConfig.Codex) {
+                opus = Role(codex.opus)
+                sonnet = Role(codex.sonnet)
+                haiku = Role(codex.haiku)
+            }
+
+            var codex: AppConfig.Codex {
+                .init(opus: opus.codexRole, sonnet: sonnet.codexRole, haiku: haiku.codexRole)
+            }
+        }
+
+        let oauth: [Configuration]
+        let roundRobin: [Configuration]
+        let apiKey: Configuration
+    }
+
+    private struct ProxyRestartReadinessError: LocalizedError {
+        let message: String
+
+        var errorDescription: String? { message }
+    }
+
     @Published var cards: [ProfileCard]
     @Published var serverStatus: DiagnosticStatus
     @Published var serverControlState: ServerControlState = .stopped
@@ -179,7 +227,10 @@ final class DashboardViewModel: ObservableObject {
     private var subscriptionUsageRefreshTask: Task<Void, Never>?
     private var subscriptionUsageRefreshIsForced = false
     private var pendingForcedSubscriptionUsageRefresh = false
-    private var pendingServerRestart = false
+    private var pendingProxyConfigurationRestartReasons: Set<ProxyConfigurationRestartReason> = []
+    private var proxyConfigurationRestartTask: Task<Void, Never>?
+    private var serverActionCompletionWaiters: [CheckedContinuation<Void, Never>] = []
+    private var ownedFastRestartFailureMessage: String?
     private var subscriptionUsageRefreshGeneration = 0
     private var subscriptionUsageRetryDelayNanoseconds: UInt64 = 60_000_000_000
 
@@ -427,13 +478,13 @@ final class DashboardViewModel: ObservableObject {
             if config.isSubscriptionUsageEnabled {
                 let createdKey = try subscriptionUsageKeyStore.createManagementKeyIfNeeded()
                 if createdKey, serverControlState.isRunning {
-                    await restartServer()
+                    await restartServerAfterRequiredChange()
                     return
                 }
             } else if subscriptionUsageKeyStore.isConfigured() {
                 try subscriptionUsageKeyStore.deleteManagementKey()
                 if serverControlState.isRunning {
-                    await restartServer()
+                    await restartServerAfterRequiredChange()
                     return
                 }
             }
@@ -741,7 +792,10 @@ final class DashboardViewModel: ObservableObject {
         do {
             try service.applyPendingNow()
             if serverControlState.isRunning {
-                await restartServer()
+                guard await restartServerAfterRequiredChange() else {
+                    settingsMessage = "CLIProxyAPI update failed: \(serverStatus.message)"
+                    return
+                }
             }
             settingsMessage = "CLIProxyAPI binary updated. Restarting the app is not required."
         } catch {
@@ -1303,11 +1357,17 @@ final class DashboardViewModel: ObservableObject {
             )
         }
         if let key {
-            try withAPIKeyTransaction(key: .claudeAPIKey, replacement: key, operation: saveSettings)
+            let credentialChanged = try withAPIKeyTransaction(
+                key: .claudeAPIKey,
+                replacement: key,
+                operation: saveSettings
+            )
+            if credentialChanged {
+                requestProxyConfigurationRestart(reason: .apiKey)
+            }
         } else {
             try saveSettings()
         }
-        requestServerRestartAfterConfigChange()
     }
 
     func saveCodexAPISettings(
@@ -1332,11 +1392,17 @@ final class DashboardViewModel: ObservableObject {
             )
         }
         if let key {
-            try withAPIKeyTransaction(key: .codexAPIKey, replacement: key, operation: saveSettings)
+            let credentialChanged = try withAPIKeyTransaction(
+                key: .codexAPIKey,
+                replacement: key,
+                operation: saveSettings
+            )
+            if credentialChanged {
+                requestProxyConfigurationRestart(reason: .apiKey)
+            }
         } else {
             try saveSettings()
         }
-        requestServerRestartAfterConfigChange()
     }
 
     private func saveAPIKey(_ value: String, for key: SecretKey) throws {
@@ -1351,8 +1417,17 @@ final class DashboardViewModel: ObservableObject {
         key: SecretKey,
         replacement: String?,
         operation: () throws -> Void
-    ) throws {
-        let previousValue = try? secretStore.get(key)
+    ) throws -> Bool {
+        let previousValue: String?
+        do {
+            previousValue = try secretStore.get(key)
+        } catch SecretStoreError.missingSecret {
+            previousValue = nil
+        } catch {
+            throw error
+        }
+        let normalizedReplacement = replacement?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let credentialChanged = normalizedReplacement != previousValue
         do {
             if let replacement {
                 try saveAPIKey(replacement, for: key)
@@ -1360,6 +1435,7 @@ final class DashboardViewModel: ObservableObject {
                 try secretStore.delete(key)
             }
             try operation()
+            return credentialChanged
         } catch {
             if let previousValue {
                 try? secretStore.set(previousValue, for: key)
@@ -1374,19 +1450,90 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
-    private func requestServerRestartAfterConfigChange() {
-        if isServerActionInProgress || serverControlState.isTransitioning {
-            pendingServerRestart = true
+    private func requestProxyConfigurationRestart(reason: ProxyConfigurationRestartReason) {
+        guard serverControlState.isRunning || isServerActionInProgress || serverControlState.isTransitioning else {
             return
         }
-        guard serverControlState.isRunning else { return }
-        Task { await self.restartServer() }
+        pendingProxyConfigurationRestartReasons.insert(reason)
+        schedulePendingProxyConfigurationRestartIfNeeded()
+    }
+
+    private func requestServerRestartAfterConfigChange() {
+        requestProxyConfigurationRestart(reason: .configuration)
+    }
+
+    private func restartForPendingConfigurationChanges() async {
+        defer {
+            proxyConfigurationRestartTask = nil
+            schedulePendingProxyConfigurationRestartIfNeeded()
+        }
+        await drainPendingProxyConfigurationRestarts()
+    }
+
+    private func drainPendingProxyConfigurationRestarts() async {
+        while !pendingProxyConfigurationRestartReasons.isEmpty, serverControlState.isRunning {
+            let reasons = pendingProxyConfigurationRestartReasons
+            pendingProxyConfigurationRestartReasons.removeAll()
+            do {
+                try await restartProxyAndRefresh()
+                clearOwnedFastRestartFailureMessageIfNeeded(for: reasons)
+            } catch {
+                handleProxyConfigurationRestartFailure(error, reasons: reasons)
+                if !pendingProxyConfigurationRestartReasons.isEmpty {
+                    serverControlState = .running
+                }
+            }
+        }
+        if !serverControlState.isRunning {
+            pendingProxyConfigurationRestartReasons.removeAll()
+        }
+    }
+
+    private func schedulePendingProxyConfigurationRestartIfNeeded() {
+        guard proxyConfigurationRestartTask == nil,
+              !pendingProxyConfigurationRestartReasons.isEmpty,
+              serverControlState.isRunning,
+              !isServerActionInProgress,
+              !serverControlState.isTransitioning else { return }
+        proxyConfigurationRestartTask = Task { await self.restartForPendingConfigurationChanges() }
+    }
+
+    private func handleProxyConfigurationRestartFailure(
+        _ error: Error,
+        reasons: Set<ProxyConfigurationRestartReason>
+    ) {
+        let message = error.localizedDescription
+        updateStatuses(
+            serverStatus: DiagnosticStatus(
+                severity: .error,
+                title: "Failed to restart CLIProxyAPI",
+                message: message
+            ),
+            claudeStatus: nil
+        )
+        serverControlState = .error(message)
+        if reasons.contains(.fastMode) {
+            let failureMessage = "Fast mode settings were saved, but CLIProxyAPI could not restart: \(message)"
+            ownedFastRestartFailureMessage = failureMessage
+            settingsMessage = failureMessage
+        }
+    }
+
+    private func clearOwnedFastRestartFailureMessageIfNeeded(
+        for reasons: Set<ProxyConfigurationRestartReason>
+    ) {
+        guard reasons.contains(.fastMode),
+              let ownedFastRestartFailureMessage else { return }
+        if settingsMessage == ownedFastRestartFailureMessage {
+            settingsMessage = nil
+        }
+        self.ownedFastRestartFailureMessage = nil
     }
 
     func removeAPIProvider(_ provider: ProviderRowState.ID) {
         let key: SecretKey = provider == .codexAPI ? .codexAPIKey : .claudeAPIKey
         do {
-            try withAPIKeyTransaction(key: key, replacement: nil) {
+            let credentialChanged = try withAPIKeyTransaction(key: key, replacement: nil) {
                 var updatedConfig = config
                 if provider == .codexAPI {
                     updatedConfig.commands.ccodexapi = ""
@@ -1395,7 +1542,9 @@ final class DashboardViewModel: ObservableObject {
                 }
                 try saveConfig(updatedConfig, validateShellFunctions: true)
             }
-            requestServerRestartAfterConfigChange()
+            if credentialChanged {
+                requestProxyConfigurationRestart(reason: .apiKey)
+            }
         } catch {
             settingsMessage = "API key removal failed: \(error.localizedDescription)"
         }
@@ -1549,7 +1698,9 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func refreshCodexModels() async {
-        guard !codexModelLoadingState.isLoading, !isServerActionInProgress else { return }
+        guard !codexModelLoadingState.isLoading else { return }
+        await waitForConfigurationRestartIfNeeded()
+        guard !isServerActionInProgress else { return }
 
         if serverControlState.isRunning {
             await loadCodexModels()
@@ -1572,11 +1723,25 @@ final class DashboardViewModel: ObservableObject {
         if serverControlState.isRunning { return true }
         guard !isServerActionInProgress else { return false }
         isServerActionInProgress = true
-        defer { isServerActionInProgress = false }
-        try await proxyService.start(port: config.port)
-        await refreshUntilServerIsReady()
-        serverControlState = serverStatus.severity == .ready ? .running : .stopped
-        return serverControlState.isRunning
+        serverControlState = .starting
+        defer {
+            isServerActionInProgress = false
+            schedulePendingProxyConfigurationRestartIfNeeded()
+        }
+        do {
+            try await proxyService.start(port: config.port)
+            await refreshUntilServerIsReady()
+            serverControlState = serverStatus.severity == .ready ? .running : .stopped
+            if serverControlState.isRunning {
+                await drainPendingProxyConfigurationRestarts()
+            } else {
+                pendingProxyConfigurationRestartReasons.removeAll()
+            }
+            return serverControlState.isRunning
+        } catch {
+            pendingProxyConfigurationRestartReasons.removeAll()
+            throw error
+        }
     }
 
     func loadCodexModels() async {
@@ -1688,12 +1853,13 @@ final class DashboardViewModel: ObservableObject {
                 } else if let currentDefault = current.defaultReasoning, supported.contains(currentDefault) {
                     defaultReasoning = currentDefault
                 } else {
-                    defaultReasoning = nil
+                    defaultReasoning = supported.isEmpty ? .auto : nil
                 }
                 return CodexModelOption(
                     id: current.id,
                     supportedReasoning: supported,
-                    defaultReasoning: defaultReasoning
+                    defaultReasoning: defaultReasoning,
+                    supportsFastMode: current.supportsFastMode && other.supportsFastMode
                 )
             }
         }
@@ -1701,10 +1867,29 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func roundRobinModelPrefixes(for profile: AppConfig.RoundRobinProfile) -> [String] {
-        let commandProfilesByAuthID = commandProfilesByAuthID(in: config)
+        Self.roundRobinModelPrefixes(
+            for: profile,
+            authProfiles: authProfiles,
+            commandProfiles: config.oauthCommandProfiles
+        )
+    }
+
+    static func roundRobinModelPrefixes(
+        for profile: AppConfig.RoundRobinProfile,
+        authProfiles: [AuthProfile],
+        commandProfiles: [AppConfig.OAuthCommandProfile]
+    ) -> [String] {
+        let authProfilesByID = Dictionary(uniqueKeysWithValues: authProfiles.map { ($0.id, $0) })
+        let commandProfilesByAuthID = commandProfiles.reduce(into: [:]) { result, commandProfile in
+            result[commandProfile.authProfileID] = commandProfile
+        }
         return profile.includedAuthProfileIDs.compactMap { authProfileID in
-            commandProfilesByAuthID[authProfileID]?.modelPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
-        }.filter { !$0.isEmpty }
+            guard let authProfile = authProfilesByID[authProfileID] else { return nil }
+            return routingPrefix(
+                authProfile: authProfile,
+                commandProfile: commandProfilesByAuthID[authProfileID]
+            )
+        }
     }
 
     private func handleCodexModelLoadingFailure(_ error: Error? = nil) {
@@ -2010,6 +2195,51 @@ final class DashboardViewModel: ObservableObject {
         config.includeDangerouslySkipPermissions = false
     }
 
+    private func codexFastConfigurationInput(config: AppConfig) -> CodexFastConfigurationInput {
+        let oauth: [CodexFastConfigurationInput.Configuration]
+        if config.oauthCommandProfiles.isEmpty {
+            oauth = [.init(config.ccodex)]
+        } else {
+            oauth = config.oauthCommandProfiles.compactMap { profile in
+                guard profile.provider == .codex, profile.isEnabled else { return nil }
+                return .init(profile.codex ?? config.ccodex)
+            }
+        }
+        let roundRobin: [CodexFastConfigurationInput.Configuration] = config.roundRobinProfiles.compactMap { profile in
+            guard profile.provider == .codex, profile.isEnabled else { return nil }
+            return .init(profile.codex ?? config.ccodex)
+        }
+        return CodexFastConfigurationInput(
+            oauth: oauth,
+            roundRobin: roundRobin,
+            apiKey: .init(config.codexAPI.codex)
+        )
+    }
+
+    private func codexFastConfiguration(from input: CodexFastConfigurationInput) throws -> CodexFastConfiguration {
+        var snapshotConfig = AppConfig.default
+        snapshotConfig.ccodex = input.oauth.first?.codex ?? AppConfig.default.ccodex
+        snapshotConfig.oauthCommandProfiles = input.oauth.enumerated().map { index, configuration in
+            .init(
+                id: "fast-snapshot-oauth-\(index)",
+                provider: .codex,
+                authProfileID: "fast-snapshot-oauth-\(index).json",
+                codex: configuration.codex,
+                modelPrefix: "fast-snapshot-oauth-\(index)"
+            )
+        }
+        snapshotConfig.roundRobinProfiles = input.roundRobin.enumerated().map { index, configuration in
+            .init(
+                id: "fast-snapshot-round-robin-\(index)",
+                provider: .codex,
+                isEnabled: true,
+                codex: configuration.codex
+            )
+        }
+        snapshotConfig.codexAPI.codex = input.apiKey.codex
+        return try CodexFastConfiguration(config: snapshotConfig)
+    }
+
     private func saveConfig(
         _ updatedConfig: AppConfig,
         validateShellFunctions: Bool = false,
@@ -2020,6 +2250,17 @@ final class DashboardViewModel: ObservableObject {
             ? updatedConfig
             : removingUnavailableRoundRobinProfiles(from: updatedConfig)
         var updatedConfig = Self.persistedConfig(persistedConfig)
+        _ = try CodexFastConfiguration(config: updatedConfig)
+        let oldFastInput = codexFastConfigurationInput(config: config)
+        let newFastInput = codexFastConfigurationInput(config: updatedConfig)
+        let fastConfigurationChanged: Bool
+        if oldFastInput == newFastInput {
+            fastConfigurationChanged = false
+        } else {
+            let newFastConfiguration = try codexFastConfiguration(from: newFastInput)
+            let oldFastConfiguration = try? codexFastConfiguration(from: oldFastInput)
+            fastConfigurationChanged = oldFastConfiguration != newFastConfiguration
+        }
         if validateShellFunctions {
             let activeNames = activeFunctionNames(in: updatedConfig)
             try ShellCommandNameValidator.validate(activeNames)
@@ -2063,6 +2304,10 @@ final class DashboardViewModel: ObservableObject {
             rebuildOptionRows()
             rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
             throw error
+        }
+
+        if fastConfigurationChanged {
+            requestProxyConfigurationRestart(reason: .fastMode)
         }
     }
 
@@ -2255,6 +2500,13 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func routingPrefix(authProfile: AuthProfile, commandProfile: AppConfig.OAuthCommandProfile?) -> String? {
+        Self.routingPrefix(authProfile: authProfile, commandProfile: commandProfile)
+    }
+
+    private static func routingPrefix(
+        authProfile: AuthProfile,
+        commandProfile: AppConfig.OAuthCommandProfile?
+    ) -> String? {
         let commandPrefix = commandProfile?.modelPrefix.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !commandPrefix.isEmpty { return commandPrefix }
         let authPrefix = authProfile.prefix?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -2378,34 +2630,88 @@ final class DashboardViewModel: ObservableObject {
         waitForReady: Bool = false,
         action: () async throws -> Void
     ) async {
-        guard isServerActionInProgress == false else { return }
+        await waitForConfigurationRestartIfNeeded()
+        while isServerActionInProgress {
+            await waitForServerActionCompletion()
+        }
+        _ = await executeServerAction(
+            title: title,
+            transitionState: transitionState,
+            waitForReady: waitForReady,
+            action: action
+        )
+    }
 
+    @discardableResult
+    private func restartServerAfterRequiredChange() async -> Bool {
+        await waitForConfigurationRestartIfNeeded()
+        while isServerActionInProgress {
+            await waitForServerActionCompletion()
+        }
+        return await executeServerAction(
+            title: "Failed to restart CLIProxyAPI",
+            transitionState: .starting,
+            waitForReady: true
+        ) {
+            try await proxyService.restart(port: config.port)
+        }
+    }
+
+    private func waitForConfigurationRestartIfNeeded() async {
+        if let proxyConfigurationRestartTask {
+            await proxyConfigurationRestartTask.value
+        }
+    }
+
+    private func waitForServerActionCompletion() async {
+        guard isServerActionInProgress else { return }
+        await withCheckedContinuation { continuation in
+            serverActionCompletionWaiters.append(continuation)
+        }
+    }
+
+    private func finishServerAction() {
+        isServerActionInProgress = false
+        let waiters = serverActionCompletionWaiters
+        serverActionCompletionWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
+    @discardableResult
+    private func executeServerAction(
+        title: String,
+        transitionState: ServerControlState,
+        waitForReady: Bool,
+        action: () async throws -> Void
+    ) async -> Bool {
         isServerActionInProgress = true
         serverControlState = transitionState
-        defer { isServerActionInProgress = false }
+        defer { finishServerAction() }
 
         do {
             try await action()
             if waitForReady {
                 await refreshUntilServerIsReady()
-                if serverStatus.severity == .ready {
-                    await refreshSubscriptionUsage()
+                guard serverStatus.severity == .ready else {
+                    let message = serverStatus.message.isEmpty
+                        ? "Could not connect to the server."
+                        : serverStatus.message
+                    throw ProxyRestartReadinessError(message: message)
                 }
+                await refreshSubscriptionUsage()
             } else {
                 await refresh()
             }
             // After action completes, derive final state from the latest health.
             serverControlState = serverStatus.severity == .ready ? .running : .stopped
-            if pendingServerRestart, serverControlState.isRunning {
-                pendingServerRestart = false
-                try await proxyService.restart(port: config.port)
-                await refreshUntilServerIsReady()
-                serverControlState = serverStatus.severity == .ready ? .running : .stopped
-            } else if pendingServerRestart {
-                pendingServerRestart = false
+            if serverControlState.isRunning {
+                await drainPendingProxyConfigurationRestarts()
+            } else {
+                pendingProxyConfigurationRestartReasons.removeAll()
             }
+            return true
         } catch {
-            pendingServerRestart = false
+            pendingProxyConfigurationRestartReasons.removeAll()
             let message = error.localizedDescription
             updateStatuses(
                 serverStatus: DiagnosticStatus(
@@ -2416,7 +2722,18 @@ final class DashboardViewModel: ObservableObject {
                 claudeStatus: nil
             )
             serverControlState = .error(message)
+            return false
         }
+    }
+
+    private func restartProxyAndRefresh() async throws {
+        try await proxyService.restart(port: config.port)
+        await refreshUntilServerIsReady()
+        guard serverStatus.severity == .ready else {
+            let message = serverStatus.message.isEmpty ? "Could not connect to the server." : serverStatus.message
+            throw ProxyRestartReadinessError(message: message)
+        }
+        serverControlState = .running
     }
 
     private func stableServerStatus() async -> DiagnosticStatus {

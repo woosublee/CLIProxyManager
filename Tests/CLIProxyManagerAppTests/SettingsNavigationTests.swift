@@ -55,7 +55,52 @@ final class SettingsNavigationTests: XCTestCase {
     }
 
     func testCodexProviderSettingsUsesTallerSheetHeight() {
-        XCTAssertEqual(ProviderSettingsSheetMetrics.codexHeight, 700)
+        XCTAssertEqual(ProviderSettingsSheetMetrics.codexHeight, 720)
+    }
+
+    func testCodexRoleRoutingFieldsNormalizeInitialAuthoritativeOptionsAndCanonicalizePickers() throws {
+        let source = try String(
+            contentsOf: repositoryRoot().appendingPathComponent(
+                "Sources/CLIProxyManagerApp/Views/CodexRoleRoutingFields.swift"
+            ),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains(".task(id: availableModels)"))
+        XCTAssertTrue(source.contains("normalizeRoles(for: availableModels)"))
+        XCTAssertTrue(source.contains("get: { CodexFastMode.canonicalModel(from: role.wrappedValue.model) }"))
+        XCTAssertTrue(source.contains("CodexRoleRoutingOptions.fastModeBinding(role: role, options: availableModels)"))
+    }
+
+    private func repositoryRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
+    func testLegacyCodexModelsSheetPreservesFastModeThroughSaveNormalization() {
+        let supportedOption = CodexModelOption(id: "gpt-5.5", supportsFastMode: true)
+        let unsupportedOption = CodexModelOption(id: "custom-model", supportsFastMode: false)
+        let sheet = ModelsSettingsSheet(
+            config: .default,
+            availableModels: [supportedOption, unsupportedOption],
+            refreshModels: {},
+            save: { _ in }
+        )
+        let codex = AppConfig.Codex(
+            opus: .init(model: "gpt-5.5", reasoning: .medium, contextWindow: .auto, fastModeEnabled: true),
+            sonnet: .init(model: "custom-model", reasoning: .medium, contextWindow: .auto, fastModeEnabled: true),
+            haiku: .init(model: "gpt-5.5", reasoning: .medium, contextWindow: .auto, fastModeEnabled: false)
+        )
+
+        let normalized = CodexRoleRoutingOptions.normalizedCodex(
+            codex,
+            options: sheet.availableModels
+        )
+
+        XCTAssertTrue(normalized.opus.fastModeEnabled)
+        XCTAssertFalse(normalized.sonnet.fastModeEnabled)
     }
 }
 

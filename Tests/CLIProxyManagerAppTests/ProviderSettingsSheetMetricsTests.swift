@@ -10,7 +10,8 @@ final class ProviderSettingsSheetMetricsTests: XCTestCase {
 
     func testProviderSheetsReserveStableRoutingDimensionsBeforeModelsLoad() {
         XCTAssertEqual(ProviderSettingsSheetMetrics.claudeHeight, 620)
-        XCTAssertEqual(ProviderSettingsSheetMetrics.codexHeight, 700)
+        XCTAssertEqual(ProviderSettingsSheetMetrics.codexWidth, 680)
+        XCTAssertEqual(ProviderSettingsSheetMetrics.codexHeight, 720)
         XCTAssertEqual(ProviderSettingsSheetMetrics.claudeModelPickerWidth, 225)
     }
 
@@ -67,6 +68,16 @@ final class ProviderSettingsSheetMetricsTests: XCTestCase {
         ])
 
         XCTAssertEqual(models, ["gpt-5.6", "gpt-5.6-mini"])
+    }
+
+    func testCodexAPIModelsCanonicalizeManagedFastAliases() {
+        XCTAssertEqual(
+            CodexAPIModelOptions.baseModels(from: [
+                "cpm-codex-api/gpt-5.6-sol-cpm-fast(xhigh)",
+                "gpt-5.6-sol"
+            ]),
+            ["gpt-5.6-sol"]
+        )
     }
 
     func testCodexProviderRefreshButtonStaysDisabledDuringScopedReload() {

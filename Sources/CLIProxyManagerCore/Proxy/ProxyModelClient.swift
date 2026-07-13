@@ -71,7 +71,7 @@ public struct ProxyModelClient: Sendable {
         }
 
         return scopedIDs.map { id in
-            guard let metadata = metadataByID[id] else { return CodexModelOption(id: id) }
+            guard let metadata = metadataByID[id.lowercased()] else { return CodexModelOption(id: id) }
             let supported = metadata.supportedReasoningLevels.compactMap { level -> AppConfig.CodexReasoning? in
                 guard let reasoning = AppConfig.CodexReasoning(rawValue: level.effort), reasoning != .auto else {
                     return nil
@@ -83,10 +83,18 @@ public struct ProxyModelClient: Sendable {
                 }
             }
             let defaultReasoning = metadata.defaultReasoningLevel.flatMap(AppConfig.CodexReasoning.init(rawValue:))
+            let metadataSupportsFast = metadata.serviceTiers.contains { tier in
+                tier.id?.caseInsensitiveCompare("priority") == .orderedSame
+                    || tier.name?.caseInsensitiveCompare("Fast") == .orderedSame
+            } || metadata.additionalSpeedTiers.contains { tier in
+                tier.caseInsensitiveCompare("fast") == .orderedSame
+            }
             return CodexModelOption(
                 id: id,
                 supportedReasoning: supported,
-                defaultReasoning: defaultReasoning.flatMap { supported.contains($0) ? $0 : nil }
+                defaultReasoning: defaultReasoning.flatMap { supported.contains($0) ? $0 : nil },
+                supportsFastMode: metadataSupportsFast
+                    || CodexModelOption.supportsFastModeFallback(for: id)
             )
         }
     }
@@ -126,16 +134,18 @@ public struct ProxyModelClient: Sendable {
             let identifier: String
             if let modelPrefix {
                 guard let unprefixed = modelIdentifier(model.id, withoutRoutingPrefix: modelPrefix),
-                      isCodexModelID(unprefixed, ownedBy: model.ownedBy) else {
+                      isCodexModelID(unprefixed, ownedBy: model.ownedBy),
+                      !CodexFastMode.isManagedAlias(unprefixed) else {
                     continue
                 }
                 identifier = baseModelName(unprefixed)
             } else {
-                guard isCodexModel(model) else { continue }
+                guard isCodexModel(model), !CodexFastMode.isManagedAlias(model.id) else { continue }
                 identifier = baseModelName(model.id)
             }
-            if seen.insert(identifier).inserted {
-                result.append(identifier)
+            let canonical = CodexFastMode.canonicalModel(from: identifier)
+            if seen.insert(canonical).inserted {
+                result.append(canonical)
             }
         }
         return result
@@ -163,9 +173,14 @@ public struct ProxyModelClient: Sendable {
         let response = try JSONDecoder().decode(CodexClientModelsResponse.self, from: data)
         var result: [String: CodexClientModelsResponse.Model] = [:]
         for model in response.models {
-            guard let id = scopedModelID(model.slug, modelPrefix: modelPrefix) else { continue }
-            if result[id] == nil {
-                result[id] = model
+            guard !CodexFastMode.isManagedAlias(model.slug),
+                  let id = scopedModelID(model.slug, modelPrefix: modelPrefix),
+                  !CodexFastMode.isManagedAlias(id) else {
+                continue
+            }
+            let lookupKey = id.lowercased()
+            if result[lookupKey] == nil {
+                result[lookupKey] = model
             }
         }
         return result
@@ -178,8 +193,13 @@ public struct ProxyModelClient: Sendable {
     }
 
     private func baseModelName(_ identifier: String) -> String {
-        guard let parenIndex = identifier.firstIndex(of: "(") else { return identifier }
-        return String(identifier[..<parenIndex])
+        let baseName: String
+        if let parenIndex = identifier.firstIndex(of: "(") {
+            baseName = String(identifier[..<parenIndex])
+        } else {
+            baseName = identifier
+        }
+        return CodexFastMode.canonicalModel(from: baseName)
     }
 
     private func isCodexModel(_ model: ModelsResponse.Model) -> Bool {
@@ -227,12 +247,16 @@ private struct CodexClientModelsResponse: Decodable {
         var supportedReasoningLevels: [ReasoningLevel]
         var defaultReasoningLevel: String?
         var visibility: String?
+        var serviceTiers: [ServiceTier]
+        var additionalSpeedTiers: [String]
 
         enum CodingKeys: String, CodingKey {
             case slug
             case supportedReasoningLevels = "supported_reasoning_levels"
             case defaultReasoningLevel = "default_reasoning_level"
             case visibility
+            case serviceTiers = "service_tiers"
+            case additionalSpeedTiers = "additional_speed_tiers"
         }
 
         init(from decoder: Decoder) throws {
@@ -244,7 +268,14 @@ private struct CodexClientModelsResponse: Decodable {
             ) ?? []
             defaultReasoningLevel = try container.decodeIfPresent(String.self, forKey: .defaultReasoningLevel)
             visibility = try container.decodeIfPresent(String.self, forKey: .visibility)
+            serviceTiers = try container.decodeIfPresent([ServiceTier].self, forKey: .serviceTiers) ?? []
+            additionalSpeedTiers = try container.decodeIfPresent([String].self, forKey: .additionalSpeedTiers) ?? []
         }
+    }
+
+    struct ServiceTier: Decodable {
+        var id: String?
+        var name: String?
     }
 
     struct ReasoningLevel: Decodable {

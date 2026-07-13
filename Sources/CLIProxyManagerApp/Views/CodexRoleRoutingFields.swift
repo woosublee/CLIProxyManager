@@ -6,14 +6,25 @@ struct CodexRoleRoutingFields: View {
     @Binding var sonnet: AppConfig.CodexRole
     @Binding var haiku: AppConfig.CodexRole
     let availableModels: [CodexModelOption]
+    private let fastColumnWidth: CGFloat = 52
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider().padding(.leading, 14)
-            row(label: "Opus", role: $opus, last: false)
-            row(label: "Sonnet", role: $sonnet, last: false)
-            row(label: "Haiku", role: $haiku, last: true)
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(spacing: 0) {
+                header
+                Divider().padding(.leading, 14)
+                row(label: "Opus", role: $opus, last: false)
+                row(label: "Sonnet", role: $sonnet, last: false)
+                row(label: "Haiku", role: $haiku, last: true)
+            }
+
+            Text(CodexRoleRoutingOptions.fastModeHelpText)
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 14)
+        }
+        .task(id: availableModels) {
+            normalizeRoles(for: availableModels)
         }
     }
 
@@ -27,6 +38,8 @@ struct CodexRoleRoutingFields: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             Text("Context")
                 .frame(maxWidth: .infinity, alignment: .leading)
+            Text("Fast")
+                .frame(width: fastColumnWidth, alignment: .center)
         }
         .font(.system(size: 10.5, weight: .semibold))
         .tracking(0.4)
@@ -82,6 +95,17 @@ struct CodexRoleRoutingFields: View {
                 .labelsHidden()
                 .pickerStyle(.menu)
                 .frame(maxWidth: .infinity, alignment: .leading)
+
+                Toggle("", isOn: fastModeBinding(for: role))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .tint(BrandPalette.accent)
+                    .controlSize(.small)
+                    .frame(width: fastColumnWidth, alignment: .center)
+                    .disabled(!CodexRoleRoutingOptions.supportsFastMode(
+                        model: role.wrappedValue.model,
+                        options: availableModels
+                    ))
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 9)
@@ -92,19 +116,31 @@ struct CodexRoleRoutingFields: View {
         }
     }
 
+    private func normalizeRoles(for models: [CodexModelOption]) {
+        guard !models.isEmpty else { return }
+        let normalized = CodexRoleRoutingOptions.normalizedCodex(
+            AppConfig.Codex(opus: opus, sonnet: sonnet, haiku: haiku),
+            options: models
+        )
+        opus = normalized.opus
+        sonnet = normalized.sonnet
+        haiku = normalized.haiku
+    }
+
     private func modelBinding(for role: Binding<AppConfig.CodexRole>) -> Binding<String> {
         Binding(
-            get: { role.wrappedValue.model },
+            get: { CodexFastMode.canonicalModel(from: role.wrappedValue.model) },
             set: { model in
-                var updated = role.wrappedValue
-                updated.model = model
-                updated.reasoning = CodexRoleRoutingOptions.normalizedReasoning(
-                    currentReasoning: updated.reasoning,
+                role.wrappedValue = CodexRoleRoutingOptions.normalizedRole(
+                    role.wrappedValue,
                     model: model,
                     options: availableModels
                 )
-                role.wrappedValue = updated
             }
         )
+    }
+
+    private func fastModeBinding(for role: Binding<AppConfig.CodexRole>) -> Binding<Bool> {
+        CodexRoleRoutingOptions.fastModeBinding(role: role, options: availableModels)
     }
 }
