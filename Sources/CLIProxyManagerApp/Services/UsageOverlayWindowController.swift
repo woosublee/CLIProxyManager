@@ -120,8 +120,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     private var resizeCoordinator = UsageOverlayResizeCoordinator()
     private var resizeScheduleGeneration = 0
     private var screenGeometryGeneration = 0
-    private var nextControllerFrameGeneration = 0
-    private var activeControllerFrameGeneration: Int?
+    private var userMoveInterruptedTransition = false
     private var configObservation: AnyCancellable?
     private var contentObservation: AnyCancellable?
     private var screenParametersObservation: NSObjectProtocol?
@@ -296,18 +295,26 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         }
 
         resizeCoordinator.animationStarted(generation: transitionGeneration)
-        let controllerFrameGeneration = beginControllerFrameApplication()
         frameAnimator(panel, target) { [weak self] in
-            guard let self else { return }
-            self.endControllerFrameApplication(generation: controllerFrameGeneration)
-            self.resizeCoordinator.animationCompleted(generation: transitionGeneration)
+            self?.resizeCoordinator.animationCompleted(generation: transitionGeneration)
         }
     }
 
     func hideForCurrentSession() {
+        userMoveInterruptedTransition = false
         interruptActiveTransition()
         panel.orderOut(nil)
         isVisible = false
+    }
+
+    func windowWillMove(_ notification: Notification) {
+        handleWindowWillMove()
+    }
+
+    func handleWindowWillMove() {
+        guard resizeCoordinator.hasActiveTransition else { return }
+        interruptActiveTransition()
+        userMoveInterruptedTransition = true
     }
 
     func windowDidMove(_ notification: Notification) {
@@ -315,9 +322,8 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     }
 
     func handleWindowDidMove() {
-        guard activeControllerFrameGeneration == nil,
-              resizeCoordinator.hasActiveTransition else { return }
-        interruptActiveTransition()
+        guard userMoveInterruptedTransition else { return }
+        userMoveInterruptedTransition = false
         resizeToFittingContent(animated: false)
     }
 
@@ -372,6 +378,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     }
 
     func handleScreenGeometryChange() {
+        userMoveInterruptedTransition = false
         interruptActiveTransition()
         updatePanelConstraints(for: displayMode)
         screenGeometryGeneration += 1
@@ -479,28 +486,13 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     private func interruptActiveTransition() {
         resizeScheduleGeneration += 1
         if resizeCoordinator.hasActiveTransition {
-            let controllerFrameGeneration = beginControllerFrameApplication()
             frameAnimationInterrupter(panel)
-            endControllerFrameApplication(generation: controllerFrameGeneration)
         }
         resizeCoordinator.cancelActiveTransition()
     }
 
-    private func beginControllerFrameApplication() -> Int {
-        nextControllerFrameGeneration += 1
-        activeControllerFrameGeneration = nextControllerFrameGeneration
-        return nextControllerFrameGeneration
-    }
-
-    private func endControllerFrameApplication(generation: Int) {
-        guard activeControllerFrameGeneration == generation else { return }
-        activeControllerFrameGeneration = nil
-    }
-
     private func applyControllerFrame(_ frame: CGRect, display: Bool) {
-        let generation = beginControllerFrameApplication()
         panel.setFrame(frame, display: display)
-        endControllerFrameApplication(generation: generation)
     }
 
     private func frameAnchoredAtAuthoritativeTransitionAnchor() -> CGRect {

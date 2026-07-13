@@ -499,6 +499,7 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
 
         let readsBeforeResize = fittingSizeReads
         controller.requestContentResize(animated: false)
+        controller.handleWindowWillMove()
         panel.setFrameOrigin(CGPoint(x: 220, y: 180))
         controller.handleWindowDidMove()
         drainMainQueueSynchronously()
@@ -509,6 +510,8 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
 
     func testWindowMoveDuringTransitionSettlesAtMovedRightTopAnchorWithoutAnimation() {
         var animationCount = 0
+        var animationWasInterrupted = false
+        var staleCompletion: (@MainActor () -> Void)?
         let panel = makePanel(x: 500, y: 400, width: 300, height: 260)
         panel.contentView = NSView(frame: CGRect(x: 0, y: 0, width: 300, height: 260))
         let controller = UsageOverlayWindowController(
@@ -518,22 +521,34 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
             shouldReduceMotion: { false },
             visibleFrameProvider: visibleFrame,
             fittingSizeProvider: { CGSize(width: 108, height: 180) },
-            frameAnimator: { _, _, _ in animationCount += 1 }
+            frameAnimator: { _, _, completion in
+                animationCount += 1
+                staleCompletion = completion
+            },
+            frameAnimationInterrupter: { _ in
+                animationWasInterrupted = true
+            }
         )
 
         controller.toggleDisplayMode()
+        drainMainQueueSynchronously()
+        XCTAssertEqual(animationCount, 1)
+
+        controller.handleWindowWillMove()
         let movedFrame = CGRect(x: 220, y: 180, width: 150, height: 210)
         panel.setFrame(movedFrame, display: false)
         controller.handleWindowDidMove()
+        staleCompletion?()
         drainMainQueueSynchronously()
 
-        XCTAssertEqual(animationCount, 0)
+        XCTAssertTrue(animationWasInterrupted)
+        XCTAssertEqual(animationCount, 1)
         XCTAssertEqual(panel.frame.maxX, movedFrame.maxX)
         XCTAssertEqual(panel.frame.maxY, movedFrame.maxY)
         XCTAssertEqual(panel.frame.size, CGSize(width: 108, height: 180))
     }
 
-    func testControllerAppliedFrameMoveIsIgnoredByWindowMoveHandler() {
+    func testControllerAppliedFrameMoveWithoutWindowWillMoveIsIgnored() {
         var fittingSizeReads = 0
         var controller: UsageOverlayWindowController!
         let panel = makePanel(x: 500, y: 400, width: 300, height: 260)
