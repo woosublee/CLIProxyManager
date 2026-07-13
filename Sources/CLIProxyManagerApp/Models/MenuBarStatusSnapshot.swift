@@ -45,7 +45,8 @@ struct MenuBarStatusSnapshot: Equatable {
         serverStatus: DiagnosticStatus,
         serverControlState: ServerControlState = .stopped,
         providers: [ProviderRowState],
-        port: Int = 18_317
+        port: Int = 18_317,
+        showsSubscriptionUsage: Bool = true
     ) {
         let displayState = Self.displayState(serverStatus: serverStatus, serverControlState: serverControlState)
         serverTitle = serverStatus.title
@@ -67,7 +68,7 @@ struct MenuBarStatusSnapshot: Equatable {
                     connectionDetail: provider.connectionDetail,
                     accountDetailHidden: provider.accountDetailHidden,
                     subscriptionUsageState: provider.subscriptionUsageState,
-                    showsSubscriptionUsage: provider.showsSubscriptionUsage
+                    showsSubscriptionUsage: provider.showsSubscriptionUsage && showsSubscriptionUsage
                 )
             }
         erroredCount = providers.filter(\.isErrored).count

@@ -124,6 +124,8 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     private var configObservation: AnyCancellable?
     private var contentObservation: AnyCancellable?
     private var screenParametersObservation: NSObjectProtocol?
+    private var lastSavedVisibility: Bool?
+    private var isSuppressedForCurrentSession = false
 
     @Published private(set) var isVisible = false
     var displayMode: AppConfig.UsageOverlay.DisplayMode { presentationState.displayMode }
@@ -301,6 +303,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     }
 
     func hideForCurrentSession() {
+        isSuppressedForCurrentSession = true
         userMoveInterruptedTransition = false
         interruptActiveTransition()
         panel.orderOut(nil)
@@ -332,6 +335,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     }
 
     func showForCurrentSession(using preferences: AppConfig.UsageOverlay) {
+        isSuppressedForCurrentSession = false
         UsageOverlayWindowConfigurator().configure(
             window: panel,
             alwaysOnTop: preferences.alwaysOnTop
@@ -343,6 +347,12 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     }
 
     func update(_ preferences: AppConfig.UsageOverlay) {
+        let savedVisibilityBecameEnabled = lastSavedVisibility == false && preferences.isVisible
+        if savedVisibilityBecameEnabled {
+            isSuppressedForCurrentSession = false
+        }
+        lastSavedVisibility = preferences.isVisible
+
         UsageOverlayWindowConfigurator().configure(
             window: panel,
             alwaysOnTop: preferences.alwaysOnTop
@@ -358,13 +368,16 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         } else {
             applyPersistedDisplayModeIfAllowed(preferences.displayMode)
         }
-        if preferences.isVisible {
+        if preferences.isVisible, !isSuppressedForCurrentSession {
             restoreSavedFrameIfUsable()
             panel.makeKeyAndOrderFront(nil)
             isVisible = true
             resizeToFittingContent(animated: false)
-        } else {
-            hideForCurrentSession()
+        } else if !preferences.isVisible {
+            userMoveInterruptedTransition = false
+            interruptActiveTransition()
+            panel.orderOut(nil)
+            isVisible = false
         }
     }
 

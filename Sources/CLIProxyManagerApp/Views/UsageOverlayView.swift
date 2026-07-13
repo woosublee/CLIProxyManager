@@ -39,7 +39,8 @@ struct UsageOverlayView: View {
             serverStatus: viewModel.serverStatus,
             serverControlState: viewModel.serverControlState,
             providers: viewModel.providerRows,
-            port: viewModel.config.port
+            port: viewModel.config.port,
+            showsSubscriptionUsage: true
         ).connectedProviders
     }
 

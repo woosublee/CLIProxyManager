@@ -292,19 +292,29 @@ public struct AppConfig: Codable, Equatable, Sendable {
     }
 
     public struct SubscriptionUsage: Codable, Equatable, Sendable {
-        public var isEnabled: Bool
+        public var showInMenuBar: Bool
 
-        public init(isEnabled: Bool = false) {
-            self.isEnabled = isEnabled
+        public init(showInMenuBar: Bool = false) {
+            self.showInMenuBar = showInMenuBar
         }
 
         private enum CodingKeys: String, CodingKey {
+            case showInMenuBar
             case isEnabled
         }
 
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
-            self.isEnabled = try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
+            if let showInMenuBar = try c.decodeIfPresent(Bool.self, forKey: .showInMenuBar) {
+                self.showInMenuBar = showInMenuBar
+            } else {
+                self.showInMenuBar = try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
+            }
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(showInMenuBar, forKey: .showInMenuBar)
         }
     }
 
@@ -382,6 +392,11 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var accountPrivacy: AccountPrivacy
     public var subscriptionUsage: SubscriptionUsage
     public var usageOverlay: UsageOverlay
+
+    public var isSubscriptionUsageEnabled: Bool {
+        subscriptionUsage.showInMenuBar || usageOverlay.isVisible
+    }
+
     public var oauthCommandProfiles: [OAuthCommandProfile]
     public var roundRobinProfiles: [RoundRobinProfile]
     public var bindAddress: String
