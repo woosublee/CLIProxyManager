@@ -2,7 +2,7 @@
 
 ## 현재 상태
 
-Codex의 Opus·Sonnet·Haiku 역할별 Fast mode 기능은 핵심 구현까지 완료됐으며, proxy restart 동시성 보강 작업 중 일시 중단했다.
+Codex의 Opus·Sonnet·Haiku 역할별 Fast mode 구현과 자동 검증을 완료했다.
 
 ## 완료된 작업
 
@@ -15,44 +15,39 @@ Codex의 Opus·Sonnet·Haiku 역할별 Fast mode 기능은 핵심 구현까지 �
 - OAuth/API Key alias와 `service_tier: priority` payload YAML 생성
 - Fast 미사용 시 기존 YAML의 바이트 단위 호환성 유지
 - legacy, OAuth, API Key, round-robin shell routing 테스트
-- Fast 설정 변경 시 proxy restart의 기본 동작
+- Fast 설정 변경 시 proxy restart 및 API Key 변경과의 coalescing
+- restart 중 추가 변경의 generation별 drain
+- model-server 준비 및 모델 조회와 configuration restart 직렬화
+- 필수 내부 restart와 수동 lifecycle action의 충돌 방지
+- restart/readiness 실패의 diagnostic 및 Fast 전용 메시지 처리
+- invalid legacy Fast alias 복구와 reasoning/context-only 저장 호환성
+- 한국어·영어 README 문서화
 
-## 마지막 안정 검증
+## 자동 검증
 
-커밋 `46cfad7` 기준:
+최종 구현 기준:
 
-- `swift test`: 746 tests, 0 failures
+- `DashboardViewModelRefreshTests`: 140 tests, 0 failures
+- 전체 `swift test`: 762 tests, 0 failures
+- development build: `swift build -c debug` 성공
 - `git diff --check`: 통과
 
-## 현재 WIP
+## 수동 검증
 
-`DashboardViewModel`의 proxy restart coordinator를 보강하는 미완료 변경이 포함돼 있다.
+앱 실행, 스크린샷, 실제 UI 조작과 runtime 설정 확인은 사용자가 직접 수행한다.
 
-대상:
+확인 권장 항목:
 
-- restart 진행 중 추가 Fast/API Key 변경을 다음 generation에서 drain
-- `prepareModelServer()` 중 발생한 pending restart 처리
-- 실제 API Key 변경이 없을 때 불필요한 restart 방지
-- restart 실패 및 readiness 실패 시 status와 Fast 전용 메시지 일치
-- 기존 invalid Fast alias 설정을 UI에서 복구할 수 있도록 old snapshot 비교 완화
-- restart suspension을 제어하는 test double 및 회귀 테스트 추가
+1. 지원되는 Codex 모델에서 역할별 Fast toggle이 활성화된다.
+2. 미지원·custom 모델에서는 Fast toggle이 비활성화된다.
+3. 저장 후 실행 중 proxy가 한 번 restart되고 ready로 복귀한다.
+4. 생성 YAML에 OAuth/API Key alias와 `service_tier: priority`가 추가된다.
+5. Fast를 모두 끄면 관리 alias와 payload section이 제거된다.
+6. shell function의 Fast 역할은 `-cpm-fast(reasoning)` 순서를 사용한다.
 
-현재 WIP 변경은 중단 시점 그대로 보존했으며 전체 테스트를 완료하지 않았다.
-
-## 남은 작업
-
-1. WIP restart coordinator 구현과 새 회귀 테스트를 정리한다.
-2. `DashboardViewModelRefreshTests` 및 전체 `swift test`를 실행한다.
-3. Task 6 focused code review를 다시 수행한다.
-4. `README.md`, `README.en.md`에 Fast mode 사용법을 추가한다.
-5. development build를 생성한다.
-6. 최종 branch review를 수행한다.
-
-앱 실행, 스크린샷, 수동 UI 검증은 사용자가 직접 수행한다.
-
-## 재개 위치
+## 관련 문서
 
 - 설계: `docs/superpowers/specs/2026-07-12-codex-fast-mode-design.md`
 - 구현 계획: `docs/superpowers/plans/2026-07-12-codex-fast-mode.md`
-- 현재 현황: 이 문서
 - 브랜치: `feature/codex-fast-mode`
+- Draft PR: `#61`
