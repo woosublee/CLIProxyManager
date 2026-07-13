@@ -1724,6 +1724,9 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "claude.json", type: .claude, email: nil, accountID: nil, expired: nil, disabled: false)
+            ]),
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore(values: [.claudeAPIKey: "secret"])
@@ -1741,6 +1744,9 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "codex.json", type: .codex, email: nil, accountID: nil, expired: nil, disabled: false)
+            ]),
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore(values: [.codexAPIKey: "secret"])
