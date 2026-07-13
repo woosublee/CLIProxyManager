@@ -35,32 +35,32 @@ struct UsageOverlayView: View {
     }
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            VStack(alignment: .leading, spacing: presentationState.presentedDisplayMode == .expanded ? 12 : 4) {
+        VStack(alignment: .leading, spacing: presentationState.presentedDisplayMode == .expanded ? 12 : 4) {
+            if presentationState.presentedDisplayMode == .compact {
                 Color.clear
-                    .frame(height: 24)
-
-                Group {
-                    switch presentationState.presentedDisplayMode {
-                    case .expanded:
-                        ExpandedUsageOverlayContent(
-                            viewModel: viewModel,
-                            providers: providers,
-                            refreshStatus: refreshStatus
-                        )
-                    case .compact:
-                        CompactUsageOverlayView(
-                            providers: providers,
-                            maximumAccountHeight: presentationState.compactAccountMaximumHeight,
-                            onMeasurementChange: onContentSizeInvalidated
-                        )
-                    }
-                }
-                .blur(radius: presentationState.contentBlurRadius)
-                .opacity(presentationState.contentOpacity)
-                .animation(.easeInOut(duration: 0.14), value: presentationState.isContentHiddenForModeTransition)
+                    .frame(height: UsageOverlaySurfaceLayout.chromeSize.height)
             }
 
+            Group {
+                switch presentationState.presentedDisplayMode {
+                case .expanded:
+                    ExpandedUsageOverlayContent(
+                        providers: providers,
+                        refreshStatus: refreshStatus
+                    )
+                case .compact:
+                    CompactUsageOverlayView(
+                        providers: providers,
+                        maximumAccountHeight: presentationState.compactAccountMaximumHeight,
+                        onMeasurementChange: recordCompactAccountHeight
+                    )
+                }
+            }
+            .blur(radius: presentationState.contentBlurRadius)
+            .opacity(presentationState.contentOpacity)
+            .animation(.easeInOut(duration: 0.14), value: presentationState.isContentHiddenForModeTransition)
+        }
+        .overlay(alignment: .topTrailing) {
             if presentationState.displayMode == .compact,
                presentationState.presentedDisplayMode == .expanded {
                 compactMeasurementContent
@@ -93,14 +93,16 @@ struct UsageOverlayView: View {
     private var compactMeasurementContent: some View {
         VStack(alignment: .leading, spacing: 4) {
             UsageOverlayChrome(
+                viewModel: viewModel,
                 displayMode: .compact,
+                onRefresh: {},
                 onToggleDisplayMode: {},
                 onClose: {}
             )
             CompactUsageOverlayView(
                 providers: providers,
                 maximumAccountHeight: presentationState.compactAccountMaximumHeight,
-                onMeasurementChange: onContentSizeInvalidated
+                onMeasurementChange: recordCompactAccountHeight
             )
         }
         .padding(10)
@@ -129,6 +131,16 @@ struct UsageOverlayView: View {
             : AppWindowMetrics.usageOverlayCompactWidth
     }
 
+    private func recordCompactAccountHeight(_ accountHeight: CGFloat) {
+        let fittingSize = CGSize(
+            width: AppWindowMetrics.usageOverlayCompactWidth,
+            height: UsageOverlaySurfaceLayout.chromeSize.height + 4 + accountHeight + 20
+        )
+        if presentationState.recordCompactFittingSize(fittingSize) {
+            onContentSizeInvalidated()
+        }
+    }
+
     private var refreshStatus: String {
         if viewModel.isSubscriptionUsageRefreshInProgress {
             return "REFRESHING"
@@ -153,13 +165,21 @@ private struct CompactUsageOverlayFittingSizePreferenceKey: PreferenceKey {
 }
 
 struct UsageOverlayChrome: View {
+    @ObservedObject var viewModel: DashboardViewModel
     let displayMode: AppConfig.UsageOverlay.DisplayMode
+    let onRefresh: () -> Void
     let onToggleDisplayMode: () -> Void
     let onClose: () -> Void
 
     var body: some View {
         HStack(spacing: 2) {
-            Spacer()
+            chromeButton(
+                symbol: "arrow.clockwise",
+                accessibilityLabel: "Reload subscription usage",
+                action: onRefresh
+            )
+            .disabled(!viewModel.canRefreshSubscriptionUsage || viewModel.isSubscriptionUsageRefreshInProgress)
+            .opacity(viewModel.canRefreshSubscriptionUsage ? 1 : 0.45)
             chromeButton(
                 symbol: displayMode.toggleSymbolName,
                 accessibilityLabel: displayMode.toggleAccessibilityLabel,
@@ -193,7 +213,6 @@ struct UsageOverlayChrome: View {
 }
 
 private struct ExpandedUsageOverlayContent: View {
-    @ObservedObject var viewModel: DashboardViewModel
     let providers: [MenuBarConnectedProvider]
     let refreshStatus: String
 
@@ -206,18 +225,10 @@ private struct ExpandedUsageOverlayContent: View {
                     Text(refreshStatus)
                         .font(.system(size: 10.5, design: .monospaced))
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
-                Spacer()
-                Button {
-                    Task { await viewModel.refreshSubscriptionUsage(force: true) }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .frame(width: 20, height: 20)
-                }
-                .buttonStyle(.plain)
-                .disabled(!viewModel.canRefreshSubscriptionUsage || viewModel.isSubscriptionUsageRefreshInProgress)
-                .opacity(viewModel.canRefreshSubscriptionUsage ? 1 : 0.45)
-                .accessibilityLabel("Reload subscription usage")
+                Spacer(minLength: UsageOverlaySurfaceLayout.expandedHeaderTrailingPadding)
             }
 
             if providers.isEmpty {

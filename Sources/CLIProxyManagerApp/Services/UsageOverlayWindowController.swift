@@ -480,6 +480,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
                     self?.resizeToFittingContent(animated: false)
                 }
             ),
+            viewModel: viewModel,
             presentationState: presentationState,
             onToggleDisplayMode: { [weak self] in self?.toggleDisplayMode() },
             onClose: { [weak self] in self?.hideForCurrentSession() }

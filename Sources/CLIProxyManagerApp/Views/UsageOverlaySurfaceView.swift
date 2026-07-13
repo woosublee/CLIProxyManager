@@ -5,8 +5,14 @@ import SwiftUI
 struct UsageOverlaySurfaceLayout {
     static let expandedCornerRadius: CGFloat = 14
     static let compactCornerRadius: CGFloat = 18
-    static let chromeSize = CGSize(width: 50, height: 24)
-    static let chromeInset: CGFloat = 10
+    static let chromeSize = CGSize(width: 76, height: 24)
+    static let chromeInset: CGFloat = 16
+    static let expandedContentInset: CGFloat = 16
+    static let expandedHeaderControlSpacing: CGFloat = 8
+    static let expandedHeaderTrailingPadding = chromeSize.width
+        + chromeInset
+        - expandedContentInset
+        + expandedHeaderControlSpacing
 
     static func chromeFrame(in bounds: CGRect) -> CGRect {
         CGRect(
@@ -37,6 +43,7 @@ final class UsageOverlaySurfaceView: NSView {
 
     init(
         rootView: UsageOverlayView,
+        viewModel: DashboardViewModel,
         presentationState: UsageOverlayPresentationState,
         onToggleDisplayMode: @escaping () -> Void,
         onClose: @escaping () -> Void
@@ -44,7 +51,11 @@ final class UsageOverlaySurfaceView: NSView {
         hostingView = NSHostingView(rootView: rootView)
         chromeHostingView = NSHostingView(
             rootView: UsageOverlayChrome(
+                viewModel: viewModel,
                 displayMode: presentationState.chromeDisplayMode,
+                onRefresh: {
+                    Task { await viewModel.refreshSubscriptionUsage(force: true) }
+                },
                 onToggleDisplayMode: onToggleDisplayMode,
                 onClose: onClose
             )
@@ -60,7 +71,11 @@ final class UsageOverlaySurfaceView: NSView {
             .removeDuplicates()
             .sink { [weak chromeHostingView] mode in
                 chromeHostingView?.rootView = UsageOverlayChrome(
+                    viewModel: viewModel,
                     displayMode: mode,
+                    onRefresh: {
+                        Task { await viewModel.refreshSubscriptionUsage(force: true) }
+                    },
                     onToggleDisplayMode: onToggleDisplayMode,
                     onClose: onClose
                 )
