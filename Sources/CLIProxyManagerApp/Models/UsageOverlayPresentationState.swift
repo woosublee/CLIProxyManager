@@ -18,7 +18,7 @@ final class UsageOverlayPresentationState: ObservableObject {
 }
 
 struct CompactUsageMeasurementState {
-    static let estimatedAccountHeight: CGFloat = 120
+    static let estimatedHeight: CGFloat = 120
     private(set) var height: CGFloat = 0
     private var providerIDs: [String] = []
 
@@ -35,6 +35,11 @@ struct CompactUsageMeasurementState {
         return true
     }
 
+    mutating func record(height newHeight: CGFloat, providerIDs newProviderIDs: [String]) -> Bool {
+        providerIDs = newProviderIDs
+        return record(height: newHeight)
+    }
+
     func viewportHeight(maximumHeight: CGFloat) -> CGFloat {
         min(contentHeight, maximumHeight)
     }
@@ -44,10 +49,7 @@ struct CompactUsageMeasurementState {
     }
 
     private var contentHeight: CGFloat {
-        if height > 0 {
-            return height
-        }
-        return CGFloat(providerIDs.count) * Self.estimatedAccountHeight
+        height > 0 ? height : Self.estimatedHeight
     }
 }
 

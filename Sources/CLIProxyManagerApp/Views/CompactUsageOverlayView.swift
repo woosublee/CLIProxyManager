@@ -44,7 +44,7 @@ struct CompactUsageOverlayView: View {
                 }
                 .onPreferenceChange(CompactAccountHeightPreferenceKey.self) { height in
                     let measuredHeight = max(1, height)
-                    if measurementState.record(height: measuredHeight) {
+                    if measurementState.record(height: measuredHeight, providerIDs: providerIDs) {
                         onMeasurementChange()
                     }
                 }
