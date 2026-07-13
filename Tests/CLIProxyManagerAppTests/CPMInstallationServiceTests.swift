@@ -1,3 +1,4 @@
+import CryptoKit
 import XCTest
 @testable import CLIProxyManagerApp
 @testable import CLIProxyManagerCore
@@ -23,17 +24,86 @@ final class CPMInstallationServiceTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.paths.cpmInstallationRecordFile.path))
     }
 
-    func testStatusReportsOutdatedWhenBundledHelperChangesAfterInstallation() async throws {
+    func testStatusRemainsCurrentWhenBundledHelperChangesWithoutRevisionChange() async throws {
         let fixture = try Fixture()
-        let service = fixture.makeService(runner: CopyingPrivilegedRunner())
+        let service = fixture.makeService(runner: CopyingPrivilegedRunner(), currentRevision: 1)
         try await service.installOrUpdate()
-        try Data("new cpm".utf8).write(to: fixture.source)
+        try Data("rebuilt cpm".utf8).write(to: fixture.source)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fixture.source.path)
 
+        XCTAssertEqual(service.status(), .installedCurrent(version: "0.1.13"))
+    }
+
+    func testStatusReportsOutdatedWhenBundledRevisionIncreases() async throws {
+        let fixture = try Fixture()
+        try await fixture.makeService(
+            runner: CopyingPrivilegedRunner(),
+            bundledVersion: "0.1.13",
+            currentRevision: 1
+        ).installOrUpdate()
+
+        let newer = fixture.makeService(
+            bundledVersion: "0.1.14",
+            currentRevision: 2
+        )
+
         XCTAssertEqual(
-            service.status(),
+            newer.status(),
             .installedOutdated(installedVersion: "0.1.13", availableVersion: "0.1.14")
         )
+    }
+
+    func testStatusKeepsNewerInstalledRevisionCurrent() async throws {
+        let fixture = try Fixture()
+        try await fixture.makeService(
+            runner: CopyingPrivilegedRunner(),
+            bundledVersion: "0.1.14",
+            currentRevision: 2
+        ).installOrUpdate()
+
+        let olderBundle = fixture.makeService(
+            bundledVersion: "0.1.13",
+            currentRevision: 1
+        )
+
+        XCTAssertEqual(olderBundle.status(), .installedCurrent(version: "0.1.14"))
+    }
+
+    func testLegacyRecordWithoutRevisionRequiresOneUpdate() throws {
+        let fixture = try Fixture()
+        try Data("installed cpm".utf8).write(to: fixture.target)
+        let digest = try fixture.sha256(of: fixture.target)
+        try FileManager.default.createDirectory(
+            at: fixture.paths.rootDirectory,
+            withIntermediateDirectories: true
+        )
+        let legacy = """
+        {"digest":"\(digest)","version":"0.1.15"}
+        """
+        try Data(legacy.utf8).write(to: fixture.paths.cpmInstallationRecordFile)
+
+        XCTAssertEqual(
+            fixture.makeService(bundledVersion: "0.1.17", currentRevision: 1).status(),
+            .installedOutdated(installedVersion: "0.1.15", availableVersion: "0.1.17")
+        )
+    }
+
+    func testInstallRecordsAppVersionAndCompatibilityRevision() async throws {
+        let fixture = try Fixture()
+        try await fixture.makeService(
+            runner: CopyingPrivilegedRunner(),
+            bundledVersion: "0.1.17",
+            currentRevision: 3
+        ).installOrUpdate()
+
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: Data(contentsOf: fixture.paths.cpmInstallationRecordFile)
+            ) as? [String: Any]
+        )
+        XCTAssertEqual(object["appVersion"] as? String, "0.1.17")
+        XCTAssertEqual(object["cpmRevision"] as? Int, 3)
+        XCTAssertNil(object["version"])
     }
 
     func testUpdateAndRemoveRejectTargetWhoseDigestDoesNotMatchRecordedInstall() async throws {
@@ -129,15 +199,26 @@ private struct Fixture {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: source.path)
     }
 
-    func makeService(runner: any PrivilegedCPMCommandRunning = CopyingPrivilegedRunner()) -> CPMInstallationService {
+    func makeService(
+        runner: any PrivilegedCPMCommandRunning = CopyingPrivilegedRunner(),
+        bundledVersion: String = "0.1.13",
+        currentRevision: Int = 1
+    ) -> CPMInstallationService {
         CPMInstallationService(
             sourceURL: source,
             targetURL: target,
-            bundledVersion: "0.1.13",
-            availableVersion: { "0.1.14" },
+            bundledVersion: bundledVersion,
+            availableVersion: { bundledVersion },
+            currentRevision: currentRevision,
             paths: paths,
             runner: runner
         )
+    }
+
+    func sha256(of url: URL) throws -> String {
+        SHA256.hash(data: try Data(contentsOf: url))
+            .map { String(format: "%02x", $0) }
+            .joined()
     }
 }
 
