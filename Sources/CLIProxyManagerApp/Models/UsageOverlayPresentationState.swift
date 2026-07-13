@@ -6,14 +6,36 @@ import SwiftUI
 @MainActor
 final class UsageOverlayPresentationState: ObservableObject {
     @Published var displayMode: AppConfig.UsageOverlay.DisplayMode
+    @Published var presentedDisplayMode: AppConfig.UsageOverlay.DisplayMode
     @Published var compactAccountMaximumHeight: CGFloat
+    @Published var compactFittingSize: CGSize?
+    @Published var isContentHiddenForModeTransition = false
 
     init(
         displayMode: AppConfig.UsageOverlay.DisplayMode,
         compactAccountMaximumHeight: CGFloat = 640
     ) {
         self.displayMode = displayMode
+        self.presentedDisplayMode = displayMode
         self.compactAccountMaximumHeight = compactAccountMaximumHeight
+        self.compactFittingSize = nil
+    }
+
+    var contentBlurRadius: CGFloat {
+        isContentHiddenForModeTransition ? 8 : 0
+    }
+
+    var contentOpacity: Double {
+        isContentHiddenForModeTransition ? 0 : 1
+    }
+
+    var chromeOpacity: Double { 1 }
+    var chromeDisplayMode: AppConfig.UsageOverlay.DisplayMode { displayMode }
+
+    func recordCompactFittingSize(_ size: CGSize) -> Bool {
+        guard size.width > 0, size.height > 0, compactFittingSize != size else { return false }
+        compactFittingSize = size
+        return true
     }
 }
 

@@ -12,6 +12,276 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         XCTAssertTrue(controller.window.styleMask.contains(.borderless))
     }
 
+    func testChromeHostingViewIdentityStaysStableAcrossModeToggle() async {
+        let viewModel = DashboardViewModel(config: .default)
+        let panel = makePanel(x: 500, y: 400, width: 300, height: 330)
+        var completeAnimation: (@MainActor () -> Void)?
+        let controller = UsageOverlayWindowController(
+            panel: panel,
+            viewModel: viewModel,
+            initialDisplayMode: .expanded,
+            persistDisplayMode: { _ in true },
+            shouldReduceMotion: { false },
+            visibleFrameProvider: visibleFrame,
+            modeTransitionResizeScheduler: { $0() },
+            fittingSizeProvider: { CGSize(width: 108, height: 168) },
+            frameAnimator: { _, _, completion in
+                completeAnimation = completion
+            }
+        )
+        await drainMainQueue()
+
+        guard let surfaceView = panel.contentView as? UsageOverlaySurfaceView else {
+            return XCTFail("Expected usage overlay surface")
+        }
+        let chromeIdentity = surfaceView.chromeViewIdentity
+
+        controller.toggleDisplayMode()
+        completeAnimation?()
+        await drainMainQueue()
+
+        XCTAssertEqual(surfaceView.chromeViewIdentity, chromeIdentity)
+    }
+
+    func testUsageOverlaySurfaceFillsPanelBoundsDuringResize() async {
+        let viewModel = DashboardViewModel(config: .default)
+        let panel = makePanel(x: 500, y: 400, width: 300, height: 260)
+        _ = UsageOverlayWindowController(
+            panel: panel,
+            viewModel: viewModel,
+            initialDisplayMode: .compact,
+            persistDisplayMode: { _ in true },
+            shouldReduceMotion: { true },
+            visibleFrameProvider: visibleFrame
+        )
+        await drainMainQueue()
+
+        guard let surfaceView = panel.contentView as? UsageOverlaySurfaceView else {
+            return XCTFail("Expected usage overlay surface")
+        }
+
+        panel.setFrame(
+            CGRect(x: 596, y: 494, width: 204, height: 166),
+            display: false
+        )
+        surfaceView.layoutSubtreeIfNeeded()
+
+        XCTAssertEqual(surfaceView.frame, panel.contentLayoutRect)
+        XCTAssertEqual(surfaceView.hostedSurfaceFrame, surfaceView.bounds)
+        XCTAssertEqual(surfaceView.layer?.masksToBounds, true)
+        XCTAssertEqual(surfaceView.layer?.cornerRadius ?? 0, 16, accuracy: 0.001)
+    }
+
+    func testCompactModeChangeKeepsHostedSurfaceAtExpandedPanelBoundsBeforeAnimation() async {
+        let viewModel = DashboardViewModel(config: .default)
+        let panel = makePanel(x: 500, y: 400, width: 300, height: 260)
+        let controller = UsageOverlayWindowController(
+            panel: panel,
+            viewModel: viewModel,
+            initialDisplayMode: .expanded,
+            persistDisplayMode: { _ in true },
+            shouldReduceMotion: { false },
+            visibleFrameProvider: visibleFrame,
+            frameAnimator: { _, _, completion in completion() }
+        )
+        await drainMainQueue()
+
+        guard let surfaceView = panel.contentView as? UsageOverlaySurfaceView else {
+            return XCTFail("Expected usage overlay surface")
+        }
+        let panelSizeBeforeToggle = panel.frame.size
+
+        controller.toggleDisplayMode()
+        surfaceView.layoutSubtreeIfNeeded()
+
+        XCTAssertEqual(surfaceView.hostedSurfaceFrame, surfaceView.bounds)
+        XCTAssertEqual(surfaceView.hostedSurfaceFrame.size, panelSizeBeforeToggle)
+    }
+
+    func testCollapseMeasuresCompactTargetWhileContentIsHidden() async {
+        let viewModel = DashboardViewModel(config: .default)
+        let panel = makePanel(x: 500, y: 400, width: 300, height: 330)
+        var animationTarget: CGRect?
+        let controller = UsageOverlayWindowController(
+            panel: panel,
+            viewModel: viewModel,
+            initialDisplayMode: .expanded,
+            persistDisplayMode: { _ in true },
+            shouldReduceMotion: { false },
+            visibleFrameProvider: visibleFrame,
+            modeTransitionResizeScheduler: { $0() },
+            frameAnimator: { _, target, _ in
+                animationTarget = target
+            }
+        )
+        await drainMainQueue()
+
+        controller.toggleDisplayMode()
+
+        XCTAssertEqual(controller.presentedDisplayMode, .expanded)
+        XCTAssertTrue(controller.isContentHiddenForModeTransition)
+        XCTAssertEqual(animationTarget?.width, AppWindowMetrics.usageOverlayCompactWidth)
+        XCTAssertLessThan(animationTarget?.height ?? .greatestFiniteMagnitude, panel.frame.height)
+    }
+
+    func testExpansionMeasuresExpandedLayoutWhileContentIsHidden() {
+        let panel = makePanel(x: 500, y: 400, width: 108, height: 168)
+        var beginResize: (@MainActor () -> Void)?
+        var animationTarget: CGRect?
+        var controller: UsageOverlayWindowController!
+        controller = UsageOverlayWindowController(
+            panel: panel,
+            initialDisplayMode: .compact,
+            persistDisplayMode: { _ in true },
+            shouldReduceMotion: { false },
+            visibleFrameProvider: visibleFrame,
+            modeTransitionResizeScheduler: { beginResize = $0 },
+            fittingSizeProvider: {
+                controller.presentedDisplayMode == .expanded
+                    ? CGSize(width: 300, height: 330)
+                    : CGSize(width: 108, height: 168)
+            },
+            frameAnimator: { _, target, _ in
+                animationTarget = target
+            }
+        )
+
+        controller.toggleDisplayMode()
+
+        XCTAssertTrue(controller.isContentHiddenForModeTransition)
+        XCTAssertEqual(controller.presentedDisplayMode, .expanded)
+
+        beginResize?()
+
+        XCTAssertEqual(animationTarget?.size, CGSize(width: 300, height: 330))
+    }
+
+    func testAnimatedModeToggleHidesContentUntilFinalResizeCompletesInBothDirections() async {
+        for initialMode in [AppConfig.UsageOverlay.DisplayMode.expanded, .compact] {
+            let initialSize = initialMode == .expanded
+                ? CGSize(width: 300, height: 330)
+                : CGSize(width: 108, height: 168)
+            let targetSize = initialMode == .expanded
+                ? CGSize(width: 108, height: 168)
+                : CGSize(width: 300, height: 330)
+            let panel = makePanel(
+                x: 500,
+                y: 400,
+                width: initialSize.width,
+                height: initialSize.height
+            )
+            var completeAnimation: (@MainActor () -> Void)?
+            let controller = UsageOverlayWindowController(
+                panel: panel,
+                initialDisplayMode: initialMode,
+                persistDisplayMode: { _ in true },
+                shouldReduceMotion: { false },
+                visibleFrameProvider: visibleFrame,
+                modeTransitionResizeScheduler: { $0() },
+                fittingSizeProvider: { targetSize },
+                frameAnimator: { _, _, completion in
+                    completeAnimation = completion
+                }
+            )
+
+            controller.toggleDisplayMode()
+            XCTAssertTrue(controller.isContentHiddenForModeTransition)
+
+            completeAnimation?()
+            XCTAssertFalse(controller.isContentHiddenForModeTransition)
+            XCTAssertEqual(controller.presentedDisplayMode, initialMode.opposite)
+        }
+    }
+
+    func testCollapseKeepsExpandedContentUntilFinalRetargetCompletes() async {
+        let viewModel = DashboardViewModel(config: .default)
+        let panel = makePanel(x: 500, y: 400, width: 300, height: 330)
+        var fittingSize = CGSize(width: 108, height: 168)
+        var animationCompletions: [@MainActor () -> Void] = []
+        let controller = UsageOverlayWindowController(
+            panel: panel,
+            viewModel: viewModel,
+            initialDisplayMode: .expanded,
+            persistDisplayMode: { _ in true },
+            shouldReduceMotion: { false },
+            visibleFrameProvider: visibleFrame,
+            modeTransitionResizeScheduler: { $0() },
+            fittingSizeProvider: { fittingSize },
+            frameAnimator: { _, _, completion in
+                animationCompletions.append(completion)
+            }
+        )
+        await drainMainQueue()
+
+        controller.toggleDisplayMode()
+        fittingSize = CGSize(width: 108, height: 210)
+        controller.requestContentResize(animated: false)
+        await drainMainQueue()
+
+        XCTAssertEqual(animationCompletions.count, 2)
+        animationCompletions[0]()
+        XCTAssertEqual(controller.presentedDisplayMode, .expanded)
+        XCTAssertTrue(controller.isContentHiddenForModeTransition)
+
+        animationCompletions[1]()
+        XCTAssertEqual(controller.presentedDisplayMode, .compact)
+    }
+
+    func testModeToggleStartsFrameAnimationAfterContentHides() async {
+        let viewModel = DashboardViewModel(config: .default)
+        let panel = makePanel(x: 500, y: 400, width: 300, height: 260)
+        var animationStarted = false
+        var beginResize: (@MainActor () -> Void)?
+        let controller = UsageOverlayWindowController(
+            panel: panel,
+            viewModel: viewModel,
+            initialDisplayMode: .expanded,
+            persistDisplayMode: { _ in true },
+            shouldReduceMotion: { false },
+            visibleFrameProvider: visibleFrame,
+            modeTransitionResizeScheduler: { beginResize = $0 },
+            fittingSizeProvider: { CGSize(width: 108, height: 168) },
+            frameAnimator: { _, _, completion in
+                animationStarted = true
+                completion()
+            }
+        )
+        await drainMainQueue()
+
+        controller.toggleDisplayMode()
+
+        XCTAssertTrue(controller.isContentHiddenForModeTransition)
+        XCTAssertFalse(animationStarted)
+
+        beginResize?()
+
+        XCTAssertTrue(animationStarted)
+    }
+
+    func testMeasuredCompactContentRetargetsPanelAtControllerAnchor() async {
+        let viewModel = DashboardViewModel(config: .default)
+        let panel = makePanel(x: 500, y: 400, width: 300, height: 260)
+        let controller = UsageOverlayWindowController(
+            panel: panel,
+            viewModel: viewModel,
+            initialDisplayMode: .expanded,
+            persistDisplayMode: { _ in true },
+            shouldReduceMotion: { false },
+            visibleFrameProvider: visibleFrame,
+            modeTransitionResizeScheduler: { $0() },
+            fittingSizeProvider: { CGSize(width: 108, height: 168) },
+            frameAnimator: { _, _, completion in completion() }
+        )
+        await drainMainQueue()
+
+        controller.toggleDisplayMode()
+        await drainMainQueue()
+
+        XCTAssertEqual(panel.frame.size, CGSize(width: 108, height: 168))
+        XCTAssertEqual(panel.frame.maxX, 800)
+        XCTAssertEqual(panel.frame.maxY, 660)
+    }
+
     func testUpdateShowsAndHidesThePanelWithoutChangingPreferenceState() {
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 300, height: 260),
@@ -375,20 +645,22 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         XCTAssertNil(ordinary.transitionGeneration)
     }
 
-    func testToggleKeepsFrameUnchangedUntilScheduledResizeUsesLayoutTarget() {
+    func testReduceMotionToggleAppliesLayoutTargetBeforeReturning() {
         let panel = makePanel(x: 500, y: 400, width: 300, height: 260)
-        let original = panel.frame
         let controller = UsageOverlayWindowController(
             panel: panel,
             initialDisplayMode: .expanded,
             persistDisplayMode: { _ in true },
             shouldReduceMotion: { true },
-            visibleFrameProvider: visibleFrame
+            visibleFrameProvider: visibleFrame,
+            fittingSizeProvider: { CGSize(width: 108, height: 180) }
         )
 
         controller.toggleDisplayMode()
 
-        XCTAssertEqual(panel.frame, original)
+        XCTAssertEqual(panel.frame.size, CGSize(width: 108, height: 180))
+        XCTAssertEqual(panel.frame.maxX, 800)
+        XCTAssertEqual(panel.frame.maxY, 660)
     }
 
     func testModeTransitionRestoresCapturedRightTopAnchorAfterAppKitContentResizeMutation() async {
@@ -405,10 +677,10 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         )
 
         controller.toggleDisplayMode()
-        simulateTopLeftAnchoredContentResize(panel, to: fittingSize)
-        XCTAssertNotEqual(panel.frame.maxX, originalAnchor.x)
+        XCTAssertEqual(panel.frame.maxX, originalAnchor.x)
         XCTAssertEqual(panel.frame.maxY, originalAnchor.y)
 
+        simulateTopLeftAnchoredContentResize(panel, to: fittingSize)
         await drainMainQueue()
 
         XCTAssertEqual(panel.frame.maxX, originalAnchor.x)
@@ -418,10 +690,10 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         let compactAnchor = CGPoint(x: panel.frame.maxX, y: panel.frame.maxY)
         fittingSize = CGSize(width: 300, height: 320)
         controller.toggleDisplayMode()
-        simulateTopLeftAnchoredContentResize(panel, to: fittingSize)
-        XCTAssertNotEqual(panel.frame.maxX, compactAnchor.x)
+        XCTAssertEqual(panel.frame.maxX, compactAnchor.x)
         XCTAssertEqual(panel.frame.maxY, compactAnchor.y)
 
+        simulateTopLeftAnchoredContentResize(panel, to: fittingSize)
         await drainMainQueue()
 
         XCTAssertEqual(panel.frame.maxX, compactAnchor.x)
@@ -479,6 +751,7 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
             shouldReduceMotion: { false },
             visibleFrameProvider: { visibleFrame },
             deferredScreenResizeScheduler: { deferredScreenResizes.append($0) },
+            modeTransitionResizeScheduler: { $0() },
             fittingSizeProvider: { CGSize(width: 108, height: 180) },
             frameAnimator: { panel, target, completion in
                 animationCount += 1
@@ -556,6 +829,7 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
             persistDisplayMode: { _ in true },
             shouldReduceMotion: { false },
             visibleFrameProvider: visibleFrame,
+            modeTransitionResizeScheduler: { $0() },
             fittingSizeProvider: { CGSize(width: 108, height: 180) },
             frameAnimator: { _, _, completion in
                 animationCount += 1
@@ -595,6 +869,7 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
             persistDisplayMode: { _ in true },
             shouldReduceMotion: { false },
             visibleFrameProvider: visibleFrame,
+            modeTransitionResizeScheduler: { $0() },
             fittingSizeProvider: {
                 fittingSizeReads += 1
                 return CGSize(width: 108, height: 180)
@@ -629,14 +904,14 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         )
 
         controller.toggleDisplayMode()
-        simulateTopLeftAnchoredContentResize(panel, to: CGSize(width: 108, height: 180))
         controller.hideForCurrentSession()
+        let anchorAfterCancelledTransition = CGPoint(x: panel.frame.maxX, y: panel.frame.maxY)
         controller.showForCurrentSession(using: preferences)
         drainMainQueueSynchronously()
 
-        XCTAssertLessThanOrEqual(panel.frame.maxX, 784)
-        XCTAssertLessThanOrEqual(panel.frame.maxY, 884)
-        XCTAssertNotEqual(panel.frame.maxX, 800)
+        XCTAssertEqual(panel.frame.maxX, anchorAfterCancelledTransition.x)
+        XCTAssertEqual(panel.frame.maxY, anchorAfterCancelledTransition.y)
+        XCTAssertEqual(panel.frame.size, CGSize(width: 108, height: 180))
     }
 
     func testMissingContentViewCompletesConsumedTransition() {
