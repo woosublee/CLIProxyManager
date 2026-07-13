@@ -51,6 +51,8 @@ final class UsageOverlaySurfaceView: NSView {
         )
         super.init(frame: .zero)
         wantsLayer = true
+        layer?.cornerCurve = .continuous
+        layer?.masksToBounds = true
         layerContentsRedrawPolicy = .onSetNeedsDisplay
         addSubview(hostingView)
         addSubview(chromeHostingView)
@@ -104,7 +106,5 @@ final class UsageOverlaySurfaceView: NSView {
         let progress = (expandedWidth - bounds.width) / widthRange
         cornerRadius = UsageOverlaySurfaceLayout.cornerRadius(progress: progress)
         layer?.cornerRadius = cornerRadius
-        layer?.cornerCurve = .continuous
-        layer?.masksToBounds = true
     }
 }

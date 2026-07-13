@@ -252,7 +252,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             presentationState.presentedDisplayMode = target
             presentationState.isContentHiddenForModeTransition = false
         } else {
-            presentationState.presentedDisplayMode = target
+            presentationState.presentedDisplayMode = target == .compact ? original : target
             presentationState.isContentHiddenForModeTransition = true
         }
         updatePanelConstraints(for: target)
@@ -314,6 +314,8 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
                 display: true
             )
             resizeCoordinator.transitionCompletedWithoutAnimation(generation: transitionGeneration)
+            presentationState.presentedDisplayMode = displayMode
+            presentationState.isContentHiddenForModeTransition = false
             return
         }
         let target = UsageOverlayFrameLayout.targetFrame(
@@ -338,11 +340,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             self.resizeCoordinator.animationCompleted(generation: transitionGeneration)
             if !self.resizeCoordinator.hasActiveTransition {
                 self.presentationState.presentedDisplayMode = self.displayMode
-                NSAnimationContext.runAnimationGroup { context in
-                    context.duration = 0.14
-                    context.allowsImplicitAnimation = true
-                    self.presentationState.isContentHiddenForModeTransition = false
-                }
+                self.presentationState.isContentHiddenForModeTransition = false
             }
         }
     }
@@ -478,11 +476,9 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             rootView: UsageOverlayView(
                 viewModel: viewModel,
                 presentationState: presentationState,
-                onToggleDisplayMode: { [weak self] in self?.toggleDisplayMode() },
                 onContentSizeInvalidated: { [weak self] in
                     self?.resizeToFittingContent(animated: false)
-                },
-                onClose: { [weak self] in self?.hideForCurrentSession() }
+                }
             ),
             presentationState: presentationState,
             onToggleDisplayMode: { [weak self] in self?.toggleDisplayMode() },

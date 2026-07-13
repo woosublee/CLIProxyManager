@@ -118,7 +118,7 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
 
         controller.toggleDisplayMode()
 
-        XCTAssertEqual(controller.presentedDisplayMode, .compact)
+        XCTAssertEqual(controller.presentedDisplayMode, .expanded)
         XCTAssertTrue(controller.isContentHiddenForModeTransition)
         XCTAssertEqual(animationTarget?.width, AppWindowMetrics.usageOverlayCompactWidth)
         XCTAssertLessThan(animationTarget?.height ?? .greatestFiniteMagnitude, panel.frame.height)
@@ -220,7 +220,7 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
 
         XCTAssertEqual(animationCompletions.count, 2)
         animationCompletions[0]()
-        XCTAssertEqual(controller.presentedDisplayMode, .compact)
+        XCTAssertEqual(controller.presentedDisplayMode, .expanded)
         XCTAssertTrue(controller.isContentHiddenForModeTransition)
 
         animationCompletions[1]()
@@ -258,7 +258,7 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         XCTAssertTrue(animationStarted)
     }
 
-    func testHostingViewDoesNotResizePanelOutsideControllerAnimation() async {
+    func testMeasuredCompactContentRetargetsPanelAtControllerAnchor() async {
         let viewModel = DashboardViewModel(config: .default)
         let panel = makePanel(x: 500, y: 400, width: 300, height: 260)
         let controller = UsageOverlayWindowController(
@@ -277,7 +277,7 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         controller.toggleDisplayMode()
         await drainMainQueue()
 
-        XCTAssertEqual(panel.frame.size, CGSize(width: 300, height: 260))
+        XCTAssertEqual(panel.frame.size, CGSize(width: 108, height: 168))
         XCTAssertEqual(panel.frame.maxX, 800)
         XCTAssertEqual(panel.frame.maxY, 660)
     }

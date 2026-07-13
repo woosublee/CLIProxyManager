@@ -4,33 +4,23 @@ import SwiftUI
 struct UsageOverlayView: View {
     @ObservedObject var viewModel: DashboardViewModel
     @ObservedObject var presentationState: UsageOverlayPresentationState
-    var onToggleDisplayMode: () -> Void = {}
     var onContentSizeInvalidated: () -> Void = {}
-    var onClose: () -> Void = {}
     @State private var refreshStatusReferenceDate = Date()
 
     init(
         viewModel: DashboardViewModel,
         presentationState: UsageOverlayPresentationState,
-        onToggleDisplayMode: @escaping () -> Void = {},
-        onContentSizeInvalidated: @escaping () -> Void = {},
-        onClose: @escaping () -> Void = {}
+        onContentSizeInvalidated: @escaping () -> Void = {}
     ) {
         self.viewModel = viewModel
         self.presentationState = presentationState
-        self.onToggleDisplayMode = onToggleDisplayMode
         self.onContentSizeInvalidated = onContentSizeInvalidated
-        self.onClose = onClose
     }
 
-    init(
-        viewModel: DashboardViewModel,
-        onClose: @escaping () -> Void = {}
-    ) {
+    init(viewModel: DashboardViewModel) {
         self.init(
             viewModel: viewModel,
-            presentationState: UsageOverlayPresentationState(displayMode: .expanded),
-            onClose: onClose
+            presentationState: UsageOverlayPresentationState(displayMode: .expanded)
         )
     }
 

@@ -69,6 +69,7 @@ final class MenuBarWindowBridgeTests: XCTestCase {
 
         configurator.configure(window: window, alwaysOnTop: true)
 
+        XCTAssertTrue(window.frameAutosaveName.isEmpty)
         XCTAssertEqual(window.frame, currentFrame)
     }
 
