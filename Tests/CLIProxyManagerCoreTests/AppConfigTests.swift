@@ -34,6 +34,43 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(config.usageOverlay.backgroundOpacity, 0.9)
         XCTAssertFalse(config.roundRobinEnabled)
         XCTAssertEqual(config.roundRobinProfiles, [])
+        XCTAssertEqual(config.accountOrder, [])
+    }
+
+    func testDefaultConfigHasNoStoredAccountOrder() {
+        XCTAssertEqual(AppConfig.default.accountOrder, [])
+    }
+
+    func testDecodedConfigDefaultsMissingAccountOrderToEmpty() throws {
+        let data = Data(#"""
+        {
+          "port": 18317,
+          "commands": { "cc": "", "ccapi": "", "ccodex": "" },
+          "ccapi": {},
+          "ccodex": {
+            "opus": { "model": "gpt-5.6-terra", "reasoning": "xhigh", "contextWindow": "auto" },
+            "sonnet": { "model": "gpt-5.6-terra", "reasoning": "medium", "contextWindow": "auto" },
+            "haiku": { "model": "gpt-5.6-terra", "reasoning": "low", "contextWindow": "auto" }
+          },
+          "includeDangerouslySkipPermissions": false,
+          "startAtLogin": false,
+          "showDockIcon": true,
+          "showMenuBarIcon": true
+        }
+        """#.utf8)
+
+        let config = try JSONDecoder().decode(AppConfig.self, from: data)
+
+        XCTAssertEqual(config.accountOrder, [])
+    }
+
+    func testAccountOrderRoundTripsThroughCodable() throws {
+        var config = AppConfig.default
+        config.accountOrder = ["codex-api", "claude-work", "claude-api"]
+
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))
+
+        XCTAssertEqual(decoded.accountOrder, ["codex-api", "claude-work", "claude-api"])
     }
 
     func testDefaultCodexRoutingUsesTerraWithRoleSpecificReasoning() {

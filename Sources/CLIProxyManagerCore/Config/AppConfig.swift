@@ -368,6 +368,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var usageOverlay: UsageOverlay
     public var oauthCommandProfiles: [OAuthCommandProfile]
     public var roundRobinProfiles: [RoundRobinProfile]
+    public var accountOrder: [String]
     public var bindAddress: String
     public var autostartServer: Bool
     public var roundRobinEnabled: Bool
@@ -391,6 +392,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         usageOverlay: UsageOverlay = UsageOverlay(),
         oauthCommandProfiles: [OAuthCommandProfile] = [],
         roundRobinProfiles: [RoundRobinProfile] = [],
+        accountOrder: [String] = [],
         bindAddress: String = "127.0.0.1",
         autostartServer: Bool = false,
         roundRobinEnabled: Bool = false,
@@ -413,6 +415,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         self.usageOverlay = usageOverlay
         self.oauthCommandProfiles = oauthCommandProfiles
         self.roundRobinProfiles = roundRobinProfiles
+        self.accountOrder = accountOrder
         self.bindAddress = bindAddress
         self.autostartServer = autostartServer
         self.roundRobinEnabled = roundRobinEnabled
@@ -431,6 +434,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         case usageOverlay
         case oauthCommandProfiles
         case roundRobinProfiles
+        case accountOrder
         case bindAddress, autostartServer, roundRobinEnabled
         case logLevel
     }
@@ -467,6 +471,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         self.usageOverlay = try c.decodeIfPresent(UsageOverlay.self, forKey: .usageOverlay) ?? UsageOverlay()
         self.oauthCommandProfiles = try c.decodeIfPresent([OAuthCommandProfile].self, forKey: .oauthCommandProfiles) ?? []
         self.roundRobinProfiles = try c.decodeIfPresent([RoundRobinProfile].self, forKey: .roundRobinProfiles) ?? []
+        self.accountOrder = try c.decodeIfPresent([String].self, forKey: .accountOrder) ?? []
         self.bindAddress = try c.decodeIfPresent(String.self, forKey: .bindAddress) ?? "127.0.0.1"
         self.autostartServer = try c.decodeIfPresent(Bool.self, forKey: .autostartServer) ?? false
         self.roundRobinEnabled = false
