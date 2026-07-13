@@ -1,5 +1,6 @@
 import CLIProxyManagerCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum DashboardSheet: Identifiable, Equatable {
     case addProvider
@@ -27,6 +28,9 @@ struct DashboardView: View {
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @State private var activeSheet: DashboardSheet?
     @State private var activeDropIndex: Int?
+    @State private var draggingAccountID: ProviderRowState.ID?
+    @State private var previewAccountIDs: [ProviderRowState.ID]?
+    @State private var accountFrames: [ProviderRowState.ID: CGRect] = [:]
     @State private var copiedEndpoint: Bool = false
     @State private var showCLIProxyAPIUpdatePrompt = false
     @State private var showCLIProxyAPIApplyPrompt = false
@@ -62,72 +66,70 @@ struct DashboardView: View {
                         trailing: "\(viewModel.providerRows.filter(\.isConnected).count) connected"
                     )
 
-                    let accounts = viewModel.providerRows.map { DashboardAccountSnapshot(provider: $0) }
-                    ForEach(Array(accounts.enumerated()), id: \.element.id) { index, account in
-                        AccountReorderDropZone(
-                            isActive: activeDropIndex == index,
-                            setTargeted: { isTargeted in
-                                if isTargeted {
-                                    activeDropIndex = index
-                                } else if activeDropIndex == index {
-                                    activeDropIndex = nil
+                    let sourceAccounts = viewModel.providerRows.map { DashboardAccountSnapshot(provider: $0) }
+                    let accountsByID = Dictionary(uniqueKeysWithValues: sourceAccounts.map { ($0.id, $0) })
+                    let accountIDs = previewAccountIDs ?? sourceAccounts.map(\.id)
+                    let accounts = accountIDs.compactMap { accountsByID[$0] }
+                    VStack(spacing: 6) {
+                        ForEach(Array(accounts.enumerated()), id: \.element.id) { index, account in
+                            ProviderAccountCardView(
+                                account: account,
+                                canReorder: accounts.count > 1,
+                                isDropTarget: activeDropIndex == index,
+                                isDragging: draggingAccountID == account.id,
+                                dragStarted: {
+                                    beginAccountDrag(account.id, sourceIDs: sourceAccounts.map(\.id))
+                                },
+                                connect: {
+                                    if account.isAPIKeyProfile {
+                                        openProviderSettings(account.id, isInitialSetup: false)
+                                    } else {
+                                        activeSheet = .addProvider
+                                        viewModel.startOAuthLogin(account.id)
+                                    }
+                                },
+                                settings: { openProviderSettings(account.id, isInitialSetup: false) },
+                                toggleAccountDetailVisibility: { viewModel.toggleAccountDetailVisibility(account.id) },
+                                setEnabled: { enabled in viewModel.setProviderEnabled(account.id, enabled: enabled) },
+                                moveUp: { viewModel.moveAccountUp(account.id) },
+                                moveDown: { viewModel.moveAccountDown(account.id) },
+                                canMoveUp: viewModel.canMoveAccountUp(account.id),
+                                canMoveDown: viewModel.canMoveAccountDown(account.id),
+                                remove: {
+                                    if account.isAPIKeyProfile {
+                                        viewModel.removeAPIProvider(account.id)
+                                    } else {
+                                        viewModel.removeProvider(account.id)
+                                    }
                                 }
-                            },
-                            drop: { draggedID in
-                                viewModel.moveAccount(
-                                    ProviderRowState.ID(rawValue: draggedID),
-                                    before: account.id
-                                )
-                                activeDropIndex = nil
-                            }
-                        )
-
-                        ProviderAccountCardView(
-                            account: account,
-                            canReorder: accounts.count > 1,
-                            isDropTarget: activeDropIndex == index,
-                            connect: {
-                                if account.isAPIKeyProfile {
-                                    openProviderSettings(account.id, isInitialSetup: false)
-                                } else {
-                                    activeSheet = .addProvider
-                                    viewModel.startOAuthLogin(account.id)
+                            )
+                            .background(
+                                GeometryReader { proxy in
+                                    Color.clear.preference(
+                                        key: AccountFramePreferenceKey.self,
+                                        value: [account.id: proxy.frame(in: .named("account-list"))]
+                                    )
                                 }
-                            },
-                            settings: { openProviderSettings(account.id, isInitialSetup: false) },
-                            toggleAccountDetailVisibility: { viewModel.toggleAccountDetailVisibility(account.id) },
-                            setEnabled: { enabled in viewModel.setProviderEnabled(account.id, enabled: enabled) },
-                            moveUp: { viewModel.moveAccountUp(account.id) },
-                            moveDown: { viewModel.moveAccountDown(account.id) },
-                            canMoveUp: viewModel.canMoveAccountUp(account.id),
-                            canMoveDown: viewModel.canMoveAccountDown(account.id),
-                            remove: {
-                                if account.isAPIKeyProfile {
-                                    viewModel.removeAPIProvider(account.id)
-                                } else {
-                                    viewModel.removeProvider(account.id)
-                                }
-                            }
-                        )
-                        .animation(
-                            accessibilityReduceMotion ? nil : .easeInOut(duration: 0.16),
-                            value: viewModel.providerRows.map(\.id)
-                        )
-                    }
-
-                    AccountReorderDropZone(
-                        isActive: activeDropIndex == accounts.count,
-                        setTargeted: { isTargeted in
-                            if isTargeted {
-                                activeDropIndex = accounts.count
-                            } else if activeDropIndex == accounts.count {
-                                activeDropIndex = nil
-                            }
-                        },
-                        drop: { draggedID in
-                            viewModel.moveAccount(ProviderRowState.ID(rawValue: draggedID), before: nil)
-                            activeDropIndex = nil
+                            )
                         }
+                    }
+                    .coordinateSpace(name: "account-list")
+                    .onPreferenceChange(AccountFramePreferenceKey.self) { accountFrames = $0 }
+                    .contentShape(Rectangle())
+                    .onDrop(
+                        of: [.plainText],
+                        delegate: AccountReorderDropDelegate(
+                            activeDropIndex: $activeDropIndex,
+                            draggingAccountID: $draggingAccountID,
+                            previewAccountIDs: $previewAccountIDs,
+                            sourceAccountIDs: sourceAccounts.map(\.id),
+                            accountFrames: accountFrames,
+                            moveAccount: viewModel.moveAccount
+                        )
+                    )
+                    .animation(
+                        accessibilityReduceMotion ? nil : .easeInOut(duration: 0.16),
+                        value: accountIDs
                     )
 
                     AddProviderCard {
@@ -160,6 +162,12 @@ struct DashboardView: View {
         .background(.regularMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .settingsToast(message: viewModel.settingsMessage, dismiss: viewModel.clearSettingsMessage)
+        .onChange(of: viewModel.providerRows.map(\.id)) { _, accountIDs in
+            draggingAccountID = nil
+            previewAccountIDs = nil
+            activeDropIndex = nil
+            accountFrames = accountFrames.filter { accountIDs.contains($0.key) }
+        }
         .confirmationDialog(
             cliProxyAPIAvailableUpdatePromptTitle(currentVersion: cliProxyAPIUpdateService.currentVersionText,
                                                   availableUpdate: cliProxyAPIUpdateService.availableUpdate),
@@ -283,6 +291,12 @@ struct DashboardView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.thinMaterial)
+    }
+
+    private func beginAccountDrag(_ id: ProviderRowState.ID, sourceIDs: [ProviderRowState.ID]) {
+        draggingAccountID = id
+        previewAccountIDs = sourceIDs
+        activeDropIndex = sourceIDs.firstIndex(of: id)
     }
 
     private func copyEndpointToPasteboard() {
@@ -607,6 +621,8 @@ private struct ProviderAccountCardView: View {
     let account: DashboardAccountSnapshot
     let canReorder: Bool
     let isDropTarget: Bool
+    let isDragging: Bool
+    let dragStarted: () -> Void
     let connect: () -> Void
     let settings: () -> Void
     let toggleAccountDetailVisibility: () -> Void
@@ -621,16 +637,8 @@ private struct ProviderAccountCardView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "line.3.horizontal")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.tertiary)
-                .frame(width: 18, height: 28)
-                .contentShape(Rectangle())
-                .draggable(account.id.rawValue)
-                .disabled(!canReorder)
-                .opacity(canReorder ? 1 : 0.35)
-                .accessibilityLabel("Reorder account")
-                .accessibilityHint("Change the position of \(account.title) in the account list")
+            dragHandle
+                .frame(maxHeight: .infinity, alignment: .center)
 
             ProviderAvatar(providerID: account.id, providerType: account.providerType)
 
@@ -665,6 +673,16 @@ private struct ProviderAccountCardView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
         )
+        .overlay(alignment: .top) {
+            if isDropTarget {
+                Capsule()
+                    .fill(BrandPalette.accent)
+                    .frame(height: 3)
+                    .padding(.horizontal, 8)
+                    .offset(y: -4.5)
+            }
+        }
+        .opacity(isDragging ? 0.12 : 1)
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.12), value: hovering)
         .alert("Remove this account?", isPresented: $confirmRemove) {
@@ -673,6 +691,24 @@ private struct ProviderAccountCardView: View {
         } message: {
             Text("The auth profile will be deleted from CLIProxyAPI. You can reconnect at any time via Add provider.")
         }
+    }
+
+    private var dragHandle: some View {
+        Image(systemName: "line.3.horizontal")
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(.tertiary)
+            .frame(width: 18, height: 28)
+            .contentShape(Rectangle())
+            .onDrag {
+                dragStarted()
+                return NSItemProvider(object: account.id.rawValue as NSString)
+            } preview: {
+                ProviderAccountDragPreview(account: account)
+            }
+            .disabled(!canReorder)
+            .opacity(canReorder ? 1 : 0.35)
+            .accessibilityLabel("Reorder account")
+            .accessibilityHint("Change the position of \(account.title) in the account list")
     }
 
     private var accountDetailAccessibilityLabel: String {
@@ -836,24 +872,129 @@ private struct ProviderAccountCardView: View {
 
 }
 
-private struct AccountReorderDropZone: View {
-    let isActive: Bool
-    let setTargeted: (Bool) -> Void
-    let drop: (String) -> Void
+private struct ProviderAccountDragPreview: View {
+    let account: DashboardAccountSnapshot
 
     var body: some View {
-        Rectangle()
-            .fill(isActive ? BrandPalette.accent : .clear)
-            .frame(height: isActive ? 3 : 6)
-            .contentShape(Rectangle())
-            .dropDestination(for: String.self) { items, _ in
-                guard let draggedID = items.first else { return false }
-                drop(draggedID)
-                return true
-            } isTargeted: { targeted in
-                setTargeted(targeted)
+        HStack(spacing: 10) {
+            Image(systemName: "line.3.horizontal")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+
+            ProviderAvatar(providerID: account.id, providerType: account.providerType)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(account.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1)
+                    SlugPill(slug: account.commandName)
+                }
+
+                Text(account.status == .connected ? account.detail : account.status == .disabled ? "Disabled" : "Disconnected")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
-            .animation(.easeOut(duration: 0.12), value: isActive)
+
+            Spacer(minLength: 24)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(width: AppWindowMetrics.mainWidth - 28)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(nsColor: .windowBackgroundColor).opacity(0.88))
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(BrandPalette.accent.opacity(0.5), lineWidth: 1)
+        }
+        .compositingGroup()
+        .opacity(0.68)
+        .shadow(color: .black.opacity(0.2), radius: 12, y: 7)
+    }
+}
+
+private struct AccountFramePreferenceKey: PreferenceKey {
+    static var defaultValue: [ProviderRowState.ID: CGRect] = [:]
+
+    static func reduce(
+        value: inout [ProviderRowState.ID: CGRect],
+        nextValue: () -> [ProviderRowState.ID: CGRect]
+    ) {
+        value.merge(nextValue(), uniquingKeysWith: { _, newValue in newValue })
+    }
+}
+
+private struct AccountReorderDropDelegate: DropDelegate {
+    @Binding var activeDropIndex: Int?
+    @Binding var draggingAccountID: ProviderRowState.ID?
+    @Binding var previewAccountIDs: [ProviderRowState.ID]?
+    let sourceAccountIDs: [ProviderRowState.ID]
+    let accountFrames: [ProviderRowState.ID: CGRect]
+    let moveAccount: (ProviderRowState.ID, ProviderRowState.ID?) -> Void
+
+    func validateDrop(info: DropInfo) -> Bool {
+        info.hasItemsConforming(to: [.plainText])
+    }
+
+    func dropEntered(info: DropInfo) {
+        updatePreview(at: info.location)
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        updatePreview(at: info.location)
+        return DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        guard let draggedID = draggingAccountID,
+              let previewAccountIDs else {
+            resetDragState()
+            return false
+        }
+
+        let previewIDsWithoutDragged = previewAccountIDs.filter { $0 != draggedID }
+        let insertionIndex = min(activeDropIndex ?? previewIDsWithoutDragged.count, previewIDsWithoutDragged.count)
+        let sourceIDsWithoutDragged = sourceAccountIDs.filter { $0 != draggedID }
+        let targetID = insertionIndex < sourceIDsWithoutDragged.count ? sourceIDsWithoutDragged[insertionIndex] : nil
+        moveAccount(draggedID, targetID)
+        resetDragState()
+        return true
+    }
+
+    func dropExited(info: DropInfo) {
+        activeDropIndex = nil
+        previewAccountIDs = sourceAccountIDs
+    }
+
+    private func updatePreview(at location: CGPoint) {
+        guard let draggedID = draggingAccountID,
+              let currentIDs = previewAccountIDs,
+              let insertionIndex = AccountOrdering.insertionIndex(
+                  for: location.y,
+                  orderedIDs: currentIDs,
+                  dragging: draggedID,
+                  frames: accountFrames
+              ) else {
+            return
+        }
+
+        let sourceIDs = currentIDs.filter { $0 != draggedID }
+        let targetID = insertionIndex < sourceIDs.count ? sourceIDs[insertionIndex] : nil
+        let updatedIDs = AccountOrdering.moving(currentIDs, id: draggedID, before: targetID)
+        activeDropIndex = insertionIndex
+        if updatedIDs != currentIDs {
+            previewAccountIDs = updatedIDs
+        }
+    }
+
+    private func resetDragState() {
+        activeDropIndex = nil
+        draggingAccountID = nil
+        previewAccountIDs = nil
     }
 }
 

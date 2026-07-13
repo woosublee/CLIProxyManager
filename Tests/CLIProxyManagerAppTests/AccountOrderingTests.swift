@@ -96,6 +96,60 @@ final class AccountOrderingTests: XCTestCase {
         )
     }
 
+    func testMovingIDsSupportsLivePreviewAcrossMultiplePositions() {
+        let ids: [ProviderRowState.ID] = ["a", "b", "c", "d"]
+
+        XCTAssertEqual(
+            AccountOrdering.moving(ids, id: "a", before: "d"),
+            ["b", "c", "a", "d"]
+        )
+        XCTAssertEqual(
+            AccountOrdering.moving(ids, id: "d", before: "a"),
+            ["d", "a", "b", "c"]
+        )
+        XCTAssertEqual(
+            AccountOrdering.moving(ids, id: "b", before: nil),
+            ["a", "c", "d", "b"]
+        )
+    }
+
+    func testInsertionIndexUsesEachRemainingCardMidpoint() {
+        let ids: [ProviderRowState.ID] = ["a", "b", "c"]
+        let frames: [ProviderRowState.ID: CGRect] = [
+            "a": CGRect(x: 0, y: 0, width: 300, height: 60),
+            "b": CGRect(x: 0, y: 66, width: 300, height: 60),
+            "c": CGRect(x: 0, y: 132, width: 300, height: 60)
+        ]
+
+        XCTAssertEqual(
+            AccountOrdering.insertionIndex(for: 20, orderedIDs: ids, dragging: "b", frames: frames),
+            0
+        )
+        XCTAssertEqual(
+            AccountOrdering.insertionIndex(for: 30, orderedIDs: ids, dragging: "b", frames: frames),
+            1
+        )
+        XCTAssertEqual(
+            AccountOrdering.insertionIndex(for: 160, orderedIDs: ids, dragging: "b", frames: frames),
+            1
+        )
+        XCTAssertEqual(
+            AccountOrdering.insertionIndex(for: 162, orderedIDs: ids, dragging: "b", frames: frames),
+            2
+        )
+    }
+
+    func testInsertionIndexReturnsNilUntilEveryRemainingCardHasAFrame() {
+        let ids: [ProviderRowState.ID] = ["a", "b", "c"]
+        let frames: [ProviderRowState.ID: CGRect] = [
+            "a": CGRect(x: 0, y: 0, width: 300, height: 60)
+        ]
+
+        XCTAssertNil(
+            AccountOrdering.insertionIndex(for: 20, orderedIDs: ids, dragging: "b", frames: frames)
+        )
+    }
+
     private func row(_ id: String, detail: String? = nil) -> ProviderRowState {
         ProviderRowState(
             id: ProviderRowState.ID(rawValue: id),
