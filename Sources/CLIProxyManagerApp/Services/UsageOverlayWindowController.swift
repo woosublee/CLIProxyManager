@@ -10,6 +10,8 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     var window: NSWindow { panel }
     private var configObservation: AnyCancellable?
     private var contentObservation: AnyCancellable?
+    private var lastSavedVisibility: Bool?
+    private var isSuppressedForCurrentSession = false
 
     init(panel: NSPanel? = nil, viewModel: DashboardViewModel? = nil) {
         self.panel = panel ?? NSPanel(
@@ -85,11 +87,13 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     }
 
     func hideForCurrentSession() {
+        isSuppressedForCurrentSession = true
         panel.orderOut(nil)
         isVisible = false
     }
 
     func showForCurrentSession(using preferences: AppConfig.UsageOverlay) {
+        isSuppressedForCurrentSession = false
         UsageOverlayWindowConfigurator().configure(
             window: panel,
             alwaysOnTop: preferences.alwaysOnTop
@@ -104,11 +108,17 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     }
 
     func update(_ preferences: AppConfig.UsageOverlay) {
+        let savedVisibilityBecameEnabled = lastSavedVisibility == false && preferences.isVisible
+        if savedVisibilityBecameEnabled {
+            isSuppressedForCurrentSession = false
+        }
+        lastSavedVisibility = preferences.isVisible
+
         UsageOverlayWindowConfigurator().configure(
             window: panel,
             alwaysOnTop: preferences.alwaysOnTop
         )
-        if preferences.isVisible {
+        if preferences.isVisible, !isSuppressedForCurrentSession {
             restoreSavedFrameIfUsable()
             panel.makeKeyAndOrderFront(nil)
             isVisible = true

@@ -76,6 +76,42 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         XCTAssertFalse(panel.isVisible)
     }
 
+    func testPreferenceUpdatesDoNotReshowSessionSuppressedHUD() {
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 300, height: 260),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        let controller = UsageOverlayWindowController(panel: panel)
+        controller.update(.init(isVisible: true, alwaysOnTop: false, backgroundOpacity: 0.9))
+        controller.hideForCurrentSession()
+
+        controller.update(.init(isVisible: true, alwaysOnTop: true, backgroundOpacity: 0.45))
+
+        XCTAssertFalse(panel.isVisible)
+        XCTAssertFalse(controller.isVisible)
+        XCTAssertEqual(panel.level, .floating)
+    }
+
+    func testPersistedFalseToTrueReshowsSessionSuppressedHUD() {
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 300, height: 260),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        let controller = UsageOverlayWindowController(panel: panel)
+        controller.update(.init(isVisible: true, alwaysOnTop: false, backgroundOpacity: 0.9))
+        controller.hideForCurrentSession()
+
+        controller.update(.init(isVisible: false, alwaysOnTop: false, backgroundOpacity: 0.9))
+        controller.update(.init(isVisible: true, alwaysOnTop: false, backgroundOpacity: 0.9))
+
+        XCTAssertTrue(panel.isVisible)
+        XCTAssertTrue(controller.isVisible)
+    }
+
     func testShowForCurrentSessionRestoresAPreviouslyHiddenHUD() {
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 300, height: 260),

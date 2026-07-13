@@ -173,9 +173,39 @@ final class CLIProxyManagerCommandTests: XCTestCase {
             ["Management key stored.\n", "configured=true\n", "Management key removed.\n", "configured=false\n"]
         )
         XCTAssertFalse(output.stdout.joined().contains("management-key-value"))
-        XCTAssertTrue(try configStore.load().subscriptionUsage.isEnabled)
+        XCTAssertTrue(try configStore.load().subscriptionUsage.showInMenuBar)
+        XCTAssertTrue(try configStore.load().isSubscriptionUsageEnabled)
         XCTAssertFalse(FileManager.default.fileExists(atPath: paths.subscriptionUsageManagementKeyFile.path))
         XCTAssertEqual(services.calls, [.proxyStatus, .proxyStatus])
+    }
+
+    func testQuotaKeySetPreservesExistingKeyWhenHUDOnlyConfigSaveFails() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox)
+        let configStore = AppConfigStore(paths: paths)
+        var config = AppConfig.default
+        config.usageOverlay.isVisible = true
+        try configStore.save(config)
+        let keyStore = CommandManagementKeyStore(key: "existing-key")
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: paths.rootDirectory.path)
+        let services = RuntimeServicesDouble()
+        let command = CLIProxyManagerCommand(
+            secretStore: InMemorySecretStore(),
+            configStore: configStore,
+            authProfileStore: AuthProfileStore(authDirectory: paths.authDirectory),
+            input: { "replacement-key\n" },
+            output: OutputDouble(isInteractive: false),
+            proxyRuntime: services,
+            appLifecycle: services,
+            logService: services,
+            statusReporter: services,
+            subscriptionUsageKeyStore: keyStore
+        )
+
+        await XCTAssertThrowsErrorAsync(try await command.run(arguments: ["quota", "key", "set", "--stdin"]))
+
+        XCTAssertEqual(keyStore.key, "existing-key")
+        XCTAssertEqual(services.calls, [])
     }
 
     func testQuotaKeyGetIsRejected() async {
@@ -190,12 +220,46 @@ final class CLIProxyManagerCommandTests: XCTestCase {
         }
     }
 
+    func testQuotaFetchesWhenOnlyUsageHUDIsEnabled() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox)
+        let configStore = AppConfigStore(paths: paths)
+        var config = AppConfig.default
+        config.usageOverlay.isVisible = true
+        try configStore.save(config)
+
+        let authDirectory = paths.authDirectory
+        try FileManager.default.createDirectory(at: authDirectory, withIntermediateDirectories: true)
+        try Data(#"{"type":"codex","disabled":false}"#.utf8)
+            .write(to: authDirectory.appendingPathComponent("codex.json"))
+        let quotaClient = FixedSubscriptionQuotaClient(states: [
+            "codex.json": .available(.init(
+                profileID: "codex.json",
+                provider: .codex,
+                windows: [.init(id: "primary", label: "Primary", usedPercent: 25, resetAt: nil)],
+                fetchedAt: Date(timeIntervalSince1970: 0)
+            ))
+        ])
+        let output = OutputDouble(isInteractive: false)
+        let command = CLIProxyManagerCommand(
+            secretStore: InMemorySecretStore(),
+            configStore: configStore,
+            authProfileStore: AuthProfileStore(authDirectory: authDirectory),
+            output: output,
+            subscriptionQuotaClient: quotaClient
+        )
+
+        try await command.run(arguments: ["quota", "--json"])
+
+        XCTAssertTrue(output.stdout.joined().contains("available"))
+    }
+
     func testQuotaTextUsesNicknameCommandAndNormalizedCodexWindows() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox)
         let configStore = AppConfigStore(paths: paths)
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         config.oauthCommandProfiles = [
             .init(id: "claude-work", provider: .claude, authProfileID: "claude.json", commandName: "cc", nickname: "Work Claude"),
             .init(id: "codex-personal", provider: .codex, authProfileID: "codex.json", commandName: "cdx")
@@ -252,7 +316,7 @@ final class CLIProxyManagerCommandTests: XCTestCase {
         let paths = ManagedPaths(rootDirectory: sandbox)
         let configStore = AppConfigStore(paths: paths)
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         config.oauthCommandProfiles = [
             .init(id: "codex-team", provider: .codex, authProfileID: "codex.json", commandName: "cdx")
         ]
@@ -297,7 +361,7 @@ final class CLIProxyManagerCommandTests: XCTestCase {
         let paths = ManagedPaths(rootDirectory: sandbox)
         let configStore = AppConfigStore(paths: paths)
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         config.oauthCommandProfiles = [
             .init(id: "claude-monthly", provider: .claude, authProfileID: "claude.json", commandName: "cc")
         ]
@@ -336,7 +400,7 @@ final class CLIProxyManagerCommandTests: XCTestCase {
         let paths = ManagedPaths(rootDirectory: sandbox)
         let configStore = AppConfigStore(paths: paths)
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         try configStore.save(config)
 
         let authDirectory = sandbox.appendingPathComponent("auth", isDirectory: true)
@@ -377,7 +441,7 @@ final class CLIProxyManagerCommandTests: XCTestCase {
         let paths = ManagedPaths(rootDirectory: sandbox)
         let configStore = AppConfigStore(paths: paths)
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         config.oauthCommandProfiles = [
             .init(id: "codex-personal", provider: .codex, authProfileID: "codex.json", commandName: "cdx")
         ]
@@ -427,7 +491,7 @@ final class CLIProxyManagerCommandTests: XCTestCase {
         let paths = ManagedPaths(rootDirectory: sandbox)
         let configStore = AppConfigStore(paths: paths)
         var config = AppConfig.default
-        config.subscriptionUsage.isEnabled = true
+        config.subscriptionUsage.showInMenuBar = true
         config.oauthCommandProfiles = [
             .init(id: "codex-personal", provider: .codex, authProfileID: "codex.json", commandName: "cdx")
         ]
@@ -794,7 +858,11 @@ private struct FixedSubscriptionQuotaClient: SubscriptionQuotaFetching {
 }
 
 private final class CommandManagementKeyStore: SubscriptionUsageManagementKeyConfiguring, @unchecked Sendable {
-    private var key: String?
+    private(set) var key: String?
+
+    init(key: String? = nil) {
+        self.key = key
+    }
 
     func isConfigured() -> Bool { key != nil }
     func createManagementKeyIfNeeded() throws -> Bool {

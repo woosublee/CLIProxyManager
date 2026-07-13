@@ -1,5 +1,6 @@
 enum SettingsTab: CaseIterable, Hashable, Identifiable {
     case general
+    case usage
     case server
     case advanced
     case about
@@ -10,6 +11,8 @@ enum SettingsTab: CaseIterable, Hashable, Identifiable {
         switch self {
         case .general:
             "General"
+        case .usage:
+            "Usage"
         case .server:
             "Server"
         case .advanced:
@@ -23,6 +26,8 @@ enum SettingsTab: CaseIterable, Hashable, Identifiable {
         switch self {
         case .general:
             "slider.horizontal.3"
+        case .usage:
+            "chart.bar.xaxis"
         case .server:
             "server.rack"
         case .advanced:

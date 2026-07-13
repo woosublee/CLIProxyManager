@@ -1,6 +1,13 @@
 import CLIProxyManagerCore
 import SwiftUI
 
+func usageOverlaySubscriptionUsageDisplayState(
+    for provider: MenuBarConnectedProvider
+) -> SubscriptionUsageDisplayState? {
+    guard provider.showsSubscriptionUsage else { return nil }
+    return subscriptionUsageDisplayState(for: provider.subscriptionUsageState)
+}
+
 struct UsageOverlayView: View {
     @ObservedObject var viewModel: DashboardViewModel
     var onClose: () -> Void = {}
@@ -11,7 +18,8 @@ struct UsageOverlayView: View {
             serverStatus: viewModel.serverStatus,
             serverControlState: viewModel.serverControlState,
             providers: viewModel.providerRows,
-            port: viewModel.config.port
+            port: viewModel.config.port,
+            showsSubscriptionUsage: true
         ).connectedProviders
     }
 
@@ -119,34 +127,36 @@ private struct UsageOverlayAccountView: View {
 
     @ViewBuilder
     private var usageContent: some View {
-        if case .unavailable(.proxyUnavailable) = provider.subscriptionUsageState {
-            Text("Start the server to check usage")
-                .font(.system(size: 10.5))
-                .foregroundStyle(.secondary)
-        } else {
-            switch subscriptionUsageDisplayState(for: provider.subscriptionUsageState) {
-            case .hidden:
-                Text("Subscription usage is disabled")
+        if let displayState = usageOverlaySubscriptionUsageDisplayState(for: provider) {
+            if case .unavailable(.proxyUnavailable) = provider.subscriptionUsageState {
+                Text("Start the server to check usage")
                     .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)
-            case .loading(let message):
-                Text(message)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
-            case .unavailable(let message):
-                Text(message)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            case .snapshot(let snapshot, let warning):
-                HStack(alignment: .top, spacing: 6) {
-                    snapshotUsage(snapshot)
-                    if let warning {
-                        SubscriptionUsageWarningIcon(
-                            issue: warning,
-                            lastUpdatedAt: snapshot.fetchedAt
-                        )
-                        .padding(.top, 1)
+            } else {
+                switch displayState {
+                case .hidden:
+                    Text("Subscription usage is disabled")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                case .loading(let message):
+                    Text(message)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                case .unavailable(let message):
+                    Text(message)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                case .snapshot(let snapshot, let warning):
+                    HStack(alignment: .top, spacing: 6) {
+                        snapshotUsage(snapshot)
+                        if let warning {
+                            SubscriptionUsageWarningIcon(
+                                issue: warning,
+                                lastUpdatedAt: snapshot.fetchedAt
+                            )
+                            .padding(.top, 1)
+                        }
                     }
                 }
             }

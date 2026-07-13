@@ -165,6 +165,122 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
         XCTAssertEqual(windowIDs, [["five_hour", "seven_day"], ["primary"]])
     }
 
+    func testSnapshotCanHideMenuBarUsageWithoutDiscardingFetchedState() throws {
+        let available = AccountSubscriptionUsageState.available(.init(
+            profileID: "codex.json",
+            provider: .codex,
+            windows: [.init(id: "primary", label: "Primary", usedPercent: 25, resetAt: nil)],
+            fetchedAt: Date(timeIntervalSince1970: 0)
+        ))
+        let snapshot = MenuBarStatusSnapshot(
+            serverStatus: DiagnosticStatus(severity: .ready, title: "Running", message: "Ready"),
+            providers: [ProviderRowState(
+                id: .codex,
+                name: "Codex OAuth",
+                nickname: "",
+                functionName: "cdx",
+                connectionTitle: "Connected",
+                connectionDetail: "codex@example.com",
+                isConnected: true,
+                subscriptionUsageState: available
+            )],
+            showsSubscriptionUsage: false
+        )
+
+        let provider = try XCTUnwrap(snapshot.connectedProviders.first)
+        XCTAssertFalse(provider.showsSubscriptionUsage)
+        XCTAssertEqual(provider.subscriptionUsageState, available)
+    }
+
+    func testSnapshotKeepsProviderCapabilityDisabledWhenMenuBarPreferenceIsEnabled() throws {
+        let snapshot = MenuBarStatusSnapshot(
+            serverStatus: DiagnosticStatus(severity: .ready, title: "Running", message: "Ready"),
+            providers: [ProviderRowState(
+                id: .claudeAPI,
+                name: "Claude API Key",
+                nickname: "",
+                functionName: "claude-api",
+                connectionTitle: "Configured",
+                connectionDetail: "API key configured",
+                isConnected: true,
+                subscriptionUsageState: .disabled,
+                showsSubscriptionUsage: false
+            )],
+            showsSubscriptionUsage: true
+        )
+
+        XCTAssertFalse(try XCTUnwrap(snapshot.connectedProviders.first).showsSubscriptionUsage)
+    }
+
+    func testUsageOverlayPresentationOmitsDisabledMessageForAPIKeyProvider() throws {
+        let snapshot = MenuBarStatusSnapshot(
+            serverStatus: DiagnosticStatus(severity: .ready, title: "Running", message: "Ready"),
+            providers: [ProviderRowState(
+                id: .claudeAPI,
+                name: "Claude API Key",
+                nickname: "",
+                functionName: "claude-api",
+                connectionTitle: "Configured",
+                connectionDetail: "API key configured",
+                isConnected: true,
+                subscriptionUsageState: .disabled,
+                showsSubscriptionUsage: false
+            )],
+            showsSubscriptionUsage: true
+        )
+
+        XCTAssertNil(usageOverlaySubscriptionUsageDisplayState(for: try XCTUnwrap(snapshot.connectedProviders.first)))
+    }
+
+    func testUsageOverlaySnapshotUsesProviderCapabilityIndependentlyOfMenuBarPreference() throws {
+        let snapshot = MenuBarStatusSnapshot(
+            serverStatus: DiagnosticStatus(severity: .ready, title: "Running", message: "Ready"),
+            providers: [
+                ProviderRowState(
+                    id: .codex,
+                    name: "Codex OAuth",
+                    nickname: "",
+                    functionName: "cdx",
+                    connectionTitle: "Connected",
+                    connectionDetail: "codex@example.com",
+                    isConnected: true,
+                    showsSubscriptionUsage: true
+                ),
+                ProviderRowState(
+                    id: .codexAPI,
+                    name: "OpenAI API Key",
+                    nickname: "",
+                    functionName: "codex-api",
+                    connectionTitle: "Configured",
+                    connectionDetail: "API key configured",
+                    isConnected: true,
+                    showsSubscriptionUsage: false
+                )
+            ],
+            showsSubscriptionUsage: true
+        )
+
+        XCTAssertEqual(snapshot.connectedProviders.map(\.showsSubscriptionUsage), [true, false])
+    }
+
+    func testSnapshotShowsMenuBarUsageWhenPreferenceIsEnabled() throws {
+        let snapshot = MenuBarStatusSnapshot(
+            serverStatus: DiagnosticStatus(severity: .ready, title: "Running", message: "Ready"),
+            providers: [ProviderRowState(
+                id: .codex,
+                name: "Codex OAuth",
+                nickname: "",
+                functionName: "cdx",
+                connectionTitle: "Connected",
+                connectionDetail: "codex@example.com",
+                isConnected: true
+            )],
+            showsSubscriptionUsage: true
+        )
+
+        XCTAssertTrue(try XCTUnwrap(snapshot.connectedProviders.first).showsSubscriptionUsage)
+    }
+
     func testCodexUsageWindowLabelsUseReportedPeriods() {
         XCTAssertEqual(
             subscriptionUsageDisplayLabel(

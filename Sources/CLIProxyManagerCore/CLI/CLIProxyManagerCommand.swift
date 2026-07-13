@@ -390,7 +390,7 @@ public struct CLIProxyManagerCommand: Sendable {
         let config = try configStore.load()
         let profiles = try authProfileStore.profiles()
         let report: SubscriptionUsageReport
-        if config.subscriptionUsage.isEnabled {
+        if config.isSubscriptionUsageEnabled {
             report = await subscriptionQuotaClient.fetchUsage(port: config.port, profiles: profiles)
         } else {
             report = SubscriptionUsageReport(
@@ -442,8 +442,8 @@ public struct CLIProxyManagerCommand: Sendable {
             guard !output.isInteractive else { throw CLIProxyManagerCommandError.usage }
             let value = input().trimmingCharacters(in: .whitespacesAndNewlines)
             guard !value.isEmpty else { throw CLIProxyManagerCommandError.emptySecret("subscription-usage-management-key") }
+            try enableSubscriptionUsageMenuBarDisplay()
             try subscriptionUsageKeyStore.setManagementKey(value)
-            try enableSubscriptionUsage()
             try await restartProxyIfRunning()
             output.writeStdout("Management key stored.\n")
         case ["delete"]:
@@ -455,10 +455,10 @@ public struct CLIProxyManagerCommand: Sendable {
         }
     }
 
-    private func enableSubscriptionUsage() throws {
+    private func enableSubscriptionUsageMenuBarDisplay() throws {
         var config = try configStore.load()
-        guard !config.subscriptionUsage.isEnabled else { return }
-        config.subscriptionUsage.isEnabled = true
+        guard !config.subscriptionUsage.showInMenuBar else { return }
+        config.subscriptionUsage.showInMenuBar = true
         try configStore.save(config)
     }
 

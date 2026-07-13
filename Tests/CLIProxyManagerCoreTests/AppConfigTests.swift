@@ -666,4 +666,71 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(decoded.effectiveClaudeRouting, routing)
         XCTAssertEqual(decoded.connectionMode, .direct)
     }
+
+    func testLegacySubscriptionUsageEnabledMigratesToMenuBarVisibility() throws {
+        let enabled = try decodeConfig(subscriptionUsageJSON: #"{"isEnabled":true}"#, usageOverlayJSON: #"{"isVisible":false}"#)
+        let disabled = try decodeConfig(subscriptionUsageJSON: #"{"isEnabled":false}"#, usageOverlayJSON: #"{"isVisible":false}"#)
+
+        XCTAssertTrue(enabled.subscriptionUsage.showInMenuBar)
+        XCTAssertFalse(disabled.subscriptionUsage.showInMenuBar)
+    }
+
+    func testNewMenuBarVisibilityTakesPrecedenceOverLegacyEnabledField() throws {
+        let config = try decodeConfig(
+            subscriptionUsageJSON: #"{"showInMenuBar":false,"isEnabled":true}"#,
+            usageOverlayJSON: #"{"isVisible":false}"#
+        )
+
+        XCTAssertFalse(config.subscriptionUsage.showInMenuBar)
+        XCTAssertFalse(config.isSubscriptionUsageEnabled)
+    }
+
+    func testSubscriptionUsageEnabledIsComputedFromEitherDisplayPreference() {
+        var config = AppConfig.default
+        XCTAssertFalse(config.isSubscriptionUsageEnabled)
+
+        config.subscriptionUsage.showInMenuBar = true
+        XCTAssertTrue(config.isSubscriptionUsageEnabled)
+
+        config.subscriptionUsage.showInMenuBar = false
+        config.usageOverlay.isVisible = true
+        XCTAssertTrue(config.isSubscriptionUsageEnabled)
+
+        config.subscriptionUsage.showInMenuBar = true
+        config.usageOverlay.isVisible = true
+        XCTAssertTrue(config.isSubscriptionUsageEnabled)
+    }
+
+    func testSubscriptionUsageEncodesOnlyNewMenuBarVisibilityField() throws {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(config)) as? [String: Any])
+        let usage = try XCTUnwrap(object["subscriptionUsage"] as? [String: Any])
+
+        XCTAssertEqual(usage["showInMenuBar"] as? Bool, true)
+        XCTAssertNil(usage["isEnabled"])
+    }
+
+    private func decodeConfig(subscriptionUsageJSON: String, usageOverlayJSON: String) throws -> AppConfig {
+        let json = """
+        {
+          "port": 18317,
+          "commands": {"cc":"","ccapi":"","ccodex":""},
+          "ccapi": {"model":"claude-opus-4-8"},
+          "ccodex": {
+            "opus": {"model":"gpt-5.5","reasoning":"xhigh","contextWindow":"auto"},
+            "sonnet": {"model":"gpt-5.5","reasoning":"medium","contextWindow":"auto"},
+            "haiku": {"model":"gpt-5.5","reasoning":"low","contextWindow":"auto"}
+          },
+          "includeDangerouslySkipPermissions": false,
+          "startAtLogin": false,
+          "showDockIcon": true,
+          "showMenuBarIcon": true,
+          "subscriptionUsage": \(subscriptionUsageJSON),
+          "usageOverlay": \(usageOverlayJSON)
+        }
+        """
+        return try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+    }
 }
