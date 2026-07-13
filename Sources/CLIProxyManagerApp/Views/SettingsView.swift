@@ -52,6 +52,8 @@ struct SettingsView: View {
                 switch selection {
                 case .general:
                     GeneralSettingsView(viewModel: viewModel)
+                case .usage:
+                    UsageSettingsView(viewModel: viewModel)
                 case .server:
                     ServerSettingsView(viewModel: viewModel)
                 case .advanced:

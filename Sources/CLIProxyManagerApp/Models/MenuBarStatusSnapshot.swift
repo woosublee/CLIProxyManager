@@ -3,14 +3,15 @@ import CLIProxyManagerCore
 struct MenuBarConnectedProvider: Equatable, Identifiable {
     let id: ProviderRowState.ID
     let name: String           // Provider type, e.g. "Claude OAuth"
-    let displayName: String    // Account identifier — email when known, else provider name
+    let displayName: String    // Trimmed account nickname, or provider name fallback
     let functionName: String
     let connectionDetail: String
     let accountDetailHidden: Bool
     let subscriptionUsageState: AccountSubscriptionUsageState
+    let showsSubscriptionUsage: Bool
 
     var menuBarDisplayName: String {
-        accountDetailHidden ? name : displayName
+        displayName
     }
 
     var usageOverlayDisplayName: String {
@@ -44,7 +45,8 @@ struct MenuBarStatusSnapshot: Equatable {
         serverStatus: DiagnosticStatus,
         serverControlState: ServerControlState = .stopped,
         providers: [ProviderRowState],
-        port: Int = 18_317
+        port: Int = 18_317,
+        showsSubscriptionUsage: Bool = true
     ) {
         let displayState = Self.displayState(serverStatus: serverStatus, serverControlState: serverControlState)
         serverTitle = serverStatus.title
@@ -65,7 +67,8 @@ struct MenuBarStatusSnapshot: Equatable {
                     functionName: provider.functionName,
                     connectionDetail: provider.connectionDetail,
                     accountDetailHidden: provider.accountDetailHidden,
-                    subscriptionUsageState: provider.subscriptionUsageState
+                    subscriptionUsageState: provider.subscriptionUsageState,
+                    showsSubscriptionUsage: provider.showsSubscriptionUsage && showsSubscriptionUsage
                 )
             }
         erroredCount = providers.filter(\.isErrored).count

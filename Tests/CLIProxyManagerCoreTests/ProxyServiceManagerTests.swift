@@ -140,6 +140,23 @@ final class ProxyServiceManagerTests: XCTestCase {
         XCTAssertTrue(config.contains("secret-key: \"sandbox-management-key\""))
     }
 
+    func testStartAddsManagementSecretWhenOnlyUsageHUDIsVisible() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        var config = AppConfig.default
+        config.usageOverlay.isVisible = true
+        try AppConfigStore(paths: paths).save(config)
+        try SubscriptionUsageManagementKeyFileStore(paths: paths).setManagementKey("management-key")
+        let manager = ProxyServiceManager(paths: paths, launcher: FakeProcessLauncher())
+
+        try await manager.start(port: 8317)
+
+        let generatedConfig = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
+        XCTAssertTrue(generatedConfig.contains("remote-management:"))
+        XCTAssertTrue(generatedConfig.contains("secret-key: \"management-key\""))
+    }
+
     func testStartOmitsManagementSecretWhenLocalStorageIsInvalid() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))

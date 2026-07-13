@@ -143,7 +143,7 @@ final class DashboardViewModel: ObservableObject {
     @Published private(set) var isCPMInstallationActionInProgress = false
 
     var canRefreshSubscriptionUsage: Bool {
-        config.subscriptionUsage.isEnabled
+        config.isSubscriptionUsageEnabled
             && subscriptionUsageKeyStore.isConfigured()
             && serverStatus.severity == .ready
     }
@@ -179,7 +179,7 @@ final class DashboardViewModel: ObservableObject {
     private var subscriptionUsageRefreshTask: Task<Void, Never>?
     private var subscriptionUsageRefreshIsForced = false
     private var pendingForcedSubscriptionUsageRefresh = false
-    private var pendingAPIKeyRestart = false
+    private var pendingServerRestart = false
     private var subscriptionUsageRefreshGeneration = 0
     private var subscriptionUsageRetryDelayNanoseconds: UInt64 = 60_000_000_000
 
@@ -276,10 +276,57 @@ final class DashboardViewModel: ObservableObject {
         config.usageOverlay.backgroundOpacity = min(max(opacity, 0.2), 1)
     }
 
+    func saveSubscriptionUsageMenuBarVisible(_ isVisible: Bool) throws {
+        var updatedConfig = config
+        updatedConfig.subscriptionUsage.showInMenuBar = isVisible
+        try saveUsageDisplayConfig(updatedConfig)
+    }
+
     func saveUsageOverlay(_ usageOverlay: AppConfig.UsageOverlay) throws {
         var updatedConfig = config
         updatedConfig.usageOverlay = usageOverlay
-        try savePrivacyOnlyConfig(updatedConfig)
+        try saveUsageDisplayConfig(updatedConfig)
+    }
+
+    private func saveUsageDisplayConfig(_ updatedConfig: AppConfig) throws {
+        let wasEnabled = config.isSubscriptionUsageEnabled
+        let willBeEnabled = updatedConfig.isSubscriptionUsageEnabled
+
+        if !wasEnabled && willBeEnabled {
+            let createdKey = try subscriptionUsageKeyStore.createManagementKeyIfNeeded()
+            do {
+                try savePrivacyOnlyConfig(updatedConfig)
+            } catch {
+                if createdKey { try? subscriptionUsageKeyStore.deleteManagementKey() }
+                throw error
+            }
+        } else {
+            try savePrivacyOnlyConfig(updatedConfig)
+            if wasEnabled && !willBeEnabled {
+                cancelSubscriptionUsageWork()
+                let cleanupError: Error?
+                do {
+                    try subscriptionUsageKeyStore.deleteManagementKey()
+                    cleanupError = nil
+                } catch {
+                    cleanupError = error
+                }
+                setSubscriptionUsageStates(.disabled)
+                clearSubscriptionUsageSnapshots()
+                lastSuccessfulSubscriptionUsageRefreshAt = nil
+                requestServerRestartAfterConfigChange()
+                if let cleanupError { throw cleanupError }
+                return
+            }
+        }
+
+        guard wasEnabled != willBeEnabled else { return }
+        requestServerRestartAfterConfigChange()
+        if !serverControlState.isRunning, !isServerActionInProgress, !serverControlState.isTransitioning {
+            Task { [weak self] in
+                await self?.refreshSubscriptionUsage()
+            }
+        }
     }
 
     func saveShowNotifications(_ enabled: Bool) throws {
@@ -331,26 +378,31 @@ final class DashboardViewModel: ObservableObject {
         updatedConfig.codexAPI = config.codexAPI
         updatedConfig.nicknames = config.nicknames
         updatedConfig.includeDangerouslySkipPermissions = config.includeDangerouslySkipPermissions
+        let shouldDeleteManagementKey = config.isSubscriptionUsageEnabled || subscriptionUsageKeyStore.isConfigured()
         do {
-            let shouldDeleteManagementKey = config.subscriptionUsage.isEnabled || subscriptionUsageKeyStore.isConfigured()
             try saveConfig(updatedConfig)
-            if shouldDeleteManagementKey {
-                cancelSubscriptionUsageWork()
-                try subscriptionUsageKeyStore.deleteManagementKey()
-            }
-            setSubscriptionUsageStates(.disabled)
-            clearSubscriptionUsageSnapshots()
-            appAppearanceService.apply(showDockIcon: updatedConfig.showDockIcon)
-            appAppearanceService.apply(appearance: updatedConfig.appearance)
-            settingsMessage = "Settings reset to defaults."
-            if serverControlState.isRunning {
-                Task { [weak self] in
-                    await self?.restartServer()
-                }
-            }
         } catch {
             settingsMessage = "Reset failed: \(error.localizedDescription)"
+            return
         }
+
+        var cleanupError: Error?
+        if shouldDeleteManagementKey {
+            cancelSubscriptionUsageWork()
+            do {
+                try subscriptionUsageKeyStore.deleteManagementKey()
+            } catch {
+                cleanupError = error
+            }
+        }
+        setSubscriptionUsageStates(.disabled)
+        clearSubscriptionUsageSnapshots()
+        lastSuccessfulSubscriptionUsageRefreshAt = nil
+        appAppearanceService.apply(showDockIcon: updatedConfig.showDockIcon)
+        appAppearanceService.apply(appearance: updatedConfig.appearance)
+        settingsMessage = cleanupError.map { "Reset failed: \($0.localizedDescription)" }
+            ?? "Settings reset to defaults."
+        requestServerRestartAfterConfigChange()
     }
 
     func startApplication() async {
@@ -370,42 +422,9 @@ final class DashboardViewModel: ObservableObject {
         updateStatuses(serverStatus: updatedServerStatus, claudeStatus: claudeStatus)
     }
 
-    func saveSubscriptionUsageEnabled(_ enabled: Bool) throws {
-        if enabled {
-            let createdKey = try subscriptionUsageKeyStore.createManagementKeyIfNeeded()
-            var updatedConfig = config
-            updatedConfig.subscriptionUsage.isEnabled = true
-            do {
-                try saveConfig(updatedConfig)
-            } catch {
-                if createdKey {
-                    try? subscriptionUsageKeyStore.deleteManagementKey()
-                }
-                throw error
-            }
-        } else {
-            var updatedConfig = config
-            updatedConfig.subscriptionUsage.isEnabled = false
-            try saveConfig(updatedConfig)
-            cancelSubscriptionUsageWork()
-            try subscriptionUsageKeyStore.deleteManagementKey()
-            setSubscriptionUsageStates(.disabled)
-            clearSubscriptionUsageSnapshots()
-        }
-
-        Task { [weak self] in
-            guard let self else { return }
-            if self.serverControlState.isRunning {
-                await self.restartServer()
-            } else {
-                await self.refreshSubscriptionUsage()
-            }
-        }
-    }
-
     func prepareSubscriptionUsage() async {
         do {
-            if config.subscriptionUsage.isEnabled {
+            if config.isSubscriptionUsageEnabled {
                 let createdKey = try subscriptionUsageKeyStore.createManagementKeyIfNeeded()
                 if createdKey, serverControlState.isRunning {
                     await restartServer()
@@ -426,7 +445,7 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func restoreSubscriptionUsageSnapshots() {
-        guard config.subscriptionUsage.isEnabled else { return }
+        guard config.isSubscriptionUsageEnabled else { return }
         let enabledProfileIDs = Set(authProfiles.filter(isSubscriptionUsageEnabled(for:)).map(\.id))
         let snapshots = subscriptionUsageSnapshotCache.load().filter { enabledProfileIDs.contains($0.key) }
         guard !snapshots.isEmpty else { return }
@@ -509,7 +528,7 @@ final class DashboardViewModel: ObservableObject {
             }
             return
         }
-        guard config.subscriptionUsage.isEnabled else {
+        guard config.isSubscriptionUsageEnabled else {
             setSubscriptionUsageStates(.disabled)
             return
         }
@@ -544,7 +563,7 @@ final class DashboardViewModel: ObservableObject {
             let report = await quotaClient.fetchUsage(port: port, profiles: profiles)
             guard !Task.isCancelled,
                   let self,
-                  self.config.subscriptionUsage.isEnabled,
+                  self.config.isSubscriptionUsageEnabled,
                   self.subscriptionUsageKeyStore.isConfigured(),
                   self.subscriptionUsageRefreshGeneration == generation else {
                 return
@@ -637,7 +656,7 @@ final class DashboardViewModel: ObservableObject {
 
     private func scheduleSubscriptionUsagePollingIfNeeded() {
         subscriptionUsagePollingTask?.cancel()
-        guard config.subscriptionUsage.isEnabled,
+        guard config.isSubscriptionUsageEnabled,
               subscriptionUsageKeyStore.isConfigured() else {
             return
         }
@@ -1288,7 +1307,7 @@ final class DashboardViewModel: ObservableObject {
         } else {
             try saveSettings()
         }
-        requestServerRestartAfterAPIKeyChange()
+        requestServerRestartAfterConfigChange()
     }
 
     func saveCodexAPISettings(
@@ -1317,7 +1336,7 @@ final class DashboardViewModel: ObservableObject {
         } else {
             try saveSettings()
         }
-        requestServerRestartAfterAPIKeyChange()
+        requestServerRestartAfterConfigChange()
     }
 
     private func saveAPIKey(_ value: String, for key: SecretKey) throws {
@@ -1355,9 +1374,9 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
-    private func requestServerRestartAfterAPIKeyChange() {
+    private func requestServerRestartAfterConfigChange() {
         if isServerActionInProgress || serverControlState.isTransitioning {
-            pendingAPIKeyRestart = true
+            pendingServerRestart = true
             return
         }
         guard serverControlState.isRunning else { return }
@@ -1376,7 +1395,7 @@ final class DashboardViewModel: ObservableObject {
                 }
                 try saveConfig(updatedConfig, validateShellFunctions: true)
             }
-            requestServerRestartAfterAPIKeyChange()
+            requestServerRestartAfterConfigChange()
         } catch {
             settingsMessage = "API key removal failed: \(error.localizedDescription)"
         }
@@ -2262,7 +2281,7 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private var defaultSubscriptionUsageState: AccountSubscriptionUsageState {
-        config.subscriptionUsage.isEnabled ? .managementKeyNotConfigured : .disabled
+        config.isSubscriptionUsageEnabled ? .managementKeyNotConfigured : .disabled
     }
 
     private func rebuildProviderRows(claudeStatus: DiagnosticStatus?, codexStatus: DiagnosticStatus?) {
@@ -2377,16 +2396,16 @@ final class DashboardViewModel: ObservableObject {
             }
             // After action completes, derive final state from the latest health.
             serverControlState = serverStatus.severity == .ready ? .running : .stopped
-            if pendingAPIKeyRestart, serverControlState.isRunning {
-                pendingAPIKeyRestart = false
+            if pendingServerRestart, serverControlState.isRunning {
+                pendingServerRestart = false
                 try await proxyService.restart(port: config.port)
                 await refreshUntilServerIsReady()
                 serverControlState = serverStatus.severity == .ready ? .running : .stopped
-            } else if pendingAPIKeyRestart {
-                pendingAPIKeyRestart = false
+            } else if pendingServerRestart {
+                pendingServerRestart = false
             }
         } catch {
-            pendingAPIKeyRestart = false
+            pendingServerRestart = false
             let message = error.localizedDescription
             updateStatuses(
                 serverStatus: DiagnosticStatus(
