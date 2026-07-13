@@ -72,6 +72,34 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         XCTAssertEqual(surfaceView.layer?.cornerRadius ?? 0, 16, accuracy: 0.001)
     }
 
+    func testCompactMeasurementDoesNotChangeExpandedSurfaceFittingSizeBeforeResize() async {
+        let viewModel = DashboardViewModel(config: .default)
+        let panel = makePanel(x: 500, y: 400, width: 300, height: 330)
+        var beginResize: (@MainActor () -> Void)?
+        let controller = UsageOverlayWindowController(
+            panel: panel,
+            viewModel: viewModel,
+            initialDisplayMode: .expanded,
+            persistDisplayMode: { _ in true },
+            shouldReduceMotion: { false },
+            visibleFrameProvider: visibleFrame,
+            modeTransitionResizeScheduler: { beginResize = $0 }
+        )
+        await drainMainQueue()
+
+        guard let surfaceView = panel.contentView as? UsageOverlaySurfaceView else {
+            return XCTFail("Expected usage overlay surface")
+        }
+        surfaceView.layoutSubtreeIfNeeded()
+        let fittingSizeBeforeToggle = surfaceView.fittingSize
+
+        controller.toggleDisplayMode()
+        surfaceView.layoutSubtreeIfNeeded()
+
+        XCTAssertNotNil(beginResize)
+        XCTAssertEqual(surfaceView.fittingSize, fittingSizeBeforeToggle)
+    }
+
     func testCompactModeChangeKeepsHostedSurfaceAtExpandedPanelBoundsBeforeAnimation() async {
         let viewModel = DashboardViewModel(config: .default)
         let panel = makePanel(x: 500, y: 400, width: 300, height: 260)
@@ -418,6 +446,52 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         XCTAssertFalse(controller.windowShouldClose(panel))
         XCTAssertFalse(panel.isVisible)
         XCTAssertFalse(controller.isVisible)
+    }
+
+    func testInitiallyVisibleCompactHUDExpandsFromSavedSingleAccountFrame() async {
+        var config = AppConfig.default
+        config.usageOverlay = .init(isVisible: true, displayMode: .compact)
+        let viewModel = DashboardViewModel(config: config)
+        viewModel.providerRows = [
+            ProviderRowState(
+                id: "claude-personal",
+                name: "Claude OAuth",
+                nickname: "Personal",
+                functionName: "claude",
+                connectionTitle: "Connected",
+                connectionDetail: "personal@example.com",
+                isConnected: true
+            ),
+            ProviderRowState(
+                id: "codex-work",
+                name: "Codex OAuth",
+                nickname: "Work",
+                functionName: "codex",
+                connectionTitle: "Connected",
+                connectionDetail: "work@example.com",
+                isConnected: true
+            )
+        ]
+        let panel = makePanel(x: 500, y: 400, width: 108, height: 168)
+        let controller = UsageOverlayWindowController(
+            panel: panel,
+            viewModel: viewModel,
+            initialDisplayMode: .compact,
+            shouldReduceMotion: { true },
+            visibleFrameProvider: visibleFrame
+        )
+
+        await drainMainQueue()
+        try? await Task.sleep(for: .milliseconds(200))
+
+        guard let surfaceView = panel.contentView as? UsageOverlaySurfaceView else {
+            return XCTFail("Expected usage overlay surface")
+        }
+        surfaceView.layoutSubtreeIfNeeded()
+        XCTAssertEqual(panel.frame.height, 245, accuracy: 0.5)
+        XCTAssertEqual(panel.frame.maxX, 608)
+        XCTAssertEqual(panel.frame.maxY, 568)
+        withExtendedLifetime(controller) {}
     }
 
     func testControllerStartsWithConfiguredDisplayMode() {
