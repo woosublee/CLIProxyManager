@@ -402,9 +402,7 @@ final class DashboardViewModel: ObservableObject {
         appAppearanceService.apply(appearance: updatedConfig.appearance)
         settingsMessage = cleanupError.map { "Reset failed: \($0.localizedDescription)" }
             ?? "Settings reset to defaults."
-        if shouldDeleteManagementKey {
-            requestServerRestartAfterConfigChange()
-        }
+        requestServerRestartAfterConfigChange()
     }
 
     func startApplication() async {

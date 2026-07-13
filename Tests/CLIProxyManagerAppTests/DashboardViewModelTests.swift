@@ -2278,6 +2278,27 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertFalse(keyStore.isConfigured())
     }
 
+    func testResetAllSettingsRestartsRunningServerWhenPortReturnsToDefaultWithoutUsageKey() async {
+        var config = AppConfig.default
+        config.port = 18_888
+        let keyStore = SubscriptionUsageManagementKeyDouble()
+        let proxy = StubProxyServiceStarter()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: keyStore,
+            proxyService: proxy
+        )
+        await viewModel.refresh()
+
+        viewModel.resetAllSettings()
+        await waitForRestart(proxy)
+
+        XCTAssertEqual(viewModel.config.port, AppConfig.default.port)
+        XCTAssertEqual(keyStore.deleteCallCount, 0)
+        XCTAssertEqual(proxy.restartPorts, [AppConfig.default.port])
+    }
+
     func testEnablingSubscriptionUsageCreatesMissingKeyPersistsConfigAndRestartsReadyProxy() async throws {
         let config = AppConfig.default
         let configStore = StubConfigStore(config: config)
