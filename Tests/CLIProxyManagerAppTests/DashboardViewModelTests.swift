@@ -3714,6 +3714,277 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 }
 
 @MainActor
+final class DashboardAccountOrderingTests: XCTestCase {
+    func testProviderRowsApplyStoredOrderAcrossOAuthAndAPIKeyAccounts() throws {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            commandProfile(id: "claude-work", authProfileID: "claude.json", provider: .claude),
+            commandProfile(id: "codex-work", authProfileID: "codex.json", provider: .codex)
+        ]
+        config.accountOrder = ["codex-api", "claude-work", "claude-api", "codex-work"]
+        let secrets = InMemorySecretStore()
+        try secrets.set("claude-key", for: .claudeAPIKey)
+        try secrets.set("codex-key", for: .codexAPIKey)
+
+        let viewModel = makeViewModel(
+            config: config,
+            profiles: [profile("claude.json", type: .claude), profile("codex.json", type: .codex)],
+            secretStore: secrets
+        )
+
+        XCTAssertEqual(
+            viewModel.providerRows.map(\.id.rawValue),
+            ["codex-api", "claude-work", "claude-api", "codex-work"]
+        )
+    }
+
+    func testProviderRowsNormalizeMissingDuplicateAndNewAccountIDs() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            commandProfile(id: "claude-work", authProfileID: "claude.json", provider: .claude),
+            commandProfile(id: "codex-work", authProfileID: "codex.json", provider: .codex)
+        ]
+        config.accountOrder = ["missing", "codex-work", "codex-work"]
+
+        let viewModel = makeViewModel(
+            config: config,
+            profiles: [profile("claude.json", type: .claude), profile("codex.json", type: .codex)]
+        )
+
+        XCTAssertEqual(viewModel.providerRows.map(\.id.rawValue), ["codex-work", "claude-work"])
+        XCTAssertEqual(viewModel.config.accountOrder, ["codex-work", "claude-work"])
+    }
+
+    func testMoveAccountPersistsNewOrderWithoutChangingOtherConfig() {
+        let config = threeAccountConfig()
+        let store = StubConfigStore(config: config)
+        let viewModel = makeViewModel(
+            config: config,
+            profiles: threeProfiles(),
+            configStore: store
+        )
+
+        viewModel.moveAccount("c", before: "a")
+
+        XCTAssertEqual(viewModel.providerRows.map(\.id.rawValue), ["c", "a", "b"])
+        XCTAssertEqual(viewModel.config.accountOrder, ["c", "a", "b"])
+        XCTAssertEqual(store.savedConfigs.last?.accountOrder, ["c", "a", "b"])
+        XCTAssertEqual(store.savedConfigs.last?.port, config.port)
+    }
+
+    func testMoveUpAndDownRespectBoundaries() {
+        let config = threeAccountConfig()
+        let viewModel = makeViewModel(config: config, profiles: threeProfiles())
+
+        XCTAssertFalse(viewModel.canMoveAccountUp("a"))
+        XCTAssertFalse(viewModel.canMoveAccountDown("c"))
+        XCTAssertTrue(viewModel.canMoveAccountUp("b"))
+        XCTAssertTrue(viewModel.canMoveAccountDown("b"))
+
+        viewModel.moveAccountUp("b")
+        XCTAssertEqual(viewModel.providerRows.map(\.id.rawValue), ["b", "a", "c"])
+
+        viewModel.moveAccountDown("a")
+        XCTAssertEqual(viewModel.providerRows.map(\.id.rawValue), ["b", "c", "a"])
+    }
+
+    func testMoveAccountRollsBackWhenSavingFails() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            commandProfile(id: "a", authProfileID: "a.json", provider: .claude),
+            commandProfile(id: "b", authProfileID: "b.json", provider: .codex)
+        ]
+        let store = StubConfigStore(
+            config: config,
+            saveError: NSError(
+                domain: "AccountOrder",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Disk full"]
+            )
+        )
+        let viewModel = makeViewModel(
+            config: config,
+            profiles: [profile("a.json", type: .claude), profile("b.json", type: .codex)],
+            configStore: store
+        )
+        let originalOrder = viewModel.providerRows.map(\.id.rawValue)
+        let originalConfigOrder = viewModel.config.accountOrder
+
+        viewModel.moveAccount("b", before: "a")
+
+        XCTAssertEqual(viewModel.providerRows.map(\.id.rawValue), originalOrder)
+        XCTAssertEqual(viewModel.config.accountOrder, originalConfigOrder)
+        XCTAssertEqual(viewModel.settingsMessage, "Account order could not be saved: Disk full")
+    }
+
+    func testNoOpMovesDoNotSave() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            commandProfile(id: "a", authProfileID: "a.json", provider: .claude),
+            commandProfile(id: "b", authProfileID: "b.json", provider: .codex)
+        ]
+        let store = StubConfigStore(config: config)
+        let viewModel = makeViewModel(
+            config: config,
+            profiles: [profile("a.json", type: .claude), profile("b.json", type: .codex)],
+            configStore: store
+        )
+
+        viewModel.moveAccount("a", before: "a")
+        viewModel.moveAccountUp("a")
+        viewModel.moveAccountDown("b")
+
+        XCTAssertTrue(store.savedConfigs.isEmpty)
+    }
+
+    func testNewAccountIsAppendedWithoutChangingExistingRelativeOrder() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            commandProfile(id: "a", authProfileID: "a.json", provider: .claude),
+            commandProfile(id: "b", authProfileID: "b.json", provider: .codex)
+        ]
+        config.accountOrder = ["b", "a"]
+        let authStore = StubAuthProfileStore(
+            profiles: [profile("a.json", type: .claude), profile("b.json", type: .codex)]
+        )
+        let viewModel = makeViewModel(
+            config: config,
+            profiles: [],
+            authProfileStore: authStore
+        )
+        authStore.nextProfiles = [
+            profile("a.json", type: .claude),
+            profile("b.json", type: .codex),
+            profile("c.json", type: .claude)
+        ]
+
+        viewModel.refreshProfiles()
+
+        XCTAssertEqual(Array(viewModel.providerRows.map(\.id.rawValue).prefix(2)), ["b", "a"])
+        XCTAssertEqual(viewModel.providerRows.last?.authProfileID, "c.json")
+    }
+
+    func testDeletingAccountRemovesItsIDAndPreservesSurvivorOrder() {
+        var config = threeAccountConfig()
+        config.accountOrder = ["c", "b", "a"]
+        let store = StubConfigStore(config: config)
+        let authStore = StubAuthProfileStore(profiles: threeProfiles(), supportsIDDelete: true)
+        let viewModel = makeViewModel(
+            config: config,
+            profiles: [],
+            configStore: store,
+            authProfileStore: authStore
+        )
+
+        viewModel.removeProvider("b")
+
+        XCTAssertEqual(viewModel.providerRows.map(\.id.rawValue), ["c", "a"])
+        XCTAssertEqual(store.savedConfigs.last?.accountOrder, ["c", "a"])
+    }
+
+    func testAPIKeyReRegistrationAppendsAfterSurvivingAccounts() throws {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            commandProfile(id: "a", authProfileID: "a.json", provider: .claude)
+        ]
+        config.accountOrder = ["claude-api", "a"]
+        let store = StubConfigStore(config: config)
+        let secrets = InMemorySecretStore()
+        try secrets.set("old-key", for: .claudeAPIKey)
+        let viewModel = makeViewModel(
+            config: config,
+            profiles: [profile("a.json", type: .claude)],
+            configStore: store,
+            secretStore: secrets
+        )
+
+        viewModel.removeAPIProvider(.claudeAPI)
+        XCTAssertEqual(viewModel.config.accountOrder, ["a"])
+        XCTAssertEqual(store.savedConfigs.last?.accountOrder, ["a"])
+
+        try viewModel.saveClaudeAPISettings(
+            functionName: "ccapi",
+            nickname: "API",
+            dangerousPermissionsEnabled: false,
+            key: "new-key"
+        )
+
+        XCTAssertEqual(viewModel.providerRows.map(\.id.rawValue), ["a", "claude-api"])
+        XCTAssertEqual(store.savedConfigs.last?.accountOrder, ["a", "claude-api"])
+    }
+
+    private func threeAccountConfig() -> AppConfig {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            commandProfile(id: "a", authProfileID: "a.json", provider: .claude),
+            commandProfile(id: "b", authProfileID: "b.json", provider: .codex),
+            commandProfile(id: "c", authProfileID: "c.json", provider: .claude)
+        ]
+        return config
+    }
+
+    private func threeProfiles() -> [AuthProfile] {
+        [
+            profile("a.json", type: .claude),
+            profile("b.json", type: .codex),
+            profile("c.json", type: .claude)
+        ]
+    }
+
+    private func profile(_ id: String, type: AuthProfileType) -> AuthProfile {
+        AuthProfile(
+            fileName: id,
+            type: type,
+            email: "\(id)@example.com",
+            accountID: nil,
+            expired: nil,
+            disabled: false
+        )
+    }
+
+    private func commandProfile(
+        id: String,
+        authProfileID: String,
+        provider: AuthProfileType
+    ) -> AppConfig.OAuthCommandProfile {
+        AppConfig.OAuthCommandProfile(
+            id: id,
+            provider: provider,
+            authProfileID: authProfileID,
+            commandName: "cmd\(id)",
+            nickname: id,
+            isEnabled: true
+        )
+    }
+
+    private func makeViewModel(
+        config: AppConfig,
+        profiles: [AuthProfile],
+        configStore: StubConfigStore? = nil,
+        authProfileStore: (any AuthProfileManaging)? = nil,
+        secretStore: any SecretStore = InMemorySecretStore()
+    ) -> DashboardViewModel {
+        DashboardViewModel(
+            config: config,
+            configStore: configStore ?? StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: authProfileStore ?? StubAuthProfileStore(profiles: profiles),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: secretStore
+        )
+    }
+
+    private func connectedClaudeConnector() -> ClaudeConnector {
+        ClaudeConnector(runner: StubProcessRunner(results: Array(repeating: [
+            ProcessResult(exitCode: 0, stdout: "/usr/local/bin/claude\n", stderr: ""),
+            ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: ""),
+            ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: "")
+        ], count: 4).flatMap { $0 }))
+    }
+}
+
 private final class RecordingAppAppearanceService: AppAppearanceApplying, @unchecked Sendable {
     private(set) var showDockIconValues: [Bool] = []
     private(set) var appearanceValues: [AppearanceMode] = []

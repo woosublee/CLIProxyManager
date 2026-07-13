@@ -103,6 +103,7 @@ final class AppConfigStoreTests: XCTestCase {
                 isEnabled: false
             )
         ]
+        config.accountOrder = ["codex-personal", "claude-api", "claude-work"]
 
         try store.save(config)
 

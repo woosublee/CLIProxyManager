@@ -540,6 +540,46 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
         XCTAssertEqual(snapshot.erroredCount, 1)
     }
 
+    func testConnectedProvidersPreserveInputRelativeOrderAfterFiltering() {
+        let providers = [
+            ProviderRowState(
+                id: "codex-work",
+                name: "Codex OAuth",
+                nickname: "Codex",
+                functionName: "codex",
+                connectionTitle: "Connected",
+                connectionDetail: "codex@example.com",
+                isConnected: true
+            ),
+            ProviderRowState(
+                id: "disabled",
+                name: "Claude OAuth",
+                nickname: "Disabled",
+                functionName: "disabled",
+                connectionTitle: "Disabled",
+                connectionDetail: "disabled@example.com",
+                isConnected: false,
+                isDisabled: true
+            ),
+            ProviderRowState(
+                id: "claude-work",
+                name: "Claude OAuth",
+                nickname: "Claude",
+                functionName: "claude",
+                connectionTitle: "Connected",
+                connectionDetail: "claude@example.com",
+                isConnected: true
+            )
+        ]
+
+        let snapshot = MenuBarStatusSnapshot(
+            serverStatus: DiagnosticStatus(severity: .ready, title: "Running", message: "Ready"),
+            providers: providers
+        )
+
+        XCTAssertEqual(snapshot.connectedProviders.map(\.id.rawValue), ["codex-work", "claude-work"])
+    }
+
     func testReadyServerStatusWinsOverStaleControlError() {
         let snapshot = MenuBarStatusSnapshot(
             serverStatus: DiagnosticStatus(
