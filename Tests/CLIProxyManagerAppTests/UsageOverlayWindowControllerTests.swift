@@ -269,7 +269,10 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
             visibleFrameProvider: visibleFrame,
             modeTransitionResizeScheduler: { $0() },
             fittingSizeProvider: { CGSize(width: 108, height: 168) },
-            frameAnimator: { _, _, completion in completion() }
+            frameAnimator: { panel, target, completion in
+                panel.setFrame(target, display: false)
+                completion()
+            }
         )
         await drainMainQueue()
 
