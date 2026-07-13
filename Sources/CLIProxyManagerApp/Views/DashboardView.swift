@@ -67,7 +67,10 @@ struct DashboardView: View {
                     )
 
                     let sourceAccounts = viewModel.providerRows.map { DashboardAccountSnapshot(provider: $0) }
-                    let accountsByID = Dictionary(uniqueKeysWithValues: sourceAccounts.map { ($0.id, $0) })
+                    let accountsByID = Dictionary(
+                        sourceAccounts.map { ($0.id, $0) },
+                        uniquingKeysWith: { first, _ in first }
+                    )
                     let accountIDs = previewAccountIDs ?? sourceAccounts.map(\.id)
                     let accounts = accountIDs.compactMap { accountsByID[$0] }
                     VStack(spacing: 6) {
