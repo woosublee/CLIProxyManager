@@ -22,8 +22,8 @@ public enum CodexFastMode {
         reasoning: AppConfig.CodexReasoning,
         fastModeEnabled: Bool
     ) -> String {
-        let canonical = canonicalModel(from: model)
-        let requestedModel = fastModeEnabled ? alias(for: canonical) : canonical
+        let base = baseModel(from: model)
+        let requestedModel = fastModeEnabled ? alias(for: base) : base
         return reasoning == .auto ? requestedModel : "\(requestedModel)(\(reasoning.rawValue))"
     }
 

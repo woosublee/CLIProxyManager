@@ -17,6 +17,8 @@ public struct CodexFastConfiguration: Equatable, Sendable {
     public let allAliases: [String]
 
     public init(config: AppConfig, includeAPIKeyModels: Bool = true) throws {
+        try Self.validateNoManagedAliasCollisions(in: config)
+
         let oauthCodexConfigs: [AppConfig.Codex]
         if config.oauthCommandProfiles.isEmpty {
             oauthCodexConfigs = [config.ccodex]
@@ -32,21 +34,32 @@ public struct CodexFastConfiguration: Equatable, Sendable {
             return profile.codex ?? config.ccodex
         }
 
-        oauthCanonicalModels = try Self.fastModels(in: oauthCodexConfigs + roundRobinCodexConfigs)
+        oauthCanonicalModels = Self.fastModels(in: oauthCodexConfigs + roundRobinCodexConfigs)
         apiKeyCanonicalModels = includeAPIKeyModels
-            ? try Self.fastModels(in: [config.codexAPI.codex])
+            ? Self.fastModels(in: [config.codexAPI.codex])
             : []
         allAliases = Set((oauthCanonicalModels + apiKeyCanonicalModels).map(CodexFastMode.alias(for:))).sorted()
     }
 
-    private static func fastModels(in configs: [AppConfig.Codex]) throws -> [String] {
-        var models = Set<String>()
-        for role in configs.flatMap({ [$0.opus, $0.sonnet, $0.haiku] }) where role.fastModeEnabled {
+    private static func validateNoManagedAliasCollisions(in config: AppConfig) throws {
+        let allCodexConfigs = [config.ccodex, config.codexAPI.codex]
+            + config.oauthCommandProfiles.compactMap { $0.provider == .codex ? $0.codex : nil }
+            + config.roundRobinProfiles.compactMap { $0.provider == .codex ? $0.codex : nil }
+
+        for role in allCodexConfigs.flatMap({ [$0.opus, $0.sonnet, $0.haiku] }) {
             guard !CodexFastMode.isManagedAlias(role.model) else {
                 throw CodexFastConfigurationError.managedAliasCollision(role.model)
             }
-            models.insert(CodexFastMode.canonicalModel(from: role.model))
         }
-        return models.sorted()
+    }
+
+    private static func fastModels(in configs: [AppConfig.Codex]) -> [String] {
+        Set(
+            configs
+                .flatMap { [$0.opus, $0.sonnet, $0.haiku] }
+                .filter(\.fastModeEnabled)
+                .map { CodexFastMode.canonicalModel(from: $0.model) }
+        )
+        .sorted()
     }
 }

@@ -124,6 +124,35 @@ final class ProxyServiceManagerTests: XCTestCase {
         XCTAssertFalse(yaml.contains("gpt-5.6-terra-cpm-fast"))
     }
 
+    func testStartKeepsNoFastCodexAPIYAMLByteCompatibleWithMainRenderer() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let manager = ProxyServiceManager(
+            paths: paths,
+            launcher: FakeProcessLauncher(),
+            codexAPIKeyProvider: { "codex-key" },
+            appConfigProvider: { .default }
+        )
+
+        try await manager.start(port: 8317)
+
+        XCTAssertEqual(try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8), """
+        port: 8317
+        auth-dir: "\(paths.authDirectory.path)"
+        logging-to-file: true
+        debug: false
+        api-keys:
+          - sk-dummy
+
+
+        codex-api-key:
+          - api-key: "codex-key"
+            base-url: "https://api.openai.com/v1"
+            prefix: "cpm-codex-api"
+        """)
+    }
+
     func testStartOmitsFastSectionsWhenNoRolesUseFastMode() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))

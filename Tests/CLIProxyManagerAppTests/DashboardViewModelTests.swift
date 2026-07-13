@@ -1855,7 +1855,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(proxyService.restartPorts, [])
     }
 
-    func testReasoningOnlySaveSucceedsWithoutRestartWhenExistingFastAliasIsInvalid() async throws {
+    func testReasoningOnlySaveRejectsExistingManagedAliasCollision() async throws {
         var config = AppConfig.default
         config.commands.ccodex = "ccodex"
         config.ccodex.opus = .init(
@@ -1879,10 +1879,12 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         var updated = config.ccodex
         updated.opus.reasoning = .max
 
-        XCTAssertNoThrow(try viewModel.saveCodexSettings(functionName: "ccodex", codex: updated))
+        XCTAssertThrowsError(try viewModel.saveCodexSettings(functionName: "ccodex", codex: updated)) { error in
+            XCTAssertEqual(error as? CodexFastConfigurationError, .managedAliasCollision("gpt-5.6-sol-cpm-fast"))
+        }
         for _ in 0..<20 { await Task.yield() }
 
-        XCTAssertEqual(store.savedConfigs.last?.ccodex.opus.reasoning, .max)
+        XCTAssertTrue(store.savedConfigs.isEmpty)
         XCTAssertEqual(proxyService.restartPorts, [])
     }
 
@@ -1946,7 +1948,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertTrue(store.savedConfigs.isEmpty)
     }
 
-    func testUnrelatedSaveSucceedsWhenExistingFastSnapshotIsInvalid() throws {
+    func testUnrelatedSaveRejectsExistingManagedAliasCollision() throws {
         var config = AppConfig.default
         config.ccodex.opus = .init(
             model: "gpt-5.6-sol-cpm-fast",
@@ -1965,8 +1967,10 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             claudeConnector: connectedClaudeConnector()
         )
 
-        XCTAssertNoThrow(try viewModel.saveLogLevel(.debug))
-        XCTAssertEqual(store.savedConfigs.last?.logLevel, .debug)
+        XCTAssertThrowsError(try viewModel.saveLogLevel(.debug)) { error in
+            XCTAssertEqual(error as? CodexFastConfigurationError, .managedAliasCollision("gpt-5.6-sol-cpm-fast"))
+        }
+        XCTAssertTrue(store.savedConfigs.isEmpty)
     }
 
     func testCodexAPIModelsUseFixedAPIKeyRoutingPrefix() async throws {

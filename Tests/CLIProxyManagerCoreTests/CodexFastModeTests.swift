@@ -22,6 +22,14 @@ final class CodexFastModeTests: XCTestCase {
             CodexFastMode.modelIdentifier(model: "gpt-5.6-sol", reasoning: .medium, fastModeEnabled: false),
             "gpt-5.6-sol(medium)"
         )
+        XCTAssertEqual(
+            CodexFastMode.modelIdentifier(
+                model: "upstream-cpm-fast",
+                reasoning: .medium,
+                fastModeEnabled: false
+            ),
+            "upstream-cpm-fast(medium)"
+        )
     }
 
     func testFastConfigurationSeparatesOAuthAndAPIKeyModelsAndSortsThem() throws {
@@ -107,6 +115,43 @@ final class CodexFastModeTests: XCTestCase {
 
         XCTAssertThrowsError(try CodexFastConfiguration(config: config)) { error in
             XCTAssertEqual(error as? CodexFastConfigurationError, .managedAliasCollision("gpt-5.6-sol-cpm-fast"))
+        }
+    }
+
+    func testFastConfigurationRejectsManagedAliasWhenFastModeIsDisabled() {
+        var config = AppConfig.default
+        config.ccodex.opus = .init(
+            model: "upstream-cpm-fast",
+            reasoning: .medium,
+            contextWindow: .auto,
+            fastModeEnabled: false
+        )
+
+        XCTAssertThrowsError(try CodexFastConfiguration(config: config)) { error in
+            XCTAssertEqual(error as? CodexFastConfigurationError, .managedAliasCollision("upstream-cpm-fast"))
+        }
+    }
+
+    func testFastConfigurationRejectsManagedAliasInDisabledProfile() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            .init(
+                id: "disabled-codex",
+                provider: .codex,
+                authProfileID: "disabled.json",
+                commandName: "ccdisabled",
+                codex: codex(
+                    opus: "upstream-cpm-fast",
+                    sonnet: "gpt-5.5",
+                    haiku: "gpt-5.5"
+                ),
+                modelPrefix: "disabled-codex",
+                isEnabled: false
+            )
+        ]
+
+        XCTAssertThrowsError(try CodexFastConfiguration(config: config)) { error in
+            XCTAssertEqual(error as? CodexFastConfigurationError, .managedAliasCollision("upstream-cpm-fast"))
         }
     }
 

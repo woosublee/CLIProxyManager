@@ -71,7 +71,7 @@ public struct ProxyModelClient: Sendable {
         }
 
         return scopedIDs.map { id in
-            guard let metadata = metadataByID[id] else { return CodexModelOption(id: id) }
+            guard let metadata = metadataByID[id.lowercased()] else { return CodexModelOption(id: id) }
             let supported = metadata.supportedReasoningLevels.compactMap { level -> AppConfig.CodexReasoning? in
                 guard let reasoning = AppConfig.CodexReasoning(rawValue: level.effort), reasoning != .auto else {
                     return nil
@@ -173,9 +173,14 @@ public struct ProxyModelClient: Sendable {
         let response = try JSONDecoder().decode(CodexClientModelsResponse.self, from: data)
         var result: [String: CodexClientModelsResponse.Model] = [:]
         for model in response.models {
-            guard let id = scopedModelID(model.slug, modelPrefix: modelPrefix) else { continue }
-            if result[id] == nil {
-                result[id] = model
+            guard !CodexFastMode.isManagedAlias(model.slug),
+                  let id = scopedModelID(model.slug, modelPrefix: modelPrefix),
+                  !CodexFastMode.isManagedAlias(id) else {
+                continue
+            }
+            let lookupKey = id.lowercased()
+            if result[lookupKey] == nil {
+                result[lookupKey] = model
             }
         }
         return result

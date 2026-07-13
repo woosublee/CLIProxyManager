@@ -572,6 +572,26 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
             aliases: fastConfiguration.allAliases
         )
 
+        guard !fastConfiguration.allAliases.isEmpty else {
+            let baseConfiguration = """
+            port: \(port)
+            auth-dir: \(yamlDoubleQuoted(paths.authDirectory.path))
+            logging-to-file: true
+            debug: false
+            api-keys:
+              - sk-dummy
+            """
+            guard !managementConfiguration.isEmpty || !claudeAPIConfiguration.isEmpty || !codexAPIConfiguration.isEmpty else {
+                return baseConfiguration + "\n\n"
+            }
+            return """
+            \(baseConfiguration)
+            \(managementConfiguration)
+            \(claudeAPIConfiguration)
+            \(codexAPIConfiguration)
+            """
+        }
+
         var sections = [
             """
             port: \(port)

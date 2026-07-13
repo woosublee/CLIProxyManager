@@ -2160,6 +2160,7 @@ final class DashboardViewModel: ObservableObject {
             ? updatedConfig
             : removingUnavailableRoundRobinProfiles(from: updatedConfig)
         let updatedConfig = Self.persistedConfig(persistedConfig)
+        _ = try CodexFastConfiguration(config: updatedConfig)
         let oldFastInput = codexFastConfigurationInput(config: config)
         let newFastInput = codexFastConfigurationInput(config: updatedConfig)
         let fastConfigurationChanged: Bool
