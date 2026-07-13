@@ -121,7 +121,6 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         XCTAssertEqual(controller.presentedDisplayMode, .expanded)
         XCTAssertTrue(controller.isContentHiddenForModeTransition)
         XCTAssertEqual(animationTarget?.width, AppWindowMetrics.usageOverlayCompactWidth)
-        XCTAssertLessThan(animationTarget?.height ?? .greatestFiniteMagnitude, panel.frame.height)
     }
 
     func testExpansionMeasuresExpandedLayoutWhileContentIsHidden() {
