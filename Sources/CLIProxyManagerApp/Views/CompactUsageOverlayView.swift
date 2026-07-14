@@ -100,6 +100,16 @@ private struct CompactUsageAccountView: View {
         VStack(spacing: 7) {
             VStack(spacing: 4) {
                 ProviderAvatar(providerID: provider.id, size: 26)
+                    .overlay(alignment: .trailing) {
+                        if let indicator = presentation.headerIndicator {
+                            CompactUsageIndicatorView(indicator: indicator)
+                                .frame(
+                                    width: SubscriptionUsageWarningLayout.iconFrameSize.width,
+                                    height: SubscriptionUsageWarningLayout.iconFrameSize.height
+                                )
+                                .offset(x: SubscriptionUsageWarningLayout.compactAvatarTrailingOffset)
+                        }
+                    }
                 Text(provider.usageOverlayDisplayName)
                     .font(.system(size: 10, weight: .semibold))
                     .lineLimit(1)
@@ -128,10 +138,6 @@ private struct CompactUsageAccountView: View {
                 .padding(.horizontal, 7)
                 .padding(.vertical, 7)
                 .background(.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-                if let indicator = presentation.indicator {
-                    CompactUsageIndicatorView(indicator: indicator)
-                }
             }
         }
         .padding(.vertical, 10)
@@ -146,7 +152,7 @@ private struct CompactUsagePlaceholderRow: View {
         HStack(spacing: 5) {
             Text(presentation.placeholder ?? "—")
                 .font(.system(size: 11, weight: .semibold, design: .monospaced))
-            if let indicator = presentation.indicator {
+            if let indicator = presentation.placeholderIndicator {
                 CompactUsageIndicatorView(indicator: indicator)
             }
         }

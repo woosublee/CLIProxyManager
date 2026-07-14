@@ -89,6 +89,48 @@ final class CompactUsagePresentationTests: XCTestCase {
         )
     }
 
+    func testStaleSnapshotRoutesWarningToHeaderWithoutPlaceholderIndicator() {
+        let snapshot = SubscriptionUsageSnapshot(
+            profileID: "codex.json",
+            provider: .codex,
+            windows: [.init(id: "primary", label: "Primary", usedPercent: 15, resetAt: nil)],
+            fetchedAt: Date(timeIntervalSince1970: 60)
+        )
+        let presentation = compactUsagePresentation(
+            for: .stale(snapshot, .credentialExpired),
+            now: Date(timeIntervalSince1970: 780)
+        )
+
+        XCTAssertEqual(
+            presentation.headerIndicator,
+            .warning(message: "Credential needs attention. Showing usage last updated 12 minutes ago.")
+        )
+        XCTAssertNil(presentation.placeholderIndicator)
+    }
+
+    func testPlaceholderRoutesIndicatorInlineWithoutHeaderOverlay() {
+        let presentation = compactUsagePresentation(for: .loading)
+
+        XCTAssertNil(presentation.headerIndicator)
+        XCTAssertEqual(
+            presentation.placeholderIndicator,
+            .loading(message: "Checking subscription usage…")
+        )
+    }
+
+    func testAvailableSnapshotHasNoHeaderOrPlaceholderIndicator() {
+        let snapshot = SubscriptionUsageSnapshot(
+            profileID: "codex.json",
+            provider: .codex,
+            windows: [.init(id: "primary", label: "Primary", usedPercent: 15, resetAt: nil)],
+            fetchedAt: Date(timeIntervalSince1970: 60)
+        )
+        let presentation = compactUsagePresentation(for: .available(snapshot))
+
+        XCTAssertNil(presentation.headerIndicator)
+        XCTAssertNil(presentation.placeholderIndicator)
+    }
+
     func testStaleEmptySnapshotPreservesWarningInsteadOfGenericUnavailableState() {
         let snapshot = SubscriptionUsageSnapshot(
             profileID: "codex.json",
