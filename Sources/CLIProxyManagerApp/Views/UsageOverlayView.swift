@@ -307,30 +307,33 @@ private struct ExpandedUsageOverlayAccountView: View {
             if case let .snapshot(snapshot, warning) = subscriptionUsageDisplayState(
                 for: provider.subscriptionUsageState
             ) {
-                HStack(alignment: .top, spacing: 6) {
-                    snapshotUsage(snapshot)
-                    if let warning {
-                        SubscriptionUsageWarningIcon(
-                            issue: warning,
-                            lastUpdatedAt: snapshot.fetchedAt
-                        )
-                        .padding(.top, 1)
-                    }
-                }
+                snapshotUsage(snapshot, warning: warning)
             }
         }
     }
 
     @ViewBuilder
-    private func snapshotUsage(_ snapshot: SubscriptionUsageSnapshot) -> some View {
+    private func snapshotUsage(
+        _ snapshot: SubscriptionUsageSnapshot,
+        warning: SubscriptionUsageIssue?
+    ) -> some View {
         if snapshot.windows.isEmpty {
-            Text("Usage details unavailable")
-                .font(.system(size: 10.5))
-                .foregroundStyle(.secondary)
+            SubscriptionUsageWarningAlignedRow(
+                warning: warning,
+                reservesWarningSpace: warning != nil,
+                lastUpdatedAt: snapshot.fetchedAt
+            ) {
+                Text("Usage details unavailable")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+            }
         } else {
             VStack(alignment: .leading, spacing: 6) {
-                ForEach(snapshot.windows) { window in
-                    ExpandedUsageOverlayProgressRow(window: window)
+                ForEach(subscriptionUsageWarningRows(snapshot: snapshot, warning: warning)) { row in
+                    ExpandedUsageOverlayProgressRow(
+                        row: row,
+                        lastUpdatedAt: snapshot.fetchedAt
+                    )
                 }
             }
         }
@@ -338,22 +341,30 @@ private struct ExpandedUsageOverlayAccountView: View {
 }
 
 private struct ExpandedUsageOverlayProgressRow: View {
-    let window: UsageWindow
+    let row: SubscriptionUsageWarningRowPresentation
+    let lastUpdatedAt: Date
 
     var body: some View {
+        let window = row.window
         let percent = min(max(window.usedPercent, 0), 100)
         VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 8) {
-                Text(subscriptionUsageDisplayLabel(for: window))
-                    .font(.system(size: 10.5, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 28, alignment: .leading)
-                ProgressView(value: percent, total: 100)
-                    .tint(subscriptionUsageProgressTone(for: percent).color)
-                    .accessibilityLabel(subscriptionUsageAccessibilityLabel(for: window))
-                Text("\(Int(percent.rounded()))%")
-                    .font(.system(size: 10.5, design: .monospaced))
-                    .frame(width: 34, alignment: .trailing)
+            SubscriptionUsageWarningAlignedRow(
+                warning: row.warning,
+                reservesWarningSpace: row.reservesWarningSpace,
+                lastUpdatedAt: lastUpdatedAt
+            ) {
+                HStack(spacing: 8) {
+                    Text(subscriptionUsageDisplayLabel(for: window))
+                        .font(.system(size: 10.5, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 28, alignment: .leading)
+                    ProgressView(value: percent, total: 100)
+                        .tint(subscriptionUsageProgressTone(for: percent).color)
+                        .accessibilityLabel(subscriptionUsageAccessibilityLabel(for: window))
+                    Text("\(Int(percent.rounded()))%")
+                        .font(.system(size: 10.5, design: .monospaced))
+                        .frame(width: 34, alignment: .trailing)
+                }
             }
             if let resetAt = window.resetAt {
                 Text("Next reset: \(resetAt.formatted(date: .abbreviated, time: .shortened))")

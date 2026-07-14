@@ -43,6 +43,14 @@ struct CompactUsagePresentation: Equatable {
     let placeholder: String?
     let indicator: CompactUsageIndicator?
 
+    var headerIndicator: CompactUsageIndicator? {
+        rows.isEmpty ? nil : indicator
+    }
+
+    var placeholderIndicator: CompactUsageIndicator? {
+        rows.isEmpty ? indicator : nil
+    }
+
     static func placeholder(
         _ value: String,
         indicator: CompactUsageIndicator
