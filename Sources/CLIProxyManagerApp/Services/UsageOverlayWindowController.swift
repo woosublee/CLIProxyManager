@@ -97,6 +97,8 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     private let shouldReduceMotion: () -> Bool
     private let visibleFrameProvider: () -> CGRect?
     private let screenVisibleFrameProvider: () -> CGRect?
+    private let screenProvider: UsageOverlayScreenProvider
+    private let placementPersistence: UsageOverlayPlacementPersistence
     private let deferredScreenResizeScheduler: (@escaping @MainActor () -> Void) -> Void
     private let modeTransitionResizeScheduler: (@escaping @MainActor () -> Void) -> Void
     private let fittingSizeProvider: (() -> CGSize)?
@@ -124,6 +126,10 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     private var isWaitingForModeTransitionResize = false
     private var screenGeometryGeneration = 0
     private var userMoveInterruptedTransition = false
+    private var isUserMoveInProgress = false
+    private var isApplyingControllerFrame = false
+    private var isUsingTemporaryScreenFallback = false
+    private var savedPlacement: UsageOverlayPlacement?
     private var configObservation: AnyCancellable?
     private var contentObservation: AnyCancellable?
     private var screenParametersObservation: NSObjectProtocol?
@@ -153,6 +159,8 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         },
         visibleFrameProvider: (() -> CGRect?)? = nil,
         screenVisibleFrameProvider: (() -> CGRect?)? = nil,
+        screenProvider: UsageOverlayScreenProvider = .live,
+        placementPersistence: UsageOverlayPlacementPersistence = .disabled,
         deferredScreenResizeScheduler: ((@escaping @MainActor () -> Void) -> Void)? = nil,
         modeTransitionResizeScheduler: ((@escaping @MainActor () -> Void) -> Void)? = nil,
         fittingSizeProvider: (() -> CGSize)? = nil,
@@ -165,6 +173,9 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         self.shouldReduceMotion = shouldReduceMotion
         self.visibleFrameProvider = visibleFrameProvider ?? { nil }
         self.screenVisibleFrameProvider = screenVisibleFrameProvider ?? { nil }
+        self.screenProvider = screenProvider
+        self.placementPersistence = placementPersistence
+        self.savedPlacement = placementPersistence.load()
         self.deferredScreenResizeScheduler = deferredScreenResizeScheduler ?? { action in
             DispatchQueue.main.async { @MainActor in
                 action()
@@ -365,6 +376,8 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     }
 
     func handleWindowWillMove() {
+        guard !isApplyingControllerFrame else { return }
+        isUserMoveInProgress = true
         guard resizeCoordinator.hasActiveTransition else { return }
         interruptActiveTransition()
         userMoveInterruptedTransition = true
@@ -375,9 +388,13 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     }
 
     func handleWindowDidMove() {
-        guard userMoveInterruptedTransition else { return }
-        userMoveInterruptedTransition = false
-        resizeToFittingContent(animated: false)
+        guard isUserMoveInProgress else { return }
+        isUserMoveInProgress = false
+        saveCurrentPlacement()
+        if userMoveInterruptedTransition {
+            userMoveInterruptedTransition = false
+            resizeToFittingContent(animated: false)
+        }
     }
 
     func requestContentResize(animated: Bool = false) {
@@ -390,7 +407,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             window: panel,
             alwaysOnTop: preferences.alwaysOnTop
         )
-        restoreSavedFrameIfUsable()
+        restoreSavedPlacement()
         panel.makeKeyAndOrderFront(nil)
         isVisible = true
         resizeToFittingContent(animated: false)
@@ -420,7 +437,9 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             applyPersistedDisplayModeIfAllowed(preferences.displayMode)
         }
         if preferences.isVisible, !isSuppressedForCurrentSession {
-            restoreSavedFrameIfUsable()
+            if !isVisible {
+                restoreSavedPlacement()
+            }
             panel.makeKeyAndOrderFront(nil)
             isVisible = true
             resizeToFittingContent(animated: false)
@@ -442,6 +461,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     }
 
     func handleScreenGeometryChange() {
+        guard !isUserMoveInProgress else { return }
         userMoveInterruptedTransition = false
         interruptActiveTransition()
         updatePanelConstraints(for: displayMode)
@@ -449,6 +469,9 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         let generation = screenGeometryGeneration
         deferredScreenResizeScheduler { @MainActor [weak self] in
             guard let self, generation == self.screenGeometryGeneration else { return }
+            if self.savedPlacement != nil || self.isUsingTemporaryScreenFallback {
+                self.restoreSavedPlacement(allowMigration: false)
+            }
             self.panel.contentView?.layoutSubtreeIfNeeded()
             let fittingSize = self.fittingSizeProvider?()
                 ?? self.panel.contentView?.fittingSize
@@ -465,7 +488,6 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         panel.title = "Usage"
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
-        panel.setFrameAutosaveName("usage-overlay")
         updatePanelConstraints(for: displayMode)
 
         let publisher = usageOverlayPublisher
@@ -505,15 +527,83 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             }
     }
 
-    private func restoreSavedFrameIfUsable() {
-        let screenFrames = currentVisibleFrame().map { [$0] } ?? NSScreen.screens.map(\.visibleFrame)
-        guard Self.isFrameUsable(panel.frame, within: screenFrames) else {
-            if visibleFrameProvider() != nil || screenVisibleFrameProvider() != nil {
-                return
-            }
-            panel.center()
+    private func restoreSavedPlacement(allowMigration: Bool = true) {
+        let screens = screenProvider.screens()
+        if savedPlacement == nil, allowMigration {
+            migrateLegacyPlacement(in: screens)
+        }
+        if let savedPlacement,
+           let screen = UsageOverlayScreen.match(identity: savedPlacement.display, in: screens) {
+            isUsingTemporaryScreenFallback = false
+            applyControllerFrame(
+                UsageOverlayFrameLayout.placementFrame(
+                    size: panel.frame.size,
+                    rightOffset: savedPlacement.rightOffset,
+                    topOffset: savedPlacement.topOffset,
+                    visibleFrame: screen.visibleFrame
+                ),
+                display: false
+            )
             return
         }
+
+        isUsingTemporaryScreenFallback = savedPlacement != nil
+        let screen = screenProvider.screenForWindow(panel)
+            ?? screens.first(where: \.isPrimary)
+            ?? screens.first
+        guard let screen else { return }
+        let fallback = UsageOverlayFrameLayout.clampedFrame(panel.frame, visibleFrame: screen.visibleFrame)
+        if Self.isFrameUsable(fallback, within: [screen.visibleFrame]) {
+            applyControllerFrame(fallback, display: false)
+        } else {
+            applyControllerFrame(centeredFrame(in: screen.visibleFrame), display: false)
+        }
+    }
+
+    private func migrateLegacyPlacement(in screens: [UsageOverlayScreen]) {
+        guard let descriptor = placementPersistence.loadLegacyFrame(),
+              let legacy = LegacyUsageOverlayFrame(descriptor: descriptor),
+              let screen = legacy.matchingScreen(in: screens) else {
+            return
+        }
+        let placement = UsageOverlayPlacement(
+            display: screen.identity,
+            frame: legacy.windowFrame,
+            visibleFrame: screen.visibleFrame
+        )
+        guard placementPersistence.save(placement) else { return }
+        savedPlacement = placement
+        placementPersistence.removeLegacyFrame()
+    }
+
+    private func saveCurrentPlacement() {
+        let screens = screenProvider.screens()
+        guard let screen = screenProvider.screenForWindow(panel)
+                ?? screens.max(by: {
+                    panel.frame.intersection($0.visibleFrame).area
+                        < panel.frame.intersection($1.visibleFrame).area
+                }) else {
+            return
+        }
+        let placement = UsageOverlayPlacement(
+            display: screen.identity,
+            frame: panel.frame,
+            visibleFrame: screen.visibleFrame
+        )
+        savedPlacement = placement
+        isUsingTemporaryScreenFallback = false
+        if placementPersistence.save(placement) {
+            placementPersistence.removeLegacyFrame()
+        }
+    }
+
+    private func centeredFrame(in visibleFrame: CGRect) -> CGRect {
+        CGRect(
+            x: visibleFrame.midX - panel.frame.width / 2,
+            y: visibleFrame.midY - panel.frame.height / 2,
+            width: panel.frame.width,
+            height: panel.frame.height
+        )
     }
 
     private func recordPersistenceEmission(_ mode: AppConfig.UsageOverlay.DisplayMode) {
@@ -563,7 +653,9 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     }
 
     private func applyControllerFrame(_ frame: CGRect, display: Bool) {
+        isApplyingControllerFrame = true
         panel.setFrame(frame, display: display)
+        isApplyingControllerFrame = false
     }
 
     private func frameAnchoredAtAuthoritativeTransitionAnchor() -> CGRect {

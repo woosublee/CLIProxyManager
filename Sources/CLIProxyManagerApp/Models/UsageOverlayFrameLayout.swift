@@ -8,8 +8,10 @@ struct UsageOverlayFrameLayout {
         mode: AppConfig.UsageOverlay.DisplayMode,
         visibleFrame: CGRect
     ) -> CGRect {
-        let margin = AppWindowMetrics.usageOverlayScreenMargin
-        let availableHeight = max(1, visibleFrame.height - margin * 2)
+        let availableHeight = max(
+            1,
+            visibleFrame.height - AppWindowMetrics.usageOverlayScreenMargin * 2
+        )
         let maximumHeight = min(AppWindowMetrics.usageOverlayMaximumHeight, availableHeight)
         let minimumHeight = mode == .expanded
             ? min(AppWindowMetrics.usageOverlayExpandedMinimumHeight, maximumHeight)
@@ -19,12 +21,33 @@ struct UsageOverlayFrameLayout {
             : AppWindowMetrics.usageOverlayCompactWidth
         let height = min(max(targetContentHeight, minimumHeight), maximumHeight)
 
-        var frame = CGRect(
+        let frame = CGRect(
             x: currentFrame.maxX - width,
             y: currentFrame.maxY - height,
             width: width,
             height: height
         )
+        return clampedFrame(frame, visibleFrame: visibleFrame)
+    }
+
+    static func placementFrame(
+        size: CGSize,
+        rightOffset: CGFloat,
+        topOffset: CGFloat,
+        visibleFrame: CGRect
+    ) -> CGRect {
+        let frame = CGRect(
+            x: visibleFrame.maxX - rightOffset - size.width,
+            y: visibleFrame.maxY - topOffset - size.height,
+            width: size.width,
+            height: size.height
+        )
+        return clampedFrame(frame, visibleFrame: visibleFrame)
+    }
+
+    static func clampedFrame(_ frame: CGRect, visibleFrame: CGRect) -> CGRect {
+        var frame = frame
+        let margin = AppWindowMetrics.usageOverlayScreenMargin
         let safeFrame = visibleFrame.insetBy(dx: margin, dy: margin)
 
         if frame.minX < safeFrame.minX { frame.origin.x = safeFrame.minX }
