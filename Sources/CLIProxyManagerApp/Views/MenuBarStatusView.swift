@@ -43,10 +43,10 @@ struct MenuBarStatusView: View {
                 icon: "arrow.clockwise",
                 label: "Reload usage",
                 trailing: subscriptionUsageRefreshAgeLabel,
-                disabled: !viewModel.canRefreshSubscriptionUsage || viewModel.isSubscriptionUsageRefreshInProgress
+                disabled: !viewModel.canReloadSubscriptionUsage || viewModel.isSubscriptionUsageReloadActionInProgress
             ) {
                 Task {
-                    await viewModel.refreshSubscriptionUsage(force: true)
+                    await viewModel.reloadSubscriptionUsage()
                 }
             }
 

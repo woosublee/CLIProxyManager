@@ -93,6 +93,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     private let panel: NSPanel
     private let presentationState: UsageOverlayPresentationState
     private let persistDisplayMode: (AppConfig.UsageOverlay.DisplayMode) -> Bool
+    private let refreshStatusOnShow: () -> Void
     private let shouldReduceMotion: () -> Bool
     private let visibleFrameProvider: () -> CGRect?
     private let screenVisibleFrameProvider: () -> CGRect?
@@ -145,6 +146,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         viewModel: DashboardViewModel? = nil,
         initialDisplayMode: AppConfig.UsageOverlay.DisplayMode? = nil,
         persistDisplayMode: ((AppConfig.UsageOverlay.DisplayMode) -> Bool)? = nil,
+        refreshStatusOnShow: (() -> Void)? = nil,
         usageOverlayPublisher: AnyPublisher<AppConfig.UsageOverlay, Never>? = nil,
         shouldReduceMotion: @escaping () -> Bool = {
             NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -193,6 +195,11 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             usageOverlay.displayMode = mode
             return viewModel.saveSetting {
                 try viewModel.saveUsageOverlay(usageOverlay)
+            }
+        }
+        self.refreshStatusOnShow = refreshStatusOnShow ?? { [weak viewModel] in
+            Task { [weak viewModel] in
+                await viewModel?.refresh()
             }
         }
         self.panel = panel ?? NSPanel(
@@ -387,6 +394,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         panel.makeKeyAndOrderFront(nil)
         isVisible = true
         resizeToFittingContent(animated: false)
+        refreshStatusOnShow()
     }
 
     func update(_ preferences: AppConfig.UsageOverlay) {
