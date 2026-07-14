@@ -938,7 +938,8 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
             },
             frameAnimationInterrupter: { _ in
                 animationWasInterrupted = true
-            }
+            },
+            isUserInitiatedMoveDuringAnimation: { true }
         )
 
         controller.toggleDisplayMode()
@@ -988,6 +989,47 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         drainMainQueueSynchronously()
 
         XCTAssertEqual(fittingSizeReads, readsBeforeToggle + 1)
+        XCTAssertEqual(panel.frame.size, CGSize(width: 108, height: 180))
+    }
+
+    func testAnimatedProgrammaticMoveDoesNotPersistPlacement() {
+        let screen = placementScreen(
+            id: 1,
+            uuid: "display",
+            frame: CGRect(x: 0, y: 0, width: 1440, height: 900),
+            isPrimary: true
+        )
+        var savedPlacements: [UsageOverlayPlacement] = []
+        var controller: UsageOverlayWindowController!
+        let panel = makePanel(x: 500, y: 400, width: 300, height: 260)
+        panel.contentView = NSView(frame: CGRect(x: 0, y: 0, width: 300, height: 260))
+        controller = UsageOverlayWindowController(
+            panel: panel,
+            initialDisplayMode: .expanded,
+            persistDisplayMode: { _ in true },
+            shouldReduceMotion: { false },
+            visibleFrameProvider: visibleFrame,
+            screenProvider: placementScreenProvider(screens: { [screen] }, windowScreen: { screen }),
+            placementPersistence: .init(
+                load: { nil },
+                save: { savedPlacements.append($0); return true },
+                loadLegacyFrame: { nil },
+                removeLegacyFrame: {}
+            ),
+            modeTransitionResizeScheduler: { $0() },
+            fittingSizeProvider: { CGSize(width: 108, height: 180) },
+            frameAnimator: { panel, target, completion in
+                controller.handleWindowWillMove()
+                panel.setFrame(target, display: false)
+                controller.handleWindowDidMove()
+                completion()
+            },
+            isUserInitiatedMoveDuringAnimation: { false }
+        )
+
+        controller.toggleDisplayMode()
+
+        XCTAssertTrue(savedPlacements.isEmpty)
         XCTAssertEqual(panel.frame.size, CGSize(width: 108, height: 180))
     }
 
@@ -1135,6 +1177,137 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         XCTAssertEqual(panel.frame.maxY, originalAnchor.y)
     }
 
+    func testSavedPlacementRestoresOnItsDisplayInsteadOfPrimaryDisplay() {
+        let primary = placementScreen(id: 1, uuid: "primary", frame: CGRect(x: 0, y: 0, width: 1440, height: 900), isPrimary: true)
+        let secondary = placementScreen(id: 2, uuid: "secondary", frame: CGRect(x: -1440, y: 0, width: 1440, height: 900))
+        let placement = UsageOverlayPlacement(
+            display: secondary.identity,
+            frame: CGRect(x: -200, y: 600, width: 108, height: 180),
+            visibleFrame: secondary.visibleFrame
+        )
+        let panel = makePanel(x: 900, y: 400, width: 108, height: 180)
+        let controller = UsageOverlayWindowController(
+            panel: panel,
+            initialDisplayMode: .compact,
+            shouldReduceMotion: { true },
+            screenProvider: placementScreenProvider(screens: { [primary, secondary] }, windowScreen: { primary }),
+            placementPersistence: .init(
+                load: { placement },
+                save: { _ in true },
+                loadLegacyFrame: { nil },
+                removeLegacyFrame: {}
+            ),
+            fittingSizeProvider: { CGSize(width: 108, height: 180) }
+        )
+
+        controller.showForCurrentSession(using: .init(isVisible: true, displayMode: .compact))
+        drainMainQueueSynchronously()
+
+        XCTAssertEqual(panel.frame.maxX, -92)
+        XCTAssertEqual(panel.frame.maxY, 780)
+    }
+
+    func testUserMovePersistsPlacementButProgrammaticResizeDoesNot() {
+        let screen = placementScreen(id: 1, uuid: "display", frame: CGRect(x: 0, y: 0, width: 1440, height: 900), isPrimary: true)
+        var savedPlacements: [UsageOverlayPlacement] = []
+        let panel = makePanel(x: 500, y: 400, width: 108, height: 180)
+        let controller = UsageOverlayWindowController(
+            panel: panel,
+            initialDisplayMode: .compact,
+            shouldReduceMotion: { true },
+            screenProvider: placementScreenProvider(screens: { [screen] }, windowScreen: { screen }),
+            placementPersistence: .init(
+                load: { nil },
+                save: {
+                    savedPlacements.append($0)
+                    return true
+                },
+                loadLegacyFrame: { nil },
+                removeLegacyFrame: {}
+            )
+        )
+
+        controller.updateContentSize(CGSize(width: 108, height: 240))
+        XCTAssertTrue(savedPlacements.isEmpty)
+
+        controller.handleWindowWillMove()
+        panel.setFrameOrigin(CGPoint(x: 800, y: 500))
+        controller.handleWindowDidMove()
+
+        XCTAssertEqual(savedPlacements.count, 1)
+        XCTAssertEqual(savedPlacements[0].display, screen.identity)
+        XCTAssertEqual(savedPlacements[0].rightOffset, screen.visibleFrame.maxX - panel.frame.maxX)
+        XCTAssertEqual(savedPlacements[0].topOffset, screen.visibleFrame.maxY - panel.frame.maxY)
+    }
+
+    func testMissingSavedDisplayFallsBackWithoutReplacingPlacementAndReturnsWhenReconnected() {
+        let primary = placementScreen(id: 1, uuid: "primary", frame: CGRect(x: 0, y: 0, width: 1440, height: 900), isPrimary: true)
+        let secondary = placementScreen(id: 2, uuid: "secondary", frame: CGRect(x: -1440, y: 0, width: 1440, height: 900))
+        let placement = UsageOverlayPlacement(
+            display: secondary.identity,
+            frame: CGRect(x: -200, y: 600, width: 108, height: 180),
+            visibleFrame: secondary.visibleFrame
+        )
+        var screens = [primary]
+        var saves = 0
+        var screenCallbacks: [@MainActor () -> Void] = []
+        let panel = makePanel(x: 900, y: 400, width: 108, height: 180)
+        let controller = UsageOverlayWindowController(
+            panel: panel,
+            initialDisplayMode: .compact,
+            shouldReduceMotion: { true },
+            screenProvider: placementScreenProvider(screens: { screens }, windowScreen: { primary }),
+            placementPersistence: .init(
+                load: { placement },
+                save: { _ in saves += 1; return true },
+                loadLegacyFrame: { nil },
+                removeLegacyFrame: {}
+            ),
+            deferredScreenResizeScheduler: { screenCallbacks.append($0) },
+            fittingSizeProvider: { CGSize(width: 108, height: 180) }
+        )
+
+        controller.showForCurrentSession(using: .init(isVisible: true, displayMode: .compact))
+        drainMainQueueSynchronously()
+        XCTAssertGreaterThanOrEqual(panel.frame.minX, primary.visibleFrame.minX + 16)
+        XCTAssertEqual(saves, 0)
+
+        screens = [primary, secondary]
+        controller.handleScreenGeometryChange()
+        screenCallbacks.removeLast()()
+
+        XCTAssertEqual(panel.frame.maxX, -92)
+        XCTAssertEqual(panel.frame.maxY, 780)
+        XCTAssertEqual(saves, 0)
+    }
+
+    func testLegacyAutosaveMigratesToPlacementAndIsRemoved() {
+        let screen = placementScreen(id: 2, uuid: "secondary", frame: CGRect(x: -2560, y: 0, width: 2560, height: 1410))
+        var savedPlacement: UsageOverlayPlacement?
+        var removedLegacy = false
+        let panel = makePanel(x: 0, y: 0, width: 108, height: 359)
+        let controller = UsageOverlayWindowController(
+            panel: panel,
+            initialDisplayMode: .compact,
+            shouldReduceMotion: { true },
+            screenProvider: placementScreenProvider(screens: { [screen] }, windowScreen: { screen }),
+            placementPersistence: .init(
+                load: { nil },
+                save: { savedPlacement = $0; return true },
+                loadLegacyFrame: { "-124 1035 108 359 -2560 0 2560 1410 " },
+                removeLegacyFrame: { removedLegacy = true }
+            ),
+            fittingSizeProvider: { CGSize(width: 108, height: 359) }
+        )
+
+        controller.showForCurrentSession(using: .init(isVisible: true, displayMode: .compact))
+        drainMainQueueSynchronously()
+
+        XCTAssertEqual(savedPlacement?.display, screen.identity)
+        XCTAssertTrue(removedLegacy)
+        XCTAssertEqual(panel.frame, CGRect(x: -124, y: 1035, width: 108, height: 359))
+    }
+
     private func simulateTopLeftAnchoredContentResize(_ panel: NSPanel, to size: CGSize) {
         let topLeft = CGPoint(x: panel.frame.minX, y: panel.frame.maxY)
         panel.setFrame(
@@ -1171,6 +1344,36 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
             try? await Task.sleep(for: .milliseconds(10))
         }
         return condition()
+    }
+
+    private func placementScreenProvider(
+        screens: @escaping () -> [UsageOverlayScreen],
+        windowScreen: @escaping () -> UsageOverlayScreen?
+    ) -> UsageOverlayScreenProvider {
+        UsageOverlayScreenProvider(
+            screens: screens,
+            screenForWindow: { _ in windowScreen() }
+        )
+    }
+
+    private func placementScreen(
+        id: CGDirectDisplayID,
+        uuid: String,
+        frame: CGRect,
+        isPrimary: Bool = false
+    ) -> UsageOverlayScreen {
+        UsageOverlayScreen(
+            displayID: id,
+            identity: UsageOverlayDisplayIdentity(
+                uuid: uuid,
+                vendorNumber: 1,
+                modelNumber: 2,
+                serialNumber: id
+            ),
+            frame: frame,
+            visibleFrame: frame,
+            isPrimary: isPrimary
+        )
     }
 
     private func makePanel(

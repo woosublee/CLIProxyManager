@@ -14,7 +14,10 @@ struct CLIProxyManagerApp: App {
         let viewModel = DashboardViewModel(config: config)
         _viewModel = StateObject(wrappedValue: viewModel)
         _usageOverlayWindowController = StateObject(
-            wrappedValue: UsageOverlayWindowController(viewModel: viewModel)
+            wrappedValue: UsageOverlayWindowController(
+                viewModel: viewModel,
+                placementPersistence: .userDefaults()
+            )
         )
         Task {
             await viewModel.startApplication()
