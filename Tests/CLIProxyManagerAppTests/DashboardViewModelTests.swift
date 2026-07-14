@@ -1790,12 +1790,10 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         try viewModel.saveCodexSettings(functionName: "ccodex", codex: codex)
         await waitForRestart(proxyService)
-        for _ in 0..<100 where viewModel.settingsMessage == nil { await Task.yield() }
+        let expectedMessage = "Fast mode settings were saved, but CLIProxyAPI could not restart: Could not connect to the server."
+        await waitForSettingsMessage(viewModel, expected: expectedMessage)
 
-        XCTAssertEqual(
-            viewModel.settingsMessage,
-            "Fast mode settings were saved, but CLIProxyAPI could not restart: Could not connect to the server."
-        )
+        XCTAssertEqual(viewModel.settingsMessage, expectedMessage)
         XCTAssertEqual(viewModel.serverStatus.severity, .error)
         XCTAssertEqual(viewModel.serverStatus.title, "Failed to restart CLIProxyAPI")
     }
@@ -4718,6 +4716,19 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             await Task.yield()
         }
         XCTFail("Expected proxy restart.")
+    }
+
+    private func waitForSettingsMessage(
+        _ viewModel: DashboardViewModel,
+        expected: String
+    ) async {
+        for _ in 0..<1_000 {
+            if viewModel.settingsMessage == expected {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTFail("Expected settings message: \(expected)")
     }
 
     private func connectedClaudeConnector() -> ClaudeConnector {
