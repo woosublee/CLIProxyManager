@@ -227,51 +227,61 @@ private struct MenuBarAccountRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             case .snapshot(let snapshot, let warning):
-                HStack(alignment: .top, spacing: 6) {
-                    snapshotUsage(snapshot)
-                    if let warning {
-                        SubscriptionUsageWarningIcon(
-                            issue: warning,
-                            lastUpdatedAt: snapshot.fetchedAt
-                        )
-                        .padding(.top, 1)
-                    }
-                }
+                snapshotUsage(snapshot, warning: warning)
             }
         }
     }
 
     @ViewBuilder
-    private func snapshotUsage(_ snapshot: SubscriptionUsageSnapshot) -> some View {
+    private func snapshotUsage(
+        _ snapshot: SubscriptionUsageSnapshot,
+        warning: SubscriptionUsageIssue?
+    ) -> some View {
         if snapshot.windows.isEmpty {
-            Text("Usage details unavailable")
-                .font(.system(size: 10.5))
-                .foregroundStyle(.tertiary)
+            SubscriptionUsageWarningAlignedRow(
+                warning: warning,
+                reservesWarningSpace: warning != nil,
+                lastUpdatedAt: snapshot.fetchedAt
+            ) {
+                Text("Usage details unavailable")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.tertiary)
+            }
         } else {
             VStack(alignment: .leading, spacing: 4) {
-                ForEach(snapshot.windows) { window in
-                    usageWindow(window)
+                ForEach(subscriptionUsageWarningRows(snapshot: snapshot, warning: warning)) { row in
+                    usageWindow(row, lastUpdatedAt: snapshot.fetchedAt)
                 }
             }
         }
     }
 
-    private func usageWindow(_ window: UsageWindow) -> some View {
+    private func usageWindow(
+        _ row: SubscriptionUsageWarningRowPresentation,
+        lastUpdatedAt: Date
+    ) -> some View {
+        let window = row.window
         let percent = min(max(window.usedPercent, 0), 100)
         return VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 7) {
-                Text(subscriptionUsageDisplayLabel(for: window))
-                    .frame(width: 24, alignment: .leading)
-                    .foregroundStyle(.secondary)
-                ProgressView(value: percent, total: 100)
-                    .tint(subscriptionUsageProgressTone(for: percent).color)
-                    .accessibilityLabel(subscriptionUsageAccessibilityLabel(for: window))
-                    .frame(minWidth: 72, maxWidth: .infinity)
-                    .layoutPriority(1)
-                Text("\(Int(percent.rounded()))%")
-                    .frame(width: 34, alignment: .trailing)
+            SubscriptionUsageWarningAlignedRow(
+                warning: row.warning,
+                reservesWarningSpace: row.reservesWarningSpace,
+                lastUpdatedAt: lastUpdatedAt
+            ) {
+                HStack(spacing: 7) {
+                    Text(subscriptionUsageDisplayLabel(for: window))
+                        .frame(width: 24, alignment: .leading)
+                        .foregroundStyle(.secondary)
+                    ProgressView(value: percent, total: 100)
+                        .tint(subscriptionUsageProgressTone(for: percent).color)
+                        .accessibilityLabel(subscriptionUsageAccessibilityLabel(for: window))
+                        .frame(minWidth: 72, maxWidth: .infinity)
+                        .layoutPriority(1)
+                    Text("\(Int(percent.rounded()))%")
+                        .frame(width: 34, alignment: .trailing)
+                }
+                .font(.system(size: 10.5, design: .monospaced))
             }
-            .font(.system(size: 10.5, design: .monospaced))
 
             if let resetAt = window.resetAt {
                 Text("Next reset: \(resetAt.formatted(date: .abbreviated, time: .shortened))")
