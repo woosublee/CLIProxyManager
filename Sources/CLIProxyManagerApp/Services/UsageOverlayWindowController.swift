@@ -198,8 +198,9 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             }
         }
         self.refreshStatusOnShow = refreshStatusOnShow ?? { [weak viewModel] in
-            guard let viewModel else { return }
-            Task { await viewModel.refresh() }
+            Task { [weak viewModel] in
+                await viewModel?.refresh()
+            }
         }
         self.panel = panel ?? NSPanel(
             contentRect: NSRect(
