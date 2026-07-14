@@ -433,6 +433,28 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         XCTAssertTrue(panel.isVisible)
     }
 
+    func testShowForCurrentSessionRefreshesStatusEachTimeReusedHUDAppears() {
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 300, height: 260),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        var refreshCount = 0
+        let controller = UsageOverlayWindowController(
+            panel: panel,
+            refreshStatusOnShow: { refreshCount += 1 }
+        )
+        let preferences = AppConfig.UsageOverlay(isVisible: true, alwaysOnTop: false, backgroundOpacity: 0.9)
+
+        controller.showForCurrentSession(using: preferences)
+        controller.hideForCurrentSession()
+        controller.showForCurrentSession(using: preferences)
+
+        XCTAssertEqual(refreshCount, 2)
+        XCTAssertTrue(controller.isVisible)
+    }
+
     func testCloseHidesPanelButRetainsTheSavedVisibilityPreference() {
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 300, height: 260),

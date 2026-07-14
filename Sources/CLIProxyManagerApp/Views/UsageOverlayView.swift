@@ -142,7 +142,7 @@ struct UsageOverlayView: View {
     }
 
     private var refreshStatus: String {
-        if viewModel.isSubscriptionUsageRefreshInProgress {
+        if viewModel.isSubscriptionUsageReloadActionInProgress {
             return "REFRESHING"
         }
         guard let refreshedAt = viewModel.lastSuccessfulSubscriptionUsageRefreshAt else {
@@ -178,8 +178,8 @@ struct UsageOverlayChrome: View {
                 accessibilityLabel: "Reload subscription usage",
                 action: onRefresh
             )
-            .disabled(!viewModel.canRefreshSubscriptionUsage || viewModel.isSubscriptionUsageRefreshInProgress)
-            .opacity(viewModel.canRefreshSubscriptionUsage ? 1 : 0.45)
+            .disabled(!viewModel.canReloadSubscriptionUsage || viewModel.isSubscriptionUsageReloadActionInProgress)
+            .opacity(viewModel.canReloadSubscriptionUsage ? 1 : 0.45)
             chromeButton(
                 symbol: displayMode.toggleSymbolName,
                 accessibilityLabel: displayMode.toggleAccessibilityLabel,

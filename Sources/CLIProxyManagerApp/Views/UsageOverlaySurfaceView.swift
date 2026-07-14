@@ -54,7 +54,7 @@ final class UsageOverlaySurfaceView: NSView {
                 viewModel: viewModel,
                 displayMode: presentationState.chromeDisplayMode,
                 onRefresh: {
-                    Task { await viewModel.refreshSubscriptionUsage(force: true) }
+                    Task { await viewModel.reloadSubscriptionUsage() }
                 },
                 onToggleDisplayMode: onToggleDisplayMode,
                 onClose: onClose
@@ -74,7 +74,7 @@ final class UsageOverlaySurfaceView: NSView {
                     viewModel: viewModel,
                     displayMode: mode,
                     onRefresh: {
-                        Task { await viewModel.refreshSubscriptionUsage(force: true) }
+                        Task { await viewModel.reloadSubscriptionUsage() }
                     },
                     onToggleDisplayMode: onToggleDisplayMode,
                     onClose: onClose

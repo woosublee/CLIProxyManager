@@ -186,14 +186,22 @@ final class DashboardViewModel: ObservableObject {
     @Published var providerRows: [ProviderRowState] = []
     @Published private(set) var subscriptionUsageStates: [String: AccountSubscriptionUsageState] = [:]
     @Published private(set) var isSubscriptionUsageRefreshInProgress = false
+    @Published private(set) var isSubscriptionUsageReloadInProgress = false
     @Published private(set) var lastSuccessfulSubscriptionUsageRefreshAt: Date?
     @Published private(set) var cpmInstallationStatus: CPMInstallationStatus
     @Published private(set) var isCPMInstallationActionInProgress = false
 
     var canRefreshSubscriptionUsage: Bool {
+        canReloadSubscriptionUsage && serverStatus.severity == .ready
+    }
+
+    var canReloadSubscriptionUsage: Bool {
         config.isSubscriptionUsageEnabled
             && subscriptionUsageKeyStore.isConfigured()
-            && serverStatus.severity == .ready
+    }
+
+    var isSubscriptionUsageReloadActionInProgress: Bool {
+        isSubscriptionUsageReloadInProgress || isSubscriptionUsageRefreshInProgress
     }
 
     private let configStore: any AppConfigStoring
@@ -570,6 +578,20 @@ final class DashboardViewModel: ObservableObject {
         } else if subscriptionUsagePollingTask == nil {
             scheduleSubscriptionUsagePollingIfNeeded()
         }
+    }
+
+    func reloadSubscriptionUsage() async {
+        guard canReloadSubscriptionUsage,
+              !isSubscriptionUsageReloadActionInProgress else {
+            return
+        }
+
+        isSubscriptionUsageReloadInProgress = true
+        defer { isSubscriptionUsageReloadInProgress = false }
+
+        await refresh()
+        guard serverStatus.severity == .ready else { return }
+        await refreshSubscriptionUsage(force: true)
     }
 
     func refreshSubscriptionUsage(force: Bool = false) async {

@@ -4397,6 +4397,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         )
 
         XCTAssertFalse(viewModel.canRefreshSubscriptionUsage)
+        XCTAssertTrue(viewModel.canReloadSubscriptionUsage)
         viewModel.serverStatus = readyStatus()
         XCTAssertTrue(viewModel.canRefreshSubscriptionUsage)
         XCTAssertFalse(viewModel.isSubscriptionUsageRefreshInProgress)
@@ -4408,6 +4409,104 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         await quotaClient.resolveAll(with: availableUsageReport(for: profile))
         await refresh.value
         XCTAssertFalse(viewModel.isSubscriptionUsageRefreshInProgress)
+    }
+
+    func testManualUsageReloadRecoversAfterRefreshingStaleServerError() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let profile = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
+        let recoveredState = availableUsageState(for: profile)
+        let quotaClient = RecordingSubscriptionQuotaClient(reports: [
+            SubscriptionUsageReport(
+                statesByProfileID: [profile.id: recoveredState],
+                fetchedAt: Date(timeIntervalSince1970: 0)
+            )
+        ])
+        let httpClient = SequencedHTTPClient(results: [.success(Data("{}".utf8))])
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [profile],
+            quotaClient: quotaClient,
+            proxyHealthClient: ProxyHealthClient(httpClient: httpClient, timeout: 0.1)
+        )
+        viewModel.serverStatus = DiagnosticStatus(
+            severity: .error,
+            title: "CLIProxyAPI Stale Error",
+            message: "The previous health check failed."
+        )
+
+        XCTAssertFalse(viewModel.canRefreshSubscriptionUsage)
+        XCTAssertTrue(viewModel.canReloadSubscriptionUsage)
+
+        await viewModel.reloadSubscriptionUsage()
+
+        let fetchCallCount = await quotaClient.fetchCallCount()
+        XCTAssertEqual(httpClient.requestCount, 1)
+        XCTAssertEqual(fetchCallCount, 1)
+        XCTAssertEqual(viewModel.serverStatus.severity, .ready)
+        XCTAssertEqual(viewModel.subscriptionUsageStates[profile.id], recoveredState)
+    }
+
+    func testManualUsageReloadSkipsQuotaFetchWhileServerIsStillUnavailable() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let profile = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
+        let quotaClient = RecordingSubscriptionQuotaClient(reports: [availableUsageReport(for: profile)])
+        let httpClient = SequencedHTTPClient(results: [
+            .failure(URLError(.cannotConnectToHost))
+        ])
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [profile],
+            quotaClient: quotaClient,
+            proxyHealthClient: ProxyHealthClient(httpClient: httpClient, timeout: 0.1)
+        )
+        viewModel.serverStatus = DiagnosticStatus(
+            severity: .error,
+            title: "CLIProxyAPI Stale Error",
+            message: "The previous health check failed."
+        )
+
+        await viewModel.reloadSubscriptionUsage()
+
+        let fetchCallCount = await quotaClient.fetchCallCount()
+        XCTAssertEqual(httpClient.requestCount, 1)
+        XCTAssertEqual(fetchCallCount, 0)
+        XCTAssertEqual(viewModel.serverStatus.severity, .warning)
+        XCTAssertFalse(viewModel.isSubscriptionUsageReloadActionInProgress)
+    }
+
+    func testManualUsageReloadReportsProgressAcrossHealthCheckAndQuotaFetch() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let profile = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
+        let quotaClient = SuspendedSubscriptionQuotaClient()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [profile],
+            quotaClient: quotaClient
+        )
+
+        let reload = Task { await viewModel.reloadSubscriptionUsage() }
+        await waitForUsageFetches(quotaClient, expectedCount: 1)
+
+        XCTAssertTrue(viewModel.isSubscriptionUsageReloadInProgress)
+        XCTAssertTrue(viewModel.isSubscriptionUsageReloadActionInProgress)
+
+        await quotaClient.resolveAll(with: availableUsageReport(for: profile))
+        await reload.value
+
+        XCTAssertFalse(viewModel.isSubscriptionUsageReloadInProgress)
+        XCTAssertFalse(viewModel.isSubscriptionUsageReloadActionInProgress)
     }
 
     func testTerminalStaleProfileIsExcludedAutomaticallyAndForceRefreshRecoversIt() async {
@@ -4530,6 +4629,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         quotaClient: any SubscriptionQuotaFetching = StubSubscriptionQuotaClient(),
         subscriptionUsageSnapshotCache: any SubscriptionUsageSnapshotCaching = SubscriptionUsageSnapshotCacheDouble(),
         appAppearanceService: (any AppAppearanceApplying)? = nil,
+        proxyHealthClient: ProxyHealthClient? = nil,
         subscriptionUsageSleep: @escaping @Sendable (UInt64) async throws -> Void = { delay in
             try await Task.sleep(nanoseconds: delay)
         }
@@ -4540,7 +4640,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             shellInstaller: StubShellInstaller(),
             authProfileStore: authProfileStore ?? StubAuthProfileStore(profiles: profiles),
             oauthLoginService: StubOAuthLoginService(),
-            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
+            proxyHealthClient: proxyHealthClient
+                ?? ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
             proxyService: proxyService,
             claudeConnector: connectedClaudeConnector(),
             appAppearanceService: appAppearanceService ?? RecordingAppAppearanceService(),
