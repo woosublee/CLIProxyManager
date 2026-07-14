@@ -39,6 +39,85 @@ enum SubscriptionUsageWarningPresentation {
     }
 }
 
+struct SubscriptionUsageWarningRowPresentation: Equatable, Identifiable {
+    let window: UsageWindow
+    let warning: SubscriptionUsageIssue?
+    let reservesWarningSpace: Bool
+
+    var id: String { window.id }
+}
+
+func subscriptionUsageWarningRows(
+    snapshot: SubscriptionUsageSnapshot,
+    warning: SubscriptionUsageIssue?
+) -> [SubscriptionUsageWarningRowPresentation] {
+    snapshot.windows.enumerated().map { index, window in
+        SubscriptionUsageWarningRowPresentation(
+            window: window,
+            warning: index == snapshot.windows.startIndex ? warning : nil,
+            reservesWarningSpace: warning != nil
+        )
+    }
+}
+
+enum SubscriptionUsageWarningLayout {
+    static let iconFrameSize = CGSize(width: 12, height: 12)
+    static let inlineSpacing: CGFloat = 6
+    static let compactAvatarTrailingOffset: CGFloat = 10
+}
+
+struct SubscriptionUsageWarningAlignedRow<Content: View>: View {
+    let warning: SubscriptionUsageIssue?
+    let reservesWarningSpace: Bool
+    let lastUpdatedAt: Date
+    let content: Content
+
+    init(
+        warning: SubscriptionUsageIssue?,
+        reservesWarningSpace: Bool,
+        lastUpdatedAt: Date,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.warning = warning
+        self.reservesWarningSpace = reservesWarningSpace
+        self.lastUpdatedAt = lastUpdatedAt
+        self.content = content()
+    }
+
+    @ViewBuilder
+    var body: some View {
+        if reservesWarningSpace {
+            HStack(spacing: SubscriptionUsageWarningLayout.inlineSpacing) {
+                content
+                warningSlot
+            }
+        } else {
+            content
+        }
+    }
+
+    @ViewBuilder
+    private var warningSlot: some View {
+        if let warning {
+            SubscriptionUsageWarningIcon(
+                issue: warning,
+                lastUpdatedAt: lastUpdatedAt
+            )
+            .frame(
+                width: SubscriptionUsageWarningLayout.iconFrameSize.width,
+                height: SubscriptionUsageWarningLayout.iconFrameSize.height
+            )
+        } else {
+            Color.clear
+                .frame(
+                    width: SubscriptionUsageWarningLayout.iconFrameSize.width,
+                    height: SubscriptionUsageWarningLayout.iconFrameSize.height
+                )
+                .accessibilityHidden(true)
+        }
+    }
+}
+
 struct SubscriptionUsageWarningIcon: View {
     let issue: SubscriptionUsageIssue
     let lastUpdatedAt: Date
