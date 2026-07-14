@@ -4,6 +4,12 @@ import XCTest
 @testable import CLIProxyManagerApp
 @testable import CLIProxyManagerCore
 
+private final class UnconstrainedTestPanel: NSPanel {
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        frameRect
+    }
+}
+
 @MainActor
 final class UsageOverlayWindowControllerTests: XCTestCase {
     func testDefaultPanelUsesBorderlessStyleForCustomHeader() {
@@ -1179,17 +1185,18 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
 
     func testSavedPlacementRestoresOnItsDisplayInsteadOfPrimaryDisplay() {
         let primary = placementScreen(id: 1, uuid: "primary", frame: CGRect(x: 0, y: 0, width: 1440, height: 900), isPrimary: true)
-        let secondary = placementScreen(id: 2, uuid: "secondary", frame: CGRect(x: -1440, y: 0, width: 1440, height: 900))
+        let secondary = placementScreen(id: 2, uuid: "secondary", frame: CGRect(x: -100_000, y: 0, width: 1440, height: 900))
         let placement = UsageOverlayPlacement(
             display: secondary.identity,
-            frame: CGRect(x: -200, y: 600, width: 108, height: 180),
+            frame: CGRect(x: -98_760, y: 600, width: 108, height: 180),
             visibleFrame: secondary.visibleFrame
         )
-        let panel = makePanel(x: 900, y: 400, width: 108, height: 180)
+        let panel = makeUnconstrainedPanel(x: 900, y: 400, width: 108, height: 180)
         let controller = UsageOverlayWindowController(
             panel: panel,
             initialDisplayMode: .compact,
             shouldReduceMotion: { true },
+            visibleFrameProvider: { secondary.visibleFrame },
             screenProvider: placementScreenProvider(screens: { [primary, secondary] }, windowScreen: { primary }),
             placementPersistence: .init(
                 load: { placement },
@@ -1203,7 +1210,7 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         controller.showForCurrentSession(using: .init(isVisible: true, displayMode: .compact))
         drainMainQueueSynchronously()
 
-        XCTAssertEqual(panel.frame.maxX, -92)
+        XCTAssertEqual(panel.frame.maxX, -98_652)
         XCTAssertEqual(panel.frame.maxY, 780)
     }
 
@@ -1251,11 +1258,15 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         var screens = [primary]
         var saves = 0
         var screenCallbacks: [@MainActor () -> Void] = []
-        let panel = makePanel(x: 900, y: 400, width: 108, height: 180)
+        let panel = makeUnconstrainedPanel(x: 900, y: 400, width: 108, height: 180)
         let controller = UsageOverlayWindowController(
             panel: panel,
             initialDisplayMode: .compact,
             shouldReduceMotion: { true },
+            visibleFrameProvider: {
+                UsageOverlayScreen.match(identity: placement.display, in: screens)?.visibleFrame
+                    ?? primary.visibleFrame
+            },
             screenProvider: placementScreenProvider(screens: { screens }, windowScreen: { primary }),
             placementPersistence: .init(
                 load: { placement },
@@ -1285,11 +1296,12 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         let screen = placementScreen(id: 2, uuid: "secondary", frame: CGRect(x: -2560, y: 0, width: 2560, height: 1410))
         var savedPlacement: UsageOverlayPlacement?
         var removedLegacy = false
-        let panel = makePanel(x: 0, y: 0, width: 108, height: 359)
+        let panel = makeUnconstrainedPanel(x: 0, y: 0, width: 108, height: 359)
         let controller = UsageOverlayWindowController(
             panel: panel,
             initialDisplayMode: .compact,
             shouldReduceMotion: { true },
+            visibleFrameProvider: { screen.visibleFrame },
             screenProvider: placementScreenProvider(screens: { [screen] }, windowScreen: { screen }),
             placementPersistence: .init(
                 load: { nil },
@@ -1383,6 +1395,20 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         height: CGFloat
     ) -> NSPanel {
         NSPanel(
+            contentRect: NSRect(x: x, y: y, width: width, height: height),
+            styleMask: [.borderless, .utilityWindow],
+            backing: .buffered,
+            defer: false
+        )
+    }
+
+    private func makeUnconstrainedPanel(
+        x: CGFloat,
+        y: CGFloat,
+        width: CGFloat,
+        height: CGFloat
+    ) -> NSPanel {
+        UnconstrainedTestPanel(
             contentRect: NSRect(x: x, y: y, width: width, height: height),
             styleMask: [.borderless, .utilityWindow],
             backing: .buffered,
