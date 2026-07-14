@@ -104,6 +104,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     private let fittingSizeProvider: (() -> CGSize)?
     private let frameAnimator: (NSPanel, CGRect, @escaping @MainActor () -> Void) -> Void
     private let frameAnimationInterrupter: (NSPanel) -> Void
+    private let isUserInitiatedMoveDuringAnimation: () -> Bool
     private struct PersistenceTransaction {
         let generation: Int
         let target: AppConfig.UsageOverlay.DisplayMode
@@ -165,7 +166,10 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         modeTransitionResizeScheduler: ((@escaping @MainActor () -> Void) -> Void)? = nil,
         fittingSizeProvider: (() -> CGSize)? = nil,
         frameAnimator: ((NSPanel, CGRect, @escaping @MainActor () -> Void) -> Void)? = nil,
-        frameAnimationInterrupter: ((NSPanel) -> Void)? = nil
+        frameAnimationInterrupter: ((NSPanel) -> Void)? = nil,
+        isUserInitiatedMoveDuringAnimation: @escaping () -> Bool = {
+            NSEvent.pressedMouseButtons != 0
+        }
     ) {
         let suppliedPanelFrame = panel?.frame
         let mode = initialDisplayMode ?? viewModel?.config.usageOverlay.displayMode ?? .expanded
@@ -200,6 +204,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         self.frameAnimationInterrupter = frameAnimationInterrupter ?? { panel in
             panel.setFrame(panel.frame, display: true, animate: false)
         }
+        self.isUserInitiatedMoveDuringAnimation = isUserInitiatedMoveDuringAnimation
         self.persistDisplayMode = persistDisplayMode ?? { [weak viewModel] mode in
             guard let viewModel else { return true }
             var usageOverlay = viewModel.config.usageOverlay
@@ -353,8 +358,10 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         }
 
         resizeCoordinator.animationStarted(generation: transitionGeneration)
+        isApplyingControllerFrame = true
         frameAnimator(panel, target) { [weak self] in
             guard let self else { return }
+            self.isApplyingControllerFrame = false
             self.resizeCoordinator.animationCompleted(generation: transitionGeneration)
             if !self.resizeCoordinator.hasActiveTransition {
                 self.presentationState.presentedDisplayMode = self.displayMode
@@ -376,7 +383,9 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     }
 
     func handleWindowWillMove() {
-        guard !isApplyingControllerFrame else { return }
+        if isApplyingControllerFrame, !isUserInitiatedMoveDuringAnimation() {
+            return
+        }
         isUserMoveInProgress = true
         guard resizeCoordinator.hasActiveTransition else { return }
         interruptActiveTransition()
@@ -649,6 +658,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         if resizeCoordinator.hasActiveTransition {
             frameAnimationInterrupter(panel)
         }
+        isApplyingControllerFrame = false
         resizeCoordinator.cancelActiveTransition()
     }
 

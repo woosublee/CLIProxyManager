@@ -938,7 +938,8 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
             },
             frameAnimationInterrupter: { _ in
                 animationWasInterrupted = true
-            }
+            },
+            isUserInitiatedMoveDuringAnimation: { true }
         )
 
         controller.toggleDisplayMode()
@@ -988,6 +989,47 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         drainMainQueueSynchronously()
 
         XCTAssertEqual(fittingSizeReads, readsBeforeToggle + 1)
+        XCTAssertEqual(panel.frame.size, CGSize(width: 108, height: 180))
+    }
+
+    func testAnimatedProgrammaticMoveDoesNotPersistPlacement() {
+        let screen = placementScreen(
+            id: 1,
+            uuid: "display",
+            frame: CGRect(x: 0, y: 0, width: 1440, height: 900),
+            isPrimary: true
+        )
+        var savedPlacements: [UsageOverlayPlacement] = []
+        var controller: UsageOverlayWindowController!
+        let panel = makePanel(x: 500, y: 400, width: 300, height: 260)
+        panel.contentView = NSView(frame: CGRect(x: 0, y: 0, width: 300, height: 260))
+        controller = UsageOverlayWindowController(
+            panel: panel,
+            initialDisplayMode: .expanded,
+            persistDisplayMode: { _ in true },
+            shouldReduceMotion: { false },
+            visibleFrameProvider: visibleFrame,
+            screenProvider: placementScreenProvider(screens: { [screen] }, windowScreen: { screen }),
+            placementPersistence: .init(
+                load: { nil },
+                save: { savedPlacements.append($0); return true },
+                loadLegacyFrame: { nil },
+                removeLegacyFrame: {}
+            ),
+            modeTransitionResizeScheduler: { $0() },
+            fittingSizeProvider: { CGSize(width: 108, height: 180) },
+            frameAnimator: { panel, target, completion in
+                controller.handleWindowWillMove()
+                panel.setFrame(target, display: false)
+                controller.handleWindowDidMove()
+                completion()
+            },
+            isUserInitiatedMoveDuringAnimation: { false }
+        )
+
+        controller.toggleDisplayMode()
+
+        XCTAssertTrue(savedPlacements.isEmpty)
         XCTAssertEqual(panel.frame.size, CGSize(width: 108, height: 180))
     }
 

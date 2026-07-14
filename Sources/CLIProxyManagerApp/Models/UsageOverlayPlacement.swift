@@ -63,10 +63,6 @@ struct UsageOverlayScreen: Equatable {
         if let uuid = identity.uuid {
             let matches = screens.filter { $0.identity.uuid == uuid }
             if matches.count == 1 { return matches[0] }
-            return uniqueHardwareMatch(
-                identity: identity,
-                in: screens.filter { $0.identity.uuid == nil }
-            )
         }
 
         return uniqueHardwareMatch(identity: identity, in: screens)
@@ -166,10 +162,10 @@ struct LegacyUsageOverlayFrame: Equatable {
     let screenFrame: CGRect
 
     init?(descriptor: String) {
-        let values = descriptor.split(whereSeparator: \Character.isWhitespace).compactMap {
-            Double($0)
-        }
-        guard values.count == 8,
+        let tokens = descriptor.split(whereSeparator: \Character.isWhitespace)
+        let values = tokens.compactMap { Double($0) }
+        guard tokens.count == 8,
+              values.count == tokens.count,
               values.allSatisfy(\.isFinite),
               values[2] > 0,
               values[3] > 0,

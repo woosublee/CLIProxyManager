@@ -39,6 +39,23 @@ final class UsageOverlayPlacementTests: XCTestCase {
         XCTAssertEqual(UsageOverlayScreen.match(identity: target.identity, in: [target]), target)
     }
 
+    func testMatchesScreenByHardwareIdentityWhenUUIDChanges() {
+        let savedIdentity = identity(uuid: "old", vendor: 1, model: 2, serial: 3)
+        let currentScreen = screen(
+            id: 2,
+            uuid: "new",
+            vendor: 1,
+            model: 2,
+            serial: 3,
+            frame: CGRect(x: -1440, y: 0, width: 1440, height: 900)
+        )
+
+        XCTAssertEqual(
+            UsageOverlayScreen.match(identity: savedIdentity, in: [currentScreen]),
+            currentScreen
+        )
+    }
+
     func testRejectsAmbiguousHardwareIdentity() {
         let first = screen(
             id: 2,
@@ -116,6 +133,12 @@ final class UsageOverlayPlacementTests: XCTestCase {
 
         XCTAssertEqual(legacyFrame?.windowFrame, CGRect(x: -124, y: 1035, width: 108, height: 359))
         XCTAssertEqual(legacyFrame?.matchingScreen(in: [screen]), screen)
+    }
+
+    func testLegacyFrameRejectsExtraInvalidToken() {
+        let descriptor = "invalid -124 1035 108 359 -2560 0 2560 1410"
+
+        XCTAssertNil(LegacyUsageOverlayFrame(descriptor: descriptor))
     }
 
     private func identity(
