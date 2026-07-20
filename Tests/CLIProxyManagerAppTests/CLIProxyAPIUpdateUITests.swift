@@ -185,6 +185,33 @@ final class CLIProxyAPIUpdateUITests: XCTestCase {
         XCTAssertFalse(settingsSource.contains("try cliProxyAPIUpdateService.applyPendingNow()"))
     }
 
+    func testApplyOnNextServerStartButtonsPersistPendingConsentWithoutChangingCancel() throws {
+        let dashboardSource = try String(
+            contentsOf: repositoryRoot().appendingPathComponent("Sources/CLIProxyManagerApp/Views/DashboardView.swift"),
+            encoding: .utf8
+        )
+        let settingsSource = try String(
+            contentsOf: repositoryRoot().appendingPathComponent("Sources/CLIProxyManagerApp/Views/GeneralSettingsView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(dashboardSource.contains("cliProxyAPIUpdateService.schedulePendingForNextServerStart()"))
+        XCTAssertTrue(settingsSource.contains("cliProxyAPIUpdateService.schedulePendingForNextServerStart()"))
+        XCTAssertTrue(dashboardSource.contains("Button(\"Cancel\", role: .cancel) {}"))
+        XCTAssertTrue(settingsSource.contains("Button(\"Cancel\", role: .cancel) {}"))
+    }
+
+    func testAppStartupReloadsCLIProxyAPIStatusAfterBundledReconciliation() throws {
+        let appSource = try String(
+            contentsOf: repositoryRoot().appendingPathComponent("Sources/CLIProxyManagerApp/CLIProxyManagerApp.swift"),
+            encoding: .utf8
+        )
+        let startRange = try XCTUnwrap(appSource.range(of: "await viewModel.startApplication()"))
+        let reloadRange = try XCTUnwrap(appSource.range(of: "cliProxyAPIUpdateService.reloadStoredStatus()"))
+
+        XCTAssertLessThan(startRange.lowerBound, reloadRange.lowerBound)
+    }
+
     private func release(_ version: String) -> CLIProxyAPIRelease {
         CLIProxyAPIRelease(
             version: CLIProxyAPIVersion(version)!,

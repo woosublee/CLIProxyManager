@@ -18,6 +18,7 @@ protocol CLIProxyAPIUpdateBinaryStoring: Sendable {
     func validatedCurrentVersion(bundledManifestURL: URL?) throws -> CLIProxyAPIVersion?
     func savePending(binaryURL: URL, manifest: CLIProxyAPIBinaryManifest) throws
     func pendingManifest() throws -> CLIProxyAPIBinaryManifest?
+    func schedulePendingForNextStart() throws
     func applyPending() throws
 }
 
@@ -163,6 +164,28 @@ final class CLIProxyAPIUpdateService: ObservableObject {
         saveState(updateState)
         refreshStoredStatus()
         state = .idle
+    }
+
+    @discardableResult
+    func schedulePendingForNextServerStart() -> Bool {
+        refreshStoredStatus()
+        guard pendingUpdate != nil else {
+            recordFailure(CLIProxyAPIBinaryStoreError.missingPendingManifest)
+            return false
+        }
+        do {
+            try store.schedulePendingForNextStart()
+            refreshStoredStatus()
+            state = .pending
+            return true
+        } catch {
+            recordFailure(error)
+            return false
+        }
+    }
+
+    func reloadStoredStatus() {
+        refreshStoredStatus()
     }
 
     private func check(suppressDeferredVersion: Bool) async -> CLIProxyAPIAutomaticCheckResult {

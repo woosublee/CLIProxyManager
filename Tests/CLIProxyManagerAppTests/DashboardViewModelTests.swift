@@ -5604,6 +5604,8 @@ private final class DashboardUpdateBinaryStore: CLIProxyAPIUpdateBinaryStoring, 
 
     func pendingManifest() throws -> CLIProxyAPIBinaryManifest? { nil }
 
+    func schedulePendingForNextStart() throws {}
+
     func applyPending() throws {
         lock.withLock { applyPendingCallCount += 1 }
     }

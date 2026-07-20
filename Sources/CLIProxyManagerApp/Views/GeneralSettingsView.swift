@@ -431,7 +431,11 @@ struct AboutSettingsView: View {
                 Task { await viewModel.applyCLIProxyAPIPendingUpdate(using: cliProxyAPIUpdateService) }
             }
             Button("Apply on next server start") {
-                viewModel.settingsMessage = "CLIProxyAPI update will be applied on next server start."
+                if cliProxyAPIUpdateService.schedulePendingForNextServerStart() {
+                    viewModel.settingsMessage = "CLIProxyAPI update will be applied on next server start."
+                } else if case let .failed(message) = cliProxyAPIUpdateService.state {
+                    viewModel.settingsMessage = "CLIProxyAPI update failed: \(message)"
+                }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
