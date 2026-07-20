@@ -51,6 +51,23 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
         }
     }
 
+    public func schedulePendingForNextStart() throws {
+        try Self.operationLock.withLock {
+            guard fileManager.fileExists(atPath: paths.pendingClipProxyBinary.path) else {
+                throw CLIProxyAPIBinaryStoreError.missingPendingBinary
+            }
+            guard let manifest = try pendingManifest() else {
+                throw CLIProxyAPIBinaryStoreError.missingPendingManifest
+            }
+            try validateBinary(at: paths.pendingClipProxyBinary, manifest: manifest)
+            try fileManager.createDirectory(at: paths.pendingClipProxyDirectory, withIntermediateDirectories: true)
+            try Data("scheduled\n".utf8).write(
+                to: paths.pendingClipProxyApplyOnNextStartMarker,
+                options: .atomic
+            )
+        }
+    }
+
     public func prepareActiveBinary(bundledBinaryURL: URL?, bundledManifestURL: URL?) throws {
         try Self.operationLock.withLock {
             try prepareActiveBinaryLocked(bundledBinaryURL: bundledBinaryURL, bundledManifestURL: bundledManifestURL)
@@ -72,6 +89,7 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
         if validate {
             try validateBinary(at: binaryURL, manifest: manifest)
         }
+        try clearPendingApplyOnNextStartMarker()
         try fileManager.createDirectory(at: paths.pendingClipProxyDirectory, withIntermediateDirectories: true)
         try replaceFile(from: binaryURL, to: paths.pendingClipProxyBinary)
         try writeManifest(manifest, to: paths.pendingClipProxyManifest)
@@ -174,7 +192,17 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
             try? fileManager.removeItem(at: paths.pendingClipProxyDirectory)
             return
         }
+        guard isPendingScheduledForNextStart() else { return }
         try applyPendingLocked()
+    }
+
+    private func isPendingScheduledForNextStart() -> Bool {
+        fileManager.fileExists(atPath: paths.pendingClipProxyApplyOnNextStartMarker.path)
+    }
+
+    private func clearPendingApplyOnNextStartMarker() throws {
+        guard isPendingScheduledForNextStart() else { return }
+        try fileManager.removeItem(at: paths.pendingClipProxyApplyOnNextStartMarker)
     }
 
     private func installBundled(binaryURL: URL, manifest: CLIProxyAPIBinaryManifest) throws {
