@@ -200,7 +200,7 @@ pending 7.2.80
 
 ### pending 정리 실패
 
-active 설치가 성공한 뒤 오래된 pending 삭제만 실패한 경우, active 설치 결과는 유지하되 오류를 기록한다. 다음 상태 reload와 서버 start의 기존 검증 경로가 오래된 pending을 승격하지 않도록 버전 검사를 유지한다.
+active 설치가 성공한 뒤 오래된 pending 삭제만 실패한 경우, active 설치와 필요한 서버 재시작을 막지 않는다. pending 삭제는 best effort로 처리하고, 다음 앱 시작 또는 서버 prepare에서 같은 버전·무결성 검사를 반복해 오래된 pending이 승격되지 않게 한다.
 
 ### 서버 재시작 실패
 
