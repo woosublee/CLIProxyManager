@@ -36,6 +36,9 @@ extension ProxyModelClient: ProxyModelListing {}
 
 protocol AuthProfileManaging: Sendable {
     func profiles() throws -> [AuthProfile]
+    func prepareCodexCredentialMigrations() throws -> [AuthProfileMigration]
+    func finalizeCodexCredentialMigrations(_ migrations: [AuthProfileMigration]) throws
+    func rollbackCodexCredentialMigrations(_ migrations: [AuthProfileMigration])
     func setDisabled(_ disabled: Bool, id: String) throws -> Bool
     func setDisabled(_ disabled: Bool, for type: AuthProfileType) throws -> Int
     func setPrefix(_ prefix: String?, id: String) throws -> Bool
@@ -44,6 +47,9 @@ protocol AuthProfileManaging: Sendable {
 }
 
 extension AuthProfileManaging {
+    func prepareCodexCredentialMigrations() throws -> [AuthProfileMigration] { [] }
+    func finalizeCodexCredentialMigrations(_: [AuthProfileMigration]) throws {}
+    func rollbackCodexCredentialMigrations(_: [AuthProfileMigration]) {}
     func setDisabled(_ disabled: Bool, id: String) throws -> Bool { false }
     func setPrefix(_ prefix: String?, id: String) throws -> Bool { false }
     func delete(id: String) throws -> Bool { false }
@@ -293,9 +299,16 @@ final class DashboardViewModel: ObservableObject {
         self.subscriptionUsageSleep = subscriptionUsageSleep
         self.serverStatusRetryDelayNanoseconds = serverStatusRetryDelayNanoseconds
         self.settingsMessageAutoClearDelayNanoseconds = settingsMessageAutoClearDelayNanoseconds
-        let persistedConfig = Self.availableConfig(config ?? ((try? configStore.load()) ?? .default))
+        var persistedConfig = Self.availableConfig(config ?? ((try? configStore.load()) ?? .default))
+        let migrationResult = Self.applyPreparedCodexCredentialMigrations(
+            to: persistedConfig,
+            authProfileStore: authProfileStore,
+            configStore: configStore,
+            subscriptionUsageSnapshotCache: subscriptionUsageSnapshotCache
+        )
+        persistedConfig = migrationResult.config
         var initialConfig = persistedConfig
-        self.authProfiles = (try? authProfileStore.profiles()) ?? []
+        self.authProfiles = migrationResult.profiles
         initialConfig = Self.reconciledOAuthCommandProfiles(in: initialConfig, authProfiles: self.authProfiles)
         self.lastPersistedConfig = persistedConfig
         self.config = initialConfig
@@ -834,6 +847,7 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func refreshProfiles() {
+        applyCodexCredentialMigrationsIfNeeded()
         authProfiles = (try? authProfileStore.profiles()) ?? []
         reconcileConfigWithAuthProfiles()
         let enabledProfileIDs = Set(authProfiles.filter(isSubscriptionUsageEnabled(for:)).map(\.id))
@@ -995,7 +1009,7 @@ final class DashboardViewModel: ObservableObject {
             try await oauthLoginService.login(provider: loginProvider, port: config.port)
             try Task.checkCancellation()
             guard oauthLoginSessionID == sessionID else { return }
-            authProfiles = (try? authProfileStore.profiles()) ?? []
+            applyCodexCredentialMigrationsIfNeeded()
             let completedID = reconcileOAuthLoginCompletion(providerType: providerType, beforeProfiles: beforeProfiles)
             refreshProfiles()
             completedOAuthLoginProvider = completedID
@@ -2125,6 +2139,176 @@ final class DashboardViewModel: ObservableObject {
             }
         }
         return result.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+    }
+
+    private struct CodexCredentialMigrationResult {
+        let config: AppConfig
+        let profiles: [AuthProfile]
+    }
+
+    private static func applyPreparedCodexCredentialMigrations(
+        to config: AppConfig,
+        authProfileStore: any AuthProfileManaging,
+        configStore: any AppConfigStoring,
+        subscriptionUsageSnapshotCache: any SubscriptionUsageSnapshotCaching
+    ) -> CodexCredentialMigrationResult {
+        guard let migrations = try? authProfileStore.prepareCodexCredentialMigrations(),
+              !migrations.isEmpty else {
+            return CodexCredentialMigrationResult(
+                config: config,
+                profiles: (try? authProfileStore.profiles()) ?? []
+            )
+        }
+
+        let mapping = migrationMapping(migrations)
+        let migratedConfig = remappingAuthProfileIDs(in: config, using: mapping)
+        let originalSnapshots = subscriptionUsageSnapshotCache.load()
+        do {
+            try configStore.save(migratedConfig)
+            try remapSubscriptionUsageSnapshots(
+                originalSnapshots,
+                using: mapping,
+                cache: subscriptionUsageSnapshotCache
+            )
+            try authProfileStore.finalizeCodexCredentialMigrations(migrations)
+            return CodexCredentialMigrationResult(
+                config: migratedConfig,
+                profiles: (try? authProfileStore.profiles()) ?? []
+            )
+        } catch {
+            try? subscriptionUsageSnapshotCache.save(originalSnapshots)
+            authProfileStore.rollbackCodexCredentialMigrations(migrations)
+            return CodexCredentialMigrationResult(
+                config: config,
+                profiles: (try? authProfileStore.profiles()) ?? []
+            )
+        }
+    }
+
+    private func applyCodexCredentialMigrationsIfNeeded() {
+        let result = Self.applyPreparedCodexCredentialMigrations(
+            to: config,
+            authProfileStore: authProfileStore,
+            configStore: configStore,
+            subscriptionUsageSnapshotCache: subscriptionUsageSnapshotCache
+        )
+        guard result.config != config else {
+            authProfiles = result.profiles
+            return
+        }
+        let mapping = Self.authProfileIDMapping(from: config, to: result.config)
+        config = result.config
+        lastPersistedConfig = result.config
+        authProfiles = result.profiles
+        subscriptionUsageStates = Self.remappingSubscriptionUsageStates(
+            subscriptionUsageStates,
+            using: mapping
+        )
+        cards = ProfileCard.makeDefaultCards(config: result.config)
+        rebuildOptionRows()
+    }
+
+    private static func migrationMapping(_ migrations: [AuthProfileMigration]) -> [String: String] {
+        Dictionary(
+            migrations.map { ($0.oldID, $0.newID) },
+            uniquingKeysWith: { _, newest in newest }
+        )
+    }
+
+    private static func authProfileIDMapping(from oldConfig: AppConfig, to newConfig: AppConfig) -> [String: String] {
+        let oldByCommandID = Dictionary(uniqueKeysWithValues: oldConfig.oauthCommandProfiles.map { ($0.id, $0.authProfileID) })
+        return newConfig.oauthCommandProfiles.reduce(into: [String: String]()) { result, profile in
+            guard let oldID = oldByCommandID[profile.id], oldID != profile.authProfileID else { return }
+            result[oldID] = profile.authProfileID
+        }
+    }
+
+    private static func remappingAuthProfileIDs(
+        in config: AppConfig,
+        using mapping: [String: String]
+    ) -> AppConfig {
+        guard !mapping.isEmpty else { return config }
+        var updated = config
+        updated.oauthCommandProfiles = config.oauthCommandProfiles.map { profile in
+            var profile = profile
+            profile.authProfileID = mapping[profile.authProfileID] ?? profile.authProfileID
+            return profile
+        }
+        updated.roundRobinProfiles = config.roundRobinProfiles.map { profile in
+            var profile = profile
+            var seen: Set<String> = []
+            profile.includedAuthProfileIDs = profile.includedAuthProfileIDs.compactMap { profileID in
+                let remapped = mapping[profileID] ?? profileID
+                return seen.insert(remapped).inserted ? remapped : nil
+            }
+            return profile
+        }
+        return updated
+    }
+
+    private static func remapSubscriptionUsageSnapshots(
+        _ snapshots: [String: SubscriptionUsageSnapshot],
+        using mapping: [String: String],
+        cache: any SubscriptionUsageSnapshotCaching
+    ) throws {
+        guard !mapping.isEmpty else { return }
+        var remapped: [String: SubscriptionUsageSnapshot] = [:]
+        for (key, snapshot) in snapshots {
+            let profileID = mapping[key] ?? mapping[snapshot.profileID] ?? snapshot.profileID
+            let updated = SubscriptionUsageSnapshot(
+                profileID: profileID,
+                provider: snapshot.provider,
+                windows: snapshot.windows,
+                fetchedAt: snapshot.fetchedAt
+            )
+            if let existing = remapped[profileID], existing.fetchedAt >= updated.fetchedAt {
+                continue
+            }
+            remapped[profileID] = updated
+        }
+        if remapped != snapshots {
+            try cache.save(remapped)
+        }
+    }
+
+    private static func remappingSubscriptionUsageStates(
+        _ states: [String: AccountSubscriptionUsageState],
+        using mapping: [String: String]
+    ) -> [String: AccountSubscriptionUsageState] {
+        guard !mapping.isEmpty else { return states }
+        var remapped: [String: AccountSubscriptionUsageState] = [:]
+        for (key, state) in states {
+            let targetID = mapping[key] ?? key
+            let updatedState: AccountSubscriptionUsageState
+            switch state {
+            case .available(let snapshot):
+                updatedState = .available(remapping(snapshot, profileID: targetID))
+            case .stale(let snapshot, let issue):
+                updatedState = .stale(remapping(snapshot, profileID: targetID), issue)
+            case .disabled, .managementKeyNotConfigured, .loading, .unavailable:
+                updatedState = state
+            }
+            if let existing = remapped[targetID],
+               let existingSnapshot = existing.snapshot,
+               let updatedSnapshot = updatedState.snapshot,
+               existingSnapshot.fetchedAt >= updatedSnapshot.fetchedAt {
+                continue
+            }
+            remapped[targetID] = updatedState
+        }
+        return remapped
+    }
+
+    private static func remapping(
+        _ snapshot: SubscriptionUsageSnapshot,
+        profileID: String
+    ) -> SubscriptionUsageSnapshot {
+        SubscriptionUsageSnapshot(
+            profileID: profileID,
+            provider: snapshot.provider,
+            windows: snapshot.windows,
+            fetchedAt: snapshot.fetchedAt
+        )
     }
 
     private func reconcileConfigWithAuthProfiles() {

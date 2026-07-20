@@ -51,6 +51,10 @@ public struct ManagedPaths: Equatable, Sendable {
         rootDirectory.appendingPathComponent("backups", isDirectory: true)
     }
 
+    public var credentialMigrationBackupsDirectory: URL {
+        backupsDirectory.appendingPathComponent("credential-migrations", isDirectory: true)
+    }
+
     public var clipProxyDirectory: URL {
         rootDirectory.appendingPathComponent("cliproxyapi")
     }

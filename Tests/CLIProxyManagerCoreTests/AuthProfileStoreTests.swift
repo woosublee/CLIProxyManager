@@ -1,3 +1,4 @@
+import CryptoKit
 import XCTest
 @testable import CLIProxyManagerCore
 
@@ -174,6 +175,116 @@ final class AuthProfileStoreTests: XCTestCase {
         XCTAssertEqual(try store.setDisabled(true, for: .claude), 0)
     }
 
+    func testPrepareAndFinalizeCodexCredentialMigrationPreservesCredentialData() throws {
+        let sandbox = try makeSandbox()
+        let authDirectory = sandbox.appendingPathComponent("auth", isDirectory: true)
+        let backupsDirectory = sandbox.appendingPathComponent("backups", isDirectory: true)
+        try FileManager.default.createDirectory(at: authDirectory, withIntermediateDirectories: true)
+        let sourceURL = authDirectory.appendingPathComponent("codex-user@example.com-pro.json")
+        let token = codexIDToken(planType: "Pro")
+        let source = #"{"type":"codex","email":"user@example.com","account_id":"acct_123","id_token":"\#(token)","access_token":"access","refresh_token":"refresh","prefix":"personal","disabled":true,"metadata":{"custom":"value"}}"#
+        try Data(source.utf8).write(to: sourceURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0o640], ofItemAtPath: sourceURL.path)
+        let expectedName = "codex-\(accountHash("acct_123"))-user@example.com-pro.json"
+        let targetURL = authDirectory.appendingPathComponent(expectedName)
+        let store = AuthProfileStore(
+            authDirectory: authDirectory,
+            migrationBackupsDirectory: backupsDirectory
+        )
+
+        let migrations = try store.prepareCodexCredentialMigrations()
+
+        XCTAssertEqual(migrations.map(\.oldID), [sourceURL.lastPathComponent])
+        XCTAssertEqual(migrations.map(\.newID), [expectedName])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sourceURL.path))
+        XCTAssertEqual(try Data(contentsOf: targetURL), try Data(contentsOf: sourceURL))
+        XCTAssertEqual(
+            try FileManager.default.attributesOfItem(atPath: targetURL.path)[.posixPermissions] as? NSNumber,
+            NSNumber(value: 0o640)
+        )
+        let repeated = try store.prepareCodexCredentialMigrations()
+        XCTAssertEqual(repeated.map(\.oldID), migrations.map(\.oldID))
+        XCTAssertEqual(repeated.map(\.newID), migrations.map(\.newID))
+
+        try store.finalizeCodexCredentialMigrations(migrations)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sourceURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: targetURL.path))
+        let backups = try FileManager.default.contentsOfDirectory(atPath: backupsDirectory.path)
+        XCTAssertEqual(backups, ["codex-user@example.com-pro.json.migrated"])
+    }
+
+    func testRollbackCodexCredentialMigrationRemovesOnlyPreparedCanonicalCopy() throws {
+        let sandbox = try makeSandbox()
+        let authDirectory = sandbox.appendingPathComponent("auth", isDirectory: true)
+        try FileManager.default.createDirectory(at: authDirectory, withIntermediateDirectories: true)
+        let sourceURL = authDirectory.appendingPathComponent("codex-user@example.com-plus.json")
+        let token = codexIDToken(planType: "plus")
+        try Data(#"{"type":"codex","email":"user@example.com","account_id":"acct_123","id_token":"\#(token)"}"#.utf8)
+            .write(to: sourceURL)
+        let store = AuthProfileStore(authDirectory: authDirectory)
+        let migrations = try store.prepareCodexCredentialMigrations()
+        let targetURL = authDirectory.appendingPathComponent(try XCTUnwrap(migrations.first?.newID))
+
+        store.rollbackCodexCredentialMigrations(migrations)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sourceURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: targetURL.path))
+    }
+
+    func testPrepareCodexCredentialMigrationReusesMatchingCanonicalTargetWithoutOverwritingIt() throws {
+        let sandbox = try makeSandbox()
+        let authDirectory = sandbox.appendingPathComponent("auth", isDirectory: true)
+        try FileManager.default.createDirectory(at: authDirectory, withIntermediateDirectories: true)
+        let token = codexIDToken(planType: "pro")
+        let sourceURL = authDirectory.appendingPathComponent("codex-user@example.com-pro.json")
+        let targetURL = authDirectory.appendingPathComponent("codex-\(accountHash("acct_123"))-user@example.com-pro.json")
+        try Data(#"{"type":"codex","email":"user@example.com","account_id":"acct_123","id_token":"\#(token)","access_token":"legacy"}"#.utf8)
+            .write(to: sourceURL)
+        let targetData = Data(#"{"type":"codex","email":"user@example.com","account_id":"acct_123","id_token":"\#(token)","access_token":"current"}"#.utf8)
+        try targetData.write(to: targetURL)
+        let store = AuthProfileStore(authDirectory: authDirectory)
+
+        let migrations = try store.prepareCodexCredentialMigrations()
+        store.rollbackCodexCredentialMigrations(migrations)
+
+        XCTAssertEqual(migrations, [AuthProfileMigration(oldID: sourceURL.lastPathComponent, newID: targetURL.lastPathComponent)])
+        XCTAssertEqual(try Data(contentsOf: targetURL), targetData)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sourceURL.path))
+    }
+
+    func testPrepareCodexCredentialMigrationSkipsUnsafeOrUnrelatedFiles() throws {
+        let sandbox = try makeSandbox()
+        let authDirectory = sandbox.appendingPathComponent("auth", isDirectory: true)
+        try FileManager.default.createDirectory(at: authDirectory, withIntermediateDirectories: true)
+        let token = codexIDToken(planType: "pro")
+        let fixtures: [(String, String)] = [
+            ("claude-user.json", #"{"type":"claude","email":"user@example.com","account_id":"acct_123","id_token":"\#(token)"}"#),
+            ("codex-no-account.json", #"{"type":"codex","email":"user@example.com","id_token":"\#(token)"}"#),
+            ("custom-codex.json", #"{"type":"codex","email":"user@example.com","account_id":"acct_123","id_token":"\#(token)"}"#),
+            ("codex-user@example.com-pro.json", #"{"type":"codex","email":"user@example.com","account_id":"acct_123","id_token":"invalid"}"#),
+            ("codex-\(accountHash("acct_456"))-other@example.com-pro.json", #"{"type":"codex","email":"other@example.com","account_id":"acct_456","id_token":"\#(token)"}"#)
+        ]
+        for (name, contents) in fixtures {
+            try Data(contents.utf8).write(to: authDirectory.appendingPathComponent(name))
+        }
+        let store = AuthProfileStore(authDirectory: authDirectory)
+
+        XCTAssertEqual(try store.prepareCodexCredentialMigrations(), [])
+    }
+
+    private func codexIDToken(planType: String) -> String {
+        let header = Data(#"{"alg":"none"}"#.utf8).base64URLEncodedString()
+        let payload = try! JSONSerialization.data(withJSONObject: [
+            "https://api.openai.com/auth": ["chatgpt_plan_type": planType]
+        ]).base64URLEncodedString()
+        return "\(header).\(payload).signature"
+    }
+
+    private func accountHash(_ accountID: String) -> String {
+        SHA256.hash(data: Data(accountID.utf8)).prefix(4).map { String(format: "%02x", $0) }.joined()
+    }
+
     private func makeSandbox() throws -> URL {
         let sandbox = FileManager.default.temporaryDirectory
             .appendingPathComponent("CLIProxyManagerTests")
@@ -181,5 +292,14 @@ final class AuthProfileStoreTests: XCTestCase {
         try FileManager.default.createDirectory(at: sandbox, withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: sandbox) }
         return sandbox
+    }
+}
+
+private extension Data {
+    func base64URLEncodedString() -> String {
+        base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
     }
 }
