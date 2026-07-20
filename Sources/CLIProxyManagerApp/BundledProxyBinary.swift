@@ -19,4 +19,12 @@ enum BundledProxyBinary {
     static func serviceManager(paths: ManagedPaths = ManagedPaths()) -> ProxyServiceManager {
         ProxyServiceManager(paths: paths, bundledBinaryURL: url(), bundledManifestURL: manifestURL())
     }
+
+    static func reconciliationService(paths: ManagedPaths = ManagedPaths()) -> BundledProxyReconciliationService {
+        BundledProxyReconciliationService(
+            store: CLIProxyAPIBinaryStore(paths: paths),
+            bundledBinaryURL: url(),
+            bundledManifestURL: manifestURL()
+        )
+    }
 }
