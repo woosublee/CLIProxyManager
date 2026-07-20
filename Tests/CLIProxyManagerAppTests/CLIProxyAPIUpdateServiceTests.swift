@@ -183,6 +183,70 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         XCTAssertNil(state.lastAvailableVersion)
     }
 
+    func testSchedulePendingForNextServerStartCallsStoreAndKeepsPendingState() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let store = StubUpdateBinaryStore(currentVersion: "7.2.41", pending: manifest("7.2.42"))
+        let service = CLIProxyAPIUpdateService(
+            paths: paths,
+            checker: StubUpdateChecking(release: release("7.2.42")),
+            downloader: StubUpdateDownloading(),
+            store: store,
+            now: { Date() }
+        )
+
+        XCTAssertTrue(service.schedulePendingForNextServerStart())
+
+        XCTAssertEqual(store.schedulePendingCallCount, 1)
+        XCTAssertEqual(service.pendingUpdate?.version, "7.2.42")
+        XCTAssertEqual(service.state, .pending)
+    }
+
+    func testSchedulePendingForNextServerStartRecordsFailure() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let store = StubUpdateBinaryStore(
+            currentVersion: "7.2.41",
+            pending: manifest("7.2.42"),
+            scheduleError: CocoaError(.fileWriteNoPermission)
+        )
+        let service = CLIProxyAPIUpdateService(
+            paths: paths,
+            checker: StubUpdateChecking(release: release("7.2.42")),
+            downloader: StubUpdateDownloading(),
+            store: store,
+            now: { Date() }
+        )
+
+        XCTAssertFalse(service.schedulePendingForNextServerStart())
+
+        XCTAssertEqual(store.schedulePendingCallCount, 1)
+        if case .failed(let message) = service.state {
+            XCTAssertFalse(message.isEmpty)
+        } else {
+            XCTFail("Expected failed state")
+        }
+    }
+
+    func testReloadStoredStatusPublishesReconciledActiveAndPendingVersions() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let store = StubUpdateBinaryStore(currentVersion: "7.2.72", pending: nil)
+        let service = CLIProxyAPIUpdateService(
+            paths: paths,
+            checker: StubUpdateChecking(release: release("7.2.92")),
+            downloader: StubUpdateDownloading(),
+            store: store,
+            now: { Date() }
+        )
+        store.replaceState(currentVersion: "7.2.91", pending: manifest("7.2.92"))
+
+        service.reloadStoredStatus()
+
+        XCTAssertEqual(service.currentVersionText, "7.2.91")
+        XCTAssertEqual(service.pendingUpdate?.version, "7.2.92")
+    }
+
     func testApplyPendingNowClearsAvailableAndPersistedAvailableVersion() throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
@@ -304,16 +368,25 @@ private final class StubUpdateBinaryStore: CLIProxyAPIUpdateBinaryStoring, @unch
     private var current: CLIProxyAPIVersion?
     private var pending: CLIProxyAPIBinaryManifest?
     private let currentAfterApply: CLIProxyAPIVersion?
+    private let scheduleError: Error?
     private var _savedPendingVersions: [String] = []
     private var _applyPendingCallCount = 0
+    private var _schedulePendingCallCount = 0
 
     var savedPendingVersions: [String] { lock.withLock { _savedPendingVersions } }
     var applyPendingCallCount: Int { lock.withLock { _applyPendingCallCount } }
+    var schedulePendingCallCount: Int { lock.withLock { _schedulePendingCallCount } }
 
-    init(currentVersion: String?, pending: CLIProxyAPIBinaryManifest? = nil, currentAfterApply: String? = nil) {
+    init(
+        currentVersion: String?,
+        pending: CLIProxyAPIBinaryManifest? = nil,
+        currentAfterApply: String? = nil,
+        scheduleError: Error? = nil
+    ) {
         self.current = currentVersion.flatMap(CLIProxyAPIVersion.init)
         self.pending = pending
         self.currentAfterApply = currentAfterApply.flatMap(CLIProxyAPIVersion.init)
+        self.scheduleError = scheduleError
     }
 
     func validatedCurrentVersion(bundledManifestURL: URL?) throws -> CLIProxyAPIVersion? { lock.withLock { current } }
@@ -330,6 +403,13 @@ private final class StubUpdateBinaryStore: CLIProxyAPIUpdateBinaryStoring, @unch
         lock.withLock {
             _savedPendingVersions.append(manifest.version)
             pending = manifest
+        }
+    }
+
+    func schedulePendingForNextStart() throws {
+        try lock.withLock {
+            _schedulePendingCallCount += 1
+            if let scheduleError { throw scheduleError }
         }
     }
 

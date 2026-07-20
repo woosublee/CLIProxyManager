@@ -91,6 +91,10 @@ public struct ManagedPaths: Equatable, Sendable {
         pendingClipProxyDirectory.appendingPathComponent("manifest.json")
     }
 
+    public var pendingClipProxyApplyOnNextStartMarker: URL {
+        pendingClipProxyDirectory.appendingPathComponent("apply-on-next-start")
+    }
+
     public var clipProxyUpdateStateFile: URL {
         clipProxyDirectory.appendingPathComponent("update-state.json")
     }

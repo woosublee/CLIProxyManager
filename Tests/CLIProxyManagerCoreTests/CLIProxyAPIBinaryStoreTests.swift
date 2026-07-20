@@ -32,12 +32,36 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         let pendingManifest = try manifest(version: "7.2.42", sourceKind: .userUpdated, binarySha: sha256(pendingBinary), size: fileSize(pendingBinary))
         let store = CLIProxyAPIBinaryStore(paths: paths)
         try store.savePending(binaryURL: pendingBinary, manifest: pendingManifest)
+        try store.schedulePendingForNextStart()
 
         try store.prepareActiveBinary(bundledBinaryURL: bundledBinary, bundledManifestURL: bundledManifest)
 
         XCTAssertEqual(try String(contentsOf: paths.clipProxyBinary, encoding: .utf8), "#!/bin/sh\necho pending\n")
         XCTAssertEqual(try store.activeManifest()?.version, "7.2.42")
         XCTAssertFalse(FileManager.default.fileExists(atPath: paths.pendingClipProxyBinary.path))
+    }
+
+    func testPrepareKeepsValidUnscheduledPendingWithoutApplyingIt() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let activeBinary = paths.clipProxyBinary
+        let bundledBinary = sandbox.appendingPathComponent("bundle/cliproxyapi")
+        let bundledManifest = sandbox.appendingPathComponent("bundle/cliproxyapi.manifest.json")
+        let pendingBinary = sandbox.appendingPathComponent("download/cliproxyapi")
+        try writeExecutable("#!/bin/sh\necho active\n", to: activeBinary)
+        try writeManifest(version: "7.2.41", sourceKind: .bundled, binarySha: sha256(activeBinary), size: fileSize(activeBinary), to: paths.activeClipProxyManifest)
+        try writeExecutable("#!/bin/sh\necho bundled\n", to: bundledBinary)
+        try writeManifest(version: "7.2.41", sourceKind: .bundled, binarySha: sha256(bundledBinary), size: fileSize(bundledBinary), to: bundledManifest)
+        try writeExecutable("#!/bin/sh\necho pending\n", to: pendingBinary)
+        let pendingManifest = try manifest(version: "7.2.42", sourceKind: .userUpdated, binarySha: sha256(pendingBinary), size: fileSize(pendingBinary))
+        let store = CLIProxyAPIBinaryStore(paths: paths)
+        try store.savePending(binaryURL: pendingBinary, manifest: pendingManifest)
+
+        try store.prepareActiveBinary(bundledBinaryURL: bundledBinary, bundledManifestURL: bundledManifest)
+
+        XCTAssertEqual(try store.activeManifest()?.version, "7.2.41")
+        XCTAssertEqual(try store.pendingManifest()?.version, "7.2.42")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.pendingClipProxyApplyOnNextStartMarker.path))
     }
 
     func testPrepareKeepsUserUpdatedActiveWhenBundledIsOlder() throws {
@@ -75,6 +99,139 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: paths.clipProxyBinary, encoding: .utf8), "#!/bin/sh\necho bundled\n")
         XCTAssertEqual(try store.activeManifest()?.sourceKind, .bundled)
         XCTAssertEqual(try store.activeManifest()?.version, "7.2.42")
+    }
+
+    func testReconcileBundledInstallsNewerBundleWithoutApplyingNewerPending() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let active = paths.clipProxyBinary
+        let bundled = sandbox.appendingPathComponent("bundle/cliproxyapi")
+        let bundledManifest = sandbox.appendingPathComponent("bundle/cliproxyapi.manifest.json")
+        let pending = sandbox.appendingPathComponent("download/cliproxyapi")
+        try writeExecutable("active", to: active)
+        try writeManifest(version: "7.2.72", sourceKind: .bundled, binarySha: sha256(active), size: fileSize(active), to: paths.activeClipProxyManifest)
+        try writeExecutable("bundled", to: bundled)
+        try writeManifest(version: "7.2.91", sourceKind: .bundled, binarySha: sha256(bundled), size: fileSize(bundled), to: bundledManifest)
+        try writeExecutable("pending", to: pending)
+        let store = CLIProxyAPIBinaryStore(paths: paths)
+        try store.savePending(
+            binaryURL: pending,
+            manifest: try manifest(version: "7.2.92", sourceKind: .userUpdated, binarySha: sha256(pending), size: fileSize(pending))
+        )
+
+        let result = try store.reconcileBundledBinary(bundledBinaryURL: bundled, bundledManifestURL: bundledManifest)
+
+        XCTAssertEqual(
+            result,
+            .installed(previousVersion: CLIProxyAPIVersion("7.2.72"), newVersion: CLIProxyAPIVersion("7.2.91")!)
+        )
+        XCTAssertEqual(try store.activeManifest()?.version, "7.2.91")
+        XCTAssertEqual(try store.pendingManifest()?.version, "7.2.92")
+    }
+
+    func testReconcileBundledKeepsNewerActive() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let active = paths.clipProxyBinary
+        let bundled = sandbox.appendingPathComponent("bundle/cliproxyapi")
+        let bundledManifest = sandbox.appendingPathComponent("bundle/cliproxyapi.manifest.json")
+        try writeExecutable("active", to: active)
+        try writeManifest(version: "7.2.92", sourceKind: .userUpdated, binarySha: sha256(active), size: fileSize(active), to: paths.activeClipProxyManifest)
+        try writeExecutable("bundled", to: bundled)
+        try writeManifest(version: "7.2.91", sourceKind: .bundled, binarySha: sha256(bundled), size: fileSize(bundled), to: bundledManifest)
+        let store = CLIProxyAPIBinaryStore(paths: paths)
+
+        XCTAssertEqual(
+            try store.reconcileBundledBinary(bundledBinaryURL: bundled, bundledManifestURL: bundledManifest),
+            .unchanged(version: CLIProxyAPIVersion("7.2.92")!)
+        )
+        XCTAssertEqual(try store.activeManifest()?.version, "7.2.92")
+    }
+
+    func testReconcileBundledRecoversMissingActive() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let bundled = sandbox.appendingPathComponent("bundle/cliproxyapi")
+        let bundledManifest = sandbox.appendingPathComponent("bundle/cliproxyapi.manifest.json")
+        try writeExecutable("bundled", to: bundled)
+        try writeManifest(version: "7.2.91", sourceKind: .bundled, binarySha: sha256(bundled), size: fileSize(bundled), to: bundledManifest)
+        let store = CLIProxyAPIBinaryStore(paths: paths)
+
+        XCTAssertEqual(
+            try store.reconcileBundledBinary(bundledBinaryURL: bundled, bundledManifestURL: bundledManifest),
+            .recoveredInvalidActive(newVersion: CLIProxyAPIVersion("7.2.91")!)
+        )
+        XCTAssertEqual(try store.activeManifest()?.version, "7.2.91")
+    }
+
+    func testReconcileBundledRejectsChecksumMismatchWithoutChangingActive() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let active = paths.clipProxyBinary
+        let bundled = sandbox.appendingPathComponent("bundle/cliproxyapi")
+        let bundledManifest = sandbox.appendingPathComponent("bundle/cliproxyapi.manifest.json")
+        try writeExecutable("active", to: active)
+        try writeManifest(version: "7.2.72", sourceKind: .bundled, binarySha: sha256(active), size: fileSize(active), to: paths.activeClipProxyManifest)
+        try writeExecutable("bundled", to: bundled)
+        try writeManifest(version: "7.2.91", sourceKind: .bundled, binarySha: "invalid-sha", size: fileSize(bundled), to: bundledManifest)
+        let store = CLIProxyAPIBinaryStore(paths: paths)
+
+        XCTAssertThrowsError(
+            try store.reconcileBundledBinary(bundledBinaryURL: bundled, bundledManifestURL: bundledManifest)
+        ) { error in
+            XCTAssertEqual(error as? CLIProxyAPIBinaryStoreError, .binaryChecksumMismatch)
+        }
+        XCTAssertEqual(try store.activeManifest()?.version, "7.2.72")
+    }
+
+    func testReconcileBundledRemovesPendingThatIsNotNewerThanFinalActive() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let active = paths.clipProxyBinary
+        let bundled = sandbox.appendingPathComponent("bundle/cliproxyapi")
+        let bundledManifest = sandbox.appendingPathComponent("bundle/cliproxyapi.manifest.json")
+        let pending = sandbox.appendingPathComponent("download/cliproxyapi")
+        try writeExecutable("active", to: active)
+        try writeManifest(version: "7.2.72", sourceKind: .bundled, binarySha: sha256(active), size: fileSize(active), to: paths.activeClipProxyManifest)
+        try writeExecutable("bundled", to: bundled)
+        try writeManifest(version: "7.2.91", sourceKind: .bundled, binarySha: sha256(bundled), size: fileSize(bundled), to: bundledManifest)
+        try writeExecutable("pending", to: pending)
+        let store = CLIProxyAPIBinaryStore(paths: paths)
+        try store.savePending(
+            binaryURL: pending,
+            manifest: try manifest(version: "7.2.80", sourceKind: .userUpdated, binarySha: sha256(pending), size: fileSize(pending))
+        )
+        try store.schedulePendingForNextStart()
+
+        _ = try store.reconcileBundledBinary(bundledBinaryURL: bundled, bundledManifestURL: bundledManifest)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.pendingClipProxyDirectory.path))
+    }
+
+    func testReconcileBundledPreservesScheduledPendingWhenItIsNewer() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let active = paths.clipProxyBinary
+        let bundled = sandbox.appendingPathComponent("bundle/cliproxyapi")
+        let bundledManifest = sandbox.appendingPathComponent("bundle/cliproxyapi.manifest.json")
+        let pending = sandbox.appendingPathComponent("download/cliproxyapi")
+        try writeExecutable("active", to: active)
+        try writeManifest(version: "7.2.72", sourceKind: .bundled, binarySha: sha256(active), size: fileSize(active), to: paths.activeClipProxyManifest)
+        try writeExecutable("bundled", to: bundled)
+        try writeManifest(version: "7.2.91", sourceKind: .bundled, binarySha: sha256(bundled), size: fileSize(bundled), to: bundledManifest)
+        try writeExecutable("pending", to: pending)
+        let store = CLIProxyAPIBinaryStore(paths: paths)
+        try store.savePending(
+            binaryURL: pending,
+            manifest: try manifest(version: "7.2.92", sourceKind: .userUpdated, binarySha: sha256(pending), size: fileSize(pending))
+        )
+        try store.schedulePendingForNextStart()
+
+        _ = try store.reconcileBundledBinary(bundledBinaryURL: bundled, bundledManifestURL: bundledManifest)
+
+        XCTAssertEqual(try store.activeManifest()?.version, "7.2.91")
+        XCTAssertEqual(try store.pendingManifest()?.version, "7.2.92")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: paths.pendingClipProxyApplyOnNextStartMarker.path))
     }
 
     func testInvalidPendingChecksumIsNotApplied() throws {
@@ -213,6 +370,40 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
 
         let mode = try FileManager.default.attributesOfItem(atPath: activeBinary.path)[.posixPermissions] as? Int
         XCTAssertEqual((try XCTUnwrap(mode)) & 0o777, 0o755)
+    }
+
+    func testSavePendingClearsApplyOnNextStartMarkerFromPreviousPending() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let first = sandbox.appendingPathComponent("download/first")
+        let second = sandbox.appendingPathComponent("download/second")
+        try writeExecutable("first", to: first)
+        try writeExecutable("second", to: second)
+        let store = CLIProxyAPIBinaryStore(paths: paths)
+        try store.savePending(
+            binaryURL: first,
+            manifest: try manifest(version: "7.2.42", sourceKind: .userUpdated, binarySha: sha256(first), size: fileSize(first))
+        )
+        try store.schedulePendingForNextStart()
+
+        try store.savePending(
+            binaryURL: second,
+            manifest: try manifest(version: "7.2.43", sourceKind: .userUpdated, binarySha: sha256(second), size: fileSize(second))
+        )
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.pendingClipProxyApplyOnNextStartMarker.path))
+        XCTAssertEqual(try store.pendingManifest()?.version, "7.2.43")
+    }
+
+    func testSchedulePendingForNextStartRejectsMissingPendingBinary() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let store = CLIProxyAPIBinaryStore(paths: paths)
+
+        XCTAssertThrowsError(try store.schedulePendingForNextStart()) { error in
+            XCTAssertEqual(error as? CLIProxyAPIBinaryStoreError, .missingPendingBinary)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.pendingClipProxyApplyOnNextStartMarker.path))
     }
 
     func testApplyPendingRestoresActiveAndPendingBinaryWhenManifestWriteFails() throws {

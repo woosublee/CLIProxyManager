@@ -218,6 +218,7 @@ final class DashboardViewModel: ObservableObject {
     private let automaticShellInstallService: AutomaticShellInstallService
     private let proxyHealthClient: ProxyHealthClient
     private let proxyService: any ProxyServiceControlling
+    private let bundledProxyReconciler: any BundledProxyReconciling
     private let claudeConnector: ClaudeConnector
     private let loginItemService: any LoginItemControlling
     private let appAppearanceService: any AppAppearanceApplying
@@ -258,6 +259,7 @@ final class DashboardViewModel: ObservableObject {
         automaticShellInstallService: AutomaticShellInstallService? = nil,
         proxyHealthClient: ProxyHealthClient = ProxyHealthClient(),
         proxyService: any ProxyServiceControlling = BundledProxyBinary.serviceManager(),
+        bundledProxyReconciler: (any BundledProxyReconciling)? = nil,
         claudeConnector: ClaudeConnector = ClaudeConnector(),
         loginItemService: any LoginItemControlling = LoginItemService(),
         appAppearanceService: any AppAppearanceApplying = AppAppearanceService(),
@@ -285,6 +287,7 @@ final class DashboardViewModel: ObservableObject {
         )
         self.proxyHealthClient = proxyHealthClient
         self.proxyService = proxyService
+        self.bundledProxyReconciler = bundledProxyReconciler ?? BundledProxyBinary.reconciliationService()
         self.claudeConnector = claudeConnector
         self.loginItemService = loginItemService
         self.appAppearanceService = appAppearanceService
@@ -479,8 +482,26 @@ final class DashboardViewModel: ObservableObject {
 
     func startApplication() async {
         await refresh()
+        let wasRunning = serverControlState.isRunning
+        var attemptedReconciliationRestart = false
+
+        do {
+            let result = try bundledProxyReconciler.reconcile()
+            if result.didChangeBinary, wasRunning {
+                attemptedReconciliationRestart = true
+                if !(await restartServerAfterRequiredChange()) {
+                    settingsMessage = "Bundled CLIProxyAPI was installed, but the server could not be restarted: \(serverStatus.message)"
+                }
+            }
+        } catch {
+            settingsMessage = "Bundled CLIProxyAPI update failed: \(error.localizedDescription)"
+        }
+
+        await refresh()
         await prepareSubscriptionUsage()
-        await performAutostartIfEnabled()
+        if !attemptedReconciliationRestart {
+            await performAutostartIfEnabled()
+        }
     }
 
     func openMainWindow() async {

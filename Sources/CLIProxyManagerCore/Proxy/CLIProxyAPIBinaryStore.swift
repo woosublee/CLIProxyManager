@@ -11,6 +11,30 @@ public enum CLIProxyAPIBinaryStoreError: Error, Equatable {
     case missingPendingManifest
 }
 
+public enum BundledProxyReconciliationResult: Equatable, Sendable {
+    case unchanged(version: CLIProxyAPIVersion)
+    case installed(previousVersion: CLIProxyAPIVersion?, newVersion: CLIProxyAPIVersion)
+    case recoveredInvalidActive(newVersion: CLIProxyAPIVersion)
+
+    public var activeVersion: CLIProxyAPIVersion {
+        switch self {
+        case .unchanged(let version):
+            return version
+        case .installed(_, let newVersion), .recoveredInvalidActive(let newVersion):
+            return newVersion
+        }
+    }
+
+    public var didChangeBinary: Bool {
+        switch self {
+        case .unchanged:
+            return false
+        case .installed, .recoveredInvalidActive:
+            return true
+        }
+    }
+}
+
 public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
     private static let operationLock = NSLock()
 
@@ -51,9 +75,38 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
         }
     }
 
+    public func schedulePendingForNextStart() throws {
+        try Self.operationLock.withLock {
+            guard fileManager.fileExists(atPath: paths.pendingClipProxyBinary.path) else {
+                throw CLIProxyAPIBinaryStoreError.missingPendingBinary
+            }
+            guard let manifest = try pendingManifest() else {
+                throw CLIProxyAPIBinaryStoreError.missingPendingManifest
+            }
+            try validateBinary(at: paths.pendingClipProxyBinary, manifest: manifest)
+            try fileManager.createDirectory(at: paths.pendingClipProxyDirectory, withIntermediateDirectories: true)
+            try Data("scheduled\n".utf8).write(
+                to: paths.pendingClipProxyApplyOnNextStartMarker,
+                options: .atomic
+            )
+        }
+    }
+
     public func prepareActiveBinary(bundledBinaryURL: URL?, bundledManifestURL: URL?) throws {
         try Self.operationLock.withLock {
             try prepareActiveBinaryLocked(bundledBinaryURL: bundledBinaryURL, bundledManifestURL: bundledManifestURL)
+        }
+    }
+
+    public func reconcileBundledBinary(
+        bundledBinaryURL: URL?,
+        bundledManifestURL: URL?
+    ) throws -> BundledProxyReconciliationResult {
+        try Self.operationLock.withLock {
+            try reconcileBundledBinaryLocked(
+                bundledBinaryURL: bundledBinaryURL,
+                bundledManifestURL: bundledManifestURL
+            )
         }
     }
 
@@ -72,6 +125,7 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
         if validate {
             try validateBinary(at: binaryURL, manifest: manifest)
         }
+        try clearPendingApplyOnNextStartMarker()
         try fileManager.createDirectory(at: paths.pendingClipProxyDirectory, withIntermediateDirectories: true)
         try replaceFile(from: binaryURL, to: paths.pendingClipProxyBinary)
         try writeManifest(manifest, to: paths.pendingClipProxyManifest)
@@ -117,6 +171,40 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
             }
             throw error
         }
+    }
+
+    private func reconcileBundledBinaryLocked(
+        bundledBinaryURL: URL?,
+        bundledManifestURL: URL?
+    ) throws -> BundledProxyReconciliationResult {
+        guard let bundledBinaryURL, fileManager.fileExists(atPath: bundledBinaryURL.path) else {
+            throw CLIProxyAPIBinaryStoreError.missingBundledBinary
+        }
+        guard let bundledManifestURL,
+              let bundledManifest = try readManifestIfExists(bundledManifestURL) else {
+            throw CLIProxyAPIBinaryStoreError.missingBundledManifest
+        }
+        guard let bundledVersion = bundledManifest.parsedVersion else {
+            throw CLIProxyAPIBinaryStoreError.invalidManifestVersion(bundledManifest.version)
+        }
+        try validateBinary(at: bundledBinaryURL, manifest: bundledManifest)
+
+        let existingVersion = (try? activeManifest())?.parsedVersion
+        guard let active = validActiveManifest(), let activeVersion = active.parsedVersion else {
+            try installBundled(binaryURL: bundledBinaryURL, manifest: bundledManifest)
+            removePendingUnlessNewer(than: bundledVersion)
+            return .recoveredInvalidActive(newVersion: bundledVersion)
+        }
+
+        if activeVersion < bundledVersion {
+            try installBundled(binaryURL: bundledBinaryURL, manifest: bundledManifest)
+            removePendingUnlessNewer(than: bundledVersion)
+            return .installed(previousVersion: existingVersion, newVersion: bundledVersion)
+        }
+
+        try ensureExecutable(paths.clipProxyBinary)
+        removePendingUnlessNewer(than: activeVersion)
+        return .unchanged(version: activeVersion)
     }
 
     private func prepareActiveBinaryLocked(bundledBinaryURL: URL?, bundledManifestURL: URL?) throws {
@@ -174,7 +262,31 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
             try? fileManager.removeItem(at: paths.pendingClipProxyDirectory)
             return
         }
+        guard isPendingScheduledForNextStart() else { return }
         try applyPendingLocked()
+    }
+
+    private func isPendingScheduledForNextStart() -> Bool {
+        fileManager.fileExists(atPath: paths.pendingClipProxyApplyOnNextStartMarker.path)
+    }
+
+    private func clearPendingApplyOnNextStartMarker() throws {
+        guard isPendingScheduledForNextStart() else { return }
+        try fileManager.removeItem(at: paths.pendingClipProxyApplyOnNextStartMarker)
+    }
+
+    private func removePendingUnlessNewer(than activeVersion: CLIProxyAPIVersion) {
+        guard fileManager.fileExists(atPath: paths.pendingClipProxyBinary.path)
+                || fileManager.fileExists(atPath: paths.pendingClipProxyManifest.path) else {
+            return
+        }
+        guard let pending = try? pendingManifest(),
+              let pendingVersion = pending.parsedVersion,
+              pendingVersion > activeVersion,
+              binaryMatches(paths.pendingClipProxyBinary, manifest: pending) else {
+            try? fileManager.removeItem(at: paths.pendingClipProxyDirectory)
+            return
+        }
     }
 
     private func installBundled(binaryURL: URL, manifest: CLIProxyAPIBinaryManifest) throws {

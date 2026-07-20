@@ -12,7 +12,9 @@ struct CLIProxyManagerApp: App {
     init() {
         let config = LaunchAppearanceBootstrapper().applySavedDockVisibility()
         let viewModel = DashboardViewModel(config: config)
+        let cliProxyAPIUpdateService = CLIProxyAPIUpdateService()
         _viewModel = StateObject(wrappedValue: viewModel)
+        _cliProxyAPIUpdateService = StateObject(wrappedValue: cliProxyAPIUpdateService)
         _usageOverlayWindowController = StateObject(
             wrappedValue: UsageOverlayWindowController(
                 viewModel: viewModel,
@@ -21,12 +23,12 @@ struct CLIProxyManagerApp: App {
         )
         Task {
             await viewModel.startApplication()
+            cliProxyAPIUpdateService.reloadStoredStatus()
         }
         _quitCoordinator = StateObject(wrappedValue: QuitCoordinator(shouldStopServerBeforeQuit: {
             viewModel.serverControlState.shouldStopServerBeforeQuit
         }))
         _updaterService = StateObject(wrappedValue: UpdaterService())
-        _cliProxyAPIUpdateService = StateObject(wrappedValue: CLIProxyAPIUpdateService())
     }
 
     private var appWindowController: AppWindowController {

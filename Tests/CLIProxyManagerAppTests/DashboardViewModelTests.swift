@@ -3726,6 +3726,99 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(fetchCallCount, 1)
     }
 
+    func testStartApplicationRestartsRunningServerAfterBundledBinaryChanges() async {
+        let config = AppConfig.default
+        let proxyService = StubProxyServiceStarter()
+        let reconciler = BundledProxyReconcilerDouble(
+            result: .installed(
+                previousVersion: CLIProxyAPIVersion("7.2.72"),
+                newVersion: CLIProxyAPIVersion("7.2.91")!
+            )
+        )
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(),
+            proxyService: proxyService,
+            bundledProxyReconciler: reconciler
+        )
+
+        await viewModel.startApplication()
+
+        XCTAssertEqual(reconciler.callCount, 1)
+        XCTAssertEqual(proxyService.restartPorts, [config.port])
+        XCTAssertTrue(proxyService.ports.isEmpty)
+    }
+
+    func testStartApplicationDoesNotRestartWhenBundledBinaryIsUnchanged() async {
+        let config = AppConfig.default
+        let proxyService = StubProxyServiceStarter()
+        let reconciler = BundledProxyReconcilerDouble(
+            result: .unchanged(version: CLIProxyAPIVersion("7.2.91")!)
+        )
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(),
+            proxyService: proxyService,
+            bundledProxyReconciler: reconciler
+        )
+
+        await viewModel.startApplication()
+
+        XCTAssertEqual(reconciler.callCount, 1)
+        XCTAssertTrue(proxyService.restartPorts.isEmpty)
+    }
+
+    func testStartApplicationDoesNotRestartStoppedServerAfterBundledBinaryChanges() async {
+        let config = AppConfig.default
+        let proxyService = StubProxyServiceStarter()
+        let reconciler = BundledProxyReconcilerDouble(
+            result: .installed(
+                previousVersion: CLIProxyAPIVersion("7.2.72"),
+                newVersion: CLIProxyAPIVersion("7.2.91")!
+            )
+        )
+        let healthClient = ProxyHealthClient(
+            httpClient: StubHTTPClient(result: .failure(HTTPClientError.timedOut)),
+            timeout: 0.01
+        )
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(),
+            proxyService: proxyService,
+            proxyHealthClient: healthClient,
+            bundledProxyReconciler: reconciler,
+            serverStatusRetryDelayNanoseconds: 0
+        )
+
+        await viewModel.startApplication()
+
+        XCTAssertEqual(reconciler.callCount, 1)
+        XCTAssertTrue(proxyService.restartPorts.isEmpty)
+        XCTAssertTrue(proxyService.ports.isEmpty)
+    }
+
+    func testStartApplicationKeepsRunningAfterBundledReconciliationFailure() async {
+        let config = AppConfig.default
+        let proxyService = StubProxyServiceStarter()
+        let reconciler = BundledProxyReconcilerDouble(error: CocoaError(.fileReadCorruptFile))
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(),
+            proxyService: proxyService,
+            bundledProxyReconciler: reconciler
+        )
+
+        await viewModel.startApplication()
+
+        XCTAssertEqual(reconciler.callCount, 1)
+        XCTAssertTrue(proxyService.restartPorts.isEmpty)
+        XCTAssertTrue(viewModel.settingsMessage?.contains("Bundled CLIProxyAPI update failed") == true)
+    }
+
     func testPrepareSubscriptionUsageRepairsEnabledConfigWithMissingKeyBeforeFirstRefresh() async throws {
         var config = AppConfig.default
         config.subscriptionUsage.showInMenuBar = true
@@ -4896,6 +4989,10 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         subscriptionUsageSnapshotCache: any SubscriptionUsageSnapshotCaching = SubscriptionUsageSnapshotCacheDouble(),
         appAppearanceService: (any AppAppearanceApplying)? = nil,
         proxyHealthClient: ProxyHealthClient? = nil,
+        bundledProxyReconciler: any BundledProxyReconciling = BundledProxyReconcilerDouble(
+            result: .unchanged(version: CLIProxyAPIVersion("7.2.91")!)
+        ),
+        serverStatusRetryDelayNanoseconds: UInt64 = 500_000_000,
         subscriptionUsageSleep: @escaping @Sendable (UInt64) async throws -> Void = { delay in
             try await Task.sleep(nanoseconds: delay)
         }
@@ -4909,12 +5006,14 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             proxyHealthClient: proxyHealthClient
                 ?? ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
             proxyService: proxyService,
+            bundledProxyReconciler: bundledProxyReconciler,
             claudeConnector: connectedClaudeConnector(),
             appAppearanceService: appAppearanceService ?? RecordingAppAppearanceService(),
             subscriptionQuotaClient: quotaClient,
             subscriptionUsageKeyStore: keyStore,
             subscriptionUsageSnapshotCache: subscriptionUsageSnapshotCache,
-            subscriptionUsageSleep: subscriptionUsageSleep
+            subscriptionUsageSleep: subscriptionUsageSleep,
+            serverStatusRetryDelayNanoseconds: serverStatusRetryDelayNanoseconds
         )
     }
 
@@ -5505,6 +5604,8 @@ private final class DashboardUpdateBinaryStore: CLIProxyAPIUpdateBinaryStoring, 
 
     func pendingManifest() throws -> CLIProxyAPIBinaryManifest? { nil }
 
+    func schedulePendingForNextStart() throws {}
+
     func applyPending() throws {
         lock.withLock { applyPendingCallCount += 1 }
     }
@@ -6068,6 +6169,31 @@ private final class StubProcessRunner: ProcessRunning, @unchecked Sendable {
 
     func run(_ executable: String, _ arguments: [String]) async -> ProcessResult {
         results.removeFirst()
+    }
+}
+
+private final class BundledProxyReconcilerDouble: BundledProxyReconciling, @unchecked Sendable {
+    private let lock = NSLock()
+    private let result: BundledProxyReconciliationResult?
+    private let error: Error?
+    private var _callCount = 0
+
+    var callCount: Int { lock.withLock { _callCount } }
+
+    init(result: BundledProxyReconciliationResult) {
+        self.result = result
+        self.error = nil
+    }
+
+    init(error: Error) {
+        self.result = nil
+        self.error = error
+    }
+
+    func reconcile() throws -> BundledProxyReconciliationResult {
+        lock.withLock { _callCount += 1 }
+        if let error { throw error }
+        return result!
     }
 }
 
