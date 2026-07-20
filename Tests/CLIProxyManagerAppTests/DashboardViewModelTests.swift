@@ -662,6 +662,78 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(cache.load(), [newID: newerSnapshot])
     }
 
+    func testInitialCodexCredentialMigrationRestoresConfigWhenFinalizationFails() {
+        let oldID = "codex-user@example.com-pro.json"
+        let newID = "codex-182d1cfd-user@example.com-pro.json"
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        config.oauthCommandProfiles = [
+            .init(id: "codex-personal", provider: .codex, authProfileID: oldID, commandName: "ccpersonal")
+        ]
+        let originalSnapshot = SubscriptionUsageSnapshot(
+            profileID: oldID,
+            provider: .codex,
+            windows: [.init(id: "primary", label: "Primary", usedPercent: 20, resetAt: nil)],
+            fetchedAt: Date(timeIntervalSince1970: 10)
+        )
+        let cache = SubscriptionUsageSnapshotCacheDouble(snapshots: [oldID: originalSnapshot])
+        let authStore = MigratingAuthProfileStore(
+            before: [AuthProfile(fileName: oldID, type: .codex, email: "user@example.com", accountID: "acct_123", expired: nil, disabled: false)],
+            after: [AuthProfile(fileName: newID, type: .codex, email: "user@example.com", accountID: "acct_123", expired: nil, disabled: false)],
+            migrations: [.init(oldID: oldID, newID: newID)],
+            finalizeError: NSError(domain: "test", code: 1)
+        )
+        let store = StubConfigStore(config: config)
+
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: authStore,
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector(),
+            subscriptionUsageSnapshotCache: cache,
+            secretStore: InMemorySecretStore()
+        )
+
+        XCTAssertGreaterThanOrEqual(store.savedConfigs.count, 2)
+        XCTAssertEqual(store.savedConfigs.first?.oauthCommandProfiles.first?.authProfileID, newID)
+        XCTAssertEqual(store.savedConfigs.last?.oauthCommandProfiles.first?.authProfileID, oldID)
+        XCTAssertEqual(store.config.oauthCommandProfiles.first?.authProfileID, oldID)
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.first?.authProfileID, oldID)
+        XCTAssertEqual(cache.load(), [oldID: originalSnapshot])
+        XCTAssertEqual(authStore.rolledBackMigrations, [.init(oldID: oldID, newID: newID)])
+    }
+
+    func testInitialCodexCredentialMigrationHandlesDuplicateCommandProfileIDs() {
+        let oldID = "codex-user@example.com-pro.json"
+        let newID = "codex-182d1cfd-user@example.com-pro.json"
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            .init(id: "duplicate", provider: .codex, authProfileID: oldID),
+            .init(id: "duplicate", provider: .codex, authProfileID: oldID)
+        ]
+        let authStore = MigratingAuthProfileStore(
+            before: [AuthProfile(fileName: oldID, type: .codex, email: "user@example.com", accountID: "acct_123", expired: nil, disabled: false)],
+            after: [AuthProfile(fileName: newID, type: .codex, email: "user@example.com", accountID: "acct_123", expired: nil, disabled: false)],
+            migrations: [.init(oldID: oldID, newID: newID)]
+        )
+
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: authStore,
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
+        )
+
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.map(\.authProfileID), [newID, newID])
+    }
+
     func testInitialCodexCredentialMigrationRollsBackWhenConfigSaveFails() {
         let oldID = "codex-user@example.com-pro.json"
         let newID = "codex-182d1cfd-user@example.com-pro.json"
@@ -690,6 +762,42 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.config.oauthCommandProfiles.first?.authProfileID, oldID)
         XCTAssertEqual(authStore.rolledBackMigrations, [.init(oldID: oldID, newID: newID)])
         XCTAssertEqual(authStore.finalizedMigrations, [])
+    }
+
+    func testCodexCredentialMigrationHandlesDuplicateCommandProfileIDs() {
+        var oldConfig = AppConfig.default
+        oldConfig.oauthCommandProfiles = [
+            .init(id: "duplicate", provider: .codex, authProfileID: "first.json"),
+            .init(id: "duplicate", provider: .codex, authProfileID: "second.json")
+        ]
+        var newConfig = oldConfig
+        newConfig.oauthCommandProfiles[0].authProfileID = "migrated.json"
+
+        XCTAssertEqual(
+            DashboardViewModel.authProfileIDMapping(from: oldConfig, to: newConfig),
+            ["first.json": "migrated.json"]
+        )
+    }
+
+    func testCodexCredentialMigrationKeepsNewestSnapshotOverLoadingState() {
+        let oldID = "codex-user@example.com-pro.json"
+        let newID = "codex-182d1cfd-user@example.com-pro.json"
+        let snapshot = SubscriptionUsageSnapshot(
+            profileID: newID,
+            provider: .codex,
+            windows: [.init(id: "primary", label: "Primary", usedPercent: 30, resetAt: nil)],
+            fetchedAt: Date(timeIntervalSince1970: 20)
+        )
+        var states: [String: AccountSubscriptionUsageState] = [:]
+        states[newID] = .available(snapshot)
+        states[oldID] = .loading
+
+        let migrated = DashboardViewModel.remappingSubscriptionUsageStates(
+            states,
+            using: [oldID: newID]
+        )
+
+        XCTAssertEqual(migrated, [newID: .available(snapshot)])
     }
 
     func testReconnectMigratedCodexCredentialKeepsExistingCommandProfile() async {
@@ -5600,10 +5708,18 @@ private final class MigratingAuthProfileStore: AuthProfileManaging, @unchecked S
     private var finalized = false
     private var rolledBack = false
 
-    init(before: [AuthProfile], after: [AuthProfile], migrations: [AuthProfileMigration]) {
+    private let finalizeError: Error?
+
+    init(
+        before: [AuthProfile],
+        after: [AuthProfile],
+        migrations: [AuthProfileMigration],
+        finalizeError: Error? = nil
+    ) {
         self.before = before
         self.after = after
         self.migrations = migrations
+        self.finalizeError = finalizeError
     }
 
     func profiles() throws -> [AuthProfile] {
@@ -5616,6 +5732,7 @@ private final class MigratingAuthProfileStore: AuthProfileManaging, @unchecked S
     }
 
     func finalizeCodexCredentialMigrations(_ migrations: [AuthProfileMigration]) throws {
+        if let finalizeError { throw finalizeError }
         finalizedMigrations = migrations
         finalized = true
     }

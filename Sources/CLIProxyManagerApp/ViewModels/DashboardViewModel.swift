@@ -2176,6 +2176,7 @@ final class DashboardViewModel: ObservableObject {
                 profiles: (try? authProfileStore.profiles()) ?? []
             )
         } catch {
+            try? configStore.save(config)
             try? subscriptionUsageSnapshotCache.save(originalSnapshots)
             authProfileStore.rollbackCodexCredentialMigrations(migrations)
             return CodexCredentialMigrationResult(
@@ -2215,10 +2216,17 @@ final class DashboardViewModel: ObservableObject {
         )
     }
 
-    private static func authProfileIDMapping(from oldConfig: AppConfig, to newConfig: AppConfig) -> [String: String] {
-        let oldByCommandID = Dictionary(uniqueKeysWithValues: oldConfig.oauthCommandProfiles.map { ($0.id, $0.authProfileID) })
+    static func authProfileIDMapping(from oldConfig: AppConfig, to newConfig: AppConfig) -> [String: String] {
+        let oldByCommandID = Dictionary(
+            oldConfig.oauthCommandProfiles.map { ($0.id, $0.authProfileID) },
+            uniquingKeysWith: { first, _ in first }
+        )
         return newConfig.oauthCommandProfiles.reduce(into: [String: String]()) { result, profile in
-            guard let oldID = oldByCommandID[profile.id], oldID != profile.authProfileID else { return }
+            guard let oldID = oldByCommandID[profile.id],
+                  oldID != profile.authProfileID,
+                  result[oldID] == nil else {
+                return
+            }
             result[oldID] = profile.authProfileID
         }
     }
@@ -2271,7 +2279,7 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
-    private static func remappingSubscriptionUsageStates(
+    static func remappingSubscriptionUsageStates(
         _ states: [String: AccountSubscriptionUsageState],
         using mapping: [String: String]
     ) -> [String: AccountSubscriptionUsageState] {
@@ -2288,11 +2296,11 @@ final class DashboardViewModel: ObservableObject {
             case .disabled, .managementKeyNotConfigured, .loading, .unavailable:
                 updatedState = state
             }
-            if let existing = remapped[targetID],
-               let existingSnapshot = existing.snapshot,
-               let updatedSnapshot = updatedState.snapshot,
-               existingSnapshot.fetchedAt >= updatedSnapshot.fetchedAt {
-                continue
+            if let existing = remapped[targetID], let existingSnapshot = existing.snapshot {
+                guard let updatedSnapshot = updatedState.snapshot,
+                      updatedSnapshot.fetchedAt > existingSnapshot.fetchedAt else {
+                    continue
+                }
             }
             remapped[targetID] = updatedState
         }
