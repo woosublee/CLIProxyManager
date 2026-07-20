@@ -4,7 +4,7 @@
 
 CLIProxyManager 앱이 새 버전으로 교체된 뒤 처음 실행될 때, 앱에 포함된 CLIProxyAPI가 현재 활성 바이너리보다 최신이면 서버 autostart 설정과 관계없이 활성 경로에 자동 반영한다. 기존 서버가 실행 중이었다면 교체 직후 자동 재시작해 실행 중 프로세스도 새 바이너리로 전환한다.
 
-앱 번들 업데이트와 사용자가 별도로 다운로드한 pending CLIProxyAPI 업데이트는 구분한다. 앱 번들은 앱 릴리스의 일부이므로 자동 적용하지만, pending 업데이트는 기존 사용자 선택인 `Apply now` 또는 `Apply on next server start`를 유지한다.
+앱 번들 업데이트와 사용자가 별도로 다운로드한 pending CLIProxyAPI 업데이트는 구분한다. 앱 번들은 앱 릴리스의 일부이므로 자동 적용하지만, pending 업데이트는 기존 사용자 선택인 `Apply now` 또는 `Apply on next server start`를 유지한다. 다운로드 직후나 confirmation dialog의 `Cancel`만으로는 다음 서버 시작에 적용하지 않으며, `Apply on next server start`를 명시적으로 선택한 경우에만 적용 예약을 기록한다.
 
 ## 배경과 원인
 
@@ -24,6 +24,7 @@ CLIProxyAPI 설정 화면도 활성 manifest를 우선 표시하므로, 앱 안�
 - 활성 바이너리가 번들보다 최신이면 유지해 다운그레이드를 방지한다.
 - 교체 시 기존 서버가 실행 중이었다면 자동 재시작해 새 프로세스에 즉시 적용한다.
 - 사용자가 다운로드만 한 pending 업데이트는 명시적 적용 전까지 보존한다.
+- `Apply on next server start`를 선택했을 때만 durable 적용 예약 marker를 생성하고, `Cancel` 후 일반 서버 재시작에서는 pending을 적용하지 않는다.
 - 앱 시작 조정 후 CLIProxyAPI 업데이트 UI의 현재 버전과 pending 상태를 다시 읽는다.
 - 조정 실패가 앱 전체 시작을 막지 않도록 한다.
 
@@ -70,7 +71,7 @@ CLIProxyAPI 설정 화면도 활성 manifest를 우선 표시하므로, 앱 안�
 6. 최종 활성 버전을 기준으로 pending 상태를 정리한다.
 7. 조정 결과를 반환한다.
 
-기존 `prepareActiveBinary()`는 서버 start/restart 시 다음 실행 적용을 위해 pending 승격 정책을 유지한다. 공통 검증·설치 구현은 private helper로 공유해 두 경로의 버전 비교와 atomic 교체가 달라지지 않게 한다.
+기존 `prepareActiveBinary()`는 서버 start/restart 시 적용 예약 marker가 있는 pending만 승격한다. 다운로드 직후에는 marker가 없고, `Apply on next server start`를 선택하면 `pending/apply-on-next-start` marker를 원자적으로 생성한다. `Apply now`, 새 pending 저장, pending 삭제, 승격 완료 시 marker를 제거한다. 공통 검증·설치 구현은 private helper로 공유해 번들 조정과 서버 prepare의 버전 비교 및 atomic 교체가 달라지지 않게 한다.
 
 ### `BundledProxyReconciliationService`
 
@@ -148,7 +149,7 @@ bundled 7.2.91
 pending 7.2.92
 ```
 
-번들 7.2.91을 active로 설치하고 pending 7.2.92는 보존한다. 사용자가 `Apply now` 또는 `Apply on next server start`를 선택할 때까지 pending을 active로 승격하지 않는다.
+번들 7.2.91을 active로 설치하고 pending 7.2.92는 보존한다. 사용자가 `Apply now`를 선택하면 즉시 승격하고, `Apply on next server start`를 선택하면 marker를 기록한 뒤 다음 start/restart에서 승격한다. `Cancel`을 선택하거나 아직 적용 방식을 고르지 않았다면 일반 서버 재시작에서도 pending을 승격하지 않는다.
 
 ### 오래됐거나 잘못된 pending이 있는 경우
 
@@ -159,6 +160,19 @@ pending 7.2.80
 ```
 
 번들 7.2.91을 active로 설치하고 pending 7.2.80은 삭제한다. checksum, 크기, manifest가 잘못된 pending도 삭제한다. 이후 오래된 pending을 수동 적용해 다운그레이드할 수 없게 한다.
+
+### pending 적용 예약
+
+`pending/apply-on-next-start`는 사용자가 `Apply on next server start`를 선택했다는 durable marker다.
+
+- 새 pending을 저장하면 이전 marker를 제거한다.
+- `Apply on next server start`는 유효한 pending이 있을 때만 marker를 생성한다.
+- `Cancel`은 marker를 만들지 않는다.
+- 서버 prepare는 marker가 있고 pending이 최종 후보 중 가장 최신일 때만 승격한다.
+- pending이 손상됐거나 active/bundled 이하로 오래됐으면 pending 디렉터리와 marker를 함께 제거한다.
+- 즉시 적용이나 예약 승격이 성공하면 marker를 제거한다.
+
+기존 버전에서 생성된 pending에는 marker가 없으므로, hotfix 설치 후에는 사용자가 다시 적용 방식을 선택하기 전까지 자동 승격하지 않는다.
 
 ### 같은 버전의 번들과 active
 
@@ -205,11 +219,13 @@ active 설치가 성공한 뒤 오래된 pending 삭제만 실패한 경우, act
 - active가 없으면 bundled를 설치하고 `recoveredInvalidActive`를 반환한다.
 - active binary 또는 manifest가 손상됐으면 bundled로 복구한다.
 - bundled checksum 또는 크기가 잘못됐으면 active를 변경하지 않는다.
-- valid pending 7.2.92는 보존하고 자동 적용하지 않는다.
-- pending 7.2.80은 최종 active 7.2.91보다 오래됐으므로 삭제한다.
-- 잘못된 pending binary 또는 manifest를 삭제한다.
+- marker 없는 valid pending 7.2.92는 보존하고 일반 prepare에서도 자동 적용하지 않는다.
+- marker 있는 valid pending 7.2.92는 다음 prepare에서 적용하고 marker를 제거한다.
+- 새 pending 저장은 이전 marker를 제거한다.
+- pending 7.2.80은 최종 active 7.2.91보다 오래됐으므로 marker와 함께 삭제한다.
+- 잘못된 pending binary 또는 manifest를 marker와 함께 삭제한다.
 - 같은 버전의 유효한 active는 다시 복사하지 않고 실행 권한만 복구한다.
-- 기존 `prepareActiveBinary()`의 `Apply on next server start` 동작은 계속 유지한다.
+- `Apply now`는 marker 유무와 관계없이 즉시 적용하고 marker를 제거한다.
 
 ### `DashboardViewModelTests`
 
@@ -225,6 +241,13 @@ active 설치가 성공한 뒤 오래된 pending 삭제만 실패한 경우, act
 - reload 후 새 active 버전을 `currentVersionText`에 반영한다.
 - 더 최신인 pending을 계속 표시한다.
 - active 이하의 available/deferred 상태를 정리한다.
+- `Apply on next server start`가 binary store에 적용 예약을 기록한다.
+- 예약 실패 시 failed state와 사람이 이해할 수 있는 오류를 남긴다.
+
+### `CLIProxyAPIUpdateUITests`
+
+- Dashboard와 Settings의 `Apply on next server start` 버튼이 메시지만 설정하지 않고 update service 예약 메서드를 호출한다.
+- `Cancel`은 pending 예약 메서드를 호출하지 않는다.
 
 ### 앱 구성 테스트
 
@@ -244,14 +267,18 @@ active 설치가 성공한 뒤 오래된 pending 삭제만 실패한 경우, act
 
 ## 예상 변경 파일
 
+- `Sources/CLIProxyManagerCore/Config/ManagedPaths.swift`
 - `Sources/CLIProxyManagerCore/Proxy/CLIProxyAPIBinaryStore.swift`
 - `Sources/CLIProxyManagerApp/BundledProxyBinary.swift`
 - `Sources/CLIProxyManagerApp/ViewModels/DashboardViewModel.swift`
 - `Sources/CLIProxyManagerApp/Services/CLIProxyAPIUpdateService.swift`
+- `Sources/CLIProxyManagerApp/Views/DashboardView.swift`
+- `Sources/CLIProxyManagerApp/Views/GeneralSettingsView.swift`
 - `Sources/CLIProxyManagerApp/CLIProxyManagerApp.swift`
 - `Tests/CLIProxyManagerCoreTests/CLIProxyAPIBinaryStoreTests.swift`
 - `Tests/CLIProxyManagerAppTests/DashboardViewModelTests.swift`
 - `Tests/CLIProxyManagerAppTests/CLIProxyAPIUpdateServiceTests.swift`
+- `Tests/CLIProxyManagerAppTests/CLIProxyAPIUpdateUITests.swift`
 
 새 서비스가 독립 파일로 분리되면 다음 파일도 추가한다.
 
@@ -263,6 +290,7 @@ active 설치가 성공한 뒤 오래된 pending 삭제만 실패한 경우, act
 - 앱 업데이트 후 별도 서버 버튼 조작 없이 번들 CLIProxyAPI가 active 경로에 반영된다.
 - 서버가 실행 중이었다면 새 binary로 자동 재시작된다.
 - 더 최신인 active와 pending은 보존된다.
+- pending은 `Apply now` 또는 `Apply on next server start`를 명시적으로 선택한 경우에만 적용되며 `Cancel` 후 재시작에서는 적용되지 않는다.
 - pending 업데이트의 사용자 승인 UX는 유지된다.
 - 실패 시 기존 active와 실행 중 서버를 가능한 한 보존하고 앱 시작은 계속된다.
 - 전체 테스트와 development build가 통과한다.
