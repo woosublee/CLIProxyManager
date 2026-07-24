@@ -751,6 +751,14 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(paths.apiKeyFile(for: .codexAPIKey), root.appendingPathComponent("api-keys/codex-api-key.json"))
     }
 
+    func testManagedPathsExposeAPIUsageLedgerFiles() {
+        let paths = ManagedPaths(rootDirectory: URL(fileURLWithPath: "/tmp/cpm"))
+
+        XCTAssertEqual(paths.apiUsageDirectory.path, "/tmp/cpm/api-usage")
+        XCTAssertEqual(paths.apiUsageMetadataFile.path, "/tmp/cpm/api-usage/metadata.json")
+        XCTAssertEqual(paths.apiUsageMonthlyLedgerFile(month: "2026-07").path, "/tmp/cpm/api-usage/2026-07.json")
+    }
+
     func testClaudeModelSelectionUsesStringRepresentationAndNormalizesBlankValues() throws {
         let automatic = try JSONDecoder().decode(ClaudeModelSelection.self, from: Data(#""automatic""#.utf8))
         let blank = try JSONDecoder().decode(ClaudeModelSelection.self, from: Data(#""   ""#.utf8))
@@ -824,20 +832,17 @@ final class AppConfigTests: XCTestCase {
         XCTAssertFalse(config.isSubscriptionUsageEnabled)
     }
 
-    func testSubscriptionUsageEnabledIsComputedFromEitherDisplayPreference() {
+    func testUsageEnabledIsComputedFromEitherDisplayAndKeepsCompatibilityAlias() {
         var config = AppConfig.default
-        XCTAssertFalse(config.isSubscriptionUsageEnabled)
+        XCTAssertFalse(config.isUsageEnabled)
+        XCTAssertEqual(config.isSubscriptionUsageEnabled, config.isUsageEnabled)
 
         config.subscriptionUsage.showInMenuBar = true
-        XCTAssertTrue(config.isSubscriptionUsageEnabled)
+        XCTAssertTrue(config.isUsageEnabled)
 
         config.subscriptionUsage.showInMenuBar = false
         config.usageOverlay.isVisible = true
-        XCTAssertTrue(config.isSubscriptionUsageEnabled)
-
-        config.subscriptionUsage.showInMenuBar = true
-        config.usageOverlay.isVisible = true
-        XCTAssertTrue(config.isSubscriptionUsageEnabled)
+        XCTAssertTrue(config.isUsageEnabled)
     }
 
     func testSubscriptionUsageEncodesOnlyNewMenuBarVisibilityField() throws {

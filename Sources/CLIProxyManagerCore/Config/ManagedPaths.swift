@@ -23,6 +23,18 @@ public struct ManagedPaths: Equatable, Sendable {
         apiKeysDirectory.appendingPathComponent("\(key.rawValue).json")
     }
 
+    public var apiUsageDirectory: URL {
+        rootDirectory.appendingPathComponent("api-usage", isDirectory: true)
+    }
+
+    public var apiUsageMetadataFile: URL {
+        apiUsageDirectory.appendingPathComponent("metadata.json")
+    }
+
+    public func apiUsageMonthlyLedgerFile(month: String) -> URL {
+        apiUsageDirectory.appendingPathComponent("\(month).json")
+    }
+
     public var roundRobinStateFile: URL {
         rootDirectory.appendingPathComponent("round-robin-state.json")
     }
