@@ -9,7 +9,8 @@ final class CodexRoleRoutingOptionsTests: XCTestCase {
             id: "gpt-5.5",
             supportedReasoning: [.low, .medium, .high, .xhigh],
             defaultReasoning: .medium,
-            supportsFastMode: true
+            supportsFastMode: true,
+            contextWindow: 372_000
         ),
         CodexModelOption(
             id: "gpt-5.6-sol",
@@ -21,7 +22,8 @@ final class CodexRoleRoutingOptionsTests: XCTestCase {
             id: "custom-model",
             supportedReasoning: [.low, .medium],
             defaultReasoning: .medium,
-            supportsFastMode: false
+            supportsFastMode: false,
+            contextWindow: 128_000
         )
     ]
 
@@ -121,6 +123,7 @@ final class CodexRoleRoutingOptionsTests: XCTestCase {
             AppConfig.CodexRole(
                 model: "custom-model",
                 reasoning: .medium,
+                detectedContextWindow: 128_000,
                 fastModeEnabled: false
             )
         )
@@ -194,5 +197,29 @@ final class CodexRoleRoutingOptionsTests: XCTestCase {
             CodexRoleRoutingOptions.modelIDs(currentModel: "codex-work/gpt-5.5", options: options),
             ["gpt-5.5", "gpt-5.6-sol", "custom-model"]
         )
+    }
+
+    func testNormalizedRoleUpdatesDetectedContextWindowFromMatchingOption() {
+        let role = AppConfig.CodexRole(model: "custom-model", reasoning: .auto, detectedContextWindow: nil)
+
+        let normalized = CodexRoleRoutingOptions.normalizedRole(role, model: "gpt-5.5", options: options)
+
+        XCTAssertEqual(normalized.detectedContextWindow, 372_000)
+    }
+
+    func testNormalizedRolePreservesDetectedContextWindowWhenModelUnknown() {
+        let role = AppConfig.CodexRole(model: "gpt-5.5", reasoning: .auto, detectedContextWindow: 372_000)
+
+        let normalized = CodexRoleRoutingOptions.normalizedRole(role, model: "missing-model", options: options)
+
+        XCTAssertEqual(normalized.detectedContextWindow, 372_000)
+    }
+
+    func testNormalizedRoleClearsDetectedContextWindowWhenOptionHasNoValue() {
+        let role = AppConfig.CodexRole(model: "gpt-5.5", reasoning: .auto, detectedContextWindow: 372_000)
+
+        let normalized = CodexRoleRoutingOptions.normalizedRole(role, model: "gpt-5.6-sol", options: options)
+
+        XCTAssertNil(normalized.detectedContextWindow)
     }
 }
