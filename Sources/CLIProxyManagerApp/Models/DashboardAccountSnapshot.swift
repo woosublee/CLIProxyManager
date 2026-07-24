@@ -1,5 +1,18 @@
 import CLIProxyManagerCore
 
+struct UsageOverlayAccountButtonPresentation: Equatable {
+    let symbolName = "chart.bar.xaxis"
+    let accessibilityLabel: String
+    let isHighlighted: Bool
+
+    init(showsInUsageOverlay: Bool) {
+        accessibilityLabel = showsInUsageOverlay
+            ? "Hide from Usage HUD"
+            : "Show in Usage HUD"
+        isHighlighted = showsInUsageOverlay
+    }
+}
+
 struct DashboardAccountSnapshot: Equatable, Identifiable {
     enum Status: Equatable {
         case connected
@@ -19,6 +32,7 @@ struct DashboardAccountSnapshot: Equatable, Identifiable {
     let isAccountDetailHidden: Bool
     let showsAccountPrivacyToggle: Bool
     let isAPIKeyProfile: Bool
+    let showsInUsageOverlay: Bool
 
     var headerCommandSlug: String {
         commandSlug
@@ -26,6 +40,10 @@ struct DashboardAccountSnapshot: Equatable, Identifiable {
 
     var accountPrivacyToggleAccessibilityLabel: String {
         isAccountDetailHidden ? "Show account detail" : "Hide account detail"
+    }
+
+    var usageOverlayButtonPresentation: UsageOverlayAccountButtonPresentation {
+        UsageOverlayAccountButtonPresentation(showsInUsageOverlay: showsInUsageOverlay)
     }
 
     init(provider: ProviderRowState) {
@@ -47,5 +65,6 @@ struct DashboardAccountSnapshot: Equatable, Identifiable {
         isAccountDetailHidden = provider.accountDetailHidden
         isAPIKeyProfile = provider.id == .claudeAPI || provider.id == .codexAPI
         showsAccountPrivacyToggle = status != .disconnected && !isAPIKeyProfile
+        showsInUsageOverlay = provider.showsInUsageOverlay
     }
 }

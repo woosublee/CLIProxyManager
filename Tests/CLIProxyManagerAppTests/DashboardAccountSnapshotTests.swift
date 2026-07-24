@@ -181,4 +181,32 @@ final class DashboardAccountSnapshotTests: XCTestCase {
 
         XCTAssertEqual(row.displayTitle, "Work")
     }
+
+    func testAccountSnapshotPreservesUsageOverlayVisibility() {
+        let row = ProviderRowState(
+            id: .claude,
+            name: "Claude OAuth",
+            nickname: "",
+            functionName: "cc",
+            connectionTitle: "Connected",
+            connectionDetail: "claude@example.com",
+            isConnected: true,
+            showsInUsageOverlay: false
+        )
+
+        let snapshot = DashboardAccountSnapshot(provider: row)
+
+        XCTAssertFalse(snapshot.showsInUsageOverlay)
+        XCTAssertEqual(snapshot.usageOverlayButtonPresentation.symbolName, "chart.bar.xaxis")
+        XCTAssertEqual(snapshot.usageOverlayButtonPresentation.accessibilityLabel, "Show in Usage HUD")
+        XCTAssertFalse(snapshot.usageOverlayButtonPresentation.isHighlighted)
+    }
+
+    func testVisibleHUDAccountButtonPresentationOffersHideAction() {
+        let presentation = UsageOverlayAccountButtonPresentation(showsInUsageOverlay: true)
+
+        XCTAssertEqual(presentation.symbolName, "chart.bar.xaxis")
+        XCTAssertEqual(presentation.accessibilityLabel, "Hide from Usage HUD")
+        XCTAssertTrue(presentation.isHighlighted)
+    }
 }
