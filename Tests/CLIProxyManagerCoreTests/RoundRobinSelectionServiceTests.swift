@@ -78,6 +78,43 @@ final class RoundRobinSelectionServiceTests: XCTestCase {
         XCTAssertFalse(output.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME"))
     }
 
+    func testCodexRoundRobinExportsAutoCompactWindowForExtendedContextRole() async throws {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            .init(id: "codex-a", provider: .codex, authProfileID: "a.json", commandName: "cca", modelPrefix: "codex-a"),
+            .init(id: "codex-b", provider: .codex, authProfileID: "b.json", commandName: "ccb", modelPrefix: "codex-b")
+        ]
+        config.roundRobinProfiles = [
+            .init(
+                id: "codex-default",
+                provider: .codex,
+                isEnabled: true,
+                commandName: "ccodex",
+                includedAuthProfileIDs: ["a.json", "b.json"],
+                codex: .init(
+                    opus: .init(model: "gpt-5.6-sol", reasoning: .xhigh, detectedContextWindow: 372_000),
+                    sonnet: .init(model: "gpt-5.5", reasoning: .medium, detectedContextWindow: 272_000),
+                    haiku: .init(model: "gpt-5.5", reasoning: .low, detectedContextWindow: 200_000)
+                )
+            )
+        ]
+        let service = RoundRobinSelectionService(
+            stateSelector: StubRoundRobinStateSelector(selections: ["b.json"])
+        )
+
+        let output = try await service.shellEnvironmentAssignments(
+            profileID: "codex-default",
+            config: config,
+            authProfiles: [
+                .init(fileName: "a.json", type: .codex, email: nil, accountID: nil, expired: nil, disabled: false, prefix: "codex-a"),
+                .init(fileName: "b.json", type: .codex, email: nil, accountID: nil, expired: nil, disabled: false, prefix: "codex-b")
+            ]
+        )
+
+        XCTAssertTrue(output.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='codex-b/gpt-5.6-sol(xhigh)[1m]'"))
+        XCTAssertTrue(output.contains("CLAUDE_CODE_AUTO_COMPACT_WINDOW='272000'"))
+    }
+
     func testClaudeSelectionResolvesModelsForActuallySelectedAccount() async throws {
         var config = AppConfig.default
         config.port = 18_888
