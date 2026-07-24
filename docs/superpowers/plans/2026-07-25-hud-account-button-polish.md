@@ -4,7 +4,7 @@
 
 **Goal:** 계정 카드의 Usage HUD 버튼을 조용한 `macwindow` 표현으로 다듬고, Expanded와 Compact HUD에 계정을 다시 표시할 때 새 행만 동일하게 짧은 fade-in을 적용한다.
 
-**Architecture:** 기존 `UsageOverlayAccountButtonPresentation`과 카드 action 구조를 유지하면서 symbol·foreground presentation만 교체한다. Expanded와 Compact의 보이는 account stack에 asymmetric opacity transition과 Reduce Motion-aware animation을 각각 적용하되, removal은 identity로 유지하고 Compact measurement stack, 저장, filtering, panel resize 동작은 변경하지 않는다.
+**Architecture:** 기존 `UsageOverlayAccountButtonPresentation`과 카드 action 구조를 유지하면서 symbol·foreground presentation만 교체한다. Expanded와 Compact의 새 account row가 transition-local opacity animation을 직접 소유하게 하여 기존 행과 removal reflow에 implicit animation이 전파되지 않도록 하고, Compact measurement stack에는 identity transition만 사용한다.
 
 **Tech Stack:** Swift 5.10, SwiftUI, AppKit, XCTest, macOS 15, Swift Package Manager
 
@@ -17,10 +17,11 @@
 - HUD 표시 중에는 `BrandPalette.accent`, 숨김 상태에는 낮은 primary/secondary 계열 opacity를 사용한다.
 - Connected, Disabled, Disconnected action 순서를 유지한다.
 - Expanded와 Compact에서 추가되는 계정 행만 동일한 `0.12`초 `easeOut` opacity insertion을 사용한다.
-- removal은 두 모드 모두 identity로 즉시 처리한다.
+- animation은 stack-level implicit animation이 아니라 insertion transition 자체에 결합한다.
+- removal은 두 모드 모두 identity로 즉시 처리하고 기존 행의 reflow도 animate하지 않는다.
 - 기존 계정과 header에 crossfade, blur, scale, move animation을 추가하지 않는다.
-- Compact의 숨겨진 measurement stack에는 animation modifier를 추가하지 않는다.
-- `accessibilityReduceMotion == true`이면 두 모드의 insertion animation은 `nil`이다.
+- Compact의 숨겨진 measurement stack에는 identity transition만 사용한다.
+- `accessibilityReduceMotion == true`이면 두 모드의 account transition은 identity다.
 - 저장, rollback, HUD filtering, menu bar, usage polling/cache, panel resize 정책을 변경하지 않는다.
 - 자동 검증은 관련 단위 테스트, 전체 `swift test`, `CONFIGURATION=debug` development app bundle build와 codesign verification까지 수행한다. 앱 실행과 수동 UI 확인은 사용자가 수행한다.
 
@@ -28,8 +29,8 @@
 
 - Modify: `Sources/CLIProxyManagerApp/Models/DashboardAccountSnapshot.swift` — HUD 버튼의 symbol과 상태별 semantic presentation을 제공한다.
 - Modify: `Sources/CLIProxyManagerApp/Views/DashboardView.swift` — 선택 background 없이 active/inactive foreground를 렌더링한다.
-- Modify: `Sources/CLIProxyManagerApp/Views/UsageOverlayView.swift` — Expanded의 보이는 account stack에 insertion-only opacity animation을 적용한다.
-- Modify: `Sources/CLIProxyManagerApp/Views/CompactUsageOverlayView.swift` — Compact의 보이는 account stack에 같은 insertion-only opacity animation을 적용하고 measurement stack은 비동작 상태로 유지한다.
+- Modify: `Sources/CLIProxyManagerApp/Views/UsageOverlayView.swift` — Expanded 새 account row의 insertion transition 자체에 opacity animation을 적용한다.
+- Modify: `Sources/CLIProxyManagerApp/Views/CompactUsageOverlayView.swift` — Compact 새 account row에 같은 transition을 적용하고 measurement stack에는 identity transition을 전달한다.
 - Modify: `Tests/CLIProxyManagerAppTests/DashboardAccountSnapshotTests.swift` — `macwindow`와 기존 action copy/highlight 상태를 검증한다.
 - Modify: `Tests/CLIProxyManagerAppTests/UsageOverlayAccountVisibilityUITests.swift` — 버튼 click target, accessibility, background 제거, 상태 색상 계약을 검증한다.
 - Create: `Tests/CLIProxyManagerAppTests/UsageOverlayAccountAnimationTests.swift` — 두 모드의 동일한 insertion, removal identity, Reduce Motion, Compact measurement 비동작 계약을 검증한다.
@@ -170,15 +171,15 @@ git commit -m "style: refine Usage HUD account button"
 ### Task 2: Expanded와 Compact 새 계정 행 insertion fade-in
 
 **Files:**
-- Modify: `Sources/CLIProxyManagerApp/Views/UsageOverlayView.swift:217-251`
-- Modify: `Sources/CLIProxyManagerApp/Views/CompactUsageOverlayView.swift:4-103`
+- Modify: `Sources/CLIProxyManagerApp/Views/UsageOverlayView.swift:217-260`
+- Modify: `Sources/CLIProxyManagerApp/Views/CompactUsageOverlayView.swift:4-120`
 - Create: `Tests/CLIProxyManagerAppTests/UsageOverlayAccountAnimationTests.swift`
 
 **Interfaces:**
 - Consumes: `ExpandedUsageOverlayContent.providers: [MenuBarConnectedProvider]`, `CompactUsageOverlayView.providers: [MenuBarConnectedProvider]`, SwiftUI `accessibilityReduceMotion`
-- Produces: 두 모드의 보이는 account stack에 동일한 `.asymmetric(insertion: .opacity, removal: .identity)` transition과 `0.12`초 Reduce Motion-aware animation
+- Produces: 두 모드의 새 행에 동일한 transition-local `.opacity.animation(.easeOut(duration: 0.12))`, removal 및 Reduce Motion용 identity transition
 
-- [ ] **Step 1: 두 모드의 animation source 계약 실패 테스트 작성**
+- [ ] **Step 1: transition scope source 계약 실패 테스트 작성**
 
 `Tests/CLIProxyManagerAppTests/UsageOverlayAccountAnimationTests.swift`를 생성한다.
 
@@ -187,20 +188,28 @@ import Foundation
 import XCTest
 
 final class UsageOverlayAccountAnimationTests: XCTestCase {
-    func testExpandedAccountStackUsesInsertionOnlyFadeAndReduceMotion() throws {
+    func testExpandedAccountUsesTransitionLocalInsertionFade() throws {
         let content = try sourceSection(
             in: try source(named: "UsageOverlayView.swift"),
             after: "private struct ExpandedUsageOverlayContent: View {",
             before: "\nenum ExpandedUsageContentPresentation"
         )
+        let accountStack = try sourceSection(
+            in: content,
+            after: "VStack(alignment: .leading, spacing: 14) {",
+            before: "\n                }"
+        )
 
         XCTAssertTrue(content.contains("@Environment(\\.accessibilityReduceMotion) private var accessibilityReduceMotion"))
-        XCTAssertTrue(content.contains(".transition(.asymmetric(insertion: .opacity, removal: .identity))"))
-        XCTAssertTrue(content.contains("accessibilityReduceMotion ? nil : .easeOut(duration: 0.12)"))
-        XCTAssertTrue(content.contains("value: providers.map(\\.id)"))
+        XCTAssertTrue(accountStack.contains(".transition(accountTransition)"))
+        XCTAssertFalse(accountStack.contains(".animation("))
+        XCTAssertTrue(content.contains("private var accountTransition: AnyTransition"))
+        XCTAssertTrue(content.contains("insertion: .opacity.animation(.easeOut(duration: 0.12))"))
+        XCTAssertTrue(content.contains("removal: .identity"))
+        XCTAssertFalse(content.contains("value: providers.map(\\.id)"))
     }
 
-    func testCompactVisibleAccountStackUsesSameInsertionOnlyFade() throws {
+    func testCompactVisibleRowsUseTransitionLocalFadeWhileMeasurementUsesIdentity() throws {
         let content = try sourceSection(
             in: try source(named: "CompactUsageOverlayView.swift"),
             after: "struct CompactUsageOverlayView: View {",
@@ -218,10 +227,14 @@ final class UsageOverlayAccountAnimationTests: XCTestCase {
         )
 
         XCTAssertTrue(content.contains("@Environment(\\.accessibilityReduceMotion) private var accessibilityReduceMotion"))
-        XCTAssertTrue(content.contains(".transition(.asymmetric(insertion: .opacity, removal: .identity))"))
-        XCTAssertTrue(visibleStack.contains("accessibilityReduceMotion ? nil : .easeOut(duration: 0.12)"))
-        XCTAssertTrue(visibleStack.contains("value: providerIDs"))
+        XCTAssertTrue(visibleStack.contains("accountRows(transition: accountTransition)"))
+        XCTAssertTrue(measurementStack.contains("accountRows(transition: .identity)"))
+        XCTAssertFalse(visibleStack.contains(".animation("))
         XCTAssertFalse(measurementStack.contains(".animation("))
+        XCTAssertTrue(content.contains(".transition(transition)"))
+        XCTAssertTrue(content.contains("insertion: .opacity.animation(.easeOut(duration: 0.12))"))
+        XCTAssertTrue(content.contains("removal: .identity"))
+        XCTAssertFalse(content.contains("value: providerIDs"))
     }
 
     private func source(named filename: String) throws -> String {
@@ -253,56 +266,59 @@ final class UsageOverlayAccountAnimationTests: XCTestCase {
 }
 ```
 
-- [ ] **Step 2: animation 테스트가 현재 구현에서 실패하는지 확인**
+- [ ] **Step 2: 강화한 테스트가 stack-level animation 구현에서 실패하는지 확인**
 
 Run: `swift test --filter UsageOverlayAccountAnimationTests`
 
-Expected: FAIL — 두 view 모두 Reduce Motion environment, asymmetric transition, 0.12초 animation이 없음
+Expected: FAIL — 현재 stack-level `.animation(..., value:)` 구현과 shared Compact rows가 transition-local scope 계약을 위반
 
-- [ ] **Step 3: Expanded와 Compact content에 Reduce Motion environment 추가**
+- [ ] **Step 3: Expanded row가 transition-local animation을 소유하도록 변경**
 
-두 view의 stored properties에 추가한다.
-
-```swift
-@Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
-```
-
-- [ ] **Step 4: Expanded 계정 행 insertion transition과 stack animation 구현**
-
-Expanded provider stack을 다음처럼 변경한다.
+Expanded provider stack에는 implicit animation을 두지 않고 row transition만 적용한다.
 
 ```swift
 VStack(alignment: .leading, spacing: 14) {
     ForEach(providers) { provider in
         ExpandedUsageOverlayAccountView(provider: provider)
-            .transition(.asymmetric(insertion: .opacity, removal: .identity))
+            .transition(accountTransition)
     }
 }
-.animation(
-    accessibilityReduceMotion ? nil : .easeOut(duration: 0.12),
-    value: providers.map(\.id)
-)
 ```
 
-modifier는 header를 포함하는 바깥 `VStack`이나 `UsageOverlayView`의 전체 `Group`에 적용하지 않는다.
-
-- [ ] **Step 5: Compact의 보이는 계정 stack에 같은 transition과 animation 구현**
-
-separator와 account가 함께 새 행으로 fade-in하도록 `accountRows`의 각 provider를 zero-spacing `VStack`으로 묶는다.
+같은 view에 Reduce Motion-aware transition을 추가한다.
 
 ```swift
+private var accountTransition: AnyTransition {
+    accessibilityReduceMotion
+        ? .identity
+        : .asymmetric(
+            insertion: .opacity.animation(.easeOut(duration: 0.12)),
+            removal: .identity
+        )
+}
+```
+
+이 방식은 새 row opacity만 animate하고 기존 행의 위치·값과 removal reflow는 즉시 반영한다. empty state에서 첫 provider가 추가될 때도 row가 자체 transition animation을 소유한다.
+
+- [ ] **Step 4: Compact visible rows와 measurement rows의 transition을 분리**
+
+separator와 account가 함께 새 행으로 fade-in하도록 각 provider를 zero-spacing `VStack`으로 묶되, transition을 parameter로 전달한다.
+
+```swift
+private var measurementAccountStack: some View {
+    VStack(spacing: 0) {
+        accountRows(transition: .identity)
+    }
+}
+
 private var visibleAccountStack: some View {
     LazyVStack(spacing: 0) {
-        accountRows
+        accountRows(transition: accountTransition)
     }
-    .animation(
-        accessibilityReduceMotion ? nil : .easeOut(duration: 0.12),
-        value: providerIDs
-    )
 }
 
 @ViewBuilder
-private var accountRows: some View {
+private func accountRows(transition: AnyTransition) -> some View {
     ForEach(Array(providers.enumerated()), id: \.element.id) { index, provider in
         VStack(spacing: 0) {
             if index > 0 {
@@ -310,14 +326,23 @@ private var accountRows: some View {
             }
             CompactUsageAccountView(provider: provider)
         }
-        .transition(.asymmetric(insertion: .opacity, removal: .identity))
+        .transition(transition)
     }
+}
+
+private var accountTransition: AnyTransition {
+    accessibilityReduceMotion
+        ? .identity
+        : .asymmetric(
+            insertion: .opacity.animation(.easeOut(duration: 0.12)),
+            removal: .identity
+        )
 }
 ```
 
-`measurementAccountStack`에는 `.animation`을 추가하지 않는다. 기존 measurement와 viewport resize 로직 및 display-mode blur/opacity animation은 변경하지 않는다.
+보이는 stack과 measurement stack 모두에 `.animation(..., value:)`를 추가하지 않는다. 기존 measurement, viewport resize 및 display-mode blur/opacity animation은 변경하지 않는다.
 
-- [ ] **Step 6: animation focused tests 실행**
+- [ ] **Step 5: animation focused tests 실행**
 
 Run: `swift test --filter UsageOverlayAccountAnimationTests`
 
@@ -325,13 +350,13 @@ Run: `swift test --filter UsageOverlayPresentationStateTests`
 
 Run: `swift test --filter UsageOverlayWindowControllerTests`
 
-Expected: 새 animation contract tests, 기존 presentation state tests, window controller tests 모두 PASS
+Expected: transition scope tests, 기존 presentation state tests, window controller tests 모두 PASS
 
-- [ ] **Step 7: 커밋**
+- [ ] **Step 6: 커밋**
 
 ```bash
 git add Sources/CLIProxyManagerApp/Views/UsageOverlayView.swift Sources/CLIProxyManagerApp/Views/CompactUsageOverlayView.swift Tests/CLIProxyManagerAppTests/UsageOverlayAccountAnimationTests.swift
-git commit -m "fix: smooth Usage HUD account insertion"
+git commit -m "fix: scope HUD animation to inserted rows"
 ```
 
 ---

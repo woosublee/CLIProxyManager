@@ -100,17 +100,20 @@ Provider 목록은 계정 추가와 함께 자연 높이가 증가하고 AppKit 
 - layout space와 panel fitting resize는 즉시 새 상태를 반영한다.
 - 이동, scale, blur 또는 전체 목록 crossfade를 추가하지 않는다.
 
-SwiftUI 구현은 각 모드의 account row에 asymmetric transition을 적용하고 provider ID 배열을 animation value로 사용한다.
+SwiftUI 구현은 stack-level implicit animation을 사용하지 않고, 각 모드의 새 account row에 적용되는 insertion transition 자체에 animation을 결합한다.
 
 ```swift
-.transition(.asymmetric(insertion: .opacity, removal: .identity))
-.animation(
-    reduceMotion ? nil : .easeOut(duration: 0.12),
-    value: providers.map(\.id)
-)
+private var accountTransition: AnyTransition {
+    reduceMotion
+        ? .identity
+        : .asymmetric(
+            insertion: .opacity.animation(.easeOut(duration: 0.12)),
+            removal: .identity
+        )
+}
 ```
 
-실제 구현에서는 animation scope가 Expanded와 Compact의 보이는 account stack에 각각 한정되어야 한다. Compact의 숨겨진 measurement stack과 Usage HUD의 기존 display-mode blur/opacity transition에는 영향을 주지 않는다.
+이 transition만 새 행에 적용하면 기존 행의 위치·사용량 값과 removal reflow는 animation transaction의 영향을 받지 않는다. empty state에서 첫 provider가 추가될 때도 새 행이 자체 transition을 소유한다. Compact의 숨겨진 measurement stack에는 `.identity` transition을 전달하고 Usage HUD의 기존 display-mode blur/opacity transition에는 영향을 주지 않는다.
 
 ## Reduce Motion
 
@@ -153,10 +156,10 @@ SwiftUI 구현은 각 모드의 account row에 asymmetric transition을 적용�
 - Expanded와 Compact account row에 같은 asymmetric transition이 존재한다.
 - insertion은 opacity이고 removal은 identity다.
 - animation duration은 `0.12`, timing은 `easeOut`이다.
-- animation value는 provider ID 배열이다.
-- 전체 HUD나 header에 crossfade를 적용하지 않는다.
-- Compact의 measurement stack에는 animation modifier를 추가하지 않는다.
-- Reduce Motion에서는 두 모드의 animation이 nil이다.
+- animation은 stack이 아니라 insertion transition 자체에만 결합한다.
+- 기존 행의 위치·값, 전체 HUD, header에는 implicit animation을 적용하지 않는다.
+- Compact의 measurement stack에는 identity transition만 사용한다.
+- Reduce Motion에서는 두 모드의 account transition이 identity다.
 
 ### 최종 검증
 
