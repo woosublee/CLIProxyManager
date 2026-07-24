@@ -244,15 +244,20 @@ private struct ExpandedUsageOverlayContent: View {
                 VStack(alignment: .leading, spacing: 14) {
                     ForEach(providers) { provider in
                         ExpandedUsageOverlayAccountView(provider: provider)
-                            .transition(.asymmetric(insertion: .opacity, removal: .identity))
+                            .transition(accountTransition)
                     }
                 }
-                .animation(
-                    accessibilityReduceMotion ? nil : .easeOut(duration: 0.12),
-                    value: providers.map(\.id)
-                )
             }
         }
+    }
+
+    private var accountTransition: AnyTransition {
+        accessibilityReduceMotion
+            ? .identity
+            : .asymmetric(
+                insertion: .opacity.animation(.easeOut(duration: 0.12)),
+                removal: .identity
+            )
     }
 }
 

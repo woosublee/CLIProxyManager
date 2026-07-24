@@ -2,20 +2,28 @@ import Foundation
 import XCTest
 
 final class UsageOverlayAccountAnimationTests: XCTestCase {
-    func testExpandedAccountStackUsesInsertionOnlyFadeAndReduceMotion() throws {
+    func testExpandedAccountUsesTransitionLocalInsertionFade() throws {
         let content = try sourceSection(
             in: try source(named: "UsageOverlayView.swift"),
             after: "private struct ExpandedUsageOverlayContent: View {",
             before: "\nenum ExpandedUsageContentPresentation"
         )
+        let accountStack = try sourceSection(
+            in: content,
+            after: "VStack(alignment: .leading, spacing: 14) {",
+            before: "\n                }"
+        )
 
         XCTAssertTrue(content.contains("@Environment(\\.accessibilityReduceMotion) private var accessibilityReduceMotion"))
-        XCTAssertTrue(content.contains(".transition(.asymmetric(insertion: .opacity, removal: .identity))"))
-        XCTAssertTrue(content.contains("accessibilityReduceMotion ? nil : .easeOut(duration: 0.12)"))
-        XCTAssertTrue(content.contains("value: providers.map(\\.id)"))
+        XCTAssertTrue(accountStack.contains(".transition(accountTransition)"))
+        XCTAssertFalse(accountStack.contains(".animation("))
+        XCTAssertTrue(content.contains("private var accountTransition: AnyTransition"))
+        XCTAssertTrue(content.contains("insertion: .opacity.animation(.easeOut(duration: 0.12))"))
+        XCTAssertTrue(content.contains("removal: .identity"))
+        XCTAssertFalse(content.contains("value: providers.map(\\.id)"))
     }
 
-    func testCompactVisibleAccountStackUsesSameInsertionOnlyFade() throws {
+    func testCompactVisibleRowsUseTransitionLocalFadeWhileMeasurementUsesIdentity() throws {
         let content = try sourceSection(
             in: try source(named: "CompactUsageOverlayView.swift"),
             after: "struct CompactUsageOverlayView: View {",
@@ -33,10 +41,14 @@ final class UsageOverlayAccountAnimationTests: XCTestCase {
         )
 
         XCTAssertTrue(content.contains("@Environment(\\.accessibilityReduceMotion) private var accessibilityReduceMotion"))
-        XCTAssertTrue(content.contains(".transition(.asymmetric(insertion: .opacity, removal: .identity))"))
-        XCTAssertTrue(visibleStack.contains("accessibilityReduceMotion ? nil : .easeOut(duration: 0.12)"))
-        XCTAssertTrue(visibleStack.contains("value: providerIDs"))
+        XCTAssertTrue(visibleStack.contains("accountRows(transition: accountTransition)"))
+        XCTAssertTrue(measurementStack.contains("accountRows(transition: .identity)"))
+        XCTAssertFalse(visibleStack.contains(".animation("))
         XCTAssertFalse(measurementStack.contains(".animation("))
+        XCTAssertTrue(content.contains(".transition(transition)"))
+        XCTAssertTrue(content.contains("insertion: .opacity.animation(.easeOut(duration: 0.12))"))
+        XCTAssertTrue(content.contains("removal: .identity"))
+        XCTAssertFalse(content.contains("value: providerIDs"))
     }
 
     private func source(named filename: String) throws -> String {

@@ -82,22 +82,18 @@ struct CompactUsageOverlayView: View {
 
     private var measurementAccountStack: some View {
         VStack(spacing: 0) {
-            accountRows
+            accountRows(transition: .identity)
         }
     }
 
     private var visibleAccountStack: some View {
         LazyVStack(spacing: 0) {
-            accountRows
+            accountRows(transition: accountTransition)
         }
-        .animation(
-            accessibilityReduceMotion ? nil : .easeOut(duration: 0.12),
-            value: providerIDs
-        )
     }
 
     @ViewBuilder
-    private var accountRows: some View {
+    private func accountRows(transition: AnyTransition) -> some View {
         ForEach(Array(providers.enumerated()), id: \.element.id) { index, provider in
             VStack(spacing: 0) {
                 if index > 0 {
@@ -105,8 +101,17 @@ struct CompactUsageOverlayView: View {
                 }
                 CompactUsageAccountView(provider: provider)
             }
-            .transition(.asymmetric(insertion: .opacity, removal: .identity))
+            .transition(transition)
         }
+    }
+
+    private var accountTransition: AnyTransition {
+        accessibilityReduceMotion
+            ? .identity
+            : .asymmetric(
+                insertion: .opacity.animation(.easeOut(duration: 0.12)),
+                removal: .identity
+            )
     }
 }
 
