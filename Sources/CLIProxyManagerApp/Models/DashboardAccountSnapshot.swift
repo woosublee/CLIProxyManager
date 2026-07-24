@@ -1,7 +1,7 @@
 import CLIProxyManagerCore
 
 struct UsageOverlayAccountButtonPresentation: Equatable {
-    let symbolName = "chart.bar.xaxis"
+    let symbolName = "macwindow"
     let accessibilityLabel: String
     let isHighlighted: Bool
 

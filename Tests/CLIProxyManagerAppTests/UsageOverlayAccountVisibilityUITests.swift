@@ -34,7 +34,7 @@ final class UsageOverlayAccountVisibilityUITests: XCTestCase {
         XCTAssertEqual(usageOverlayButtonCount(in: disconnectedActions), 1)
     }
 
-    func testUsageHUDButtonKeepsClickTargetTooltipAndAccessibilityLabel() throws {
+    func testUsageHUDButtonUsesQuietWindowPresentationAndKeepsInteractionContract() throws {
         let button = try sourceSection(
             in: dashboardSource(),
             after: "private var usageOverlayButton: some View {",
@@ -42,8 +42,12 @@ final class UsageOverlayAccountVisibilityUITests: XCTestCase {
         )
 
         XCTAssertTrue(button.contains(".frame(width: 26, height: 26)"))
+        XCTAssertTrue(button.contains("BrandPalette.accent"))
+        XCTAssertTrue(button.contains("Color.primary.opacity(hovering ? 0.65 : 0.38)"))
         XCTAssertTrue(button.contains(".help(presentation.accessibilityLabel)"))
         XCTAssertTrue(button.contains(".accessibilityLabel(presentation.accessibilityLabel)"))
+        XCTAssertFalse(button.contains(".background"))
+        XCTAssertFalse(button.contains("RoundedRectangle"))
     }
 
     private func dashboardSource() throws -> String {

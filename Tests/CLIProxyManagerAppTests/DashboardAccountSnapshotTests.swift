@@ -197,7 +197,7 @@ final class DashboardAccountSnapshotTests: XCTestCase {
         let snapshot = DashboardAccountSnapshot(provider: row)
 
         XCTAssertFalse(snapshot.showsInUsageOverlay)
-        XCTAssertEqual(snapshot.usageOverlayButtonPresentation.symbolName, "chart.bar.xaxis")
+        XCTAssertEqual(snapshot.usageOverlayButtonPresentation.symbolName, "macwindow")
         XCTAssertEqual(snapshot.usageOverlayButtonPresentation.accessibilityLabel, "Show in Usage HUD")
         XCTAssertFalse(snapshot.usageOverlayButtonPresentation.isHighlighted)
     }
@@ -205,7 +205,7 @@ final class DashboardAccountSnapshotTests: XCTestCase {
     func testVisibleHUDAccountButtonPresentationOffersHideAction() {
         let presentation = UsageOverlayAccountButtonPresentation(showsInUsageOverlay: true)
 
-        XCTAssertEqual(presentation.symbolName, "chart.bar.xaxis")
+        XCTAssertEqual(presentation.symbolName, "macwindow")
         XCTAssertEqual(presentation.accessibilityLabel, "Hide from Usage HUD")
         XCTAssertTrue(presentation.isHighlighted)
     }

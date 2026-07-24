@@ -776,14 +776,8 @@ private struct ProviderAccountCardView: View {
                 .foregroundStyle(
                     presentation.isHighlighted
                         ? BrandPalette.accent
-                        : Color.primary.opacity(0.55)
+                        : Color.primary.opacity(hovering ? 0.65 : 0.38)
                 )
-                .background {
-                    if presentation.isHighlighted {
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(BrandPalette.accent.opacity(0.12))
-                    }
-                }
         }
         .buttonStyle(.plain)
         .help(presentation.accessibilityLabel)
