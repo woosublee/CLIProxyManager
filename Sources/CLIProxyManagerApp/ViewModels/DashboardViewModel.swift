@@ -2771,6 +2771,10 @@ final class DashboardViewModel: ObservableObject {
         config.isSubscriptionUsageEnabled ? .managementKeyNotConfigured : .disabled
     }
 
+    private func showsInUsageOverlay(_ id: ProviderRowState.ID) -> Bool {
+        !config.usageOverlay.hiddenAccountIDs.contains(id.rawValue)
+    }
+
     private func rebuildProviderRows(claudeStatus: DiagnosticStatus?, codexStatus: DiagnosticStatus?) {
         let authProfilesByID = Dictionary(uniqueKeysWithValues: authProfiles.map { ($0.id, $0) })
         var rows: [ProviderRowState]
@@ -2799,7 +2803,8 @@ final class DashboardViewModel: ObservableObject {
                     isConnected: enabledProfile != nil, isDisabled: isDisabled,
                     isErrored: isProviderErrored(providerType: authProfile.type, enabledProfile: enabledProfile, diagnosticStatus: diagnosticStatus),
                     accountDetailHidden: authProfile.type == .codex ? config.accountPrivacy.codexHidden : config.accountPrivacy.claudeHidden,
-                    subscriptionUsageState: subscriptionUsageStates[authProfile.id] ?? defaultSubscriptionUsageState
+                    subscriptionUsageState: subscriptionUsageStates[authProfile.id] ?? defaultSubscriptionUsageState,
+                    showsInUsageOverlay: showsInUsageOverlay(ProviderRowState.ID(rawValue: rowID))
                 )
             }
         } else {
@@ -2821,7 +2826,8 @@ final class DashboardViewModel: ObservableObject {
                     isConnected: enabledProfile != nil, isDisabled: isDisabled,
                     isErrored: isProviderErrored(providerType: commandProfile.provider, enabledProfile: enabledProfile, diagnosticStatus: diagnosticStatus),
                     accountDetailHidden: commandProfile.accountDetailHidden,
-                    subscriptionUsageState: subscriptionUsageStates[authProfile.id] ?? defaultSubscriptionUsageState
+                    subscriptionUsageState: subscriptionUsageStates[authProfile.id] ?? defaultSubscriptionUsageState,
+                    showsInUsageOverlay: showsInUsageOverlay(ProviderRowState.ID(rawValue: commandProfile.id))
                 )
             }
         }
@@ -2832,7 +2838,8 @@ final class DashboardViewModel: ObservableObject {
                 functionName: config.commands.ccapi, connectionTitle: "Configured",
                 connectionDetail: "CLIProxyAPI",
                 isConnected: true, accountDetailHidden: true, subscriptionUsageState: .disabled,
-                showsSubscriptionUsage: false
+                showsSubscriptionUsage: false,
+                showsInUsageOverlay: showsInUsageOverlay(.claudeAPI)
             ))
         }
         if isAPIKeyConfigured(.codexAPIKey) {
@@ -2841,7 +2848,8 @@ final class DashboardViewModel: ObservableObject {
                 functionName: config.commands.ccodexapi, connectionTitle: "Configured",
                 connectionDetail: "CLIProxyAPI", isConnected: true,
                 accountDetailHidden: true, subscriptionUsageState: .disabled,
-                showsSubscriptionUsage: false
+                showsSubscriptionUsage: false,
+                showsInUsageOverlay: showsInUsageOverlay(.codexAPI)
             ))
         }
         let orderedRows = AccountOrdering.orderedRows(rows, storedIDs: config.accountOrder)

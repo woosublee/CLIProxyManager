@@ -317,6 +317,40 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.connectionDetail, "codex@example.com")
     }
 
+    func testProviderRowDefaultsToShowingInUsageOverlay() {
+        let row = ProviderRowState(
+            id: .claude,
+            name: "Claude OAuth",
+            nickname: "",
+            functionName: "cc",
+            connectionTitle: "Connected",
+            connectionDetail: "claude@example.com",
+            isConnected: true
+        )
+
+        XCTAssertTrue(row.showsInUsageOverlay)
+    }
+
+    func testProviderRowsReflectUsageOverlayHiddenAccountIDs() {
+        var config = AppConfig.default
+        config.usageOverlay.hiddenAccountIDs = [ProviderRowState.ID.codex.rawValue]
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false),
+                AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: nil, disabled: false)
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
+        )
+
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.showsInUsageOverlay, true)
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.showsInUsageOverlay, false)
+    }
+
     func testProviderRowsReflectConfiguredAccountPrivacy() {
         var config = AppConfig.default
         config.accountPrivacy = AppConfig.AccountPrivacy(claudeHidden: false, codexHidden: true)
