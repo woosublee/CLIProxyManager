@@ -6,6 +6,7 @@ struct CompactUsageOverlayView: View {
     let emptyMessage: String
     let maximumAccountHeight: CGFloat
     var onMeasurementChange: (CGFloat) -> Void = { _ in }
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @State private var measurementState = CompactUsageMeasurementState()
 
     var body: some View {
@@ -89,15 +90,22 @@ struct CompactUsageOverlayView: View {
         LazyVStack(spacing: 0) {
             accountRows
         }
+        .animation(
+            accessibilityReduceMotion ? nil : .easeOut(duration: 0.12),
+            value: providerIDs
+        )
     }
 
     @ViewBuilder
     private var accountRows: some View {
         ForEach(Array(providers.enumerated()), id: \.element.id) { index, provider in
-            if index > 0 {
-                CompactUsageSeparator()
+            VStack(spacing: 0) {
+                if index > 0 {
+                    CompactUsageSeparator()
+                }
+                CompactUsageAccountView(provider: provider)
             }
-            CompactUsageAccountView(provider: provider)
+            .transition(.asymmetric(insertion: .opacity, removal: .identity))
         }
     }
 }

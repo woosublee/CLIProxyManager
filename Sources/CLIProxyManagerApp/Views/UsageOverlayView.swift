@@ -218,6 +218,7 @@ private struct ExpandedUsageOverlayContent: View {
     let providers: [MenuBarConnectedProvider]
     let emptyMessage: String
     let refreshStatus: String
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -243,8 +244,13 @@ private struct ExpandedUsageOverlayContent: View {
                 VStack(alignment: .leading, spacing: 14) {
                     ForEach(providers) { provider in
                         ExpandedUsageOverlayAccountView(provider: provider)
+                            .transition(.asymmetric(insertion: .opacity, removal: .identity))
                     }
                 }
+                .animation(
+                    accessibilityReduceMotion ? nil : .easeOut(duration: 0.12),
+                    value: providers.map(\.id)
+                )
             }
         }
     }
