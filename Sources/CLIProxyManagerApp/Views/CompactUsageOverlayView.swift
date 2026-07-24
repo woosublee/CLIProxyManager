@@ -3,6 +3,7 @@ import SwiftUI
 
 struct CompactUsageOverlayView: View {
     let providers: [MenuBarConnectedProvider]
+    let emptyMessage: String
     let maximumAccountHeight: CGFloat
     var onMeasurementChange: (CGFloat) -> Void = { _ in }
     @State private var measurementState = CompactUsageMeasurementState()
@@ -13,9 +14,10 @@ struct CompactUsageOverlayView: View {
                 VStack(spacing: 7) {
                     Image(systemName: "person.crop.circle.badge.questionmark")
                         .font(.system(size: 20))
-                    Text("No accounts")
+                    Text(emptyMessage)
                         .font(.system(size: 9.5, weight: .medium))
                         .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, minHeight: 72)

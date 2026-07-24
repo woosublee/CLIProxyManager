@@ -24,14 +24,13 @@ struct UsageOverlayView: View {
         )
     }
 
-    private var providers: [MenuBarConnectedProvider] {
-        MenuBarStatusSnapshot(
+    private var accountPresentation: UsageOverlayAccountPresentation {
+        UsageOverlayAccountPresentation(
             serverStatus: viewModel.serverStatus,
             serverControlState: viewModel.serverControlState,
-            providers: viewModel.providerRows,
-            port: viewModel.config.port,
-            showsSubscriptionUsage: true
-        ).connectedProviders
+            providerRows: viewModel.providerRows,
+            port: viewModel.config.port
+        )
     }
 
     var body: some View {
@@ -45,12 +44,14 @@ struct UsageOverlayView: View {
                 switch presentationState.presentedDisplayMode {
                 case .expanded:
                     ExpandedUsageOverlayContent(
-                        providers: providers,
+                        providers: accountPresentation.providers,
+                        emptyMessage: accountPresentation.emptyMessage ?? "No connected accounts",
                         refreshStatus: refreshStatus
                     )
                 case .compact:
                     CompactUsageOverlayView(
-                        providers: providers,
+                        providers: accountPresentation.providers,
+                        emptyMessage: accountPresentation.emptyMessage ?? "No connected accounts",
                         maximumAccountHeight: presentationState.compactAccountMaximumHeight,
                         onMeasurementChange: recordCompactAccountHeight
                     )
@@ -100,7 +101,8 @@ struct UsageOverlayView: View {
                 onClose: {}
             )
             CompactUsageOverlayView(
-                providers: providers,
+                providers: accountPresentation.providers,
+                emptyMessage: accountPresentation.emptyMessage ?? "No connected accounts",
                 maximumAccountHeight: presentationState.compactAccountMaximumHeight,
                 onMeasurementChange: recordCompactAccountHeight
             )
@@ -214,6 +216,7 @@ struct UsageOverlayChrome: View {
 
 private struct ExpandedUsageOverlayContent: View {
     let providers: [MenuBarConnectedProvider]
+    let emptyMessage: String
     let refreshStatus: String
 
     var body: some View {
@@ -232,7 +235,7 @@ private struct ExpandedUsageOverlayContent: View {
             }
 
             if providers.isEmpty {
-                Text("No connected accounts")
+                Text(emptyMessage)
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 140, alignment: .center)
