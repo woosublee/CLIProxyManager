@@ -342,6 +342,18 @@ final class ProxyModelClientTests: XCTestCase {
         }
         XCTAssertTrue(httpClient.requests.isEmpty)
     }
+
+    func testCodexModelOptionContextWindowDefaultsToNil() {
+        let option = CodexModelOption(id: "gpt-5.6-sol")
+
+        XCTAssertNil(option.contextWindow)
+    }
+
+    func testCodexModelOptionContextWindowCanBeSet() {
+        let option = CodexModelOption(id: "gpt-5.6-sol", contextWindow: 372_000)
+
+        XCTAssertEqual(option.contextWindow, 372_000)
+    }
 }
 
 private final class StubHTTPClient: HTTPClient, @unchecked Sendable {

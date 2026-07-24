@@ -13,18 +13,21 @@ public struct CodexModelOption: Equatable, Sendable {
     public var supportedReasoning: [AppConfig.CodexReasoning]
     public var defaultReasoning: AppConfig.CodexReasoning?
     public var supportsFastMode: Bool
+    public var contextWindow: Int?
 
     public init(
         id: String,
         supportedReasoning: [AppConfig.CodexReasoning] = [],
         defaultReasoning: AppConfig.CodexReasoning? = nil,
-        supportsFastMode: Bool? = nil
+        supportsFastMode: Bool? = nil,
+        contextWindow: Int? = nil
     ) {
         let canonicalID = CodexFastMode.canonicalModel(from: id)
         self.id = canonicalID
         self.supportedReasoning = supportedReasoning
         self.defaultReasoning = defaultReasoning
         self.supportsFastMode = supportsFastMode ?? Self.supportsFastModeFallback(for: canonicalID)
+        self.contextWindow = contextWindow
     }
 
     static func supportsFastModeFallback(for id: String) -> Bool {
