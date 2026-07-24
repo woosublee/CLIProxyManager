@@ -521,6 +521,7 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
 
     private func config(for port: Int) throws -> String {
         let appConfig = try appConfigProvider()
+        let usageEnabled = usageEnabledProvider()
         let claudeAPIKey = nonEmpty(claudeAPIKeyProvider())
         let codexAPIKey = nonEmpty(codexAPIKeyProvider())
         let hasManagedAPIKey = claudeAPIKey != nil || codexAPIKey != nil
@@ -530,7 +531,7 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         )
 
         let managementConfiguration: String
-        if usageEnabledProvider(),
+        if usageEnabled,
            let key = managementKeyProvider()?.trimmingCharacters(in: .whitespacesAndNewlines),
            !key.isEmpty {
             managementConfiguration = """
@@ -541,7 +542,7 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
             managementConfiguration = ""
         }
 
-        let usageQueueConfiguration = usageEnabledProvider() && hasManagedAPIKey
+        let usageQueueConfiguration = usageEnabled && hasManagedAPIKey
             ? """
               usage-statistics-enabled: true
               redis-usage-queue-retention-seconds: 3600

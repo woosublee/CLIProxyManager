@@ -93,6 +93,31 @@ final class ProxyServiceManagerTests: XCTestCase {
         XCTAssertTrue(yaml.contains("remote-management:"))
     }
 
+    func testStartUsesOneUsageEnabledSnapshotForManagementAndQueue() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let callCounter = ProviderCallCounter()
+        let manager = ProxyServiceManager(
+            paths: paths,
+            launcher: FakeProcessLauncher(),
+            managementKeyProvider: { "management-key" },
+            usageEnabledProvider: {
+                callCounter.increment()
+                return callCounter.value == 1
+            },
+            claudeAPIKeyProvider: { "claude-key" },
+            codexAPIKeyProvider: { nil }
+        )
+
+        try await manager.start(port: 8317)
+
+        let yaml = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
+        XCTAssertEqual(callCounter.value, 1)
+        XCTAssertTrue(yaml.contains("remote-management:"))
+        XCTAssertTrue(yaml.contains("usage-statistics-enabled: true"))
+    }
+
     func testStartOmitsUsageQueueWhenUsageIsDisabledEvenWithAPIKey() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
