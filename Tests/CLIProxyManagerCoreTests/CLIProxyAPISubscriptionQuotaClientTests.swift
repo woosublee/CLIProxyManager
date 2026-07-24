@@ -278,7 +278,7 @@ private final class StubManagementKeyStore: SubscriptionUsageManagementKeyProvid
     }
 }
 
-private final class StubSubscriptionUsageTransport: SubscriptionUsageHTTPTransport, @unchecked Sendable {
+private final class StubSubscriptionUsageTransport: ManagementAPIHTTPTransport, @unchecked Sendable {
     struct Response {
         let data: Data
         let statusCode: Int
