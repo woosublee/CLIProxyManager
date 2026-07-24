@@ -121,6 +121,25 @@ final class AppConfigTests: XCTestCase {
         )
     }
 
+    func testCodexRoleModelIdentifierAppendsOneMillionSuffixForExtendedContext() {
+        let role = AppConfig.CodexRole(
+            model: "gpt-5.6-sol",
+            reasoning: .xhigh,
+            detectedContextWindow: 372_000,
+            fastModeEnabled: true
+        )
+
+        XCTAssertEqual(role.modelIdentifier, "gpt-5.6-sol-fast(xhigh)[1m]")
+    }
+
+    func testCodexRoleModelIdentifierOmitsSuffixAtOrBelowStandardContext() {
+        let atStandard = AppConfig.CodexRole(model: "gpt-5.5", reasoning: .medium, detectedContextWindow: 200_000)
+        let unknown = AppConfig.CodexRole(model: "gpt-5.5", reasoning: .medium, detectedContextWindow: nil)
+
+        XCTAssertEqual(atStandard.modelIdentifier, "gpt-5.5(medium)")
+        XCTAssertEqual(unknown.modelIdentifier, "gpt-5.5(medium)")
+    }
+
     func testCodexRoleDetectedContextWindowRoundTrips() throws {
         let role = AppConfig.CodexRole(
             model: "gpt-5.6-sol",
