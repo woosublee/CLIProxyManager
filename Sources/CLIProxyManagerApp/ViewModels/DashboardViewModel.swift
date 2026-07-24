@@ -159,6 +159,14 @@ final class DashboardViewModel: ObservableObject {
         var errorDescription: String? { message }
     }
 
+    private struct UsageOverlayAccountVisibilitySaveError: LocalizedError {
+        let underlyingError: Error
+
+        var errorDescription: String? {
+            "Usage HUD account visibility could not be saved: \(underlyingError.localizedDescription)"
+        }
+    }
+
     @Published var cards: [ProfileCard]
     @Published var serverStatus: DiagnosticStatus
     @Published var serverControlState: ServerControlState = .stopped
@@ -891,6 +899,27 @@ final class DashboardViewModel: ObservableObject {
     func canMoveAccountDown(_ id: ProviderRowState.ID) -> Bool {
         guard let index = providerRows.firstIndex(where: { $0.id == id }) else { return false }
         return index < providerRows.index(before: providerRows.endIndex)
+    }
+
+    func setAccountVisibleInUsageOverlay(
+        _ id: ProviderRowState.ID,
+        isVisible: Bool
+    ) throws {
+        guard let row = providerRows.first(where: { $0.id == id }) else { return }
+        guard row.showsInUsageOverlay != isVisible else { return }
+
+        var updatedConfig = config
+        if isVisible {
+            updatedConfig.usageOverlay.hiddenAccountIDs.removeAll { $0 == id.rawValue }
+        } else if !updatedConfig.usageOverlay.hiddenAccountIDs.contains(id.rawValue) {
+            updatedConfig.usageOverlay.hiddenAccountIDs.append(id.rawValue)
+        }
+
+        do {
+            try savePrivacyOnlyConfig(updatedConfig)
+        } catch {
+            throw UsageOverlayAccountVisibilitySaveError(underlyingError: error)
+        }
     }
 
     func moveAccountUp(_ id: ProviderRowState.ID) {
