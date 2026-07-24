@@ -222,4 +222,14 @@ final class CodexRoleRoutingOptionsTests: XCTestCase {
 
         XCTAssertNil(normalized.detectedContextWindow)
     }
+
+    func testContextWindowDisplayAbbreviatesLargeValues() {
+        XCTAssertEqual(CodexRoleRoutingOptions.contextWindowDisplay(372_000), "372K")
+        XCTAssertEqual(CodexRoleRoutingOptions.contextWindowDisplay(1_050_000), "1.05M")
+    }
+
+    func testContextWindowDisplayShowsDashForUnknownOrStandardValues() {
+        XCTAssertEqual(CodexRoleRoutingOptions.contextWindowDisplay(nil), "—")
+        XCTAssertEqual(CodexRoleRoutingOptions.contextWindowDisplay(200_000), "—")
+    }
 }
