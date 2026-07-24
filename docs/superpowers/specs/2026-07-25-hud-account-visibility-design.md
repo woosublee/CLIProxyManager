@@ -108,8 +108,9 @@ UsageOverlay(
 
 ### 정규화
 
-- 동일 ID가 여러 번 있으면 하나만 유지한다.
-- 저장 배열은 현재 `accountOrder`의 순서에 맞춰 결정적으로 정렬한다.
+- decode할 때 중복 ID는 첫 번째 항목만 유지한다.
+- 계정을 숨길 때 기존 배열 끝에 ID를 추가하고, 표시할 때 해당 ID를 제거한다.
+- 계정 순서 변경은 hidden 목록을 다시 쓰지 않는다. 표시 순서는 계속 `accountOrder`에서만 결정한다.
 - 현재 계정 목록에서 확인할 수 없는 stale ID가 있어도 decode나 HUD 표시를 실패시키지 않는다.
 - 계정을 명시적으로 삭제할 때 해당 ID를 hidden 목록에서도 제거한다.
 
@@ -151,7 +152,7 @@ func setAccountVisibleInUsageOverlay(
 6. 기존 원자적 config 저장 경로로 저장한다.
 7. 저장 실패 시 config, provider 행, 카드 버튼, HUD 목록을 이전 상태로 rollback한다.
 
-UI에서는 기존 `saveSetting` 경로를 사용하여 오류를 settings toast에 표시한다. 오류 문구의 의미는 다음과 같다.
+UI에서는 기존 `saveSetting` 경로를 사용하여 오류를 settings toast에 표시한다. ViewModel은 config 저장 오류를 기능 전용 `LocalizedError`로 감싸 다음 문구를 제공한다.
 
 ```text
 Usage HUD account visibility could not be saved: <localized error>
@@ -197,11 +198,11 @@ let selectedRows = viewModel.providerRows.filter(\.showsInUsageOverlay)
 
 ## 빈 상태
 
-HUD는 다음 두 상태를 구분한다.
+HUD는 전체 `providerRows`, HUD 대상으로 선택된 행, 최종 connected provider를 함께 확인하여 다음 상태를 구분한다. 등록 계정 자체가 없는 경우에는 기존 `No connected accounts` 의미를 유지한다.
 
 ### 선택된 계정 없음
 
-현재 등록 계정이 있지만 모두 `showsInUsageOverlay == false`인 상태다.
+현재 등록 계정이 하나 이상 있지만 모두 `showsInUsageOverlay == false`인 상태다.
 
 ```text
 No accounts selected
