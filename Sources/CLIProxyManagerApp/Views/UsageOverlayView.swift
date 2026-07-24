@@ -235,29 +235,37 @@ private struct ExpandedUsageOverlayContent: View {
                 Spacer(minLength: UsageOverlaySurfaceLayout.expandedHeaderTrailingPadding)
             }
 
+            accountSurface
+        }
+    }
+
+    private var accountSurface: some View {
+        ZStack(alignment: .topLeading) {
+            VStack(alignment: .leading, spacing: 14) {
+                ForEach(providers) { provider in
+                    ExpandedUsageOverlayAccountView(provider: provider)
+                        .transition(accountTransition)
+                }
+            }
+
             if providers.isEmpty {
                 Text(emptyMessage)
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 140, alignment: .center)
-            } else {
-                VStack(alignment: .leading, spacing: 14) {
-                    ForEach(providers) { provider in
-                        ExpandedUsageOverlayAccountView(provider: provider)
-                            .transition(accountTransition)
-                    }
-                }
+                    .transition(.identity)
             }
         }
     }
 
     private var accountTransition: AnyTransition {
-        accessibilityReduceMotion
-            ? .identity
-            : .asymmetric(
-                insertion: .opacity.animation(.easeOut(duration: 0.12)),
-                removal: .identity
-            )
+        if accessibilityReduceMotion {
+            return .identity
+        }
+        return .asymmetric(
+            insertion: .opacity.animation(.easeOut(duration: 0.12)),
+            removal: .identity
+        )
     }
 }
 
