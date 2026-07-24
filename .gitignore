@@ -6,3 +6,5 @@
 *.xcworkspace
 derived-data/
 .superpowers/brainstorm/
+.superpowers/sdd/
+.worktrees/
