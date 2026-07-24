@@ -10,9 +10,9 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             commands: AppConfig.Commands(cc: "claude-local", ccapi: "api-local", ccodex: "codex-local"),
             ccapi: AppConfig.ClaudeAPI(),
             ccodex: AppConfig.Codex(
-                opus: AppConfig.CodexRole(model: "test-opus", reasoning: .auto, contextWindow: .auto),
-                sonnet: AppConfig.CodexRole(model: "test-sonnet", reasoning: .auto, contextWindow: .auto),
-                haiku: AppConfig.CodexRole(model: "test-haiku", reasoning: .auto, contextWindow: .auto)
+                opus: AppConfig.CodexRole(model: "test-opus", reasoning: .auto),
+                sonnet: AppConfig.CodexRole(model: "test-sonnet", reasoning: .auto),
+                haiku: AppConfig.CodexRole(model: "test-haiku", reasoning: .auto)
             ),
             includeDangerouslySkipPermissions: false,
             startAtLogin: false,
@@ -578,9 +578,9 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let oldID = "codex-user@example.com-pro.json"
         let newID = "codex-182d1cfd-user@example.com-pro.json"
         let codex = AppConfig.Codex(
-            opus: .init(model: "gpt-5.6-terra", reasoning: .max, contextWindow: .context1m, fastModeEnabled: true),
-            sonnet: .init(model: "gpt-5.5", reasoning: .high, contextWindow: .context400k),
-            haiku: .init(model: "gpt-5.4", reasoning: .low, contextWindow: .context200k)
+            opus: .init(model: "gpt-5.6-terra", reasoning: .max, fastModeEnabled: true),
+            sonnet: .init(model: "gpt-5.5", reasoning: .high),
+            haiku: .init(model: "gpt-5.4", reasoning: .low)
         )
         var config = AppConfig.default
         config.subscriptionUsage.showInMenuBar = true
@@ -2018,7 +2018,6 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         secondGeneration.sonnet = .init(
             model: "gpt-5.6-sol",
             reasoning: .auto,
-            contextWindow: .auto,
             fastModeEnabled: true
         )
         try viewModel.saveCodexSettings(functionName: "ccodex", codex: secondGeneration)
@@ -2116,7 +2115,6 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         viewModel.serverControlState = .running
         var codex = config.codexAPI.codex
         codex.opus.reasoning = .high
-        codex.opus.contextWindow = .context400k
 
         try viewModel.saveCodexAPISettings(
             functionName: "ccodexapi",
@@ -2202,7 +2200,6 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         config.ccodex.opus = .init(
             model: "gpt-5.6-sol-fast",
             reasoning: .high,
-            contextWindow: .auto,
             fastModeEnabled: true
         )
         let proxyService = StubProxyServiceStarter()
@@ -2235,7 +2232,6 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         config.ccodex.opus = .init(
             model: "gpt-5.6-sol-fast",
             reasoning: .high,
-            contextWindow: .auto,
             fastModeEnabled: true
         )
         let store = StubConfigStore(config: config)
@@ -2279,7 +2275,6 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         invalid.opus = .init(
             model: "gpt-5.6-sol-fast",
             reasoning: .high,
-            contextWindow: .auto,
             fastModeEnabled: true
         )
 
@@ -2294,7 +2289,6 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         config.ccodex.opus = .init(
             model: "gpt-5.6-sol-fast",
             reasoning: .high,
-            contextWindow: .auto,
             fastModeEnabled: true
         )
         let store = StubConfigStore(config: config)
@@ -3579,9 +3573,9 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         var config = AppConfig.default
         config.codexAPI = .init(
             codex: AppConfig.Codex(
-                opus: .init(model: "gpt-5.6", reasoning: .xhigh, contextWindow: .context1m),
-                sonnet: .init(model: "gpt-5.6", reasoning: .medium, contextWindow: .context400k),
-                haiku: .init(model: "gpt-5.6-mini", reasoning: .low, contextWindow: .context200k)
+                opus: .init(model: "gpt-5.6", reasoning: .xhigh),
+                sonnet: .init(model: "gpt-5.6", reasoning: .medium),
+                haiku: .init(model: "gpt-5.6-mini", reasoning: .low)
             ),
             nickname: "OpenAI Work",
             dangerousPermissionsEnabled: true

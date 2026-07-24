@@ -26,9 +26,9 @@ final class DashboardViewModelTests: XCTestCase {
             commands: AppConfig.Commands(cc: "claude-local", ccapi: "api-local", ccodex: "codex-local"),
             ccapi: AppConfig.ClaudeAPI(),
             ccodex: AppConfig.Codex(
-                opus: AppConfig.CodexRole(model: "test-opus", reasoning: .auto, contextWindow: .auto),
-                sonnet: AppConfig.CodexRole(model: "test-sonnet", reasoning: .auto, contextWindow: .auto),
-                haiku: AppConfig.CodexRole(model: "test-haiku", reasoning: .auto, contextWindow: .auto)
+                opus: AppConfig.CodexRole(model: "test-opus", reasoning: .auto),
+                sonnet: AppConfig.CodexRole(model: "test-sonnet", reasoning: .auto),
+                haiku: AppConfig.CodexRole(model: "test-haiku", reasoning: .auto)
             ),
             includeDangerouslySkipPermissions: false,
             startAtLogin: false,

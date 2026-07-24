@@ -127,7 +127,6 @@ final class CodexFastModeTests: XCTestCase {
         config.ccodex.opus = .init(
             model: "gpt-5.6-sol-fast",
             reasoning: .xhigh,
-            contextWindow: .auto,
             fastModeEnabled: true
         )
 
@@ -141,7 +140,6 @@ final class CodexFastModeTests: XCTestCase {
         config.ccodex.opus = .init(
             model: "upstream-fast",
             reasoning: .medium,
-            contextWindow: .auto,
             fastModeEnabled: false
         )
 
@@ -182,9 +180,9 @@ final class CodexFastModeTests: XCTestCase {
         fastHaiku: Bool = false
     ) -> AppConfig.Codex {
         .init(
-            opus: .init(model: opus, reasoning: .xhigh, contextWindow: .auto, fastModeEnabled: fastOpus),
-            sonnet: .init(model: sonnet, reasoning: .medium, contextWindow: .auto, fastModeEnabled: fastSonnet),
-            haiku: .init(model: haiku, reasoning: .low, contextWindow: .auto, fastModeEnabled: fastHaiku)
+            opus: .init(model: opus, reasoning: .xhigh, fastModeEnabled: fastOpus),
+            sonnet: .init(model: sonnet, reasoning: .medium, fastModeEnabled: fastSonnet),
+            haiku: .init(model: haiku, reasoning: .low, fastModeEnabled: fastHaiku)
         )
     }
 }

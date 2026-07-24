@@ -128,7 +128,7 @@ final class DashboardViewModel: ObservableObject {
             }
 
             var codexRole: AppConfig.CodexRole {
-                .init(model: model, reasoning: .auto, contextWindow: .auto, fastModeEnabled: fastModeEnabled)
+                .init(model: model, reasoning: .auto, fastModeEnabled: fastModeEnabled)
             }
         }
 

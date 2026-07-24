@@ -113,7 +113,6 @@ final class CodexRoleRoutingOptionsTests: XCTestCase {
         let role = AppConfig.CodexRole(
             model: "gpt-5.5",
             reasoning: .xhigh,
-            contextWindow: .context1m,
             fastModeEnabled: true
         )
 
@@ -122,7 +121,6 @@ final class CodexRoleRoutingOptionsTests: XCTestCase {
             AppConfig.CodexRole(
                 model: "custom-model",
                 reasoning: .medium,
-                contextWindow: .context1m,
                 fastModeEnabled: false
             )
         )
@@ -130,9 +128,9 @@ final class CodexRoleRoutingOptionsTests: XCTestCase {
 
     func testNormalizedCodexPreservesFastForUnknownCapabilityButDisablesAuthoritativeUnsupported() {
         let codex = AppConfig.Codex(
-            opus: .init(model: "gpt-5.5", reasoning: .xhigh, contextWindow: .auto, fastModeEnabled: true),
-            sonnet: .init(model: "custom-model", reasoning: .medium, contextWindow: .auto, fastModeEnabled: true),
-            haiku: .init(model: "missing-model", reasoning: .low, contextWindow: .auto, fastModeEnabled: true)
+            opus: .init(model: "gpt-5.5", reasoning: .xhigh, fastModeEnabled: true),
+            sonnet: .init(model: "custom-model", reasoning: .medium, fastModeEnabled: true),
+            haiku: .init(model: "missing-model", reasoning: .low, fastModeEnabled: true)
         )
 
         let normalized = CodexRoleRoutingOptions.normalizedCodex(codex, options: options)
@@ -150,7 +148,6 @@ final class CodexRoleRoutingOptionsTests: XCTestCase {
         var role = AppConfig.CodexRole(
             model: "missing-model",
             reasoning: .auto,
-            contextWindow: .auto,
             fastModeEnabled: true
         )
         let binding = CodexRoleRoutingOptions.fastModeBinding(
@@ -169,7 +166,6 @@ final class CodexRoleRoutingOptionsTests: XCTestCase {
         let role = AppConfig.CodexRole(
             model: "gpt-5.5",
             reasoning: .xhigh,
-            contextWindow: .auto,
             fastModeEnabled: true
         )
 

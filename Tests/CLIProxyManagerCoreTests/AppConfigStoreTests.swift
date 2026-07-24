@@ -15,9 +15,9 @@ final class AppConfigStoreTests: XCTestCase {
         XCTAssertEqual(config.commands.ccodex, "")
         XCTAssertEqual(config.ccapi.connectionMode, .proxy)
         XCTAssertFalse(config.ccapi.dangerousPermissionsEnabled)
-        XCTAssertEqual(config.ccodex.opus, AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .xhigh, contextWindow: .auto))
-        XCTAssertEqual(config.ccodex.sonnet, AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .medium, contextWindow: .auto))
-        XCTAssertEqual(config.ccodex.haiku, AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .low, contextWindow: .auto))
+        XCTAssertEqual(config.ccodex.opus, AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .xhigh))
+        XCTAssertEqual(config.ccodex.sonnet, AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .medium))
+        XCTAssertEqual(config.ccodex.haiku, AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .low))
         XCTAssertEqual(config.roundRobinProfiles, [])
         XCTAssertFalse(config.subscriptionUsage.showInMenuBar)
         XCTAssertFalse(config.isSubscriptionUsageEnabled)
@@ -64,9 +64,9 @@ final class AppConfigStoreTests: XCTestCase {
             commands: AppConfig.Commands(cc: "mine", ccapi: "mineapi", ccodex: "minecodex"),
             ccapi: AppConfig.ClaudeAPI(dangerousPermissionsEnabled: true),
             ccodex: AppConfig.Codex(
-                opus: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .xhigh, contextWindow: .context1m),
-                sonnet: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .medium, contextWindow: .context400k),
-                haiku: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .low, contextWindow: .context200k)
+                opus: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .xhigh),
+                sonnet: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .medium),
+                haiku: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .low)
             ),
             includeDangerouslySkipPermissions: true,
             startAtLogin: true,
@@ -95,9 +95,9 @@ final class AppConfigStoreTests: XCTestCase {
                 accountDetailHidden: true,
                 dangerousPermissionsEnabled: false,
                 codex: AppConfig.Codex(
-                    opus: AppConfig.CodexRole(model: "gpt-5.6", reasoning: .high, contextWindow: .auto),
-                    sonnet: AppConfig.CodexRole(model: "gpt-5.6", reasoning: .medium, contextWindow: .context400k),
-                    haiku: AppConfig.CodexRole(model: "gpt-5.6-mini", reasoning: .low, contextWindow: .context200k)
+                    opus: AppConfig.CodexRole(model: "gpt-5.6", reasoning: .high),
+                    sonnet: AppConfig.CodexRole(model: "gpt-5.6", reasoning: .medium),
+                    haiku: AppConfig.CodexRole(model: "gpt-5.6-mini", reasoning: .low)
                 ),
                 modelPrefix: "codex-personal",
                 isEnabled: false

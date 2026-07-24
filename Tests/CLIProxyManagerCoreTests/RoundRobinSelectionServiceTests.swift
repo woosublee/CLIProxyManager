@@ -51,9 +51,9 @@ final class RoundRobinSelectionServiceTests: XCTestCase {
                 commandName: "ccodex",
                 includedAuthProfileIDs: ["a.json", "b.json"],
                 codex: .init(
-                    opus: .init(model: "gpt-5.6-sol", reasoning: .xhigh, contextWindow: .auto, fastModeEnabled: true),
-                    sonnet: .init(model: "gpt-5.6-sol", reasoning: .medium, contextWindow: .auto),
-                    haiku: .init(model: "gpt-5.5", reasoning: .low, contextWindow: .auto, fastModeEnabled: true)
+                    opus: .init(model: "gpt-5.6-sol", reasoning: .xhigh, fastModeEnabled: true),
+                    sonnet: .init(model: "gpt-5.6-sol", reasoning: .medium),
+                    haiku: .init(model: "gpt-5.5", reasoning: .low, fastModeEnabled: true)
                 )
             )
         ]
@@ -295,9 +295,9 @@ final class RoundRobinSelectionServiceTests: XCTestCase {
 
     private func testCodex(model: String) -> AppConfig.Codex {
         AppConfig.Codex(
-            opus: AppConfig.CodexRole(model: model, reasoning: .xhigh, contextWindow: .auto),
-            sonnet: AppConfig.CodexRole(model: model, reasoning: .medium, contextWindow: .auto),
-            haiku: AppConfig.CodexRole(model: model, reasoning: .low, contextWindow: .auto)
+            opus: AppConfig.CodexRole(model: model, reasoning: .xhigh),
+            sonnet: AppConfig.CodexRole(model: model, reasoning: .medium),
+            haiku: AppConfig.CodexRole(model: model, reasoning: .low)
         )
     }
 }
