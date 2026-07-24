@@ -165,6 +165,77 @@ final class ShellFunctionRendererTests: XCTestCase {
         XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME"))
     }
 
+    func testLegacyCodexCommandExportsAutoCompactWindowForExtendedContextRole() throws {
+        var config = configuredCommands()
+        config.ccodex = .init(
+            opus: .init(model: "gpt-5.6-sol", reasoning: .xhigh, detectedContextWindow: 372_000, fastModeEnabled: true),
+            sonnet: .init(model: "gpt-5.6-sol", reasoning: .medium, detectedContextWindow: 372_000),
+            haiku: .init(model: "gpt-5.5", reasoning: .low, detectedContextWindow: 200_000)
+        )
+
+        let script = try ShellFunctionRenderer(config: config, helperCommand: "/usr/local/bin/cpm").render()
+
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='gpt-5.6-sol-fast(xhigh)[1m]'"))
+        XCTAssertTrue(script.contains("CLAUDE_CODE_AUTO_COMPACT_WINDOW='372000'"))
+    }
+
+    func testLegacyCodexCommandOmitsAutoCompactWindowWhenNoRoleExtendsContext() throws {
+        var config = configuredCommands()
+        config.ccodex = .init(
+            opus: .init(model: "gpt-5.5", reasoning: .xhigh, detectedContextWindow: 200_000),
+            sonnet: .init(model: "gpt-5.5", reasoning: .medium),
+            haiku: .init(model: "gpt-5.5", reasoning: .low)
+        )
+
+        let script = try ShellFunctionRenderer(config: config, helperCommand: "/usr/local/bin/cpm").render()
+
+        XCTAssertFalse(script.contains("CLAUDE_CODE_AUTO_COMPACT_WINDOW"))
+    }
+
+    func testCodexAPICommandExportsAutoCompactWindow() throws {
+        var config = configuredCommands()
+        config.commands.ccodexapi = "ccodexapi"
+        config.codexAPI = .init(
+            codex: .init(
+                opus: .init(model: "gpt-5.4", reasoning: .xhigh, detectedContextWindow: 1_050_000),
+                sonnet: .init(model: "gpt-5.5", reasoning: .medium, detectedContextWindow: 272_000),
+                haiku: .init(model: "gpt-5.5", reasoning: .low, detectedContextWindow: 200_000)
+            )
+        )
+
+        let script = try ShellFunctionRenderer(
+            config: config,
+            helperCommand: "/usr/local/bin/cpm",
+            enabledFunctions: .init(claudeOAuth: false, codex: false, claudeAPI: false, codexAPI: true)
+        ).render()
+
+        let function = renderedFunction(named: config.commands.ccodexapi, in: script)
+        XCTAssertTrue(function.contains("CLAUDE_CODE_AUTO_COMPACT_WINDOW='272000'"))
+    }
+
+    func testOAuthCommandProfileExportsAutoCompactWindow() throws {
+        var config = configuredCommands()
+        config.oauthCommandProfiles = [
+            .init(
+                id: "codex-work",
+                provider: .codex,
+                authProfileID: "codex-work.json",
+                commandName: "ccwork",
+                codex: .init(
+                    opus: .init(model: "gpt-5.6-sol", reasoning: .xhigh, detectedContextWindow: 372_000),
+                    sonnet: .init(model: "gpt-5.5", reasoning: .medium, detectedContextWindow: 272_000),
+                    haiku: .init(model: "gpt-5.5", reasoning: .low, detectedContextWindow: 200_000)
+                ),
+                modelPrefix: "codex-work"
+            )
+        ]
+
+        let script = try ShellFunctionRenderer(config: config, helperCommand: "/usr/local/bin/cpm").render()
+
+        let function = renderedFunction(named: "ccwork", in: script)
+        XCTAssertTrue(function.contains("CLAUDE_CODE_AUTO_COMPACT_WINDOW='272000'"))
+    }
+
     func testRenderUsesMultipleOAuthCommandProfilesWithModelPrefixesAndCodexProfileMapping() throws {
         var config = configuredCommands()
         config.oauthCommandProfiles = [
