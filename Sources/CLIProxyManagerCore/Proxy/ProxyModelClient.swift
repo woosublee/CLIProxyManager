@@ -94,7 +94,8 @@ public struct ProxyModelClient: Sendable {
                 supportedReasoning: supported,
                 defaultReasoning: defaultReasoning.flatMap { supported.contains($0) ? $0 : nil },
                 supportsFastMode: metadataSupportsFast
-                    || CodexModelOption.supportsFastModeFallback(for: id)
+                    || CodexModelOption.supportsFastModeFallback(for: id),
+                contextWindow: metadata.contextWindow
             )
         }
     }
@@ -249,6 +250,7 @@ private struct CodexClientModelsResponse: Decodable {
         var visibility: String?
         var serviceTiers: [ServiceTier]
         var additionalSpeedTiers: [String]
+        var contextWindow: Int?
 
         enum CodingKeys: String, CodingKey {
             case slug
@@ -257,6 +259,7 @@ private struct CodexClientModelsResponse: Decodable {
             case visibility
             case serviceTiers = "service_tiers"
             case additionalSpeedTiers = "additional_speed_tiers"
+            case contextWindow = "context_window"
         }
 
         init(from decoder: Decoder) throws {
@@ -270,6 +273,7 @@ private struct CodexClientModelsResponse: Decodable {
             visibility = try container.decodeIfPresent(String.self, forKey: .visibility)
             serviceTiers = try container.decodeIfPresent([ServiceTier].self, forKey: .serviceTiers) ?? []
             additionalSpeedTiers = try container.decodeIfPresent([String].self, forKey: .additionalSpeedTiers) ?? []
+            contextWindow = try container.decodeIfPresent(Int.self, forKey: .contextWindow)
         }
     }
 

@@ -77,8 +77,8 @@ final class ProxyServiceManagerTests: XCTestCase {
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         try createBinary(at: paths.clipProxyBinary)
         var config = AppConfig.default
-        config.ccodex.opus = .init(model: "gpt-5.6-sol", reasoning: .xhigh, contextWindow: .auto, fastModeEnabled: true)
-        config.codexAPI.codex.sonnet = .init(model: "gpt-5.5", reasoning: .medium, contextWindow: .auto, fastModeEnabled: true)
+        config.ccodex.opus = .init(model: "gpt-5.6-sol", reasoning: .xhigh, fastModeEnabled: true)
+        config.codexAPI.codex.sonnet = .init(model: "gpt-5.5", reasoning: .medium, fastModeEnabled: true)
         let configuredAppConfig = config
         let manager = ProxyServiceManager(
             paths: paths,

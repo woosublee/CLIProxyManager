@@ -100,9 +100,9 @@ final class SettingsNavigationTests: XCTestCase {
             save: { _ in }
         )
         let codex = AppConfig.Codex(
-            opus: .init(model: "gpt-5.5", reasoning: .medium, contextWindow: .auto, fastModeEnabled: true),
-            sonnet: .init(model: "custom-model", reasoning: .medium, contextWindow: .auto, fastModeEnabled: true),
-            haiku: .init(model: "gpt-5.5", reasoning: .medium, contextWindow: .auto, fastModeEnabled: false)
+            opus: .init(model: "gpt-5.5", reasoning: .medium, fastModeEnabled: true),
+            sonnet: .init(model: "custom-model", reasoning: .medium, fastModeEnabled: true),
+            haiku: .init(model: "gpt-5.5", reasoning: .medium, fastModeEnabled: false)
         )
 
         let normalized = CodexRoleRoutingOptions.normalizedCodex(

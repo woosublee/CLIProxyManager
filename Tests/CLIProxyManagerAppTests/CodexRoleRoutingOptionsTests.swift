@@ -9,7 +9,8 @@ final class CodexRoleRoutingOptionsTests: XCTestCase {
             id: "gpt-5.5",
             supportedReasoning: [.low, .medium, .high, .xhigh],
             defaultReasoning: .medium,
-            supportsFastMode: true
+            supportsFastMode: true,
+            contextWindow: 372_000
         ),
         CodexModelOption(
             id: "gpt-5.6-sol",
@@ -21,7 +22,8 @@ final class CodexRoleRoutingOptionsTests: XCTestCase {
             id: "custom-model",
             supportedReasoning: [.low, .medium],
             defaultReasoning: .medium,
-            supportsFastMode: false
+            supportsFastMode: false,
+            contextWindow: 128_000
         )
     ]
 
@@ -113,7 +115,6 @@ final class CodexRoleRoutingOptionsTests: XCTestCase {
         let role = AppConfig.CodexRole(
             model: "gpt-5.5",
             reasoning: .xhigh,
-            contextWindow: .context1m,
             fastModeEnabled: true
         )
 
@@ -122,7 +123,7 @@ final class CodexRoleRoutingOptionsTests: XCTestCase {
             AppConfig.CodexRole(
                 model: "custom-model",
                 reasoning: .medium,
-                contextWindow: .context1m,
+                detectedContextWindow: 128_000,
                 fastModeEnabled: false
             )
         )
@@ -130,9 +131,9 @@ final class CodexRoleRoutingOptionsTests: XCTestCase {
 
     func testNormalizedCodexPreservesFastForUnknownCapabilityButDisablesAuthoritativeUnsupported() {
         let codex = AppConfig.Codex(
-            opus: .init(model: "gpt-5.5", reasoning: .xhigh, contextWindow: .auto, fastModeEnabled: true),
-            sonnet: .init(model: "custom-model", reasoning: .medium, contextWindow: .auto, fastModeEnabled: true),
-            haiku: .init(model: "missing-model", reasoning: .low, contextWindow: .auto, fastModeEnabled: true)
+            opus: .init(model: "gpt-5.5", reasoning: .xhigh, fastModeEnabled: true),
+            sonnet: .init(model: "custom-model", reasoning: .medium, fastModeEnabled: true),
+            haiku: .init(model: "missing-model", reasoning: .low, fastModeEnabled: true)
         )
 
         let normalized = CodexRoleRoutingOptions.normalizedCodex(codex, options: options)
@@ -150,7 +151,6 @@ final class CodexRoleRoutingOptionsTests: XCTestCase {
         var role = AppConfig.CodexRole(
             model: "missing-model",
             reasoning: .auto,
-            contextWindow: .auto,
             fastModeEnabled: true
         )
         let binding = CodexRoleRoutingOptions.fastModeBinding(
@@ -169,7 +169,6 @@ final class CodexRoleRoutingOptionsTests: XCTestCase {
         let role = AppConfig.CodexRole(
             model: "gpt-5.5",
             reasoning: .xhigh,
-            contextWindow: .auto,
             fastModeEnabled: true
         )
 
@@ -198,5 +197,39 @@ final class CodexRoleRoutingOptionsTests: XCTestCase {
             CodexRoleRoutingOptions.modelIDs(currentModel: "codex-work/gpt-5.5", options: options),
             ["gpt-5.5", "gpt-5.6-sol", "custom-model"]
         )
+    }
+
+    func testNormalizedRoleUpdatesDetectedContextWindowFromMatchingOption() {
+        let role = AppConfig.CodexRole(model: "custom-model", reasoning: .auto, detectedContextWindow: nil)
+
+        let normalized = CodexRoleRoutingOptions.normalizedRole(role, model: "gpt-5.5", options: options)
+
+        XCTAssertEqual(normalized.detectedContextWindow, 372_000)
+    }
+
+    func testNormalizedRolePreservesDetectedContextWindowWhenModelUnknown() {
+        let role = AppConfig.CodexRole(model: "gpt-5.5", reasoning: .auto, detectedContextWindow: 372_000)
+
+        let normalized = CodexRoleRoutingOptions.normalizedRole(role, model: "missing-model", options: options)
+
+        XCTAssertEqual(normalized.detectedContextWindow, 372_000)
+    }
+
+    func testNormalizedRoleClearsDetectedContextWindowWhenOptionHasNoValue() {
+        let role = AppConfig.CodexRole(model: "gpt-5.5", reasoning: .auto, detectedContextWindow: 372_000)
+
+        let normalized = CodexRoleRoutingOptions.normalizedRole(role, model: "gpt-5.6-sol", options: options)
+
+        XCTAssertNil(normalized.detectedContextWindow)
+    }
+
+    func testContextWindowDisplayAbbreviatesLargeValues() {
+        XCTAssertEqual(CodexRoleRoutingOptions.contextWindowDisplay(372_000), "372K")
+        XCTAssertEqual(CodexRoleRoutingOptions.contextWindowDisplay(1_050_000), "1.05M")
+    }
+
+    func testContextWindowDisplayShowsDashForUnknownOrStandardValues() {
+        XCTAssertEqual(CodexRoleRoutingOptions.contextWindowDisplay(nil), "—")
+        XCTAssertEqual(CodexRoleRoutingOptions.contextWindowDisplay(200_000), "—")
     }
 }

@@ -123,9 +123,9 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             secretStore: InMemorySecretStore()
         )
         let routing = AppConfig.Codex(
-            opus: .init(model: "cpm-codex-api/gpt-5.6(xhigh)", reasoning: .xhigh, contextWindow: .context1m),
-            sonnet: .init(model: "codex-work/gpt-5.6", reasoning: .medium, contextWindow: .context400k),
-            haiku: .init(model: "openai/gpt-5.6-mini(low)", reasoning: .low, contextWindow: .context200k)
+            opus: .init(model: "cpm-codex-api/gpt-5.6(xhigh)", reasoning: .xhigh),
+            sonnet: .init(model: "codex-work/gpt-5.6", reasoning: .medium),
+            haiku: .init(model: "openai/gpt-5.6-mini(low)", reasoning: .low)
         )
 
         try viewModel.saveCodexAPISettings(
@@ -151,9 +151,9 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             secretStore: secretStore
         )
         let routing = AppConfig.Codex(
-            opus: .init(model: "gpt-5.6", reasoning: .xhigh, contextWindow: .context1m),
-            sonnet: .init(model: "gpt-5.6", reasoning: .medium, contextWindow: .context400k),
-            haiku: .init(model: "gpt-5.6-mini", reasoning: .low, contextWindow: .context200k)
+            opus: .init(model: "gpt-5.6", reasoning: .xhigh),
+            sonnet: .init(model: "gpt-5.6", reasoning: .medium),
+            haiku: .init(model: "gpt-5.6-mini", reasoning: .low)
         )
 
         try viewModel.saveCodexAPISettings(
@@ -303,9 +303,9 @@ final class ProviderSettingsViewModelTests: XCTestCase {
     func testInitialCodexSettingsUseDefaultModelRouting() {
         var config = AppConfig.default
         config.ccodex = AppConfig.Codex(
-            opus: AppConfig.CodexRole(model: "old-opus", reasoning: .high, contextWindow: .context200k),
-            sonnet: AppConfig.CodexRole(model: "old-sonnet", reasoning: .medium, contextWindow: .context400k),
-            haiku: AppConfig.CodexRole(model: "old-haiku", reasoning: .low, contextWindow: .context1m)
+            opus: AppConfig.CodexRole(model: "old-opus", reasoning: .high),
+            sonnet: AppConfig.CodexRole(model: "old-sonnet", reasoning: .medium),
+            haiku: AppConfig.CodexRole(model: "old-haiku", reasoning: .low)
         )
 
         XCTAssertEqual(oauthSettingsInitialCodex(config: config, isInitialSetup: true), AppConfig.default.ccodex)
@@ -871,9 +871,9 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         state.profile.isEnabled = true
         state.profile.commandName = "ccodexrr"
         state.profile.codex = AppConfig.Codex(
-            opus: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .xhigh, contextWindow: .context1m),
-            sonnet: AppConfig.CodexRole(model: "gpt-5.1", reasoning: .medium, contextWindow: .context400k),
-            haiku: AppConfig.CodexRole(model: "gpt-5-mini", reasoning: .low, contextWindow: .context200k)
+            opus: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .xhigh),
+            sonnet: AppConfig.CodexRole(model: "gpt-5.1", reasoning: .medium),
+            haiku: AppConfig.CodexRole(model: "gpt-5-mini", reasoning: .low)
         )
 
         try viewModel.saveRoundRobinSettings(state)
@@ -1785,9 +1785,9 @@ final class ProviderSettingsViewModelTests: XCTestCase {
 
     private func testCodex(model: String = "gpt-5.5") -> AppConfig.Codex {
         AppConfig.Codex(
-            opus: AppConfig.CodexRole(model: model, reasoning: .xhigh, contextWindow: .auto),
-            sonnet: AppConfig.CodexRole(model: model, reasoning: .medium, contextWindow: .auto),
-            haiku: AppConfig.CodexRole(model: model, reasoning: .low, contextWindow: .auto)
+            opus: AppConfig.CodexRole(model: model, reasoning: .xhigh),
+            sonnet: AppConfig.CodexRole(model: model, reasoning: .medium),
+            haiku: AppConfig.CodexRole(model: model, reasoning: .low)
         )
     }
 

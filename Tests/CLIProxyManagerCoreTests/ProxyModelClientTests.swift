@@ -193,6 +193,26 @@ final class ProxyModelClientTests: XCTestCase {
         ])
     }
 
+    func testCodexModelOptionsParseContextWindowMetadata() async throws {
+        let regular = Data(#"{"data":[{"id":"codex-work/gpt-5.6-sol","owned_by":"openai","created":300}]}"#.utf8)
+        let metadata = Data(#"{"models":[{"slug":"codex-work/gpt-5.6-sol","context_window":372000}]}"#.utf8)
+        let client = ProxyModelClient(httpClient: StubHTTPClient(results: [.success(regular), .success(metadata)]))
+
+        let models = try await client.codexModelOptions(port: 18_317, modelPrefix: "codex-work")
+
+        XCTAssertEqual(models, [CodexModelOption(id: "gpt-5.6-sol", supportsFastMode: true, contextWindow: 372_000)])
+    }
+
+    func testCodexModelOptionsMissingContextWindowFieldDecodesToNil() async throws {
+        let regular = Data(#"{"data":[{"id":"codex-work/custom-model","owned_by":"openai","created":300}]}"#.utf8)
+        let metadata = Data(#"{"models":[{"slug":"codex-work/custom-model"}]}"#.utf8)
+        let client = ProxyModelClient(httpClient: StubHTTPClient(results: [.success(regular), .success(metadata)]))
+
+        let models = try await client.codexModelOptions(port: 18_317, modelPrefix: "codex-work")
+
+        XCTAssertNil(models.first?.contextWindow)
+    }
+
     func testCodexModelOptionsKeepRegularModelsWhenMetadataFails() async throws {
         let regular = Data(#"{"data":[{"id":"cpm-codex-api/custom-gpt","owned_by":"openai","created":300}]}"#.utf8)
         let httpClient = StubHTTPClient(results: [
@@ -341,6 +361,18 @@ final class ProxyModelClientTests: XCTestCase {
             XCTAssertEqual(error as? ClaudeModelDiscoveryError, .emptyModelPrefix)
         }
         XCTAssertTrue(httpClient.requests.isEmpty)
+    }
+
+    func testCodexModelOptionContextWindowDefaultsToNil() {
+        let option = CodexModelOption(id: "gpt-5.6-sol")
+
+        XCTAssertNil(option.contextWindow)
+    }
+
+    func testCodexModelOptionContextWindowCanBeSet() {
+        let option = CodexModelOption(id: "gpt-5.6-sol", contextWindow: 372_000)
+
+        XCTAssertEqual(option.contextWindow, 372_000)
     }
 }
 

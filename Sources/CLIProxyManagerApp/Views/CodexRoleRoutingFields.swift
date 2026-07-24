@@ -87,14 +87,10 @@ struct CodexRoleRoutingFields: View {
                 .pickerStyle(.menu)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                Picker("", selection: role.contextWindow) {
-                    ForEach(AppConfig.CodexContextWindow.allCases, id: \.self) { context in
-                        Text(context.rawValue).tag(context)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                Text(CodexRoleRoutingOptions.contextWindowDisplay(role.wrappedValue.detectedContextWindow))
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
                 Toggle("", isOn: fastModeBinding(for: role))
                     .labelsHidden()

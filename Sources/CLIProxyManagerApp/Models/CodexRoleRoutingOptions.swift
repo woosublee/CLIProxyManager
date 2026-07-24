@@ -11,6 +11,18 @@ enum CodexRoleRoutingOptions {
 
     static let fastModeHelpText = "Fast mode can be about 1.5× faster and may consume more usage or credits."
 
+    static func contextWindowDisplay(_ contextWindow: Int?) -> String {
+        guard let contextWindow, contextWindow > 200_000 else { return "—" }
+        if contextWindow % 1_000_000 == 0 {
+            return "\(contextWindow / 1_000_000)M"
+        }
+        if contextWindow >= 1_000_000 {
+            let millions = Double(contextWindow) / 1_000_000
+            return String(format: "%.2fM", millions)
+        }
+        return "\(contextWindow / 1_000)K"
+    }
+
     static func modelIDs(currentModel: String, options: [CodexModelOption]) -> [String] {
         ModelSelectionOptions.options(
             currentModel: CodexFastMode.canonicalModel(from: currentModel),
@@ -78,6 +90,9 @@ enum CodexRoleRoutingOptions {
         let capability = fastModeCapability(model: updated.model, options: options)
         if capability == .unsupported || (updated.model != previousModel && capability == .unknown) {
             updated.fastModeEnabled = false
+        }
+        if let matchedOption = options.first(where: { $0.id == updated.model }) {
+            updated.detectedContextWindow = matchedOption.contextWindow
         }
         return updated
     }

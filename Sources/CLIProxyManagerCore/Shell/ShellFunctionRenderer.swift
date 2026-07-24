@@ -145,6 +145,8 @@ public struct ShellFunctionRenderer: Sendable {
     private func renderCodexAPIFunction() -> String {
         let claudeCommand = claudeCommand(skipPermissions: config.codexAPI.dangerousPermissionsEnabled)
         let codex = config.codexAPI.codex
+        let autoCompactWindow = CodexContextWindowExport.autoCompactWindow(for: codex)
+        let autoCompactLine = autoCompactWindow.map { "  CLAUDE_CODE_AUTO_COMPACT_WINDOW='\($0)' \\\n" } ?? ""
         return """
         \(config.commands.ccodexapi)() {
           if ! curl -sf -H 'Authorization: Bearer sk-dummy' "http://127.0.0.1:\(config.port)/v1/models" | grep -q 'cpm-codex-api/'; then
@@ -157,7 +159,7 @@ public struct ShellFunctionRenderer: Sendable {
           ANTHROPIC_DEFAULT_OPUS_MODEL=\(shellSingleQuoted(prefixedModel(codex.opus.modelIdentifier, prefix: "cpm-codex-api"))) \\
           ANTHROPIC_DEFAULT_SONNET_MODEL=\(shellSingleQuoted(prefixedModel(codex.sonnet.modelIdentifier, prefix: "cpm-codex-api"))) \\
           ANTHROPIC_DEFAULT_HAIKU_MODEL=\(shellSingleQuoted(prefixedModel(codex.haiku.modelIdentifier, prefix: "cpm-codex-api"))) \\
-          \(claudeCommand)
+        \(autoCompactLine)  \(claudeCommand)
         }
 
         """
@@ -192,6 +194,8 @@ public struct ShellFunctionRenderer: Sendable {
         }
 
         if enabledFunctions.codex, hasCommandName(config.commands.ccodex) {
+            let autoCompactWindow = CodexContextWindowExport.autoCompactWindow(for: config.ccodex)
+            let autoCompactLine = autoCompactWindow.map { "  CLAUDE_CODE_AUTO_COMPACT_WINDOW='\($0)' \\\n" } ?? ""
             script += """
             \(config.commands.ccodex)() {
               if ! curl -sf -H 'Authorization: Bearer sk-dummy' "http://127.0.0.1:\(port)/v1/models" >/dev/null; then
@@ -204,7 +208,7 @@ public struct ShellFunctionRenderer: Sendable {
               ANTHROPIC_DEFAULT_OPUS_MODEL=\(shellSingleQuoted(opusModel)) \\
               ANTHROPIC_DEFAULT_SONNET_MODEL=\(shellSingleQuoted(sonnetModel)) \\
               ANTHROPIC_DEFAULT_HAIKU_MODEL=\(shellSingleQuoted(haikuModel)) \\
-              \(claudeCommand)
+            \(autoCompactLine)  \(claudeCommand)
             }
 
             """
@@ -240,6 +244,8 @@ public struct ShellFunctionRenderer: Sendable {
 
         let errorMessage = "CLIProxyAPI Manager is not running or authentication settings are invalid. Start it with cpm start, then retry."
         let models = codexDefaultModels(for: commandProfile)
+        let autoCompactWindow = CodexContextWindowExport.autoCompactWindow(for: commandProfile.codex ?? config.ccodex)
+        let autoCompactLine = autoCompactWindow.map { "  CLAUDE_CODE_AUTO_COMPACT_WINDOW='\($0)' \\\n" } ?? ""
 
         return """
         \(commandName)() {
@@ -253,7 +259,7 @@ public struct ShellFunctionRenderer: Sendable {
           ANTHROPIC_DEFAULT_OPUS_MODEL=\(shellSingleQuoted(models.opus)) \\
           ANTHROPIC_DEFAULT_SONNET_MODEL=\(shellSingleQuoted(models.sonnet)) \\
           ANTHROPIC_DEFAULT_HAIKU_MODEL=\(shellSingleQuoted(models.haiku)) \\
-          \(claudeCommand)
+        \(autoCompactLine)  \(claudeCommand)
         }
 
         """

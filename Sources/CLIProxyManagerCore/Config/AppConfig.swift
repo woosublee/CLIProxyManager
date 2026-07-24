@@ -91,49 +91,44 @@ public struct AppConfig: Codable, Equatable, Sendable {
         case max
     }
 
-    public enum CodexContextWindow: String, Codable, CaseIterable, Sendable {
-        case auto
-        case context200k = "200k"
-        case context400k = "400k"
-        case context1m = "1m"
-    }
-
     public struct CodexRole: Codable, Equatable, Sendable {
         public var model: String
         public var reasoning: CodexReasoning
-        public var contextWindow: CodexContextWindow
+        public var detectedContextWindow: Int?
         public var fastModeEnabled: Bool
 
         public init(
             model: String,
             reasoning: CodexReasoning,
-            contextWindow: CodexContextWindow,
+            detectedContextWindow: Int? = nil,
             fastModeEnabled: Bool = false
         ) {
             self.model = model
             self.reasoning = reasoning
-            self.contextWindow = contextWindow
+            self.detectedContextWindow = detectedContextWindow
             self.fastModeEnabled = fastModeEnabled
         }
 
         private enum CodingKeys: String, CodingKey {
-            case model, reasoning, contextWindow, fastModeEnabled
+            case model, reasoning, detectedContextWindow, fastModeEnabled
         }
 
         public init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             model = try container.decode(String.self, forKey: .model)
             reasoning = try container.decode(CodexReasoning.self, forKey: .reasoning)
-            contextWindow = try container.decode(CodexContextWindow.self, forKey: .contextWindow)
+            detectedContextWindow = try container.decodeIfPresent(Int.self, forKey: .detectedContextWindow)
             fastModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .fastModeEnabled) ?? false
         }
 
         public var modelIdentifier: String {
-            CodexFastMode.modelIdentifier(
+            let base = CodexFastMode.modelIdentifier(
                 model: model,
                 reasoning: reasoning,
                 fastModeEnabled: fastModeEnabled
             )
+            guard let detectedContextWindow, detectedContextWindow > 200_000 else { return base }
+            return base + "[1m]"
         }
     }
 
@@ -538,9 +533,9 @@ public struct AppConfig: Codable, Equatable, Sendable {
         commands: Commands(cc: "", ccapi: "", ccodex: ""),
         ccapi: ClaudeAPI(),
         ccodex: Codex(
-            opus: CodexRole(model: "gpt-5.6-terra", reasoning: .xhigh, contextWindow: .auto),
-            sonnet: CodexRole(model: "gpt-5.6-terra", reasoning: .medium, contextWindow: .auto),
-            haiku: CodexRole(model: "gpt-5.6-terra", reasoning: .low, contextWindow: .auto)
+            opus: CodexRole(model: "gpt-5.6-terra", reasoning: .xhigh),
+            sonnet: CodexRole(model: "gpt-5.6-terra", reasoning: .medium),
+            haiku: CodexRole(model: "gpt-5.6-terra", reasoning: .low)
         ),
         includeDangerouslySkipPermissions: false,
         startAtLogin: false,

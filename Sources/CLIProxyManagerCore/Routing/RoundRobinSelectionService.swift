@@ -93,12 +93,17 @@ public struct RoundRobinSelectionService: Sendable {
                 OAuthModelDefaults.prefixedModel(codex.haiku.modelIdentifier, prefix: selected.modelPrefix)
             )
         }
-        return [
+        var assignments = [
             shellAssignment(name: "ANTHROPIC_DEFAULT_OPUS_MODEL", value: models.opus),
             shellAssignment(name: "ANTHROPIC_DEFAULT_SONNET_MODEL", value: models.sonnet),
             shellAssignment(name: "ANTHROPIC_DEFAULT_HAIKU_MODEL", value: models.haiku),
             shellAssignment(name: "CLIPROXY_ROUND_ROBIN_PROFILE", value: selected.authProfileID)
-        ].joined(separator: "\n")
+        ]
+        if profile.provider == .codex,
+           let autoCompactWindow = CodexContextWindowExport.autoCompactWindow(for: profile.codex ?? config.ccodex) {
+            assignments.append(shellAssignment(name: "CLAUDE_CODE_AUTO_COMPACT_WINDOW", value: String(autoCompactWindow)))
+        }
+        return assignments.joined(separator: "\n")
     }
 
     private func candidates(

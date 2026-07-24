@@ -21,9 +21,9 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(config.codexAPI.codex, config.ccodex)
         XCTAssertEqual(config.codexAPI.nickname, "")
         XCTAssertFalse(config.codexAPI.dangerousPermissionsEnabled)
-        XCTAssertEqual(config.ccodex.opus, AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .xhigh, contextWindow: .auto))
-        XCTAssertEqual(config.ccodex.sonnet, AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .medium, contextWindow: .auto))
-        XCTAssertEqual(config.ccodex.haiku, AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .low, contextWindow: .auto))
+        XCTAssertEqual(config.ccodex.opus, AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .xhigh))
+        XCTAssertEqual(config.ccodex.sonnet, AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .medium))
+        XCTAssertEqual(config.ccodex.haiku, AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .low))
         XCTAssertFalse(config.includeDangerouslySkipPermissions)
         XCTAssertFalse(config.startAtLogin)
         XCTAssertTrue(config.showDockIcon)
@@ -77,20 +77,20 @@ final class AppConfigTests: XCTestCase {
     func testDefaultCodexRoutingUsesTerraWithRoleSpecificReasoning() {
         XCTAssertEqual(
             AppConfig.default.ccodex.opus,
-            AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .xhigh, contextWindow: .auto)
+            AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .xhigh)
         )
         XCTAssertEqual(
             AppConfig.default.ccodex.sonnet,
-            AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .medium, contextWindow: .auto)
+            AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .medium)
         )
         XCTAssertEqual(
             AppConfig.default.ccodex.haiku,
-            AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .low, contextWindow: .auto)
+            AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .low)
         )
     }
 
     func testCodexReasoningMaxRendersAndRoundTrips() throws {
-        let role = AppConfig.CodexRole(model: "gpt-5.6-sol", reasoning: .max, contextWindow: .auto)
+        let role = AppConfig.CodexRole(model: "gpt-5.6-sol", reasoning: .max)
 
         XCTAssertEqual(role.modelIdentifier, "gpt-5.6-sol(max)")
 
@@ -111,7 +111,6 @@ final class AppConfigTests: XCTestCase {
         let role = AppConfig.CodexRole(
             model: "gpt-5.6-sol",
             reasoning: .max,
-            contextWindow: .auto,
             fastModeEnabled: true
         )
 
@@ -120,6 +119,55 @@ final class AppConfigTests: XCTestCase {
             try JSONDecoder().decode(AppConfig.CodexRole.self, from: JSONEncoder().encode(role)),
             role
         )
+    }
+
+    func testCodexRoleModelIdentifierAppendsOneMillionSuffixForExtendedContext() {
+        let role = AppConfig.CodexRole(
+            model: "gpt-5.6-sol",
+            reasoning: .xhigh,
+            detectedContextWindow: 372_000,
+            fastModeEnabled: true
+        )
+
+        XCTAssertEqual(role.modelIdentifier, "gpt-5.6-sol-fast(xhigh)[1m]")
+    }
+
+    func testCodexRoleModelIdentifierOmitsSuffixAtOrBelowStandardContext() {
+        let atStandard = AppConfig.CodexRole(model: "gpt-5.5", reasoning: .medium, detectedContextWindow: 200_000)
+        let unknown = AppConfig.CodexRole(model: "gpt-5.5", reasoning: .medium, detectedContextWindow: nil)
+
+        XCTAssertEqual(atStandard.modelIdentifier, "gpt-5.5(medium)")
+        XCTAssertEqual(unknown.modelIdentifier, "gpt-5.5(medium)")
+    }
+
+    func testCodexRoleDetectedContextWindowRoundTrips() throws {
+        let role = AppConfig.CodexRole(
+            model: "gpt-5.6-sol",
+            reasoning: .xhigh,
+            detectedContextWindow: 372_000,
+            fastModeEnabled: false
+        )
+
+        let encoded = try JSONEncoder().encode(role)
+        let decoded = try JSONDecoder().decode(AppConfig.CodexRole.self, from: encoded)
+
+        XCTAssertEqual(decoded.detectedContextWindow, 372_000)
+    }
+
+    func testCodexRoleDefaultsDetectedContextWindowToNilWhenMissing() throws {
+        let data = Data(#"{"model":"gpt-5.5","reasoning":"xhigh"}"#.utf8)
+
+        let role = try JSONDecoder().decode(AppConfig.CodexRole.self, from: data)
+
+        XCTAssertNil(role.detectedContextWindow)
+    }
+
+    func testCodexRoleIgnoresLegacyContextWindowStringKey() throws {
+        let data = Data(#"{"model":"gpt-5.5","reasoning":"xhigh","contextWindow":"auto"}"#.utf8)
+
+        let role = try JSONDecoder().decode(AppConfig.CodexRole.self, from: data)
+
+        XCTAssertNil(role.detectedContextWindow)
     }
 
     func testUsageOverlayInitializerClampsBackgroundOpacity() {
@@ -487,9 +535,9 @@ final class AppConfigTests: XCTestCase {
                 accountDetailHidden: false,
                 dangerousPermissionsEnabled: true,
                 codex: AppConfig.Codex(
-                    opus: AppConfig.CodexRole(model: "gpt-5.6", reasoning: .xhigh, contextWindow: .context1m),
-                    sonnet: AppConfig.CodexRole(model: "gpt-5.6", reasoning: .medium, contextWindow: .context400k),
-                    haiku: AppConfig.CodexRole(model: "gpt-5.6-mini", reasoning: .low, contextWindow: .context200k)
+                    opus: AppConfig.CodexRole(model: "gpt-5.6", reasoning: .xhigh),
+                    sonnet: AppConfig.CodexRole(model: "gpt-5.6", reasoning: .medium),
+                    haiku: AppConfig.CodexRole(model: "gpt-5.6-mini", reasoning: .low)
                 )
             )
         ])
@@ -617,8 +665,8 @@ final class AppConfigTests: XCTestCase {
             modelPrefix: "team",
             isEnabled: true
         ))
-        XCTAssertEqual(roundTripped.oauthCommandProfiles[1].codex?.sonnet.contextWindow, .context400k)
-        XCTAssertEqual(roundTripped.oauthCommandProfiles[1].codex?.haiku.contextWindow, .context200k)
+        XCTAssertNil(roundTripped.oauthCommandProfiles[1].codex?.sonnet.detectedContextWindow)
+        XCTAssertNil(roundTripped.oauthCommandProfiles[1].codex?.haiku.detectedContextWindow)
     }
 
     func testMissingOAuthCommandProfilesDecodesToEmptyArray() throws {

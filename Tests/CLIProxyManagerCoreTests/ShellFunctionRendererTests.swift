@@ -129,9 +129,9 @@ final class ShellFunctionRendererTests: XCTestCase {
         var config = configuredCommands()
         config.port = 8320
         config.ccodex = AppConfig.Codex(
-            opus: AppConfig.CodexRole(model: "gpt-5.3-codex", reasoning: .xhigh, contextWindow: .auto),
-            sonnet: AppConfig.CodexRole(model: "gpt-5.3-codex", reasoning: .medium, contextWindow: .auto),
-            haiku: AppConfig.CodexRole(model: "gpt-5.3-codex", reasoning: .low, contextWindow: .auto)
+            opus: AppConfig.CodexRole(model: "gpt-5.3-codex", reasoning: .xhigh),
+            sonnet: AppConfig.CodexRole(model: "gpt-5.3-codex", reasoning: .medium),
+            haiku: AppConfig.CodexRole(model: "gpt-5.3-codex", reasoning: .low)
         )
 
         let script = try ShellFunctionRenderer(
@@ -150,9 +150,9 @@ final class ShellFunctionRendererTests: XCTestCase {
     func testLegacyCodexCommandRendersRoleSpecificFastAlias() throws {
         var config = configuredCommands()
         config.ccodex = .init(
-            opus: .init(model: "gpt-5.6-sol", reasoning: .xhigh, contextWindow: .auto, fastModeEnabled: true),
-            sonnet: .init(model: "gpt-5.6-sol", reasoning: .medium, contextWindow: .auto),
-            haiku: .init(model: "gpt-5.5", reasoning: .auto, contextWindow: .auto, fastModeEnabled: true)
+            opus: .init(model: "gpt-5.6-sol", reasoning: .xhigh, fastModeEnabled: true),
+            sonnet: .init(model: "gpt-5.6-sol", reasoning: .medium),
+            haiku: .init(model: "gpt-5.5", reasoning: .auto, fastModeEnabled: true)
         )
 
         let script = try ShellFunctionRenderer(config: config, helperCommand: "/usr/local/bin/cpm").render()
@@ -163,6 +163,77 @@ final class ShellFunctionRendererTests: XCTestCase {
         XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"))
         XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"))
         XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME"))
+    }
+
+    func testLegacyCodexCommandExportsAutoCompactWindowForExtendedContextRole() throws {
+        var config = configuredCommands()
+        config.ccodex = .init(
+            opus: .init(model: "gpt-5.6-sol", reasoning: .xhigh, detectedContextWindow: 372_000, fastModeEnabled: true),
+            sonnet: .init(model: "gpt-5.6-sol", reasoning: .medium, detectedContextWindow: 372_000),
+            haiku: .init(model: "gpt-5.5", reasoning: .low, detectedContextWindow: 200_000)
+        )
+
+        let script = try ShellFunctionRenderer(config: config, helperCommand: "/usr/local/bin/cpm").render()
+
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='gpt-5.6-sol-fast(xhigh)[1m]'"))
+        XCTAssertTrue(script.contains("CLAUDE_CODE_AUTO_COMPACT_WINDOW='372000'"))
+    }
+
+    func testLegacyCodexCommandOmitsAutoCompactWindowWhenNoRoleExtendsContext() throws {
+        var config = configuredCommands()
+        config.ccodex = .init(
+            opus: .init(model: "gpt-5.5", reasoning: .xhigh, detectedContextWindow: 200_000),
+            sonnet: .init(model: "gpt-5.5", reasoning: .medium),
+            haiku: .init(model: "gpt-5.5", reasoning: .low)
+        )
+
+        let script = try ShellFunctionRenderer(config: config, helperCommand: "/usr/local/bin/cpm").render()
+
+        XCTAssertFalse(script.contains("CLAUDE_CODE_AUTO_COMPACT_WINDOW"))
+    }
+
+    func testCodexAPICommandExportsAutoCompactWindow() throws {
+        var config = configuredCommands()
+        config.commands.ccodexapi = "ccodexapi"
+        config.codexAPI = .init(
+            codex: .init(
+                opus: .init(model: "gpt-5.4", reasoning: .xhigh, detectedContextWindow: 1_050_000),
+                sonnet: .init(model: "gpt-5.5", reasoning: .medium, detectedContextWindow: 272_000),
+                haiku: .init(model: "gpt-5.5", reasoning: .low, detectedContextWindow: 200_000)
+            )
+        )
+
+        let script = try ShellFunctionRenderer(
+            config: config,
+            helperCommand: "/usr/local/bin/cpm",
+            enabledFunctions: .init(claudeOAuth: false, codex: false, claudeAPI: false, codexAPI: true)
+        ).render()
+
+        let function = renderedFunction(named: config.commands.ccodexapi, in: script)
+        XCTAssertTrue(function.contains("CLAUDE_CODE_AUTO_COMPACT_WINDOW='272000'"))
+    }
+
+    func testOAuthCommandProfileExportsAutoCompactWindow() throws {
+        var config = configuredCommands()
+        config.oauthCommandProfiles = [
+            .init(
+                id: "codex-work",
+                provider: .codex,
+                authProfileID: "codex-work.json",
+                commandName: "ccwork",
+                codex: .init(
+                    opus: .init(model: "gpt-5.6-sol", reasoning: .xhigh, detectedContextWindow: 372_000),
+                    sonnet: .init(model: "gpt-5.5", reasoning: .medium, detectedContextWindow: 272_000),
+                    haiku: .init(model: "gpt-5.5", reasoning: .low, detectedContextWindow: 200_000)
+                ),
+                modelPrefix: "codex-work"
+            )
+        ]
+
+        let script = try ShellFunctionRenderer(config: config, helperCommand: "/usr/local/bin/cpm").render()
+
+        let function = renderedFunction(named: "ccwork", in: script)
+        XCTAssertTrue(function.contains("CLAUDE_CODE_AUTO_COMPACT_WINDOW='272000'"))
     }
 
     func testRenderUsesMultipleOAuthCommandProfilesWithModelPrefixesAndCodexProfileMapping() throws {
@@ -189,9 +260,9 @@ final class ShellFunctionRendererTests: XCTestCase {
                 authProfileID: "codex-fast.json",
                 commandName: "ccfast",
                 codex: AppConfig.Codex(
-                    opus: AppConfig.CodexRole(model: "gpt-fast", reasoning: .high, contextWindow: .auto),
-                    sonnet: AppConfig.CodexRole(model: "gpt-fast", reasoning: .medium, contextWindow: .auto),
-                    haiku: AppConfig.CodexRole(model: "gpt-fast-mini", reasoning: .auto, contextWindow: .auto)
+                    opus: AppConfig.CodexRole(model: "gpt-fast", reasoning: .high),
+                    sonnet: AppConfig.CodexRole(model: "gpt-fast", reasoning: .medium),
+                    haiku: AppConfig.CodexRole(model: "gpt-fast-mini", reasoning: .auto)
                 ),
                 modelPrefix: "codex-fast"
             ),
@@ -201,9 +272,9 @@ final class ShellFunctionRendererTests: XCTestCase {
                 authProfileID: "codex-deep.json",
                 commandName: "ccdeep",
                 codex: AppConfig.Codex(
-                    opus: AppConfig.CodexRole(model: "gpt-deep", reasoning: .xhigh, contextWindow: .auto),
-                    sonnet: AppConfig.CodexRole(model: "gpt-deep", reasoning: .high, contextWindow: .auto),
-                    haiku: AppConfig.CodexRole(model: "gpt-deep-mini", reasoning: .low, contextWindow: .auto)
+                    opus: AppConfig.CodexRole(model: "gpt-deep", reasoning: .xhigh),
+                    sonnet: AppConfig.CodexRole(model: "gpt-deep", reasoning: .high),
+                    haiku: AppConfig.CodexRole(model: "gpt-deep-mini", reasoning: .low)
                 ),
                 modelPrefix: "codex-deep"
             ),
@@ -213,9 +284,9 @@ final class ShellFunctionRendererTests: XCTestCase {
                 authProfileID: "codex-team-2.json",
                 commandName: "ccteam2",
                 codex: AppConfig.Codex(
-                    opus: AppConfig.CodexRole(model: "gpt-team", reasoning: .xhigh, contextWindow: .context1m),
-                    sonnet: AppConfig.CodexRole(model: "gpt-team", reasoning: .medium, contextWindow: .auto),
-                    haiku: AppConfig.CodexRole(model: "gpt-team-mini", reasoning: .low, contextWindow: .auto)
+                    opus: AppConfig.CodexRole(model: "gpt-team", reasoning: .xhigh),
+                    sonnet: AppConfig.CodexRole(model: "gpt-team", reasoning: .medium),
+                    haiku: AppConfig.CodexRole(model: "gpt-team-mini", reasoning: .low)
                 ),
                 modelPrefix: "codex-team-2"
             )
@@ -315,9 +386,9 @@ final class ShellFunctionRendererTests: XCTestCase {
         var config = configuredCommands()
         config.port = 18_888
         config.ccodex = AppConfig.Codex(
-            opus: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .xhigh, contextWindow: .context1m),
-            sonnet: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .medium, contextWindow: .context400k),
-            haiku: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .auto, contextWindow: .auto)
+            opus: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .xhigh),
+            sonnet: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .medium),
+            haiku: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .auto)
         )
 
         let script = try ShellFunctionRenderer(
@@ -484,9 +555,9 @@ final class ShellFunctionRendererTests: XCTestCase {
                 authProfileID: "codex-work.json",
                 commandName: "ccwork",
                 codex: .init(
-                    opus: .init(model: "gpt-5.6-sol", reasoning: .xhigh, contextWindow: .auto, fastModeEnabled: true),
-                    sonnet: .init(model: "gpt-5.5", reasoning: .medium, contextWindow: .auto),
-                    haiku: .init(model: "gpt-5.5", reasoning: .low, contextWindow: .auto)
+                    opus: .init(model: "gpt-5.6-sol", reasoning: .xhigh, fastModeEnabled: true),
+                    sonnet: .init(model: "gpt-5.5", reasoning: .medium),
+                    haiku: .init(model: "gpt-5.5", reasoning: .low)
                 ),
                 modelPrefix: "codex-work"
             )
@@ -508,18 +579,15 @@ final class ShellFunctionRendererTests: XCTestCase {
             opus: .init(
                 model: "gpt-5.6-terra",
                 reasoning: .max,
-                contextWindow: .auto,
                 fastModeEnabled: true
             ),
             sonnet: .init(
                 model: "gpt-5.6-sol",
-                reasoning: .medium,
-                contextWindow: .auto
+                reasoning: .medium
             ),
             haiku: .init(
                 model: "gpt-5.5",
-                reasoning: .auto,
-                contextWindow: .auto
+                reasoning: .auto
             )
         )
 
@@ -543,9 +611,9 @@ final class ShellFunctionRendererTests: XCTestCase {
         config.includeDangerouslySkipPermissions = true
         config.codexAPI = .init(
             codex: .init(
-                opus: .init(model: "gpt-5.6", reasoning: .xhigh, contextWindow: .context1m),
-                sonnet: .init(model: "gpt-5.6", reasoning: .medium, contextWindow: .context400k),
-                haiku: .init(model: "gpt-5.6-mini", reasoning: .low, contextWindow: .context200k)
+                opus: .init(model: "gpt-5.6", reasoning: .xhigh),
+                sonnet: .init(model: "gpt-5.6", reasoning: .medium),
+                haiku: .init(model: "gpt-5.6-mini", reasoning: .low)
             ),
             dangerousPermissionsEnabled: false
         )
