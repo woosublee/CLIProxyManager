@@ -5429,6 +5429,7 @@ final class DashboardAccountOrderingTests: XCTestCase {
     func testDeletingAccountRemovesItsIDAndPreservesSurvivorOrder() {
         var config = threeAccountConfig()
         config.accountOrder = ["c", "b", "a"]
+        config.usageOverlay.hiddenAccountIDs = ["b", "c"]
         let store = StubConfigStore(config: config)
         let authStore = StubAuthProfileStore(profiles: threeProfiles(), supportsIDDelete: true)
         let viewModel = makeViewModel(
@@ -5442,6 +5443,8 @@ final class DashboardAccountOrderingTests: XCTestCase {
 
         XCTAssertEqual(viewModel.providerRows.map(\.id.rawValue), ["c", "a"])
         XCTAssertEqual(store.savedConfigs.last?.accountOrder, ["c", "a"])
+        XCTAssertEqual(viewModel.config.usageOverlay.hiddenAccountIDs, ["c"])
+        XCTAssertEqual(store.savedConfigs.last?.usageOverlay.hiddenAccountIDs, ["c"])
     }
 
     func testAPIKeyReRegistrationAppendsAfterSurvivingAccounts() throws {
@@ -5450,6 +5453,7 @@ final class DashboardAccountOrderingTests: XCTestCase {
             commandProfile(id: "a", authProfileID: "a.json", provider: .claude)
         ]
         config.accountOrder = ["claude-api", "a"]
+        config.usageOverlay.hiddenAccountIDs = [ProviderRowState.ID.claudeAPI.rawValue]
         let store = StubConfigStore(config: config)
         let secrets = InMemorySecretStore()
         try secrets.set("old-key", for: .claudeAPIKey)
@@ -5463,6 +5467,8 @@ final class DashboardAccountOrderingTests: XCTestCase {
         viewModel.removeAPIProvider(.claudeAPI)
         XCTAssertEqual(viewModel.config.accountOrder, ["a"])
         XCTAssertEqual(store.savedConfigs.last?.accountOrder, ["a"])
+        XCTAssertEqual(viewModel.config.usageOverlay.hiddenAccountIDs, [])
+        XCTAssertEqual(store.savedConfigs.last?.usageOverlay.hiddenAccountIDs, [])
 
         try viewModel.saveClaudeAPISettings(
             functionName: "ccapi",
@@ -5473,6 +5479,7 @@ final class DashboardAccountOrderingTests: XCTestCase {
 
         XCTAssertEqual(viewModel.providerRows.map(\.id.rawValue), ["a", "claude-api"])
         XCTAssertEqual(store.savedConfigs.last?.accountOrder, ["a", "claude-api"])
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .claudeAPI }?.showsInUsageOverlay, true)
     }
 
     private func threeAccountConfig() -> AppConfig {

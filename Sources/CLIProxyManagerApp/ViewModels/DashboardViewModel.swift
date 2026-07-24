@@ -1621,6 +1621,7 @@ final class DashboardViewModel: ObservableObject {
         do {
             let credentialChanged = try withAPIKeyTransaction(key: key, replacement: nil) {
                 var updatedConfig = config
+                updatedConfig.usageOverlay.hiddenAccountIDs.removeAll { $0 == provider.rawValue }
                 if provider == .codexAPI {
                     updatedConfig.commands.ccodexapi = ""
                 } else {
@@ -2433,6 +2434,7 @@ final class DashboardViewModel: ObservableObject {
 
     private func resetProviderSettings(_ provider: ProviderRowState.ID) throws {
         var updatedConfig = config
+        updatedConfig.usageOverlay.hiddenAccountIDs.removeAll { $0 == provider.rawValue }
         if let index = updatedConfig.oauthCommandProfiles.firstIndex(where: { $0.id == provider.rawValue }) {
             updatedConfig.oauthCommandProfiles.remove(at: index)
             resetLegacyFields(for: oauthProviderType(for: provider), in: &updatedConfig)
