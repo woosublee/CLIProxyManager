@@ -341,21 +341,24 @@ public struct AppConfig: Codable, Equatable, Sendable {
         public var alwaysOnTop: Bool
         public var backgroundOpacity: Double
         public var displayMode: DisplayMode
+        public var hiddenAccountIDs: [String]
 
         public init(
             isVisible: Bool = false,
             alwaysOnTop: Bool = false,
             backgroundOpacity: Double = 0.9,
-            displayMode: DisplayMode = .expanded
+            displayMode: DisplayMode = .expanded,
+            hiddenAccountIDs: [String] = []
         ) {
             self.isVisible = isVisible
             self.alwaysOnTop = alwaysOnTop
             self.backgroundOpacity = min(max(backgroundOpacity, 0.2), 1)
             self.displayMode = displayMode
+            self.hiddenAccountIDs = Self.uniqued(hiddenAccountIDs)
         }
 
         private enum CodingKeys: String, CodingKey {
-            case isVisible, alwaysOnTop, backgroundOpacity, displayMode
+            case isVisible, alwaysOnTop, backgroundOpacity, displayMode, hiddenAccountIDs
         }
 
         public init(from decoder: Decoder) throws {
@@ -367,6 +370,14 @@ public struct AppConfig: Codable, Equatable, Sendable {
                 1
             )
             self.displayMode = try container.decodeIfPresent(DisplayMode.self, forKey: .displayMode) ?? .expanded
+            self.hiddenAccountIDs = Self.uniqued(
+                try container.decodeIfPresent([String].self, forKey: .hiddenAccountIDs) ?? []
+            )
+        }
+
+        private static func uniqued(_ values: [String]) -> [String] {
+            var seen: Set<String> = []
+            return values.filter { seen.insert($0).inserted }
         }
     }
 

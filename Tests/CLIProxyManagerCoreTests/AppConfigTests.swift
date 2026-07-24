@@ -186,6 +186,46 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(AppConfig.default.usageOverlay.displayMode, .expanded)
     }
 
+    func testUsageOverlayDefaultsHiddenAccountIDsToEmpty() {
+        XCTAssertEqual(AppConfig.UsageOverlay().hiddenAccountIDs, [])
+        XCTAssertEqual(AppConfig.default.usageOverlay.hiddenAccountIDs, [])
+    }
+
+    func testUsageOverlayMissingHiddenAccountIDsDecodesAsEmpty() throws {
+        let data = Data(#"{"isVisible":true,"alwaysOnTop":false,"backgroundOpacity":0.7,"displayMode":"compact"}"#.utf8)
+
+        let decoded = try JSONDecoder().decode(AppConfig.UsageOverlay.self, from: data)
+
+        XCTAssertEqual(decoded.hiddenAccountIDs, [])
+        XCTAssertEqual(decoded.displayMode, .compact)
+    }
+
+    func testUsageOverlayDeduplicatesHiddenAccountIDsWhenDecoding() throws {
+        let data = Data(#"{"hiddenAccountIDs":["claude","codex","claude","claude-api","codex"]}"#.utf8)
+
+        let decoded = try JSONDecoder().decode(AppConfig.UsageOverlay.self, from: data)
+
+        XCTAssertEqual(decoded.hiddenAccountIDs, ["claude", "codex", "claude-api"])
+    }
+
+    func testUsageOverlayHiddenAccountIDsRoundTrip() throws {
+        let overlay = AppConfig.UsageOverlay(
+            isVisible: true,
+            alwaysOnTop: true,
+            backgroundOpacity: 0.45,
+            displayMode: .compact,
+            hiddenAccountIDs: ["codex-work", "claude-api"]
+        )
+
+        let decoded = try JSONDecoder().decode(
+            AppConfig.UsageOverlay.self,
+            from: JSONEncoder().encode(overlay)
+        )
+
+        XCTAssertEqual(decoded, overlay)
+        XCTAssertEqual(decoded.hiddenAccountIDs, ["codex-work", "claude-api"])
+    }
+
     func testUsageOverlayDisplayModeRoundTrips() throws {
         let overlay = AppConfig.UsageOverlay(
             isVisible: true,
