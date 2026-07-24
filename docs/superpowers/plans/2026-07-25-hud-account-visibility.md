@@ -397,7 +397,7 @@ func testSetAccountVisibleInUsageOverlayRollsBackWhenSaveFails() {
 
 - [ ] **Step 3: 테스트가 API 부재로 실패하는지 확인**
 
-Run: `swift test --filter DashboardViewModelTests/testSetAccountVisibleInUsageOverlayPersistsHiddenIDAndUpdatesRow`
+Run: `swift test --filter DashboardViewModelRefreshTests/testSetAccountVisibleInUsageOverlayPersistsHiddenIDAndUpdatesRow`
 
 Expected: FAIL — `DashboardViewModel`에 method가 없다는 compile error
 
@@ -511,7 +511,7 @@ func testSetAccountVisibleInUsageOverlayPreservesCachedSnapshot() throws {
 
 - [ ] **Step 6: ViewModel focused tests 실행**
 
-Run: `swift test --filter DashboardViewModelTests/testSetAccountVisibleInUsageOverlay`
+Run: `swift test --filter DashboardViewModelRefreshTests/testSetAccountVisibleInUsageOverlay`
 
 Expected: hide/show, no-op, rollback, backend lifecycle, cached snapshot 유지 테스트 PASS
 
@@ -1151,7 +1151,7 @@ git commit -m "docs: explain Usage HUD account selection"
 
 Run: `swift test --filter AppConfigTests`
 
-Run: `swift test --filter DashboardViewModelTests/testSetAccountVisibleInUsageOverlay`
+Run: `swift test --filter DashboardViewModelRefreshTests/testSetAccountVisibleInUsageOverlay`
 
 Run: `swift test --filter DashboardAccountSnapshotTests`
 

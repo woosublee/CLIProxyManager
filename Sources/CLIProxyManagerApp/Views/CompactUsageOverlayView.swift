@@ -22,6 +22,14 @@ struct CompactUsageOverlayView: View {
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, minHeight: 72)
                 .accessibilityElement(children: .combine)
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: CompactAccountHeightPreferenceKey.self,
+                            value: proxy.size.height
+                        )
+                    }
+                )
             } else {
                 ZStack(alignment: .top) {
                     measurementAccountStack
@@ -44,12 +52,12 @@ struct CompactUsageOverlayView: View {
                     .scrollDisabled(!needsScrolling)
                     .frame(height: viewportHeight)
                 }
-                .onPreferenceChange(CompactAccountHeightPreferenceKey.self) { height in
-                    let measuredHeight = max(1, height)
-                    if measurementState.record(height: measuredHeight, providerIDs: providerIDs) {
-                        onMeasurementChange(min(measuredHeight, maximumAccountHeight))
-                    }
-                }
+            }
+        }
+        .onPreferenceChange(CompactAccountHeightPreferenceKey.self) { height in
+            let measuredHeight = max(1, height)
+            if measurementState.record(height: measuredHeight, providerIDs: providerIDs) {
+                onMeasurementChange(min(measuredHeight, maximumAccountHeight))
             }
         }
         .onChange(of: providerIDs, initial: true) { _, providerIDs in

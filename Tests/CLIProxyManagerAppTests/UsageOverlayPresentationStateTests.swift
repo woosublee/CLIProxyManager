@@ -1,3 +1,5 @@
+import AppKit
+import SwiftUI
 import XCTest
 @testable import CLIProxyManagerApp
 @testable import CLIProxyManagerCore
@@ -170,5 +172,90 @@ final class UsageOverlayPresentationStateTests: XCTestCase {
 
         XCTAssertFalse(state.updateProviderIDs(["three", "one", "two"]))
         XCTAssertEqual(state.height, 360)
+    }
+
+    func testCompactViewRemeasuresRenderedEmptyStateAfterLastProviderIsRemoved() async {
+        let model = CompactUsageMeasurementHarnessModel(
+            providers: [
+                MenuBarConnectedProvider(
+                    id: .claude,
+                    name: "Claude OAuth",
+                    displayName: "Work",
+                    functionName: "cc-work",
+                    connectionDetail: "work@example.com",
+                    accountDetailHidden: true,
+                    subscriptionUsageState: .disabled,
+                    showsSubscriptionUsage: true
+                )
+            ],
+            emptyMessage: Array(repeating: "No accounts selected", count: 16).joined(separator: "\n")
+        )
+        let hostingView = NSHostingView(rootView: CompactUsageMeasurementHarness(model: model))
+        hostingView.frame = CGRect(x: 0, y: 0, width: 108, height: 640)
+
+        let measuredNonEmptyState = await waitUntil {
+            hostingView.layoutSubtreeIfNeeded()
+            return model.measurements.contains {
+                abs($0 - CompactUsageMeasurementState.estimatedHeight) > 0.5
+            }
+        }
+        XCTAssertTrue(measuredNonEmptyState)
+        let measurementCountBeforeRemoval = model.measurements.count
+
+        model.providers = []
+
+        let measuredRenderedEmptyState = await waitUntil {
+            hostingView.layoutSubtreeIfNeeded()
+            return model.measurements.dropFirst(measurementCountBeforeRemoval).contains {
+                $0 > CompactUsageMeasurementState.estimatedHeight
+            }
+        }
+        XCTAssertTrue(measuredRenderedEmptyState)
+        XCTAssertGreaterThan(
+            model.measurements.last ?? 0,
+            CompactUsageMeasurementState.estimatedHeight
+        )
+    }
+
+    private func waitUntil(
+        attempts: Int = 200,
+        condition: @escaping @MainActor () -> Bool
+    ) async -> Bool {
+        for _ in 0..<attempts {
+            if condition() { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return condition()
+    }
+}
+
+@MainActor
+private final class CompactUsageMeasurementHarnessModel: ObservableObject {
+    @Published var providers: [MenuBarConnectedProvider]
+    let emptyMessage: String
+    private(set) var measurements: [CGFloat] = []
+
+    init(providers: [MenuBarConnectedProvider], emptyMessage: String) {
+        self.providers = providers
+        self.emptyMessage = emptyMessage
+    }
+
+    func record(_ height: CGFloat) {
+        measurements.append(height)
+    }
+}
+
+private struct CompactUsageMeasurementHarness: View {
+    @ObservedObject var model: CompactUsageMeasurementHarnessModel
+
+    var body: some View {
+        CompactUsageOverlayView(
+            providers: model.providers,
+            emptyMessage: model.emptyMessage,
+            maximumAccountHeight: 640,
+            onMeasurementChange: model.record
+        )
+        .frame(width: 108)
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
