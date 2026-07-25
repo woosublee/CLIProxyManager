@@ -25,9 +25,14 @@ struct CLIProxyManagerApp: App {
             await viewModel.startApplication()
             cliProxyAPIUpdateService.reloadStoredStatus()
         }
-        _quitCoordinator = StateObject(wrappedValue: QuitCoordinator(shouldStopServerBeforeQuit: {
-            viewModel.serverControlState.shouldStopServerBeforeQuit
-        }))
+        _quitCoordinator = StateObject(wrappedValue: QuitCoordinator(
+            shouldStopServerBeforeQuit: {
+                viewModel.serverControlState.shouldStopServerBeforeQuit
+            },
+            beforeTerminate: {
+                await viewModel.prepareForTermination()
+            }
+        ))
         _updaterService = StateObject(wrappedValue: UpdaterService())
     }
 

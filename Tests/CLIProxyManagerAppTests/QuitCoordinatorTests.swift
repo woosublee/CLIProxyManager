@@ -28,7 +28,7 @@ final class QuitCoordinatorTests: XCTestCase {
         XCTAssertEqual(terminator.terminateCount, 0)
     }
 
-    func testRequestQuitTerminatesImmediatelyWhenServerIsStopped() {
+    func testRequestQuitTerminatesImmediatelyWhenServerIsStopped() async {
         let proxyService = StubProxyService()
         let terminator = StubAppTerminator()
         let presenter = StubQuitConfirmationPresenter(shouldConfirm: true)
@@ -40,10 +40,34 @@ final class QuitCoordinatorTests: XCTestCase {
         )
 
         coordinator.requestQuit()
+        for _ in 0..<100 {
+            if terminator.terminateCount > 0 { break }
+            await Task.yield()
+        }
 
         XCTAssertEqual(presenter.confirmationCount, 0)
         XCTAssertEqual(proxyService.stopCount, 0)
         XCTAssertEqual(terminator.terminateCount, 1)
+    }
+
+    func testQuitFlushesUsageBeforeTerminatingWhenServerIsAlreadyStopped() async {
+        let events = QuitEventLog()
+        let terminator = StubAppTerminator(events: events)
+        let coordinator = QuitCoordinator(
+            appTerminator: terminator,
+            shouldStopServerBeforeQuit: { false },
+            beforeTerminate: {
+                events.append("flush")
+            }
+        )
+
+        coordinator.requestQuit()
+        for _ in 0..<100 {
+            if terminator.terminateCount > 0 { break }
+            await Task.yield()
+        }
+
+        XCTAssertEqual(events.values, ["flush", "terminate"])
     }
 
     func testRequestQuitAsksForConfirmationWhenServerIsStarting() {

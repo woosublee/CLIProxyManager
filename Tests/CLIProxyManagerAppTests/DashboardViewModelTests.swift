@@ -3425,12 +3425,30 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         )
         await viewModel.refresh()
 
-        await viewModel.prepareSubscriptionUsage()
+        await viewModel.prepareUsage()
         await waitForRestart(proxy)
 
         XCTAssertTrue(viewModel.config.isSubscriptionUsageEnabled)
         XCTAssertTrue(keyStore.isConfigured())
         XCTAssertEqual(keyStore.createCallCount, 1)
+    }
+
+    func testResetAllSettingsDoesNotStopUninitializedAPICollectorWhenUsageWasDisabled() async {
+        let config = AppConfig.default
+        let collector = APIUsageCollectorDouble()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(),
+            proxyService: StubProxyServiceStarter(),
+            apiUsageCollector: collector
+        )
+
+        viewModel.resetAllSettings()
+        await collector.waitForStop()
+
+        let stopCount = await collector.stopCount()
+        XCTAssertEqual(stopCount, 0)
     }
 
     func testResetAllSettingsTurnsOffBothUsageDisplaysAndDeletesKey() async {
@@ -3826,7 +3844,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         )
         await viewModel.refresh()
 
-        await viewModel.prepareSubscriptionUsage()
+        await viewModel.prepareUsage()
         await waitForRestart(proxyService)
 
         XCTAssertEqual(keyStore.createCallCount, 1)
@@ -3849,7 +3867,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         )
         await viewModel.refresh()
 
-        await viewModel.prepareSubscriptionUsage()
+        await viewModel.prepareUsage()
 
         XCTAssertEqual(keyStore.createCallCount, 0)
         XCTAssertEqual(keyStore.deleteCallCount, 1)
@@ -4931,6 +4949,254 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.subscriptionUsageStates[profile.id], .disabled)
     }
 
+    func testAPIKeyRowsReceiveCostStateAndOAuthRowsKeepSubscriptionState() async throws {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let collector = APIUsageCollectorDouble(
+            restoredReport: reportWithClaudeCost(
+                cost: "1.25",
+                updatedAt: Date(timeIntervalSince1970: 100)
+            )
+        )
+        let secretStore = InMemorySecretStore(values: [.claudeAPIKey: "key"])
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            apiUsageCollector: collector,
+            secretStore: secretStore
+        )
+
+        await viewModel.prepareUsage()
+
+        let apiRow = try XCTUnwrap(viewModel.providerRows.first { $0.id == .claudeAPI })
+        guard case let .apiCost(.available(snapshot)) = apiRow.usageState else {
+            return XCTFail("Expected API cost")
+        }
+        XCTAssertEqual(snapshot.day.estimatedUSD, Decimal(string: "1.25"))
+    }
+
+    func testDisablingUsageClearsOAuthCacheButStopsAndPreservesAPILedger() async throws {
+        let profile = AuthProfile(
+            fileName: "claude.json",
+            type: .claude,
+            email: "user@example.com",
+            accountID: nil,
+            expired: nil,
+            disabled: false
+        )
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let snapshot = SubscriptionUsageSnapshot(
+            profileID: profile.id,
+            provider: .claude,
+            windows: [UsageWindow(id: "5h", label: "5h", usedPercent: 10, resetAt: nil)],
+            fetchedAt: Date(timeIntervalSince1970: 200)
+        )
+        let cache = SubscriptionUsageSnapshotCacheDouble(snapshots: [profile.id: snapshot])
+        let collector = APIUsageCollectorDouble()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [profile],
+            subscriptionUsageSnapshotCache: cache,
+            apiUsageCollector: collector,
+            secretStore: InMemorySecretStore(values: [.claudeAPIKey: "key"])
+        )
+
+        try viewModel.saveSubscriptionUsageMenuBarVisible(false)
+        await collector.waitForStop()
+
+        let stopCount = await collector.stopCount()
+        let deleteLedgerCount = await collector.deleteLedgerCount()
+        XCTAssertTrue(cache.isEmpty)
+        XCTAssertEqual(stopCount, 1)
+        XCTAssertEqual(deleteLedgerCount, 0)
+    }
+
+    func testPrepareUsageRefreshesOAuthOnceWhenMissingKeyRequiresRestart() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let profile = AuthProfile(
+            fileName: "claude.json",
+            type: .claude,
+            email: "user@example.com",
+            accountID: nil,
+            expired: nil,
+            disabled: false
+        )
+        let report = availableUsageReport(for: profile)
+        let quota = RecordingSubscriptionQuotaClient(reports: [report, report])
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [profile],
+            quotaClient: quota
+        )
+        await viewModel.refresh()
+
+        await viewModel.prepareUsage()
+
+        let fetchCount = await quota.fetchCallCount()
+        XCTAssertEqual(fetchCount, 1)
+    }
+
+    func testEnablingUsageWhileServerIsRunningStartsAPICollector() async throws {
+        let config = AppConfig.default
+        let collector = APIUsageCollectorDouble()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(),
+            proxyService: StubProxyServiceStarter(),
+            apiUsageCollector: collector,
+            secretStore: InMemorySecretStore(values: [.claudeAPIKey: "key"])
+        )
+        await viewModel.refresh()
+
+        try viewModel.saveSubscriptionUsageMenuBarVisible(true)
+        await collector.waitForStartCount(1)
+
+        let startCount = await collector.startCount()
+        XCTAssertEqual(startCount, 1)
+    }
+
+    func testRapidDisableThenEnableWaitsForStopBeforeRestartingCollector() async throws {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let collector = APIUsageCollectorDouble(suspendsStop: true)
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            apiUsageCollector: collector,
+            secretStore: InMemorySecretStore(values: [.claudeAPIKey: "key"])
+        )
+        await viewModel.prepareUsage()
+
+        try viewModel.saveSubscriptionUsageMenuBarVisible(false)
+        await collector.waitForStop()
+        try viewModel.saveSubscriptionUsageMenuBarVisible(true)
+        await collector.waitForStartCount(2)
+
+        let startsBeforeStopCompletes = await collector.startCount()
+        XCTAssertEqual(startsBeforeStopCompletes, 1)
+
+        await collector.resumeStop()
+        await collector.waitForStartCount(2)
+        let finalStartCount = await collector.startCount()
+        XCTAssertEqual(finalStartCount, 2)
+    }
+
+    func testReenablingUsageRestartsCollectorToClosePauseInterval() async throws {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let collector = APIUsageCollectorDouble()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            apiUsageCollector: collector,
+            secretStore: InMemorySecretStore(values: [.claudeAPIKey: "key"])
+        )
+
+        await viewModel.prepareUsage()
+        try viewModel.saveSubscriptionUsageMenuBarVisible(false)
+        await collector.waitForStop()
+        try viewModel.saveSubscriptionUsageMenuBarVisible(true)
+        await collector.waitForStartCount(2)
+
+        let startCount = await collector.startCount()
+        XCTAssertEqual(startCount, 2)
+    }
+
+    func testReloadUsageRefreshesQuotaAndImmediatelyDrainsAPIQueue() async {
+        let profile = AuthProfile(
+            fileName: "claude.json",
+            type: .claude,
+            email: "user@example.com",
+            accountID: nil,
+            expired: nil,
+            disabled: false
+        )
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let quota = RecordingSubscriptionQuotaClient(reports: [availableUsageReport(for: profile)])
+        let collector = APIUsageCollectorDouble(
+            reloadReport: reportWithClaudeCost(cost: "0.42", updatedAt: Date())
+        )
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [profile],
+            quotaClient: quota,
+            apiUsageCollector: collector,
+            secretStore: InMemorySecretStore(values: [.claudeAPIKey: "key"])
+        )
+        await viewModel.refresh()
+
+        await viewModel.reloadUsage()
+
+        let quotaFetchCount = await quota.fetchCallCount()
+        let collectorReloadCount = await collector.reloadCount()
+        XCTAssertEqual(quotaFetchCount, 1)
+        XCTAssertEqual(collectorReloadCount, 1)
+        XCTAssertFalse(viewModel.isUsageReloadActionInProgress)
+    }
+
+    func testLastSuccessfulUsageRefreshUsesOldestVisibleSnapshot() async {
+        let profile = AuthProfile(
+            fileName: "claude.json",
+            type: .claude,
+            email: "user@example.com",
+            accountID: nil,
+            expired: nil,
+            disabled: false
+        )
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let subscription = SubscriptionUsageSnapshot(
+            profileID: profile.id,
+            provider: .claude,
+            windows: [UsageWindow(id: "5h", label: "5h", usedPercent: 10, resetAt: nil)],
+            fetchedAt: Date(timeIntervalSince1970: 200)
+        )
+        let collector = APIUsageCollectorDouble(
+            restoredReport: reportWithClaudeCost(
+                cost: "1.00",
+                updatedAt: Date(timeIntervalSince1970: 100)
+            )
+        )
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [profile],
+            subscriptionUsageSnapshotCache: SubscriptionUsageSnapshotCacheDouble(
+                snapshots: [profile.id: subscription]
+            ),
+            apiUsageCollector: collector,
+            secretStore: InMemorySecretStore(values: [.claudeAPIKey: "key"])
+        )
+
+        await viewModel.prepareUsage()
+
+        XCTAssertEqual(
+            viewModel.lastSuccessfulUsageRefreshAt,
+            Date(timeIntervalSince1970: 100)
+        )
+    }
+
     func testInstallOrUpdateCPMRefreshesStatusAfterSuccessfulInstall() async {
         let cpm = CPMInstallationDouble(
             status: .notInstalled,
@@ -4986,6 +5252,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         bundledProxyReconciler: any BundledProxyReconciling = BundledProxyReconcilerDouble(
             result: .unchanged(version: CLIProxyAPIVersion("7.2.91")!)
         ),
+        apiUsageCollector: any APIUsageCollecting = APIUsageCollectorDouble(),
+        secretStore: any SecretStore = InMemorySecretStore(),
         serverStatusRetryDelayNanoseconds: UInt64 = 500_000_000,
         subscriptionUsageSleep: @escaping @Sendable (UInt64) async throws -> Void = { delay in
             try await Task.sleep(nanoseconds: delay)
@@ -5006,6 +5274,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             subscriptionQuotaClient: quotaClient,
             subscriptionUsageKeyStore: keyStore,
             subscriptionUsageSnapshotCache: subscriptionUsageSnapshotCache,
+            apiUsageCollector: apiUsageCollector,
+            secretStore: secretStore,
             subscriptionUsageSleep: subscriptionUsageSleep,
             serverStatusRetryDelayNanoseconds: serverStatusRetryDelayNanoseconds
         )
@@ -5426,6 +5696,123 @@ private final class CPMInstallationDouble: CPMInstallationManaging {
         if let removeError { throw removeError }
         if let statusAfterRemove { currentStatus = statusAfterRemove }
     }
+}
+
+private actor APIUsageCollectorDouble: APIUsageCollecting {
+    private let restoredReport: APIUsageCollectionReport
+    private let reloadReport: APIUsageCollectionReport
+    private let suspendsStop: Bool
+    private var startCalls = 0
+    private var reloadCalls = 0
+    private var stopCalls = 0
+    private var stopContinuation: CheckedContinuation<Void, Never>?
+
+    init(
+        restoredReport: APIUsageCollectionReport = .init(
+            statesByProfileID: [:],
+            collectedAt: Date(timeIntervalSince1970: 0)
+        ),
+        reloadReport: APIUsageCollectionReport = .init(
+            statesByProfileID: [:],
+            collectedAt: Date(timeIntervalSince1970: 0)
+        ),
+        suspendsStop: Bool = false
+    ) {
+        self.restoredReport = restoredReport
+        self.reloadReport = reloadReport
+        self.suspendsStop = suspendsStop
+    }
+
+    func reports() async -> AsyncStream<APIUsageCollectionReport> {
+        AsyncStream { $0.finish() }
+    }
+
+    func restore(configuration: APIUsageCollectorConfiguration) async -> APIUsageCollectionReport {
+        restoredReport
+    }
+
+    func start(configuration: APIUsageCollectorConfiguration) async {
+        startCalls += 1
+    }
+
+    func update(configuration: APIUsageCollectorConfiguration) async {}
+
+    func reload(configuration: APIUsageCollectorConfiguration) async -> APIUsageCollectionReport {
+        reloadCalls += 1
+        return reloadReport
+    }
+
+    func stop(reason: APIUsageCollectorStopReason, at: Date) async {
+        stopCalls += 1
+        if suspendsStop {
+            await withCheckedContinuation { continuation in
+                stopContinuation = continuation
+            }
+        }
+    }
+
+    func resumeStop() {
+        stopContinuation?.resume()
+        stopContinuation = nil
+    }
+
+    func startCount() -> Int { startCalls }
+    func reloadCount() -> Int { reloadCalls }
+    func stopCount() -> Int { stopCalls }
+    func deleteLedgerCount() -> Int { 0 }
+
+    func waitForStartCount(_ expectedCount: Int) async {
+        for _ in 0..<100 {
+            if startCalls >= expectedCount { return }
+            await Task.yield()
+        }
+    }
+
+    func waitForStop() async {
+        for _ in 0..<100 {
+            if stopCalls > 0 { return }
+            await Task.yield()
+        }
+    }
+}
+
+private func reportWithClaudeCost(cost: String, updatedAt: Date) -> APIUsageCollectionReport {
+    let day = APICostPeriodSnapshot(
+        period: .day,
+        estimatedUSD: Decimal(string: cost)!,
+        totalTokens: 100,
+        requestCount: 1,
+        failedRequestCount: 0,
+        pricedRequestCount: 1,
+        unpricedRequestCount: 0,
+        intervalStart: Date(timeIntervalSince1970: 0),
+        intervalEnd: updatedAt,
+        issues: []
+    )
+    let month = APICostPeriodSnapshot(
+        period: .month,
+        estimatedUSD: Decimal(string: cost)!,
+        totalTokens: 100,
+        requestCount: 1,
+        failedRequestCount: 0,
+        pricedRequestCount: 1,
+        unpricedRequestCount: 0,
+        intervalStart: Date(timeIntervalSince1970: 0),
+        intervalEnd: updatedAt,
+        issues: []
+    )
+    let snapshot = APICostSnapshot(
+        profileID: "claude-api",
+        provider: .claude,
+        day: day,
+        month: month,
+        reportingTimeZoneID: "UTC",
+        updatedAt: updatedAt
+    )
+    return .init(
+        statesByProfileID: ["claude-api": .available(snapshot)],
+        collectedAt: updatedAt
+    )
 }
 
 private struct StubSubscriptionQuotaClient: SubscriptionQuotaFetching {

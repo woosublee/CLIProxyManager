@@ -191,8 +191,10 @@ final class DashboardViewModel: ObservableObject {
     @Published var optionRows: [DashboardOptionRow] = []
     @Published var providerRows: [ProviderRowState] = []
     @Published private(set) var subscriptionUsageStates: [String: AccountSubscriptionUsageState] = [:]
+    @Published private(set) var apiCostUsageStates: [String: APICostUsageState] = [:]
     @Published private(set) var isSubscriptionUsageRefreshInProgress = false
     @Published private(set) var isSubscriptionUsageReloadInProgress = false
+    @Published private(set) var isAPIUsageReloadInProgress = false
     @Published private(set) var lastSuccessfulSubscriptionUsageRefreshAt: Date?
     @Published private(set) var cpmInstallationStatus: CPMInstallationStatus
     @Published private(set) var isCPMInstallationActionInProgress = false
@@ -210,6 +212,34 @@ final class DashboardViewModel: ObservableObject {
         isSubscriptionUsageReloadInProgress || isSubscriptionUsageRefreshInProgress
     }
 
+    var canReloadUsage: Bool {
+        config.isUsageEnabled && subscriptionUsageKeyStore.isConfigured()
+    }
+
+    var isUsageReloadActionInProgress: Bool {
+        isSubscriptionUsageReloadInProgress
+            || isSubscriptionUsageRefreshInProgress
+            || isAPIUsageReloadInProgress
+    }
+
+    var lastSuccessfulUsageRefreshAt: Date? {
+        let subscriptionDates = providerRows.compactMap { row -> Date? in
+            guard row.showsUsage,
+                  case let .subscription(state) = row.usageState else {
+                return nil
+            }
+            return state.snapshot?.fetchedAt
+        }
+        let apiDates = providerRows.compactMap { row -> Date? in
+            guard row.showsUsage,
+                  case let .apiCost(state) = row.usageState else {
+                return nil
+            }
+            return state.snapshot?.updatedAt
+        }
+        return (subscriptionDates + apiDates).min()
+    }
+
     private let configStore: any AppConfigStoring
     private let shellInstaller: any ShellFunctionInstalling
     private let modelClient: any ProxyModelListing
@@ -225,6 +255,7 @@ final class DashboardViewModel: ObservableObject {
     private let subscriptionQuotaClient: any SubscriptionQuotaFetching
     private let subscriptionUsageKeyStore: any SubscriptionUsageManagementKeyConfiguring
     private let subscriptionUsageSnapshotCache: any SubscriptionUsageSnapshotCaching
+    private let apiUsageCollector: any APIUsageCollecting
     private let claudeModelOptionsCache: any ClaudeModelOptionsCaching
     private let cpmInstallationService: any CPMInstallationManaging
     private let secretStore: any SecretStore
@@ -240,6 +271,9 @@ final class DashboardViewModel: ObservableObject {
     private var lastPersistedConfig: AppConfig
     private var subscriptionUsagePollingTask: Task<Void, Never>?
     private var subscriptionUsageRefreshTask: Task<Void, Never>?
+    private var apiUsageReportTask: Task<Void, Never>?
+    private var apiUsageLifecycleTask: Task<Void, Never>?
+    private var hasStartedAPIUsageCollector = false
     private var subscriptionUsageRefreshIsForced = false
     private var pendingForcedSubscriptionUsageRefresh = false
     private var pendingProxyConfigurationRestartReasons: Set<ProxyConfigurationRestartReason> = []
@@ -266,6 +300,7 @@ final class DashboardViewModel: ObservableObject {
         subscriptionQuotaClient: any SubscriptionQuotaFetching = CLIProxyAPISubscriptionQuotaClient(),
         subscriptionUsageKeyStore: any SubscriptionUsageManagementKeyConfiguring = SubscriptionUsageManagementKeyFileStore(),
         subscriptionUsageSnapshotCache: any SubscriptionUsageSnapshotCaching = SubscriptionUsageSnapshotCacheFileStore(),
+        apiUsageCollector: any APIUsageCollecting = APIUsageCollector(),
         claudeModelOptionsCache: any ClaudeModelOptionsCaching = ClaudeModelOptionsCacheFileStore(),
         cpmInstallationService: (any CPMInstallationManaging)? = nil,
         secretStore: any SecretStore = FileSecretStore(),
@@ -294,6 +329,7 @@ final class DashboardViewModel: ObservableObject {
         self.subscriptionQuotaClient = subscriptionQuotaClient
         self.subscriptionUsageKeyStore = subscriptionUsageKeyStore
         self.subscriptionUsageSnapshotCache = subscriptionUsageSnapshotCache
+        self.apiUsageCollector = apiUsageCollector
         self.claudeModelOptionsCache = claudeModelOptionsCache
         let resolvedCPMInstallationService = cpmInstallationService ?? CPMInstallationService()
         self.cpmInstallationService = resolvedCPMInstallationService
@@ -364,8 +400,8 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func saveUsageDisplayConfig(_ updatedConfig: AppConfig) throws {
-        let wasEnabled = config.isSubscriptionUsageEnabled
-        let willBeEnabled = updatedConfig.isSubscriptionUsageEnabled
+        let wasEnabled = config.isUsageEnabled
+        let willBeEnabled = updatedConfig.isUsageEnabled
 
         if !wasEnabled && willBeEnabled {
             let createdKey = try subscriptionUsageKeyStore.createManagementKeyIfNeeded()
@@ -389,6 +425,17 @@ final class DashboardViewModel: ObservableObject {
                 setSubscriptionUsageStates(.disabled)
                 clearSubscriptionUsageSnapshots()
                 lastSuccessfulSubscriptionUsageRefreshAt = nil
+                apiCostUsageStates.removeAll()
+                rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
+                hasStartedAPIUsageCollector = false
+                let proxyCouldServeRequests = serverControlState.isRunning
+                let collector = apiUsageCollector
+                enqueueAPIUsageLifecycle {
+                    await collector.stop(
+                        reason: .trackingDisabled(proxyCouldServeRequests: proxyCouldServeRequests),
+                        at: Date()
+                    )
+                }
                 requestServerRestartAfterConfigChange()
                 if let cleanupError { throw cleanupError }
                 return
@@ -397,10 +444,8 @@ final class DashboardViewModel: ObservableObject {
 
         guard wasEnabled != willBeEnabled else { return }
         requestServerRestartAfterConfigChange()
-        if !serverControlState.isRunning, !isServerActionInProgress, !serverControlState.isTransitioning {
-            Task { [weak self] in
-                await self?.refreshSubscriptionUsage()
-            }
+        enqueueAPIUsageLifecycle { [weak self] in
+            await self?.performPrepareUsage()
         }
     }
 
@@ -453,7 +498,8 @@ final class DashboardViewModel: ObservableObject {
         updatedConfig.codexAPI = config.codexAPI
         updatedConfig.nicknames = config.nicknames
         updatedConfig.includeDangerouslySkipPermissions = config.includeDangerouslySkipPermissions
-        let shouldDeleteManagementKey = config.isSubscriptionUsageEnabled || subscriptionUsageKeyStore.isConfigured()
+        let shouldDeleteManagementKey = config.isUsageEnabled || subscriptionUsageKeyStore.isConfigured()
+        let shouldStopAPIUsageCollector = config.isUsageEnabled || hasStartedAPIUsageCollector
         do {
             try saveConfig(updatedConfig)
         } catch {
@@ -473,6 +519,19 @@ final class DashboardViewModel: ObservableObject {
         setSubscriptionUsageStates(.disabled)
         clearSubscriptionUsageSnapshots()
         lastSuccessfulSubscriptionUsageRefreshAt = nil
+        apiCostUsageStates.removeAll()
+        rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
+        hasStartedAPIUsageCollector = false
+        if shouldStopAPIUsageCollector {
+            let proxyCouldServeRequests = serverControlState.isRunning
+            let collector = apiUsageCollector
+            enqueueAPIUsageLifecycle {
+                await collector.stop(
+                    reason: .trackingDisabled(proxyCouldServeRequests: proxyCouldServeRequests),
+                    at: Date()
+                )
+            }
+        }
         appAppearanceService.apply(showDockIcon: updatedConfig.showDockIcon)
         appAppearanceService.apply(appearance: updatedConfig.appearance)
         settingsMessage = cleanupError.map { "Reset failed: \($0.localizedDescription)" }
@@ -498,7 +557,7 @@ final class DashboardViewModel: ObservableObject {
         }
 
         await refresh()
-        await prepareSubscriptionUsage()
+        await prepareUsage()
         if !attemptedReconciliationRestart {
             await performAutostartIfEnabled()
         }
@@ -509,32 +568,100 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func refresh() async {
+        let wasProxyReady = serverStatus.severity == .ready
         let rawServerStatus = await stableServerStatus()
         let updatedServerStatus = passiveRefreshPresentationStatus(from: rawServerStatus)
         let claudeStatus = await claudeConnector.status()
         updateStatuses(serverStatus: updatedServerStatus, claudeStatus: claudeStatus)
+        if wasProxyReady != (updatedServerStatus.severity == .ready) {
+            await updateAPIUsageCollectorIfStarted()
+        }
     }
 
-    func prepareSubscriptionUsage() async {
+    func prepareUsage() async {
+        let task = enqueueAPIUsageLifecycle { [weak self] in
+            await self?.performPrepareUsage()
+        }
+        await task.value
+    }
+
+    private func performPrepareUsage() async {
+        var didRefreshUsageAfterRestart = false
         do {
-            if config.isSubscriptionUsageEnabled {
-                let createdKey = try subscriptionUsageKeyStore.createManagementKeyIfNeeded()
+            if config.isUsageEnabled {
+                let createdKey = subscriptionUsageKeyStore.isConfigured()
+                    ? false
+                    : try subscriptionUsageKeyStore.createManagementKeyIfNeeded()
                 if createdKey, serverControlState.isRunning {
-                    await restartServerAfterRequiredChange()
-                    return
+                    didRefreshUsageAfterRestart = await restartServerAfterRequiredChange()
                 }
             } else if subscriptionUsageKeyStore.isConfigured() {
                 try subscriptionUsageKeyStore.deleteManagementKey()
                 if serverControlState.isRunning {
-                    await restartServerAfterRequiredChange()
-                    return
+                    didRefreshUsageAfterRestart = await restartServerAfterRequiredChange()
                 }
             }
         } catch {
-            settingsMessage = "Subscription usage setup failed: \(error.localizedDescription)"
+            settingsMessage = "Usage setup failed: \(error.localizedDescription)"
             return
         }
-        await refreshSubscriptionUsage()
+
+        observeAPIUsageReportsIfNeeded()
+        let configuration = apiUsageCollectorConfiguration
+        let restoredReport = await apiUsageCollector.restore(configuration: configuration)
+        applyAPIUsageReport(restoredReport)
+        if configuration.usageEnabled {
+            if hasStartedAPIUsageCollector {
+                await apiUsageCollector.update(configuration: configuration)
+            } else {
+                hasStartedAPIUsageCollector = true
+                await apiUsageCollector.start(configuration: configuration)
+            }
+        } else {
+            await apiUsageCollector.start(configuration: configuration)
+            hasStartedAPIUsageCollector = false
+        }
+        if !didRefreshUsageAfterRestart {
+            await refreshSubscriptionUsage()
+        }
+    }
+
+    @discardableResult
+    private func enqueueAPIUsageLifecycle(
+        _ operation: @escaping @MainActor @Sendable () async -> Void
+    ) -> Task<Void, Never> {
+        let previousTask = apiUsageLifecycleTask
+        let task = Task {
+            await previousTask?.value
+            await operation()
+        }
+        apiUsageLifecycleTask = task
+        return task
+    }
+
+    private func observeAPIUsageReportsIfNeeded() {
+        guard apiUsageReportTask == nil else { return }
+        let collector = apiUsageCollector
+        apiUsageReportTask = Task { [weak self] in
+            let reports = await collector.reports()
+            for await report in reports {
+                guard !Task.isCancelled else { break }
+                self?.applyAPIUsageReport(report)
+            }
+        }
+    }
+
+    private func applyAPIUsageReport(_ report: APIUsageCollectionReport) {
+        apiCostUsageStates = report.statesByProfileID
+        rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
+    }
+
+    func prepareForTermination() async {
+        await apiUsageLifecycleTask?.value
+        apiUsageLifecycleTask = nil
+        apiUsageReportTask?.cancel()
+        apiUsageReportTask = nil
+        await apiUsageCollector.stop(reason: .applicationTermination, at: Date())
     }
 
     private func restoreSubscriptionUsageSnapshots() {
@@ -626,6 +753,22 @@ final class DashboardViewModel: ObservableObject {
         await refresh()
         guard serverStatus.severity == .ready else { return }
         await refreshSubscriptionUsage(force: true)
+    }
+
+    func reloadUsage() async {
+        guard canReloadUsage,
+              !isUsageReloadActionInProgress else {
+            return
+        }
+
+        isAPIUsageReloadInProgress = true
+        defer { isAPIUsageReloadInProgress = false }
+
+        await refresh()
+        guard serverStatus.severity == .ready else { return }
+        await refreshSubscriptionUsage(force: true)
+        let report = await apiUsageCollector.reload(configuration: apiUsageCollectorConfiguration)
+        applyAPIUsageReport(report)
     }
 
     func refreshSubscriptionUsage(force: Bool = false) async {
@@ -1421,6 +1564,7 @@ final class DashboardViewModel: ObservableObject {
             )
             if credentialChanged {
                 requestProxyConfigurationRestart(reason: .apiKey)
+                scheduleAPIUsageCollectorUpdateIfStarted()
             }
         } else {
             try saveSettings()
@@ -1456,6 +1600,7 @@ final class DashboardViewModel: ObservableObject {
             )
             if credentialChanged {
                 requestProxyConfigurationRestart(reason: .apiKey)
+                scheduleAPIUsageCollectorUpdateIfStarted()
             }
         } else {
             try saveSettings()
@@ -1601,6 +1746,7 @@ final class DashboardViewModel: ObservableObject {
             }
             if credentialChanged {
                 requestProxyConfigurationRestart(reason: .apiKey)
+                scheduleAPIUsageCollectorUpdateIfStarted()
             }
         } catch {
             settingsMessage = "API key removal failed: \(error.localizedDescription)"
@@ -1657,6 +1803,7 @@ final class DashboardViewModel: ObservableObject {
         var updatedConfig = config
         updatedConfig.port = port
         try saveConfig(updatedConfig)
+        scheduleAPIUsageCollectorUpdateIfStarted()
     }
 
     func saveCommands(_ commands: AppConfig.Commands) throws {
@@ -2767,8 +2914,25 @@ final class DashboardViewModel: ObservableObject {
         return .available(count: selectedOptions.count)
     }
 
+    private var apiUsageCollectorConfiguration: APIUsageCollectorConfiguration {
+        var providers: Set<APIUsageProvider> = []
+        if isAPIKeyConfigured(.claudeAPIKey) { providers.insert(.claude) }
+        if isAPIKeyConfigured(.codexAPIKey) { providers.insert(.openAI) }
+        return APIUsageCollectorConfiguration(
+            usageEnabled: config.isUsageEnabled,
+            proxyReady: serverStatus.severity == .ready,
+            port: config.port,
+            enabledProviders: providers,
+            reportingTimeZoneID: TimeZone.current.identifier
+        )
+    }
+
     private var defaultSubscriptionUsageState: AccountSubscriptionUsageState {
-        config.isSubscriptionUsageEnabled ? .managementKeyNotConfigured : .disabled
+        config.isUsageEnabled ? .managementKeyNotConfigured : .disabled
+    }
+
+    private var defaultAPICostUsageState: APICostUsageState {
+        config.isUsageEnabled ? .loading : .disabled
     }
 
     private func rebuildProviderRows(claudeStatus: DiagnosticStatus?, codexStatus: DiagnosticStatus?) {
@@ -2831,7 +2995,9 @@ final class DashboardViewModel: ObservableObject {
                 id: .claudeAPI, providerType: .claude, name: "Claude API Key", nickname: config.ccapi.nickname,
                 functionName: config.commands.ccapi, connectionTitle: "Configured",
                 connectionDetail: "CLIProxyAPI",
-                isConnected: true, accountDetailHidden: true, usageState: .apiCost(.disabled)
+                isConnected: true, accountDetailHidden: true,
+                usageState: .apiCost(apiCostUsageStates[ProviderRowState.ID.claudeAPI.rawValue] ?? defaultAPICostUsageState),
+                showsUsage: true
             ))
         }
         if isAPIKeyConfigured(.codexAPIKey) {
@@ -2839,7 +3005,9 @@ final class DashboardViewModel: ObservableObject {
                 id: .codexAPI, providerType: .codex, name: "OpenAI API Key", nickname: config.codexAPI.nickname,
                 functionName: config.commands.ccodexapi, connectionTitle: "Configured",
                 connectionDetail: "CLIProxyAPI", isConnected: true,
-                accountDetailHidden: true, usageState: .apiCost(.disabled)
+                accountDetailHidden: true,
+                usageState: .apiCost(apiCostUsageStates[ProviderRowState.ID.codexAPI.rawValue] ?? defaultAPICostUsageState),
+                showsUsage: true
             ))
         }
         let orderedRows = AccountOrdering.orderedRows(rows, storedIDs: config.accountOrder)
@@ -2931,7 +3099,7 @@ final class DashboardViewModel: ObservableObject {
                         : serverStatus.message
                     throw ProxyRestartReadinessError(message: message)
                 }
-                await refreshSubscriptionUsage()
+                await refreshUsageAfterServerChange()
             } else {
                 await refresh()
             }
@@ -2967,6 +3135,26 @@ final class DashboardViewModel: ObservableObject {
             throw ProxyRestartReadinessError(message: message)
         }
         serverControlState = .running
+        await updateAPIUsageCollectorIfStarted()
+    }
+
+    private func refreshUsageAfterServerChange() async {
+        await refreshSubscriptionUsage()
+        await updateAPIUsageCollectorIfStarted()
+    }
+
+    private func updateAPIUsageCollectorIfStarted() async {
+        guard hasStartedAPIUsageCollector else { return }
+        await apiUsageCollector.update(configuration: apiUsageCollectorConfiguration)
+    }
+
+    private func scheduleAPIUsageCollectorUpdateIfStarted() {
+        guard hasStartedAPIUsageCollector else { return }
+        let collector = apiUsageCollector
+        let configuration = apiUsageCollectorConfiguration
+        Task {
+            await collector.update(configuration: configuration)
+        }
     }
 
     private func stableServerStatus() async -> DiagnosticStatus {

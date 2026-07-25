@@ -36,22 +36,25 @@ final class QuitCoordinator: ObservableObject {
     private let appTerminator: any AppTerminating
     private let quitConfirmationPresenter: any QuitConfirmationPresenting
     private let shouldStopServerBeforeQuit: @MainActor @Sendable () -> Bool
+    private let beforeTerminate: @MainActor @Sendable () async -> Void
 
     init(
         proxyService: any ProxyServiceControlling = BundledProxyBinary.serviceManager(),
         appTerminator: any AppTerminating = NSApplicationTerminator(),
         quitConfirmationPresenter: any QuitConfirmationPresenting = NSAlertQuitConfirmationPresenter(),
-        shouldStopServerBeforeQuit: @escaping @MainActor @Sendable () -> Bool = { true }
+        shouldStopServerBeforeQuit: @escaping @MainActor @Sendable () -> Bool = { true },
+        beforeTerminate: @escaping @MainActor @Sendable () async -> Void = {}
     ) {
         self.proxyService = proxyService
         self.appTerminator = appTerminator
         self.quitConfirmationPresenter = quitConfirmationPresenter
         self.shouldStopServerBeforeQuit = shouldStopServerBeforeQuit
+        self.beforeTerminate = beforeTerminate
     }
 
     func requestQuit() {
         guard shouldStopServerBeforeQuit() else {
-            appTerminator.terminate()
+            Task { await finishTermination() }
             return
         }
 
@@ -69,10 +72,15 @@ final class QuitCoordinator: ObservableObject {
         quitErrorMessage = nil
         do {
             try await proxyService.stop()
-            appTerminator.terminate()
+            await finishTermination()
         } catch {
             quitErrorMessage = "Failed to stop the CLIProxyAPI server. Quit was cancelled."
         }
+    }
+
+    private func finishTermination() async {
+        await beforeTerminate()
+        appTerminator.terminate()
     }
 }
 
