@@ -6,6 +6,24 @@ struct CompactUsageRowPresentation: Equatable, Identifiable {
     let label: String
     let value: String
     let accessibilityLabel: String
+    let tooltip: String?
+    let textLayout: UsageTextLayout
+
+    init(
+        id: String,
+        label: String,
+        value: String,
+        accessibilityLabel: String,
+        tooltip: String? = nil,
+        textLayout: UsageTextLayout = .adaptiveSingleLine(minimumScaleFactor: 0.6)
+    ) {
+        self.id = id
+        self.label = label
+        self.value = value
+        self.accessibilityLabel = accessibilityLabel
+        self.tooltip = tooltip
+        self.textLayout = textLayout
+    }
 }
 
 enum CompactUsageIndicator: Equatable {
@@ -134,21 +152,23 @@ private func compactAPICostSnapshotPresentation(
     _ snapshot: APICostSnapshot,
     issues: [APICostIssue]
 ) -> CompactUsagePresentation {
-    let rows = apiCostRows(snapshot: snapshot).map { row in
+    let apiPresentation = apiCostUsagePresentation(snapshot: snapshot, issues: issues)
+    let rows = apiPresentation.rows.map { row in
         CompactUsageRowPresentation(
             id: row.id,
             label: row.label,
             value: row.cost,
-            accessibilityLabel: row.accessibilityLabel
+            accessibilityLabel: row.accessibilityLabel,
+            tooltip: row.tooltip,
+            textLayout: row.textLayout
         )
     }
-    let warning = orderedAPICostIssues(issues)
-        .map(apiCostIssueMessage)
-        .joined(separator: " ")
     return CompactUsagePresentation(
         rows: rows,
         placeholder: nil,
-        indicator: warning.isEmpty ? nil : .warning(message: warning)
+        indicator: apiPresentation.warningMessage.map {
+            .warning(message: $0)
+        }
     )
 }
 

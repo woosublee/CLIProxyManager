@@ -1,6 +1,23 @@
 import CLIProxyManagerCore
 import Foundation
 
+enum UsageTextLayout: Equatable {
+    case adaptiveSingleLine(minimumScaleFactor: Double)
+
+    var lineLimit: Int { 1 }
+
+    var minimumScaleFactor: Double {
+        switch self {
+        case .adaptiveSingleLine(let minimumScaleFactor):
+            minimumScaleFactor
+        }
+    }
+}
+
+enum UsageRowDecoration: Equatable {
+    case textOnly
+}
+
 struct APICostRowPresentation: Equatable, Identifiable {
     let id: String
     let label: String
@@ -8,6 +25,13 @@ struct APICostRowPresentation: Equatable, Identifiable {
     let cost: String
     let tooltip: String
     let accessibilityLabel: String
+    let textLayout: UsageTextLayout
+    let decoration: UsageRowDecoration
+}
+
+struct APICostUsagePresentation: Equatable {
+    let rows: [APICostRowPresentation]
+    let warningMessage: String?
 }
 
 enum ProviderUsageDisplayState: Equatable {
@@ -98,10 +122,22 @@ func apiCostIssueMessage(_ issue: APICostIssue) -> String {
     }
 }
 
+func apiCostUsagePresentation(
+    snapshot: APICostSnapshot,
+    issues: [APICostIssue]
+) -> APICostUsagePresentation {
+    APICostUsagePresentation(
+        rows: apiCostRows(snapshot: snapshot),
+        warningMessage: issues.isEmpty
+            ? nil
+            : apiCostWarningMessage(snapshot: snapshot, issues: issues)
+    )
+}
+
 func apiCostRows(snapshot: APICostSnapshot) -> [APICostRowPresentation] {
     [
-        (id: "day", label: "Day", period: snapshot.day),
-        (id: "month", label: "Mon", period: snapshot.month)
+        (id: "day", label: "Day", accessibilityLabel: "Day", period: snapshot.day),
+        (id: "month", label: "Mon", accessibilityLabel: "Month", period: snapshot.month)
     ].map { item in
         let period = item.period
         let detail = "\(compactTokenCount(period.totalTokens)) TOK · \(period.requestCount) REQ"
@@ -123,9 +159,37 @@ func apiCostRows(snapshot: APICostSnapshot) -> [APICostRowPresentation] {
             detail: detail,
             cost: apiCostCurrency(period.estimatedUSD),
             tooltip: tooltipLines.joined(separator: "\n"),
-            accessibilityLabel: "\(item.label), estimated API cost \(apiCostExactCurrency(period.estimatedUSD)), \(period.totalTokens) tokens, \(period.requestCount) \(requestWord(period.requestCount))"
+            accessibilityLabel: "\(item.accessibilityLabel), estimated API cost \(apiCostExactCurrency(period.estimatedUSD)), \(period.totalTokens) tokens, \(period.requestCount) \(requestWord(period.requestCount))",
+            textLayout: .adaptiveSingleLine(minimumScaleFactor: 0.6),
+            decoration: .textOnly
         )
     }
+}
+
+func apiCostWarningMessage(
+    snapshot: APICostSnapshot,
+    issues: [APICostIssue]
+) -> String {
+    let orderedIssues = orderedAPICostIssues(issues)
+    let dayIssues = orderedAPICostIssues(snapshot.day.issues).filter(orderedIssues.contains)
+    let monthIssues = orderedAPICostIssues(snapshot.month.issues).filter(orderedIssues.contains)
+    let periodIssues = Set(dayIssues + monthIssues)
+    let sharedIssues = orderedIssues.filter { !periodIssues.contains($0) }
+    var parts = [
+        "Estimated API cost may be incomplete.",
+        "Last successful update: \(apiCostUpdatedAt(snapshot.updatedAt, timeZoneID: snapshot.reportingTimeZoneID)).",
+        "Reporting timezone: \(snapshot.reportingTimeZoneID)."
+    ]
+    if !dayIssues.isEmpty {
+        parts.append("Day: \(dayIssues.map(apiCostIssueMessage).joined(separator: " "))")
+    }
+    if !monthIssues.isEmpty {
+        parts.append("Month: \(monthIssues.map(apiCostIssueMessage).joined(separator: " "))")
+    }
+    if !sharedIssues.isEmpty {
+        parts.append("Day and Month: \(sharedIssues.map(apiCostIssueMessage).joined(separator: " "))")
+    }
+    return parts.joined(separator: " ")
 }
 
 private let oneUSCent = Decimal(sign: .plus, exponent: -2, significand: 1)
@@ -155,6 +219,15 @@ func compactTokenCount(_ value: Int64) -> String {
 
 func orderedAPICostIssues(_ issues: [APICostIssue]) -> [APICostIssue] {
     APICostIssue.allCases.filter { issues.contains($0) }
+}
+
+private func apiCostUpdatedAt(_ date: Date, timeZoneID: String) -> String {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = TimeZone(identifier: timeZoneID) ?? TimeZone(secondsFromGMT: 0)
+    formatter.dateStyle = .medium
+    formatter.timeStyle = .short
+    return formatter.string(from: date)
 }
 
 private func apiCostPeriodRange(_ period: APICostPeriodSnapshot, timeZoneID: String) -> String {

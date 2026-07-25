@@ -4,6 +4,26 @@ import XCTest
 @testable import CLIProxyManagerApp
 
 final class APICostUsagePresentationTests: XCTestCase {
+    func testCompactPresentationPreservesExactTooltipsForZeroTinyAndNormalCosts() {
+        let cases: [(String, String, String)] = [
+            ("0", "$0.00", "Exact estimate: $0.0000."),
+            ("0.004", "<$0.01", "Exact estimate: $0.0040."),
+            ("12.345", "$12.35", "Exact estimate: $12.3450.")
+        ]
+
+        for (cost, visible, exact) in cases {
+            let presentation = compactUsagePresentation(
+                for: .apiCost(.available(makeCostSnapshot(dayCost: cost)))
+            )
+            let day = presentation.rows[0]
+
+            XCTAssertEqual(day.value, visible)
+            XCTAssertTrue(day.tooltip?.contains(exact) == true)
+            XCTAssertTrue(day.tooltip?.contains("UTC") == true)
+            XCTAssertTrue(day.tooltip?.contains("Estimated API cost") == true)
+        }
+    }
+
     func testCompactPresentationShowsDayAndMonthCostWithoutQuotaSemantics() {
         let state = ProviderUsageState.apiCost(
             .available(makeCostSnapshot(dayCost: "0.004", monthCost: "8.73"))
@@ -16,6 +36,18 @@ final class APICostUsagePresentationTests: XCTestCase {
         XCTAssertFalse(presentation.rows.flatMap { [$0.label, $0.value, $0.accessibilityLabel] }.contains {
             $0.contains("TOK") || $0.contains("REQ") || $0.contains("percent") || $0.contains("remaining")
         })
+    }
+
+    func testMonthUsesVisualAbbreviationAndFullAccessibilityPeriodName() {
+        let rows = apiCostRows(snapshot: makeCostSnapshot())
+
+        XCTAssertEqual(rows[1].label, "Mon")
+        XCTAssertTrue(rows[1].accessibilityLabel.hasPrefix("Month,"))
+        XCTAssertEqual(
+            compactUsagePresentation(for: .apiCost(.available(makeCostSnapshot())))
+                .rows[1].accessibilityLabel.hasPrefix("Month,"),
+            true
+        )
     }
 
     func testExpandedRowsIncludeCompactTokensRequestsAndExactTooltip() {
@@ -41,6 +73,32 @@ final class APICostUsagePresentationTests: XCTestCase {
             rows[0].accessibilityLabel,
             "Day, estimated API cost $0.4200, 84000 tokens, 14 requests"
         )
+    }
+
+    func testLargeCostsAndDetailsUseAdaptiveSingleLineTextContract() {
+        let costs = ["999.99", "1000.00", "12345.67", "123456789012345.67"]
+
+        for cost in costs {
+            let snapshot = makeCostSnapshot(
+                dayCost: cost,
+                dayTokens: 9_223_372_036_854_775_000,
+                dayRequests: 9_223_372_036_854_775_000
+            )
+            let expanded = apiCostRows(snapshot: snapshot)[0]
+            let compact = compactUsagePresentation(for: .apiCost(.available(snapshot))).rows[0]
+
+            XCTAssertEqual(expanded.textLayout, .adaptiveSingleLine(minimumScaleFactor: 0.6))
+            XCTAssertEqual(compact.textLayout, expanded.textLayout)
+            XCTAssertFalse(expanded.cost.contains("\n"))
+            XCTAssertFalse(expanded.detail.contains("\n"))
+            XCTAssertFalse(compact.value.contains("\n"))
+        }
+    }
+
+    func testAPICostRowsUseTextOnlyDecorationInsteadOfProgressOrPercentage() {
+        let rows = apiCostRows(snapshot: makeCostSnapshot())
+
+        XCTAssertTrue(rows.allSatisfy { $0.decoration == .textOnly })
     }
 
     func testCurrencyFormattingDistinguishesZeroTinyNormalAndExactValues() {
@@ -153,19 +211,28 @@ final class APICostUsagePresentationTests: XCTestCase {
         XCTAssertFalse(rows[1].tooltip.contains("Some request models"))
     }
 
-    func testCompactPartialStateCombinesIssuesInStableOrder() {
-        let snapshot = makeCostSnapshot()
-
-        let presentation = compactUsagePresentation(
-            for: .apiCost(.partial(snapshot, [.persistenceFailure, .unknownModel]))
+    func testPartialWarningCombinesEstimateFreshnessTimezoneAndPeriodIssuesInStableOrder() throws {
+        let snapshot = makeCostSnapshot(
+            timeZone: "Asia/Seoul",
+            dayIssues: [.persistenceFailure, .unknownModel],
+            monthIssues: [.collectionGap]
         )
+        let issues: [APICostIssue] = [.persistenceFailure, .collectionGap, .unknownModel]
 
-        XCTAssertEqual(
-            presentation.indicator,
-            .warning(
-                message: "Some request models are not in the bundled price catalog. API usage could not be saved completely."
-            )
+        let message = apiCostWarningMessage(snapshot: snapshot, issues: issues)
+        let compact = compactUsagePresentation(for: .apiCost(.partial(snapshot, issues)))
+
+        XCTAssertTrue(message.contains("Estimated API cost may be incomplete."))
+        XCTAssertTrue(message.contains("Last successful update:"))
+        XCTAssertTrue(message.contains("Reporting timezone: Asia/Seoul."))
+        XCTAssertTrue(message.contains("Day:"))
+        XCTAssertTrue(message.contains("Month:"))
+        XCTAssertLessThan(
+            try XCTUnwrap(message.range(of: "Some request models")).lowerBound,
+            try XCTUnwrap(message.range(of: "could not be saved completely")).lowerBound
         )
+        XCTAssertTrue(message.contains("Month: Some requests may be missing because collection was interrupted."))
+        XCTAssertEqual(compact.indicator, .warning(message: message))
     }
 
     func testIssueMessagesUseUserFacingCopyForEveryIssue() {

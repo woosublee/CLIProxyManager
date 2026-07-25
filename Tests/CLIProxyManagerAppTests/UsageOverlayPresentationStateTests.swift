@@ -64,13 +64,15 @@ final class UsageOverlayPresentationStateTests: XCTestCase {
         XCTAssertEqual(presentation, .usage)
     }
 
-    func testExpandedAPIRowHasNoProgressDecoration() {
+    func testExpandedAPIRenderContractUsesTextOnlyAdaptiveRows() {
         let row = apiCostRows(
             snapshot: makeCostSnapshot(dayTokens: 84_000, dayRequests: 14)
         ).first!
 
         XCTAssertEqual(row.detail, "84K TOK · 14 REQ")
         XCTAssertEqual(row.cost, "$0.42")
+        XCTAssertEqual(row.decoration, .textOnly)
+        XCTAssertEqual(row.textLayout, .adaptiveSingleLine(minimumScaleFactor: 0.6))
     }
 
     func testExpandedContentUsesHeaderOnlyForProvidersWithoutUsageCapability() {

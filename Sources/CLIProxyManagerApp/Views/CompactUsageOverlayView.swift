@@ -126,9 +126,15 @@ private struct CompactUsageAccountView: View {
                         HStack(spacing: 4) {
                             Text(row.label)
                                 .foregroundStyle(.secondary)
+                                .lineLimit(1)
                             Spacer(minLength: 2)
                             Text(row.value)
                                 .foregroundStyle(.primary)
+                                .lineLimit(row.textLayout.lineLimit)
+                                .minimumScaleFactor(row.textLayout.minimumScaleFactor)
+                                .allowsTightening(true)
+                                .layoutPriority(1)
+                                .help(row.tooltip ?? "")
                         }
                         .font(.system(size: 10, weight: .semibold, design: .monospaced))
                         .accessibilityElement(children: .ignore)

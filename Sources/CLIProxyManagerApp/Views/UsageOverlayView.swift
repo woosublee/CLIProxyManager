@@ -328,28 +328,39 @@ private struct ExpandedUsageOverlayAccountView: View {
         _ snapshot: APICostSnapshot,
         issues: [APICostIssue]
     ) -> some View {
-        let rows = apiCostRows(snapshot: snapshot)
-        let warningMessage = orderedAPICostIssues(issues)
-            .map(apiCostIssueMessage)
-            .joined(separator: " ")
+        let presentation = apiCostUsagePresentation(snapshot: snapshot, issues: issues)
         return VStack(alignment: .leading, spacing: 6) {
-            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+            ForEach(Array(presentation.rows.enumerated()), id: \.element.id) { index, row in
                 UsageWarningAlignedRow(
-                    message: index == 0 && !warningMessage.isEmpty ? warningMessage : nil,
-                    reservesWarningSpace: !warningMessage.isEmpty
+                    message: index == 0 ? presentation.warningMessage : nil,
+                    reservesWarningSpace: presentation.warningMessage != nil
                 ) {
-                    HStack(spacing: 8) {
-                        Text(row.label)
-                            .font(.system(size: 10.5, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 28, alignment: .leading)
-                        Text(row.detail)
-                            .font(.system(size: 10.5, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        Text(row.cost)
-                            .font(.system(size: 10.5, design: .monospaced))
-                            .frame(width: 58, alignment: .trailing)
+                    Group {
+                        switch row.decoration {
+                        case .textOnly:
+                            HStack(spacing: 8) {
+                                Text(row.label)
+                                    .font(.system(size: 10.5, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .frame(width: 28, alignment: .leading)
+                                Text(row.detail)
+                                    .font(.system(size: 10.5, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(row.textLayout.lineLimit)
+                                    .minimumScaleFactor(row.textLayout.minimumScaleFactor)
+                                    .allowsTightening(true)
+                                    .layoutPriority(1)
+                                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                                Text(row.cost)
+                                    .font(.system(size: 10.5, design: .monospaced))
+                                    .lineLimit(row.textLayout.lineLimit)
+                                    .minimumScaleFactor(row.textLayout.minimumScaleFactor)
+                                    .allowsTightening(true)
+                                    .layoutPriority(1)
+                                    .frame(minWidth: 58, alignment: .trailing)
+                            }
+                        }
                     }
                     .help(row.tooltip)
                     .accessibilityElement(children: .ignore)

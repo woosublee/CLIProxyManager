@@ -280,23 +280,24 @@ private struct MenuBarAccountRow: View {
         _ snapshot: APICostSnapshot,
         issues: [APICostIssue]
     ) -> some View {
-        let rows = apiCostRows(snapshot: snapshot)
-        let warningMessage = orderedAPICostIssues(issues)
-            .map(apiCostIssueMessage)
-            .joined(separator: " ")
+        let presentation = apiCostUsagePresentation(snapshot: snapshot, issues: issues)
         return VStack(alignment: .leading, spacing: 4) {
-            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+            ForEach(Array(presentation.rows.enumerated()), id: \.element.id) { index, row in
                 UsageWarningAlignedRow(
-                    message: index == 0 && !warningMessage.isEmpty ? warningMessage : nil,
-                    reservesWarningSpace: !warningMessage.isEmpty
+                    message: index == 0 ? presentation.warningMessage : nil,
+                    reservesWarningSpace: presentation.warningMessage != nil
                 ) {
                     HStack(spacing: 7) {
                         Text(row.label)
                             .frame(width: 28, alignment: .leading)
                             .foregroundStyle(.secondary)
-                        Spacer(minLength: 72)
+                        Spacer(minLength: 8)
                         Text(row.cost)
-                            .frame(width: 56, alignment: .trailing)
+                            .lineLimit(row.textLayout.lineLimit)
+                            .minimumScaleFactor(row.textLayout.minimumScaleFactor)
+                            .allowsTightening(true)
+                            .layoutPriority(1)
+                            .frame(minWidth: 56, maxWidth: .infinity, alignment: .trailing)
                     }
                     .font(.system(size: 10.5, design: .monospaced))
                     .help(row.tooltip)
