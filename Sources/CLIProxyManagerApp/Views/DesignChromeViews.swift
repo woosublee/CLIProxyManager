@@ -101,6 +101,8 @@ struct SlugPill: View {
                     .fontWeight(.bold)
                 Text(slug)
                     .foregroundStyle(.primary.opacity(hovering ? 1.0 : 0.78))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                 Image(systemName: copied ? "checkmark" : "doc.on.doc")
                     .font(.system(size: 9, weight: .medium))
                     .frame(width: 10, height: 10, alignment: .center)
