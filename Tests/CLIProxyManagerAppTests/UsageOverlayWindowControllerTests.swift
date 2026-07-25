@@ -318,6 +318,111 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         XCTAssertEqual(panel.frame.maxY, 660)
     }
 
+    func testAccountAdditionKeepsOldSnapshotUntilConcealCompletes() async {
+        let oneAccount = accountPresentation([.claude])
+        let twoAccounts = accountPresentation([.claude, .codex])
+        let panel = makePanel(x: 500, y: 400, width: 300, height: 260)
+        var concealCallbacks: [@MainActor () -> Void] = []
+        var frameCompletions: [@MainActor () -> Void] = []
+        let controller = UsageOverlayWindowController(
+            panel: panel,
+            initialDisplayMode: .expanded,
+            initialAccountPresentation: oneAccount,
+            persistDisplayMode: { _ in true },
+            shouldReduceMotion: { false },
+            visibleFrameProvider: visibleFrame,
+            accountConcealScheduler: { concealCallbacks.append($0) },
+            accountRevealScheduler: { _ in },
+            fittingSizeProvider: { CGSize(width: 300, height: 360) },
+            frameAnimator: { _, _, completion in
+                frameCompletions.append(completion)
+            }
+        )
+        controller.showForCurrentSession(using: .init(isVisible: true, displayMode: .expanded))
+
+        controller.updateAccountPresentation(twoAccounts)
+
+        XCTAssertEqual(controller.presentedAccountPresentation, oneAccount)
+        XCTAssertEqual(controller.accountTransitionPhase, .concealing)
+        XCTAssertEqual(concealCallbacks.count, 1)
+        XCTAssertTrue(frameCompletions.isEmpty)
+
+        concealCallbacks.removeFirst()()
+        await drainMainQueue()
+
+        XCTAssertEqual(controller.presentedAccountPresentation, twoAccounts)
+        XCTAssertEqual(controller.accountTransitionPhase, .resizing)
+        XCTAssertEqual(frameCompletions.count, 1)
+    }
+
+    func testAccountRemovalUsesSameConcealSwapResizeFlow() async {
+        let twoAccounts = accountPresentation([.claude, .codex])
+        let oneAccount = accountPresentation([.claude])
+        let panel = makePanel(x: 500, y: 400, width: 300, height: 360)
+        var completeConceal: (@MainActor () -> Void)?
+        var completeFrame: (@MainActor () -> Void)?
+        let controller = UsageOverlayWindowController(
+            panel: panel,
+            initialDisplayMode: .expanded,
+            initialAccountPresentation: twoAccounts,
+            persistDisplayMode: { _ in true },
+            shouldReduceMotion: { false },
+            visibleFrameProvider: visibleFrame,
+            accountConcealScheduler: { completeConceal = $0 },
+            accountRevealScheduler: { _ in },
+            fittingSizeProvider: { CGSize(width: 300, height: 260) },
+            frameAnimator: { _, _, completion in completeFrame = completion }
+        )
+        controller.showForCurrentSession(using: .init(isVisible: true, displayMode: .expanded))
+
+        controller.updateAccountPresentation(oneAccount)
+        XCTAssertEqual(controller.presentedAccountPresentation, twoAccounts)
+        XCTAssertEqual(controller.accountTransitionPhase, .concealing)
+
+        completeConceal?()
+        await drainMainQueue()
+
+        XCTAssertEqual(controller.presentedAccountPresentation, oneAccount)
+        XCTAssertEqual(controller.accountTransitionPhase, .resizing)
+        XCTAssertNotNil(completeFrame)
+    }
+
+    func testAccountContentRevealsOnlyAfterFrameAndRevealCompletions() async {
+        let oneAccount = accountPresentation([.claude])
+        let twoAccounts = accountPresentation([.claude, .codex])
+        let panel = makePanel(x: 500, y: 400, width: 300, height: 260)
+        var completeConceal: (@MainActor () -> Void)?
+        var completeFrame: (@MainActor () -> Void)?
+        var completeReveal: (@MainActor () -> Void)?
+        let controller = UsageOverlayWindowController(
+            panel: panel,
+            initialDisplayMode: .expanded,
+            initialAccountPresentation: oneAccount,
+            persistDisplayMode: { _ in true },
+            shouldReduceMotion: { false },
+            visibleFrameProvider: visibleFrame,
+            accountConcealScheduler: { completeConceal = $0 },
+            accountRevealScheduler: { completeReveal = $0 },
+            fittingSizeProvider: { CGSize(width: 300, height: 360) },
+            frameAnimator: { _, _, completion in completeFrame = completion }
+        )
+        controller.showForCurrentSession(using: .init(isVisible: true, displayMode: .expanded))
+
+        controller.updateAccountPresentation(twoAccounts)
+        completeConceal?()
+        await drainMainQueue()
+        XCTAssertEqual(controller.accountTransitionPhase, .resizing)
+        XCTAssertNil(completeReveal)
+
+        completeFrame?()
+        XCTAssertEqual(controller.accountTransitionPhase, .revealing)
+        XCTAssertNotNil(completeReveal)
+
+        completeReveal?()
+        XCTAssertEqual(controller.accountTransitionPhase, .visible)
+        XCTAssertEqual(controller.presentedAccountPresentation, twoAccounts)
+    }
+
     func testUpdateShowsAndHidesThePanelWithoutChangingPreferenceState() {
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 300, height: 260),
@@ -1318,6 +1423,26 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         XCTAssertEqual(savedPlacement?.display, screen.identity)
         XCTAssertTrue(removedLegacy)
         XCTAssertEqual(panel.frame, CGRect(x: -124, y: 1035, width: 108, height: 359))
+    }
+
+    private func accountPresentation(
+        _ ids: [ProviderRowState.ID]
+    ) -> UsageOverlayAccountPresentation {
+        UsageOverlayAccountPresentation(
+            providers: ids.enumerated().map { index, id in
+                MenuBarConnectedProvider(
+                    id: id,
+                    name: "Provider \(index)",
+                    displayName: "Account \(index)",
+                    functionName: "provider-\(index)",
+                    connectionDetail: "account-\(index)@example.com",
+                    accountDetailHidden: true,
+                    subscriptionUsageState: .disabled,
+                    showsSubscriptionUsage: true
+                )
+            },
+            emptyMessage: ids.isEmpty ? "No connected accounts" : nil
+        )
     }
 
     private func simulateTopLeftAnchoredContentResize(_ panel: NSPanel, to size: CGSize) {
