@@ -18,6 +18,13 @@ final class UsageOverlayAccountAnimationTests: XCTestCase {
         XCTAssertFalse(content.contains(".opacity(insertionState.isRevealed"))
         XCTAssertTrue(content.contains("if providers.isEmpty"))
         XCTAssertTrue(content.contains("ForEach(providers)"))
+        XCTAssertFalse(source.contains("private var accountPresentation:"))
+        XCTAssertTrue(source.contains("presentationState.presentedAccountPresentation"))
+        XCTAssertTrue(
+            source.contains(
+                ".animation(.easeInOut(duration: 0.14), value: presentationState.isContentConcealed)"
+            )
+        )
     }
 
     func testCompactRestoresPreAnimationRenderingAndMeasurement() throws {

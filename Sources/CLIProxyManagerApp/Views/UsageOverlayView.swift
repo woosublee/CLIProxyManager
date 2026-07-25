@@ -24,16 +24,8 @@ struct UsageOverlayView: View {
         )
     }
 
-    private var accountPresentation: UsageOverlayAccountPresentation {
-        UsageOverlayAccountPresentation(
-            serverStatus: viewModel.serverStatus,
-            serverControlState: viewModel.serverControlState,
-            providerRows: viewModel.providerRows,
-            port: viewModel.config.port
-        )
-    }
-
     var body: some View {
+        let accountPresentation = presentationState.presentedAccountPresentation
         VStack(alignment: .leading, spacing: presentationState.presentedDisplayMode == .expanded ? 12 : 4) {
             if presentationState.presentedDisplayMode == .compact {
                 Color.clear
@@ -59,7 +51,7 @@ struct UsageOverlayView: View {
             }
             .blur(radius: presentationState.contentBlurRadius)
             .opacity(presentationState.contentOpacity)
-            .animation(.easeInOut(duration: 0.14), value: presentationState.isContentHiddenForModeTransition)
+            .animation(.easeInOut(duration: 0.14), value: presentationState.isContentConcealed)
         }
         .overlay(alignment: .topTrailing) {
             if presentationState.displayMode == .compact,
@@ -101,8 +93,9 @@ struct UsageOverlayView: View {
                 onClose: {}
             )
             CompactUsageOverlayView(
-                providers: accountPresentation.providers,
-                emptyMessage: accountPresentation.emptyMessage ?? "No connected accounts",
+                providers: presentationState.presentedAccountPresentation.providers,
+                emptyMessage: presentationState.presentedAccountPresentation.emptyMessage
+                    ?? "No connected accounts",
                 maximumAccountHeight: presentationState.compactAccountMaximumHeight,
                 onMeasurementChange: recordCompactAccountHeight
             )

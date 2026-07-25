@@ -37,6 +37,75 @@ final class UsageOverlayPresentationStateTests: XCTestCase {
         XCTAssertEqual(state.contentOpacity, 0)
     }
 
+    func testAccountTransitionConcealsContentWithoutConcealingChrome() {
+        let presentation = accountPresentation([.claude])
+        let state = UsageOverlayPresentationState(
+            displayMode: .expanded,
+            accountPresentation: presentation
+        )
+
+        state.accountTransitionPhase = .concealing
+
+        XCTAssertEqual(state.contentBlurRadius, 8)
+        XCTAssertEqual(state.contentOpacity, 0)
+        XCTAssertEqual(state.chromeOpacity, 1)
+        XCTAssertTrue(state.isContentHiddenForAccountTransition)
+    }
+
+    func testModeAndAccountConcealmentComposeUntilBothRelease() {
+        let state = UsageOverlayPresentationState(
+            displayMode: .expanded,
+            accountPresentation: accountPresentation([.claude])
+        )
+        state.isContentHiddenForModeTransition = true
+        state.accountTransitionPhase = .resizing
+
+        state.isContentHiddenForModeTransition = false
+        XCTAssertEqual(state.contentOpacity, 0)
+        XCTAssertTrue(state.isContentConcealed)
+
+        state.accountTransitionPhase = .revealing
+        XCTAssertEqual(state.contentOpacity, 1)
+        XCTAssertFalse(state.isContentConcealed)
+    }
+
+    func testPresentationStatePublishesBufferedAccountSnapshot() {
+        let original = accountPresentation([.claude])
+        let updated = accountPresentation([.claude, .codex])
+        let state = UsageOverlayPresentationState(
+            displayMode: .expanded,
+            accountPresentation: original
+        )
+
+        state.presentedAccountPresentation = updated
+
+        XCTAssertEqual(state.presentedAccountPresentation, updated)
+    }
+
+    func testAccountTransitionConcealmentCoversOnlyHiddenPhases() {
+        let state = UsageOverlayPresentationState(
+            displayMode: .expanded,
+            accountPresentation: accountPresentation([])
+        )
+
+        for phase in [
+            UsageOverlayAccountTransitionPhase.concealing,
+            .swapping,
+            .resizing,
+        ] {
+            state.accountTransitionPhase = phase
+            XCTAssertTrue(state.isContentHiddenForAccountTransition)
+        }
+
+        for phase in [
+            UsageOverlayAccountTransitionPhase.revealing,
+            .visible,
+        ] {
+            state.accountTransitionPhase = phase
+            XCTAssertFalse(state.isContentHiddenForAccountTransition)
+        }
+    }
+
     func testModePresentationUsesAvailableMacOS15SymbolsAndLabels() {
         XCTAssertEqual(AppConfig.UsageOverlay.DisplayMode.expanded.toggleSymbolName, "arrow.down.right.and.arrow.up.left")
         XCTAssertEqual(AppConfig.UsageOverlay.DisplayMode.expanded.toggleAccessibilityLabel, "Show compact usage window")
@@ -214,6 +283,26 @@ final class UsageOverlayPresentationStateTests: XCTestCase {
         XCTAssertGreaterThan(
             model.measurements.last ?? 0,
             CompactUsageMeasurementState.estimatedHeight
+        )
+    }
+
+    private func accountPresentation(
+        _ ids: [ProviderRowState.ID]
+    ) -> UsageOverlayAccountPresentation {
+        UsageOverlayAccountPresentation(
+            providers: ids.enumerated().map { index, id in
+                MenuBarConnectedProvider(
+                    id: id,
+                    name: "Provider \(index)",
+                    displayName: "Account \(index)",
+                    functionName: "provider-\(index)",
+                    connectionDetail: "account-\(index)@example.com",
+                    accountDetailHidden: true,
+                    subscriptionUsageState: .disabled,
+                    showsSubscriptionUsage: true
+                )
+            },
+            emptyMessage: ids.isEmpty ? "No connected accounts" : nil
         )
     }
 
