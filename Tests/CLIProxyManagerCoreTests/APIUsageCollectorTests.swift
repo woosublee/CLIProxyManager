@@ -341,7 +341,10 @@ final class APIUsageCollectorTests: XCTestCase {
         let events = await ledger.allEvents()
         let flushCount = await ledger.flushCount()
         let delays = await sleep.recordedDelays()
-        XCTAssertEqual(Array(events.prefix(5)), ["prepare", "flush", "resume", "read", "merge"])
+        XCTAssertEqual(
+            Array(events.prefix(6)),
+            ["prepare", "flush", "read", "resume", "read", "merge"]
+        )
         XCTAssertEqual(flushCount, 1)
         XCTAssertEqual(delays, [30_000_000_000])
 
@@ -432,6 +435,139 @@ final class APIUsageCollectorTests: XCTestCase {
         XCTAssertTrue(stoppedWithoutManualResume)
         let queueCalls = await queue.callCount()
         XCTAssertEqual(queueCalls, 2)
+    }
+
+    func testStartFlushInitializationGateBlocksReloadAndUpdateThenDrainsLatestConfigurationOnce() async throws {
+        let ledger = RecordingLedgerStore(
+            suspendFlushCall: 1,
+            initiallyInitialized: false
+        )
+        let queue = RecordingQueueClient(results: [.success([])])
+        let sleep = StepSleepRecorder()
+        let collector = APIUsageCollector(
+            queueClient: queue,
+            ledgerStore: ledger,
+            sleep: { try await sleep.sleep($0) }
+        )
+        let firstConfiguration = APIUsageCollectorConfiguration(
+            usageEnabled: true,
+            proxyReady: true,
+            port: 18_317,
+            enabledProviders: [.claude],
+            reportingTimeZoneID: "Asia/Seoul"
+        )
+        let latestConfiguration = APIUsageCollectorConfiguration(
+            usageEnabled: true,
+            proxyReady: true,
+            port: 19_001,
+            enabledProviders: [.claude, .openAI],
+            reportingTimeZoneID: "UTC"
+        )
+
+        let startTask = Task { await collector.start(configuration: firstConfiguration) }
+        try await waitUntil { await ledger.isFlushSuspended() }
+        let reloadTask = Task { await collector.reload(configuration: latestConfiguration) }
+        let updateTask = Task { await collector.update(configuration: latestConfiguration) }
+        for _ in 0..<20 { await Task.yield() }
+
+        let callsBeforeInitialization = await queue.callCount()
+        XCTAssertEqual(callsBeforeInitialization, 0)
+        await ledger.resumeFlush()
+        await startTask.value
+        _ = await reloadTask.value
+        await updateTask.value
+
+        let ports = await queue.requestedPorts()
+        let preparedTimeZones = await ledger.preparedTimeZoneIDs()
+        XCTAssertEqual(ports, [19_001])
+        XCTAssertEqual(preparedTimeZones, ["Asia/Seoul"])
+        await collector.stop(reason: .applicationTermination, at: Date())
+    }
+
+    func testStartFlushFailureIsSharedByReloadAndUpdateWithoutPop() async throws {
+        let ledger = RecordingLedgerStore(
+            flushError: .persistenceFailure,
+            suspendFlushCall: 1,
+            initiallyInitialized: false
+        )
+        let queue = RecordingQueueClient(results: [.success([makeQueueRecord()])])
+        let collector = APIUsageCollector(queueClient: queue, ledgerStore: ledger)
+        let firstConfiguration = APIUsageCollectorConfiguration(
+            usageEnabled: true,
+            proxyReady: true,
+            port: 18_317,
+            enabledProviders: [.claude],
+            reportingTimeZoneID: "Asia/Seoul"
+        )
+        let latestConfiguration = APIUsageCollectorConfiguration(
+            usageEnabled: true,
+            proxyReady: true,
+            port: 19_001,
+            enabledProviders: [.claude, .openAI],
+            reportingTimeZoneID: "UTC"
+        )
+
+        let startTask = Task { await collector.start(configuration: firstConfiguration) }
+        try await waitUntil { await ledger.isFlushSuspended() }
+        let reloadTask = Task { await collector.reload(configuration: latestConfiguration) }
+        let updateTask = Task { await collector.update(configuration: latestConfiguration) }
+        for _ in 0..<20 { await Task.yield() }
+
+        let callsBeforeFailure = await queue.callCount()
+        XCTAssertEqual(callsBeforeFailure, 0)
+        await ledger.resumeFlush()
+        await startTask.value
+        let report = await reloadTask.value
+        await updateTask.value
+
+        let finalQueueCalls = await queue.callCount()
+        let preparedTimeZones = await ledger.preparedTimeZoneIDs()
+        XCTAssertEqual(finalQueueCalls, 0)
+        XCTAssertEqual(preparedTimeZones, ["Asia/Seoul"])
+        XCTAssertEqual(
+            report.statesByProfileID["claude-api"],
+            .unavailable(.persistenceFailure)
+        )
+    }
+
+    func testDisabledUpdateWaitsForSharedInitializationAndNeverPops() async throws {
+        let ledger = RecordingLedgerStore(
+            suspendFlushCall: 1,
+            initiallyInitialized: false
+        )
+        let queue = RecordingQueueClient(results: [.success([makeQueueRecord()])])
+        let completed = CompletionFlag()
+        let collector = APIUsageCollector(queueClient: queue, ledgerStore: ledger)
+        let disabledConfiguration = APIUsageCollectorConfiguration(
+            usageEnabled: false,
+            proxyReady: true,
+            port: 19_001,
+            enabledProviders: [.claude],
+            reportingTimeZoneID: "UTC"
+        )
+
+        let startTask = Task { await collector.start(configuration: enabledConfiguration()) }
+        try await waitUntil { await ledger.isFlushSuspended() }
+        let updateTask = Task {
+            await collector.update(configuration: disabledConfiguration)
+            await completed.markCompleted()
+        }
+        for _ in 0..<20 { await Task.yield() }
+
+        let returnedBeforeInitialization = await completed.isCompleted()
+        let callsBeforeInitialization = await queue.callCount()
+        XCTAssertFalse(returnedBeforeInitialization)
+        XCTAssertEqual(callsBeforeInitialization, 0)
+        await ledger.resumeFlush()
+        await startTask.value
+        await updateTask.value
+
+        let finalQueueCalls = await queue.callCount()
+        XCTAssertEqual(finalQueueCalls, 0)
+        let stream = await collector.reports()
+        var iterator = stream.makeAsyncIterator()
+        let latest = await iterator.next()
+        XCTAssertEqual(latest?.statesByProfileID["claude-api"], .disabled)
     }
 
     func testConcurrentStartReloadStopDuringInitializationNeverPops() async throws {
@@ -815,6 +951,7 @@ private typealias QueueResult = Result<[APIUsageQueueRecord], APIUsageQueueClien
 private actor RecordingQueueClient: APIUsageQueueFetching {
     private var results: [QueueResult]
     private var counts: [Int] = []
+    private var ports: [Int] = []
 
     init(results: [QueueResult]) {
         self.results = results
@@ -822,11 +959,13 @@ private actor RecordingQueueClient: APIUsageQueueFetching {
 
     func popUsage(port: Int, count: Int) async throws -> [APIUsageQueueRecord] {
         counts.append(count)
+        ports.append(port)
         guard !results.isEmpty else { return [] }
         return try results.removeFirst().get()
     }
 
     func requestedCounts() -> [Int] { counts }
+    func requestedPorts() -> [Int] { ports }
     func callCount() -> Int { counts.count }
 }
 
@@ -924,10 +1063,13 @@ private actor RecordingLedgerStore: APIUsageLedgerStoring {
     private var readError: APIUsageLedgerStoreError?
     private let flushError: APIUsageLedgerStoreError?
     private let suspendReadCall: Int?
+    private let suspendFlushCall: Int?
     private var shouldSuspendPrepare: Bool
     private var prepareContinuation: CheckedContinuation<Void, Never>?
     private var readCalls = 0
     private var readContinuation: CheckedContinuation<Void, Never>?
+    private var flushContinuation: CheckedContinuation<Void, Never>?
+    private var preparedTimeZones: [String] = []
     private var mutations: [APIUsageLedgerMutation] = []
     private var flushes = 0
     private var pauseValues: [(Date, Bool)] = []
@@ -944,6 +1086,7 @@ private actor RecordingLedgerStore: APIUsageLedgerStoring {
         readError: APIUsageLedgerStoreError? = nil,
         flushError: APIUsageLedgerStoreError? = nil,
         suspendReadCall: Int? = nil,
+        suspendFlushCall: Int? = nil,
         suspendPrepare: Bool = false,
         initiallyInitialized: Bool = true
     ) {
@@ -955,11 +1098,13 @@ private actor RecordingLedgerStore: APIUsageLedgerStoring {
         self.readError = readError
         self.flushError = flushError
         self.suspendReadCall = suspendReadCall
+        self.suspendFlushCall = suspendFlushCall
         self.shouldSuspendPrepare = suspendPrepare
     }
 
     func prepareTracking(at: Date, reportingTimeZoneID: String) async throws {
         events.append("prepare")
+        preparedTimeZones.append(reportingTimeZoneID)
         if shouldSuspendPrepare {
             shouldSuspendPrepare = false
             await withCheckedContinuation { prepareContinuation = $0 }
@@ -1048,6 +1193,9 @@ private actor RecordingLedgerStore: APIUsageLedgerStoring {
     func flush() async throws {
         events.append("flush")
         flushes += 1
+        if flushes == suspendFlushCall {
+            await withCheckedContinuation { flushContinuation = $0 }
+        }
         if let flushError { throw flushError }
     }
 
@@ -1074,8 +1222,10 @@ private actor RecordingLedgerStore: APIUsageLedgerStoring {
     func successfulDrainCount() -> Int { successfulDrains }
     func allEvents() -> [String] { events }
     func eventsPrefix(_ count: Int) -> [String] { Array(events.prefix(count)) }
+    func preparedTimeZoneIDs() -> [String] { preparedTimeZones }
     func isPrepareSuspended() -> Bool { prepareContinuation != nil }
     func isReadSuspended() -> Bool { readContinuation != nil }
+    func isFlushSuspended() -> Bool { flushContinuation != nil }
 
     func resumePrepare() {
         prepareContinuation?.resume()
@@ -1085,6 +1235,11 @@ private actor RecordingLedgerStore: APIUsageLedgerStoring {
     func resumeRead() {
         readContinuation?.resume()
         readContinuation = nil
+    }
+
+    func resumeFlush() {
+        flushContinuation?.resume()
+        flushContinuation = nil
     }
 }
 

@@ -89,6 +89,10 @@ public actor APIUsageCollector: APIUsageCollecting {
     private let sleep: @Sendable (UInt64) async throws -> Void
 
     private var configuration: APIUsageCollectorConfiguration?
+    private var initializationTask: Task<PreparedBaseline, Error>?
+    private var initializationGeneration: UInt64 = 0
+    private var initializationRequiresFlush = false
+    private var activeInitializationGeneration: UInt64?
     private var reloadTask: Task<DrainResult, Never>?
     private var reloadGeneration: UInt64 = 0
     private var activeReloadGeneration: UInt64?
@@ -125,6 +129,7 @@ public actor APIUsageCollector: APIUsageCollecting {
     deinit {
         pollingTask?.cancel()
         reloadTask?.cancel()
+        initializationTask?.cancel()
         reportContinuation?.finish()
     }
 
@@ -171,15 +176,20 @@ public actor APIUsageCollector: APIUsageCollecting {
 
         let startedAt = now()
         do {
-            try await ledgerStore.prepareTracking(
+            _ = try await sharedInitialization(
+                configuration: configuration,
                 at: startedAt,
-                reportingTimeZoneID: configuration.reportingTimeZoneID
+                forcePreparation: true
             )
-            guard lifecycleStopGeneration == stopGeneration else { return }
-            try await ledgerStore.flush()
-            guard lifecycleStopGeneration == stopGeneration else { return }
+            guard lifecycleStopGeneration == stopGeneration,
+                  self.configuration?.usageEnabled == true else {
+                return
+            }
             try await ledgerStore.markResumed(at: startedAt)
-            guard lifecycleStopGeneration == stopGeneration else { return }
+            guard lifecycleStopGeneration == stopGeneration,
+                  self.configuration == configuration else {
+                return
+            }
         } catch {
             let failedAt = now()
             let ledger = try? await ledgerStore.readCurrentPeriods(at: failedAt)
@@ -311,6 +321,7 @@ public actor APIUsageCollector: APIUsageCollecting {
     public func stop(reason: APIUsageCollectorStopReason, at: Date) async {
         lifecycleStopGeneration &+= 1
         await cancelPolling()
+        await waitForActiveInitialization()
         await waitForActiveLifecycleDrain()
         await cancelPolling()
 
@@ -397,26 +408,95 @@ public actor APIUsageCollector: APIUsageCollecting {
         activeDrainDidFlush = false
     }
 
-    private func preparedBaseline(
+    private func sharedInitialization(
         configuration: APIUsageCollectorConfiguration,
-        at: Date
+        at: Date,
+        forcePreparation: Bool
     ) async throws -> PreparedBaseline {
+        if let initializationTask,
+           let generation = activeInitializationGeneration {
+            do {
+                let result = try await initializationTask.value
+                finishInitialization(generation: generation)
+                return result
+            } catch {
+                finishInitialization(generation: generation)
+                throw error
+            }
+        }
+
+        initializationGeneration &+= 1
+        let generation = initializationGeneration
+        activeInitializationGeneration = generation
+        let task = Task {
+            try await self.performInitialization(
+                configuration: configuration,
+                at: at,
+                forcePreparation: forcePreparation
+            )
+        }
+        initializationTask = task
+
+        do {
+            let result = try await task.value
+            finishInitialization(generation: generation)
+            return result
+        } catch {
+            finishInitialization(generation: generation)
+            throw error
+        }
+    }
+
+    private func performInitialization(
+        configuration: APIUsageCollectorConfiguration,
+        at: Date,
+        forcePreparation: Bool
+    ) async throws -> PreparedBaseline {
+        if forcePreparation {
+            initializationRequiresFlush = true
+            try await ledgerStore.prepareTracking(
+                at: at,
+                reportingTimeZoneID: configuration.reportingTimeZoneID
+            )
+            try await ledgerStore.flush()
+            let ledger = try await ledgerStore.readCurrentPeriods(at: at)
+            initializationRequiresFlush = false
+            return PreparedBaseline(ledger: ledger, hadExistingTracking: true)
+        }
+
+        if initializationRequiresFlush {
+            try await ledgerStore.prepareTracking(
+                at: at,
+                reportingTimeZoneID: configuration.reportingTimeZoneID
+            )
+            try await ledgerStore.flush()
+            let ledger = try await ledgerStore.readCurrentPeriods(at: at)
+            initializationRequiresFlush = false
+            return PreparedBaseline(ledger: ledger, hadExistingTracking: false)
+        }
+
         do {
             return PreparedBaseline(
                 ledger: try await ledgerStore.readCurrentPeriods(at: at),
                 hadExistingTracking: true
             )
         } catch APIUsageLedgerStoreError.notInitialized {
+            initializationRequiresFlush = true
             try await ledgerStore.prepareTracking(
                 at: at,
                 reportingTimeZoneID: configuration.reportingTimeZoneID
             )
             try await ledgerStore.flush()
-            return PreparedBaseline(
-                ledger: try await ledgerStore.readCurrentPeriods(at: at),
-                hadExistingTracking: false
-            )
+            let ledger = try await ledgerStore.readCurrentPeriods(at: at)
+            initializationRequiresFlush = false
+            return PreparedBaseline(ledger: ledger, hadExistingTracking: false)
         }
+    }
+
+    private func finishInitialization(generation: UInt64) {
+        guard activeInitializationGeneration == generation else { return }
+        initializationTask = nil
+        activeInitializationGeneration = nil
     }
 
     private func performDrain(
@@ -426,9 +506,10 @@ public actor APIUsageCollector: APIUsageCollecting {
         let drainStartedAt = now()
         let prepared: PreparedBaseline
         do {
-            prepared = try await preparedBaseline(
+            prepared = try await sharedInitialization(
                 configuration: configuration,
-                at: drainStartedAt
+                at: drainStartedAt,
+                forcePreparation: false
             )
         } catch let error as APIUsageLedgerStoreError {
             let report = report(
@@ -453,6 +534,7 @@ public actor APIUsageCollector: APIUsageCollecting {
         let initializedBaseline = prepared.ledger
         let baseline = prepared.hadExistingTracking ? initializedBaseline : nil
         guard lifecycleStopGeneration == stopGeneration,
+              self.configuration == configuration,
               !Task.isCancelled else {
             let report = reportFromBaseline(
                 configuration: configuration,
@@ -714,6 +796,15 @@ public actor APIUsageCollector: APIUsageCollecting {
         }
         task.cancel()
         await task.value
+    }
+
+    private func waitForActiveInitialization() async {
+        guard let task = initializationTask,
+              let generation = activeInitializationGeneration else {
+            return
+        }
+        _ = try? await task.value
+        finishInitialization(generation: generation)
     }
 
     private func waitForActiveLifecycleDrain() async {
