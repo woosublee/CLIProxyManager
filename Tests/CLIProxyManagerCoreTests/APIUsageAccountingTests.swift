@@ -52,6 +52,36 @@ final class APIUsageAccountingTests: XCTestCase {
         XCTAssertFalse(Mirror(reflecting: record).children.compactMap(\.label).contains("authIndex"))
     }
 
+    func testOnlyProviderMatchedManagedModelAliasesAreCanonicalized() {
+        let managed = makeRecord(
+            provider: "codex",
+            executor: "CodexExecutor",
+            model: "cpm-codex-api/gpt-5.6-sol-fast(xhigh)",
+            alias: "cpm-codex-api/gpt-5.6-sol-fast(xhigh)"
+        )
+        guard case let .aggregate(input) = APIUsageRecordMapper().classify(managed) else {
+            return XCTFail("Expected aggregate")
+        }
+        XCTAssertEqual(input.model, "gpt-5.6-sol")
+
+        for model in [
+            "third-party/gpt-5.6-sol",
+            "gpt-5.6-sol(fake)",
+            "cpm-claude-api/gpt-5.6-sol"
+        ] {
+            let record = makeRecord(
+                provider: "codex",
+                executor: "CodexExecutor",
+                model: model,
+                alias: "cpm-codex-api/\(model)"
+            )
+            guard case let .aggregate(unknown) = APIUsageRecordMapper().classify(record) else {
+                return XCTFail("Expected aggregate for \(model)")
+            }
+            XCTAssertEqual(unknown.model, model)
+        }
+    }
+
     func testPriorityLongContextIsPreservedAsUnsupportedVariant() {
         let record = makeRecord(provider: "codex", executor: "CodexExecutor", model: "gpt-5.6-sol", alias: "cpm-codex-api/gpt-5.6-sol", inputTotal: 272_001, responseTier: "priority")
         guard case let .aggregate(input) = APIUsageRecordMapper().classify(record) else { return XCTFail("Expected aggregate") }

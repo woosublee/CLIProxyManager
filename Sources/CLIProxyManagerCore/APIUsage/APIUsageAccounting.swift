@@ -79,7 +79,7 @@ public struct APIUsageRecordMapper: Sendable {
             ))
         }
 
-        let model = canonicalModel(record.model)
+        let model = canonicalModel(record.model, provider: provider)
         let rawTier = normalized(record.responseServiceTier.flatMap(nonEmpty) ?? record.serviceTier)
         let tier = canonicalServiceTier(rawTier, provider: provider)
         let longContextModels: Set<String> = [
@@ -145,17 +145,26 @@ public struct APIUsageRecordMapper: Sendable {
         }
     }
 
-    private func canonicalModel(_ model: String) -> String {
+    private func canonicalModel(_ model: String, provider: APIUsageProvider) -> String {
         let normalizedModel = normalized(model)
-        let modelWithoutRoutingPrefix = normalizedModel
-            .split(separator: "/", omittingEmptySubsequences: true)
-            .last
-            .map(String.init) ?? normalizedModel
-        let modelWithoutReasoningSuffix = modelWithoutRoutingPrefix
-            .split(separator: "(", maxSplits: 1, omittingEmptySubsequences: false)
-            .first
-            .map(String.init) ?? modelWithoutRoutingPrefix
-        return CodexFastMode.canonicalModel(from: modelWithoutReasoningSuffix)
+
+        switch provider {
+        case .claude:
+            let prefix = "cpm-claude-api/"
+            guard normalizedModel.hasPrefix(prefix) else { return normalizedModel }
+            return String(normalizedModel.dropFirst(prefix.count))
+        case .openAI:
+            let prefix = "cpm-codex-api/"
+            let modelWithoutRoutingPrefix: String
+            if normalizedModel.hasPrefix(prefix) {
+                modelWithoutRoutingPrefix = String(normalizedModel.dropFirst(prefix.count))
+            } else if normalizedModel.contains("/") {
+                return normalizedModel
+            } else {
+                modelWithoutRoutingPrefix = normalizedModel
+            }
+            return CodexFastMode.canonicalModel(from: modelWithoutRoutingPrefix)
+        }
     }
 
     private func valid(_ breakdown: APIUsageTokenBreakdown) -> Bool {
