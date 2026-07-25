@@ -7,14 +7,14 @@
 
 계정별 Usage HUD 표시 관리 기능은 정상적으로 동작하지만, 메인 계정 카드의 현재 버튼은 `chart.bar.xaxis` 아이콘과 선택 배경을 사용한다. 실제 development build 확인 결과 이 표현은 주변의 `gearshape`, `ellipsis`보다 시각적으로 강하고, 구독 통계 기능처럼 보여 “별도 HUD 창에 표시”한다는 의미도 충분히 전달하지 못한다.
 
-또한 Expanded HUD에서 숨긴 계정을 다시 표시할 때 새로 추가되는 계정 행만 순간적으로 깜빡인다. 계정을 숨길 때는 문제가 없었다. 원인은 새 행이 자연 높이 stack에 즉시 들어가며 opacity transition을 시작한 뒤, main queue에 예약된 AppKit fitting-size resize가 panel을 정착시키는 순서 충돌이다. Compact는 별도 measurement/viewport 경로와 기존 transition-local fade를 유지하며 이번 수정 범위에서 변경하지 않는다.
+또한 Expanded HUD에서 숨긴 계정을 다시 표시할 때 새로 추가되는 계정 행만 순간적으로 깜빡인다. 계정을 숨길 때는 문제가 없었다. 원인은 새 행이 자연 높이 stack에 즉시 들어가며 opacity transition을 시작한 뒤, AppKit fitting-size resize가 panel을 정착시키는 순서 충돌이다. `DashboardViewModel.objectWillChange` 경로는 outer main async에서 resize를 요청하고 resize 자체도 inner main async를 예약하므로, 단일 next-tick reveal만으로는 resize보다 먼저 보이지 않는다는 보장이 없다. Compact는 별도 measurement/viewport 경로와 기존 transition-local fade를 유지하며 이번 수정 범위에서 변경하지 않는다.
 
 ## 목표
 
 1. Usage HUD 버튼을 기존 계정 카드 action과 같은 위계로 정리한다.
 2. 버튼이 통계 기능이 아니라 별도 HUD window 표시 설정임을 전달한다.
 3. 표시 상태는 명확히 구분하되 선택 배경으로 과도하게 강조하지 않는다.
-4. Expanded HUD에서는 새 행의 layout을 먼저 투명하게 준비하고 다음 main-queue tick에서만 짧게 reveal하여 panel resize 전 깜빡임을 없앤다. Compact는 현재 transition-local fade 동작을 유지한다.
+4. Expanded HUD에서는 새 행의 layout을 먼저 투명하게 준비하고, controller가 fitting resize를 동기 적용한 뒤에만 다음 main-queue tick에서 짧게 reveal하여 panel resize 전 깜빡임을 없앤다. Compact는 현재 transition-local fade 동작을 유지한다.
 5. 두 모드의 즉시 숨김 동작과 저장·필터·오류 처리 동작은 변경하지 않는다.
 6. Reduce Motion 설정을 존중한다.
 
@@ -23,7 +23,7 @@
 - 계정별 HUD 표시 설정의 저장 모델 변경
 - HUD account filtering 또는 empty-state 변경
 - 메뉴바 계정 표시 변경
-- HUD window resize 정책 변경
+- Compact HUD 및 일반 HUD window resize 정책 변경 (Expanded insertion scheduler가 기존 fitting resize를 즉시 consume하는 순서 보장은 제외)
 - 계정 제거 animation 변경
 - 기존 privacy `eye` 버튼 변경
 - 카드 전체 action layout 재설계
@@ -88,23 +88,25 @@ UsageOverlayAccountButtonPresentation(
 
 Expanded HUD에서 계정을 다시 표시하면 기존 계정은 안정적으로 유지되지만 새로 추가되는 계정 행만 panel이 정착하기 전에 번쩍이거나 잘렸다 나타난다. 제거 시에는 문제가 없다.
 
-`DashboardViewModel.objectWillChange`은 `UsageOverlayWindowController.resizeToFittingContent(animated: false)`를 main queue에 예약한다. Expanded는 같은 SwiftUI update에서 새 행을 자연 높이 `VStack`에 삽입하고 opacity transition을 시작했으므로, 예약된 AppKit fitting-size resize보다 먼저 행이 부분적으로 보일 수 있었다. Compact는 별도 measurement/viewport 경로를 사용한다.
+`DashboardViewModel.objectWillChange`은 outer main queue closure에서 `UsageOverlayWindowController.resizeToFittingContent(animated: false)`를 호출하고, 이 메서드는 다시 inner main queue closure로 `performScheduledResize()`를 예약한다. Expanded가 같은 SwiftUI update에서 새 행을 자연 높이 `VStack`에 삽입한 뒤 한 번만 main queue에 reveal을 예약하면, reveal은 아직 실행되지 않은 inner resize보다 먼저 발생할 수 있었다. Compact는 별도 measurement/viewport 경로를 사용한다.
 
 ### 채택 동작
 
 - Expanded에서 새 provider ID는 첫 render pass에 layout에 즉시 참여하되 opacity `0`으로 준비한다.
-- 같은 ID는 다음 main-queue tick에서만 `easeOut(duration: 0.12)`으로 reveal한다. 이미 예약된 fitting-size resize가 먼저 정착할 수 있도록 한다.
+- Expanded는 reveal closure를 상위 `UsageOverlayView`의 scheduler dependency에 전달한다. controller가 제공하는 scheduler는 먼저 `resizeToFittingContentImmediately(animated: false)`를 동기 호출해 hidden row가 포함된 fitting size를 적용하고, 그 호출이 반환된 뒤에만 main queue에 reveal closure를 예약한다.
+- 즉시 resize는 기존 scheduled request가 있어도 early return하지 않는다. pending request를 consume/apply하고 scheduled generation을 증가시켜 오래된 scheduled closure를 무효화한다. mode-transition의 animation intent와 pending flag는 기존 coordinator semantics로 보존한다.
+- controller가 없는 기본 `UsageOverlayView` initializer는 scheduler가 reveal을 다음 main-queue tick에 예약하는 fallback을 제공한다.
 - 초기 Expanded presentation 및 Compact에서 Expanded로 전환할 때 이미 존재하는 ID는 즉시 revealed 상태로 초기화하여 전체 목록을 fade하지 않는다.
 - 기존 Expanded 행은 완전히 보이는 상태로 유지하며 opacity animation을 받지 않는다.
 - 제거와 남은 행의 reflow는 즉시 처리한다. pending reveal 전에 ID가 제거되면 generation으로 예약 작업을 무효화하고 revealed state에 남기지 않는다.
 - Compact는 기존 transition-local opacity fade 및 identity measurement transition을 유지하며 source와 동작을 변경하지 않는다.
 - 이동, scale, blur, panel-size animation 또는 stack-level implicit animation은 추가하지 않는다.
 
-Expanded는 순수 `ExpandedUsageOverlayInsertionState`로 revealed ID만 추적한다. provider ID 변경 시 먼저 제거된 ID를 prune하고 새 ID를 pending으로 남긴 뒤, `DispatchQueue.main.async`에서 현재 generation과 present ID를 다시 확인한다. row는 `.opacity(insertionState.isRevealed(provider.id) ? 1 : 0)` 및 `.transition(.identity)`를 사용한다.
+Expanded는 순수 `ExpandedUsageOverlayInsertionState`로 revealed ID만 추적한다. provider ID 변경 시 먼저 제거된 ID를 prune하고 새 ID를 pending으로 남긴다. view는 직접 `DispatchQueue.main.async`를 호출하지 않으며, injected scheduler가 실행하는 closure 안에서 현재 generation과 present ID를 다시 확인한다. row는 `.opacity(insertionState.isRevealed(provider.id) ? 1 : 0)` 및 `.transition(.identity)`를 사용한다.
 
 ## Reduce Motion
 
-`accessibilityReduceMotion`이 활성화되면 Expanded도 같은 다음 main-queue tick에서 reveal하되 `withAnimation` 없이 상태만 갱신한다. Compact의 기존 Reduce Motion transition 정책과 mode transition 정책은 변경하지 않는다.
+`accessibilityReduceMotion`이 활성화되면 Expanded controller scheduler는 동일하게 fitting resize를 먼저 동기 적용하고 다음 main-queue tick에서 reveal하되 `withAnimation` 없이 상태만 갱신한다. Compact의 기존 Reduce Motion transition 정책과 mode transition 정책은 변경하지 않는다.
 
 ## 데이터 및 오류 처리
 
@@ -141,8 +143,9 @@ Expanded는 순수 `ExpandedUsageOverlayInsertionState`로 revealed ID만 추적
 - `ExpandedUsageOverlayInsertionState`의 초기 ID는 즉시 revealed 상태다.
 - `prepare`는 제거된 ID를 즉시 prune하고 새 ID만 pending으로 반환하며, `reveal`은 아직 present인 pending ID만 revealed로 만든다.
 - Expanded row는 opacity `0` 상태로 layout에 먼저 참여하고 `.transition(.identity)`를 사용한다.
-- provider ID 변경은 `DispatchQueue.main.async` reveal을 예약하며 generation으로 오래된 예약을 무효화한다.
-- regular motion reveal만 `easeOut(duration: 0.12)` `withAnimation`으로 감싸고 Reduce Motion은 다음 tick에서 animation 없이 reveal한다.
+- provider ID 변경은 injected scheduler로 reveal closure를 전달하며 generation으로 오래된 예약을 무효화한다.
+- controller scheduler는 hidden row의 fitting resize를 동기 apply/consume한 뒤에만 reveal closure를 main queue에 예약한다. pending scheduled resize는 immediate path가 consume하고 scheduled flag가 clear된다.
+- regular motion reveal만 `easeOut(duration: 0.12)` `withAnimation`으로 감싸고 Reduce Motion은 resize 후 다음 tick에서 animation 없이 reveal한다.
 - Expanded stack, 기존 행, header, removal reflow에는 implicit animation이 없다.
 - Compact의 source와 동작은 변경하지 않으며 기존 visible transition-local fade 및 measurement identity transition을 유지한다.
 
@@ -158,10 +161,10 @@ Expanded는 순수 `ExpandedUsageOverlayInsertionState`로 revealed ID만 추적
 - `macwindow` 아이콘이 gear 및 ellipsis와 자연스럽게 어울리는지
 - 표시 중과 숨김 상태가 배경 없이도 구분되는지
 - 계정을 숨길 때 기존 즉시 제거 동작이 유지되는지
-- Expanded에서 다시 켤 때 새 계정 행의 layout이 먼저 안정화된 뒤 120ms reveal되고 기존 계정은 깜빡이지 않는지
+- Expanded에서 다시 켤 때 controller가 hidden row를 포함한 panel fitting size를 먼저 적용한 뒤 새 행만 120ms reveal되고 기존 계정은 깜빡이지 않는지
 - Compact의 현재 fade 동작이 유지되는지
 - 두 모드에서 계정을 숨길 때 기존처럼 즉시 제거되는지
-- Reduce Motion에서 Expanded 계정이 다음 run-loop tick에 animation 없이 나타나는지
+- Reduce Motion에서 Expanded 계정이 resize 후 다음 run-loop tick에 animation 없이 나타나는지
 
 ## 완료 조건
 
@@ -169,8 +172,9 @@ Expanded는 순수 `ExpandedUsageOverlayInsertionState`로 revealed ID만 추적
 - 버튼의 선택 배경이 제거된다.
 - active/inactive 상태가 foreground와 opacity로 구분된다.
 - 모든 account status의 버튼 위치와 click target이 유지된다.
-- Expanded의 새 계정 행은 transparent layout 준비 후 다음 main-queue tick에서만 120ms reveal한다.
+- Expanded의 새 계정 행은 transparent layout 준비 후 controller가 fitting resize를 동기 적용하고 다음 main-queue tick에서만 120ms reveal한다.
+- pending scheduled resize도 immediate coordinator path가 consume/apply하며 stale scheduled closure는 generation으로 무효화된다.
 - Compact의 기존 transition-local fade source와 동작은 변경하지 않는다.
-- 제거는 두 모드 모두 즉시 처리되고 Reduce Motion에서는 Expanded reveal도 다음 tick에 animation 없이 처리된다.
+- 제거는 두 모드 모두 즉시 처리되고 Reduce Motion에서는 Expanded reveal도 resize 후 다음 tick에 animation 없이 처리된다.
 - 저장·필터·메뉴바·usage backend 동작에 회귀가 없다.
 - 자동 테스트와 debug development bundle build가 통과한다.

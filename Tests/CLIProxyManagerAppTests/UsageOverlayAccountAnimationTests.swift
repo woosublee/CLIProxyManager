@@ -73,7 +73,9 @@ final class UsageOverlayAccountAnimationTests: XCTestCase {
         XCTAssertTrue(content.contains("@Environment(\\.accessibilityReduceMotion) private var accessibilityReduceMotion"))
         XCTAssertTrue(content.contains("@State private var insertionState: ExpandedUsageOverlayInsertionState"))
         XCTAssertTrue(content.contains("@State private var insertionGeneration = 0"))
+        XCTAssertTrue(content.contains("let insertionRevealScheduler: UsageOverlayExpandedInsertionRevealScheduler"))
         XCTAssertTrue(content.contains("_insertionState = State(initialValue: ExpandedUsageOverlayInsertionState(providerIDs: providers.map(\\.id)))"))
+        XCTAssertTrue(content.contains("self.insertionRevealScheduler = insertionRevealScheduler"))
         XCTAssertTrue(body.contains("accountSurface"))
         XCTAssertTrue(body.contains(".onChange(of: providerIDs) { _, providerIDs in"))
         XCTAssertFalse(body.contains("if providers.isEmpty"))
@@ -89,12 +91,54 @@ final class UsageOverlayAccountAnimationTests: XCTestCase {
         XCTAssertFalse(accountSurface.contains(".animation("))
         XCTAssertFalse(content.contains("private var accountTransition: AnyTransition"))
 
-        XCTAssertTrue(reveal.contains("DispatchQueue.main.async"))
+        XCTAssertTrue(reveal.contains("insertionRevealScheduler {"))
+        XCTAssertFalse(reveal.contains("DispatchQueue.main.async"))
         XCTAssertTrue(reveal.contains("guard generation == insertionGeneration else { return }"))
         XCTAssertTrue(reveal.contains("if accessibilityReduceMotion {"))
         XCTAssertTrue(reveal.contains("insertionState.reveal(providerIDs, presentProviderIDs: self.providerIDs)"))
         XCTAssertTrue(reveal.contains("withAnimation(.easeOut(duration: 0.12))"))
         XCTAssertEqual(content.components(separatedBy: "withAnimation(").count - 1, 1)
+    }
+
+    func testControllerResizePrecedesExpandedRevealScheduling() throws {
+        let viewSource = try source(named: "UsageOverlayView.swift")
+        let expandedContent = try expandedContent()
+        let controllerSource = try appSource(
+            relativePath: "Services/UsageOverlayWindowController.swift"
+        )
+        let configuration = try sourceSection(
+            in: controllerSource,
+            after: "private func configurePanelAndContent(",
+            before: "\n    private func restoreSavedPlacement"
+        )
+        let scheduler = try sourceSection(
+            in: configuration,
+            after: "scheduleExpandedInsertionReveal: { [weak self] reveal in",
+            before: "\n                }\n            ),"
+        )
+        let immediateResize = try sourceSection(
+            in: controllerSource,
+            after: "private func resizeToFittingContentImmediately(animated: Bool) {",
+            before: "\n    private func resizeToFittingContent(animated: Bool)"
+        )
+
+        XCTAssertTrue(viewSource.contains("typealias UsageOverlayExpandedInsertionRevealScheduler"))
+        XCTAssertTrue(viewSource.contains("insertionRevealScheduler: scheduleExpandedInsertionReveal"))
+        XCTAssertTrue(viewSource.contains("DispatchQueue.main.async(execute: reveal)"))
+        XCTAssertTrue(expandedContent.contains("insertionRevealScheduler {"))
+        XCTAssertFalse(expandedContent.contains("DispatchQueue.main.async"))
+
+        let resizeIndex = try XCTUnwrap(
+            scheduler.range(of: "self.resizeToFittingContentImmediately(animated: false)")?.lowerBound
+        )
+        XCTAssertNotNil(
+            scheduler[resizeIndex...].range(of: "DispatchQueue.main.async(execute: reveal)")
+        )
+
+        XCTAssertTrue(immediateResize.contains("_ = resizeCoordinator.requestResize(animated: animated)"))
+        XCTAssertFalse(immediateResize.contains("guard resizeCoordinator.requestResize"))
+        XCTAssertTrue(immediateResize.contains("resizeScheduleGeneration += 1"))
+        XCTAssertTrue(immediateResize.contains("performScheduledResize()"))
     }
 
     func testCompactKeepsVisibleAccountStackMountedWithIdentityMeasurementRows() throws {
@@ -162,10 +206,14 @@ final class UsageOverlayAccountAnimationTests: XCTestCase {
     }
 
     private func source(named filename: String) throws -> String {
+        try appSource(relativePath: "Views/\(filename)")
+    }
+
+    private func appSource(relativePath: String) throws -> String {
         try String(
             contentsOf: repositoryRoot()
-                .appendingPathComponent("Sources/CLIProxyManagerApp/Views")
-                .appendingPathComponent(filename),
+                .appendingPathComponent("Sources/CLIProxyManagerApp")
+                .appendingPathComponent(relativePath),
             encoding: .utf8
         )
     }

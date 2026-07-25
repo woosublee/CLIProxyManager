@@ -34,6 +34,10 @@ struct UsageOverlayResizeCoordinator {
         activeTransitionGeneration != nil
     }
 
+    var isResizeScheduled: Bool {
+        resizeScheduled
+    }
+
     mutating func requestResize(animated: Bool) -> Bool {
         pendingAnimation = pendingAnimation || animated || activeTransitionGeneration != nil
         guard !resizeScheduled else { return false }
@@ -517,6 +521,14 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
                 presentationState: presentationState,
                 onContentSizeInvalidated: { [weak self] in
                     self?.resizeToFittingContent(animated: false)
+                },
+                scheduleExpandedInsertionReveal: { [weak self] reveal in
+                    guard let self else {
+                        DispatchQueue.main.async(execute: reveal)
+                        return
+                    }
+                    self.resizeToFittingContentImmediately(animated: false)
+                    DispatchQueue.main.async(execute: reveal)
                 }
             ),
             viewModel: viewModel,
@@ -698,7 +710,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     }
 
     private func resizeToFittingContentImmediately(animated: Bool) {
-        guard resizeCoordinator.requestResize(animated: animated) else { return }
+        _ = resizeCoordinator.requestResize(animated: animated)
         resizeScheduleGeneration += 1
         performScheduledResize()
     }

@@ -1,20 +1,29 @@
 import CLIProxyManagerCore
 import SwiftUI
 
+typealias UsageOverlayExpandedInsertionRevealScheduler = (@escaping () -> Void) -> Void
+
 struct UsageOverlayView: View {
     @ObservedObject var viewModel: DashboardViewModel
     @ObservedObject var presentationState: UsageOverlayPresentationState
     var onContentSizeInvalidated: () -> Void = {}
+    var scheduleExpandedInsertionReveal: UsageOverlayExpandedInsertionRevealScheduler = { reveal in
+        DispatchQueue.main.async(execute: reveal)
+    }
     @State private var refreshStatusReferenceDate = Date()
 
     init(
         viewModel: DashboardViewModel,
         presentationState: UsageOverlayPresentationState,
-        onContentSizeInvalidated: @escaping () -> Void = {}
+        onContentSizeInvalidated: @escaping () -> Void = {},
+        scheduleExpandedInsertionReveal: @escaping UsageOverlayExpandedInsertionRevealScheduler = { reveal in
+            DispatchQueue.main.async(execute: reveal)
+        }
     ) {
         self.viewModel = viewModel
         self.presentationState = presentationState
         self.onContentSizeInvalidated = onContentSizeInvalidated
+        self.scheduleExpandedInsertionReveal = scheduleExpandedInsertionReveal
     }
 
     init(viewModel: DashboardViewModel) {
@@ -46,7 +55,8 @@ struct UsageOverlayView: View {
                     ExpandedUsageOverlayContent(
                         providers: accountPresentation.providers,
                         emptyMessage: accountPresentation.emptyMessage ?? "No connected accounts",
-                        refreshStatus: refreshStatus
+                        refreshStatus: refreshStatus,
+                        insertionRevealScheduler: scheduleExpandedInsertionReveal
                     )
                 case .compact:
                     CompactUsageOverlayView(
@@ -245,6 +255,7 @@ private struct ExpandedUsageOverlayContent: View {
     let providers: [MenuBarConnectedProvider]
     let emptyMessage: String
     let refreshStatus: String
+    let insertionRevealScheduler: UsageOverlayExpandedInsertionRevealScheduler
     @State private var insertionState: ExpandedUsageOverlayInsertionState
     @State private var insertionGeneration = 0
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
@@ -252,11 +263,13 @@ private struct ExpandedUsageOverlayContent: View {
     init(
         providers: [MenuBarConnectedProvider],
         emptyMessage: String,
-        refreshStatus: String
+        refreshStatus: String,
+        insertionRevealScheduler: @escaping UsageOverlayExpandedInsertionRevealScheduler
     ) {
         self.providers = providers
         self.emptyMessage = emptyMessage
         self.refreshStatus = refreshStatus
+        self.insertionRevealScheduler = insertionRevealScheduler
         _insertionState = State(initialValue: ExpandedUsageOverlayInsertionState(providerIDs: providers.map(\.id)))
     }
 
@@ -311,7 +324,7 @@ private struct ExpandedUsageOverlayContent: View {
 
     private func scheduleReveal(for providerIDs: [ProviderRowState.ID]) {
         let generation = insertionGeneration
-        DispatchQueue.main.async {
+        insertionRevealScheduler {
             guard generation == insertionGeneration else { return }
             if accessibilityReduceMotion {
                 insertionState.reveal(providerIDs, presentProviderIDs: self.providerIDs)
