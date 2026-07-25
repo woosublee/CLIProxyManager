@@ -6,13 +6,53 @@ struct CompactUsageOverlayView: View {
     let emptyMessage: String
     let maximumAccountHeight: CGFloat
     var onMeasurementChange: (CGFloat) -> Void = { _ in }
-    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @State private var measurementState = CompactUsageMeasurementState()
 
     var body: some View {
-        ZStack(alignment: .top) {
-            measurementLayer
-            accountScrollView
+        Group {
+            if providers.isEmpty {
+                VStack(spacing: 7) {
+                    Image(systemName: "person.crop.circle.badge.questionmark")
+                        .font(.system(size: 20))
+                    Text(emptyMessage)
+                        .font(.system(size: 9.5, weight: .medium))
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, minHeight: 72)
+                .accessibilityElement(children: .combine)
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: CompactAccountHeightPreferenceKey.self,
+                            value: proxy.size.height
+                        )
+                    }
+                )
+            } else {
+                ZStack(alignment: .top) {
+                    measurementAccountStack
+                        .fixedSize(horizontal: false, vertical: true)
+                        .hidden()
+                        .background(
+                            GeometryReader { proxy in
+                                Color.clear.preference(
+                                    key: CompactAccountHeightPreferenceKey.self,
+                                    value: proxy.size.height
+                                )
+                            }
+                        )
+                        .frame(height: 0)
+                        .clipped()
+
+                    ScrollView(.vertical, showsIndicators: needsScrolling) {
+                        visibleAccountStack
+                    }
+                    .scrollDisabled(!needsScrolling)
+                    .frame(height: viewportHeight)
+                }
+            }
         }
         .onPreferenceChange(CompactAccountHeightPreferenceKey.self) { height in
             let measuredHeight = max(1, height)
@@ -39,91 +79,26 @@ struct CompactUsageOverlayView: View {
         measurementState.needsScrolling(maximumHeight: maximumAccountHeight)
     }
 
-    private var emptyMeasurementLayer: some View {
-        VStack(spacing: 7) {
-            Image(systemName: "person.crop.circle.badge.questionmark")
-                .font(.system(size: 20))
-            Text(emptyMessage)
-                .font(.system(size: 9.5, weight: .medium))
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .foregroundStyle(.secondary)
-        .frame(maxWidth: .infinity, minHeight: 72)
-        .accessibilityElement(children: .combine)
-        .transition(.identity)
-        .background(
-            GeometryReader { proxy in
-                Color.clear.preference(
-                    key: CompactAccountHeightPreferenceKey.self,
-                    value: proxy.size.height
-                )
-            }
-        )
-    }
-
-    @ViewBuilder
-    private var measurementLayer: some View {
-        if providers.isEmpty {
-            emptyMeasurementLayer
-        } else {
-            measurementAccountStack
-                .fixedSize(horizontal: false, vertical: true)
-                .hidden()
-                .background(
-                    GeometryReader { proxy in
-                        Color.clear.preference(
-                            key: CompactAccountHeightPreferenceKey.self,
-                            value: proxy.size.height
-                        )
-                    }
-                )
-                .frame(height: 0)
-                .clipped()
-        }
-    }
-
-    private var accountScrollView: some View {
-        ScrollView(.vertical, showsIndicators: needsScrolling) {
-            visibleAccountStack
-        }
-        .scrollDisabled(!needsScrolling)
-        .frame(height: providers.isEmpty ? 0 : viewportHeight)
-    }
-
     private var measurementAccountStack: some View {
         VStack(spacing: 0) {
-            accountRows(transition: .identity)
+            accountRows
         }
     }
 
     private var visibleAccountStack: some View {
         LazyVStack(spacing: 0) {
-            accountRows(transition: accountTransition)
+            accountRows
         }
     }
 
     @ViewBuilder
-    private func accountRows(transition: AnyTransition) -> some View {
+    private var accountRows: some View {
         ForEach(Array(providers.enumerated()), id: \.element.id) { index, provider in
-            VStack(spacing: 0) {
-                if index > 0 {
-                    CompactUsageSeparator()
-                }
-                CompactUsageAccountView(provider: provider)
+            if index > 0 {
+                CompactUsageSeparator()
             }
-            .transition(transition)
+            CompactUsageAccountView(provider: provider)
         }
-    }
-
-    private var accountTransition: AnyTransition {
-        if accessibilityReduceMotion {
-            return .identity
-        }
-        return .asymmetric(
-            insertion: .opacity.animation(.easeOut(duration: 0.12)),
-            removal: .identity
-        )
     }
 }
 

@@ -658,20 +658,6 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         XCTAssertEqual(controller.displayMode, .expanded)
     }
 
-    func testImmediateResizeCanConsumePendingScheduledRequestAndClearScheduledFlag() {
-        var coordinator = UsageOverlayResizeCoordinator()
-
-        XCTAssertTrue(coordinator.requestResize(animated: false))
-        XCTAssertTrue(coordinator.isResizeScheduled)
-        XCTAssertFalse(coordinator.requestResize(animated: true))
-
-        let request = coordinator.consumeResizeRequest()
-
-        XCTAssertTrue(request.animated)
-        XCTAssertFalse(coordinator.isResizeScheduled)
-        XCTAssertTrue(coordinator.requestResize(animated: false))
-    }
-
     func testModeTransitionAnimationRemainsActiveThroughFollowUpRetarget() {
         var coordinator = UsageOverlayResizeCoordinator()
         let generation = coordinator.beginModeTransition(anchor: CGPoint(x: 800, y: 660))

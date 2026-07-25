@@ -1,29 +1,20 @@
 import CLIProxyManagerCore
 import SwiftUI
 
-typealias UsageOverlayExpandedInsertionRevealScheduler = (@escaping () -> Void) -> Void
-
 struct UsageOverlayView: View {
     @ObservedObject var viewModel: DashboardViewModel
     @ObservedObject var presentationState: UsageOverlayPresentationState
     var onContentSizeInvalidated: () -> Void = {}
-    var scheduleExpandedInsertionReveal: UsageOverlayExpandedInsertionRevealScheduler = { reveal in
-        DispatchQueue.main.async(execute: reveal)
-    }
     @State private var refreshStatusReferenceDate = Date()
 
     init(
         viewModel: DashboardViewModel,
         presentationState: UsageOverlayPresentationState,
-        onContentSizeInvalidated: @escaping () -> Void = {},
-        scheduleExpandedInsertionReveal: @escaping UsageOverlayExpandedInsertionRevealScheduler = { reveal in
-            DispatchQueue.main.async(execute: reveal)
-        }
+        onContentSizeInvalidated: @escaping () -> Void = {}
     ) {
         self.viewModel = viewModel
         self.presentationState = presentationState
         self.onContentSizeInvalidated = onContentSizeInvalidated
-        self.scheduleExpandedInsertionReveal = scheduleExpandedInsertionReveal
     }
 
     init(viewModel: DashboardViewModel) {
@@ -55,8 +46,7 @@ struct UsageOverlayView: View {
                     ExpandedUsageOverlayContent(
                         providers: accountPresentation.providers,
                         emptyMessage: accountPresentation.emptyMessage ?? "No connected accounts",
-                        refreshStatus: refreshStatus,
-                        insertionRevealScheduler: scheduleExpandedInsertionReveal
+                        refreshStatus: refreshStatus
                     )
                 case .compact:
                     CompactUsageOverlayView(
@@ -176,33 +166,6 @@ private struct CompactUsageOverlayFittingSizePreferenceKey: PreferenceKey {
     }
 }
 
-struct ExpandedUsageOverlayInsertionState: Equatable {
-    private(set) var revealedProviderIDs: Set<ProviderRowState.ID>
-
-    init(providerIDs: [ProviderRowState.ID]) {
-        revealedProviderIDs = Set(providerIDs)
-    }
-
-    mutating func prepare(providerIDs: [ProviderRowState.ID]) -> [ProviderRowState.ID] {
-        let presentProviderIDs = Set(providerIDs)
-        revealedProviderIDs.formIntersection(presentProviderIDs)
-        return providerIDs.filter { !revealedProviderIDs.contains($0) }
-    }
-
-    mutating func reveal(
-        _ providerIDs: [ProviderRowState.ID],
-        presentProviderIDs: [ProviderRowState.ID]
-    ) {
-        revealedProviderIDs.formUnion(
-            Set(providerIDs).intersection(presentProviderIDs)
-        )
-    }
-
-    func isRevealed(_ providerID: ProviderRowState.ID) -> Bool {
-        revealedProviderIDs.contains(providerID)
-    }
-}
-
 struct UsageOverlayChrome: View {
     @ObservedObject var viewModel: DashboardViewModel
     let displayMode: AppConfig.UsageOverlay.DisplayMode
@@ -255,23 +218,6 @@ private struct ExpandedUsageOverlayContent: View {
     let providers: [MenuBarConnectedProvider]
     let emptyMessage: String
     let refreshStatus: String
-    let insertionRevealScheduler: UsageOverlayExpandedInsertionRevealScheduler
-    @State private var insertionState: ExpandedUsageOverlayInsertionState
-    @State private var insertionGeneration = 0
-    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
-
-    init(
-        providers: [MenuBarConnectedProvider],
-        emptyMessage: String,
-        refreshStatus: String,
-        insertionRevealScheduler: @escaping UsageOverlayExpandedInsertionRevealScheduler
-    ) {
-        self.providers = providers
-        self.emptyMessage = emptyMessage
-        self.refreshStatus = refreshStatus
-        self.insertionRevealScheduler = insertionRevealScheduler
-        _insertionState = State(initialValue: ExpandedUsageOverlayInsertionState(providerIDs: providers.map(\.id)))
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -288,49 +234,16 @@ private struct ExpandedUsageOverlayContent: View {
                 Spacer(minLength: UsageOverlaySurfaceLayout.expandedHeaderTrailingPadding)
             }
 
-            accountSurface
-        }
-        .onChange(of: providerIDs) { _, providerIDs in
-            insertionGeneration += 1
-            let pendingProviderIDs = insertionState.prepare(providerIDs: providerIDs)
-            guard !pendingProviderIDs.isEmpty else { return }
-            scheduleReveal(for: pendingProviderIDs)
-        }
-    }
-
-    private var accountSurface: some View {
-        ZStack(alignment: .topLeading) {
-            VStack(alignment: .leading, spacing: 14) {
-                ForEach(providers) { provider in
-                    ExpandedUsageOverlayAccountView(provider: provider)
-                        .opacity(insertionState.isRevealed(provider.id) ? 1 : 0)
-                        .transition(.identity)
-                }
-            }
-
             if providers.isEmpty {
                 Text(emptyMessage)
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 140, alignment: .center)
-                    .transition(.identity)
-            }
-        }
-    }
-
-    private var providerIDs: [ProviderRowState.ID] {
-        providers.map(\.id)
-    }
-
-    private func scheduleReveal(for providerIDs: [ProviderRowState.ID]) {
-        let generation = insertionGeneration
-        insertionRevealScheduler {
-            guard generation == insertionGeneration else { return }
-            if accessibilityReduceMotion {
-                insertionState.reveal(providerIDs, presentProviderIDs: self.providerIDs)
             } else {
-                withAnimation(.easeOut(duration: 0.12)) {
-                    insertionState.reveal(providerIDs, presentProviderIDs: self.providerIDs)
+                VStack(alignment: .leading, spacing: 14) {
+                    ForEach(providers) { provider in
+                        ExpandedUsageOverlayAccountView(provider: provider)
+                    }
                 }
             }
         }
