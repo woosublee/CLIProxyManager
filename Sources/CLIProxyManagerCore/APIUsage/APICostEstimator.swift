@@ -180,16 +180,44 @@ public struct APICostEstimator: Sendable {
             )
 
             for bucket in ledger.currentMonth.buckets where bucket.key.provider == provider && bucket.key.profileID == profileID {
-                add(bucket, to: &month)
-                if bucket.key.localDate == bounds.localDate {
-                    add(bucket, to: &day)
+                let dateDisposition = nestedDateDisposition(
+                    localDate: bucket.key.localDate,
+                    ledgerMonth: ledger.currentMonth.month,
+                    bounds: bounds
+                )
+                guard case let .included(isCurrentDay) = dateDisposition,
+                      isValid(bucket) else {
+                    markCorrupted(dateDisposition, day: &day, month: &month)
+                    continue
+                }
+
+                let contribution = contribution(for: bucket)
+                month.merge(contribution)
+                if isCurrentDay {
+                    day.merge(contribution)
                 }
             }
 
             for issueBucket in ledger.currentMonth.issues where applies(issueBucket, to: provider, profileID: profileID) {
-                add(issueBucket, to: &month)
-                if issueBucket.localDate == bounds.localDate {
-                    add(issueBucket, to: &day)
+                let dateDisposition = nestedDateDisposition(
+                    localDate: issueBucket.localDate,
+                    ledgerMonth: ledger.currentMonth.month,
+                    bounds: bounds
+                )
+                guard case let .included(isCurrentDay) = dateDisposition,
+                      issueBucket.count >= 0 else {
+                    markCorrupted(dateDisposition, day: &day, month: &month)
+                    continue
+                }
+
+                let contribution = BucketContribution(
+                    requestCount: issueBucket.count,
+                    unpricedRequestCount: issueBucket.count,
+                    issues: [costIssue(for: issueBucket.reason)]
+                )
+                month.merge(contribution)
+                if isCurrentDay {
+                    day.merge(contribution)
                 }
             }
 
@@ -219,35 +247,41 @@ public struct APICostEstimator: Sendable {
         })
     }
 
-    private func add(_ bucket: APIUsageLedgerBucket, to accumulator: inout PeriodAccumulator) {
-        accumulator.totalTokens += bucket.totalTokens
-        accumulator.requestCount += bucket.requestCount
-        accumulator.failedRequestCount += bucket.failedRequestCount
+    private func contribution(for bucket: APIUsageLedgerBucket) -> BucketContribution {
+        var result = BucketContribution(
+            totalTokens: bucket.totalTokens,
+            requestCount: bucket.requestCount,
+            failedRequestCount: bucket.failedRequestCount
+        )
 
         switch classification(for: bucket) {
         case let .priced(entry):
-            accumulator.estimatedUSD += cost(
+            result.estimatedUSD += cost(
                 tokens: bucket.uncachedInputTokens,
                 rate: entry.rates.uncachedInputUSDPerMillion
             )
-            accumulator.estimatedUSD += cost(
-                tokens: bucket.nonReasoningOutputTokens + bucket.reasoningOutputTokens,
+            result.estimatedUSD += cost(
+                tokens: bucket.nonReasoningOutputTokens,
+                rate: entry.rates.outputUSDPerMillion
+            )
+            result.estimatedUSD += cost(
+                tokens: bucket.reasoningOutputTokens,
                 rate: entry.rates.outputUSDPerMillion
             )
 
             var fullyPriced = true
             if bucket.cacheReadTokens != 0 {
                 if let rate = entry.rates.cacheReadUSDPerMillion {
-                    accumulator.estimatedUSD += cost(tokens: bucket.cacheReadTokens, rate: rate)
+                    result.estimatedUSD += cost(tokens: bucket.cacheReadTokens, rate: rate)
                 } else {
                     fullyPriced = false
                 }
             }
             if bucket.cacheWriteTokens != 0 {
                 if let rate = entry.rates.cacheWriteUSDPerMillion {
-                    accumulator.estimatedUSD += cost(tokens: bucket.cacheWriteTokens, rate: rate)
+                    result.estimatedUSD += cost(tokens: bucket.cacheWriteTokens, rate: rate)
                     if bucket.key.provider == .claude {
-                        accumulator.add(issue: .cacheWriteTTLAssumedDefault)
+                        result.add(issue: .cacheWriteTTLAssumedDefault)
                     }
                 } else {
                     fullyPriced = false
@@ -255,32 +289,34 @@ public struct APICostEstimator: Sendable {
             }
 
             if fullyPriced {
-                accumulator.pricedRequestCount += bucket.requestCount
+                result.pricedRequestCount = bucket.requestCount
             } else {
-                accumulator.unpricedRequestCount += bucket.requestCount
-                accumulator.add(issue: .unknownPricingVariant)
+                result.unpricedRequestCount = bucket.requestCount
+                result.add(issue: .unknownPricingVariant)
             }
 
             if bucket.requestCount != 0,
                bucket.key.provider == .claude,
                Self.globalInferenceGeoModels.contains(entry.model) {
-                accumulator.add(issue: .inferenceGeoAssumedGlobal)
+                result.add(issue: .inferenceGeoAssumedGlobal)
             }
             if bucket.requestCount != 0,
                bucket.key.provider == .claude,
                Self.standardSpeedModels.contains(entry.model) {
-                accumulator.add(issue: .fastModeAssumedStandard)
+                result.add(issue: .fastModeAssumedStandard)
             }
 
         case .unknownModel:
-            markUnpriced(bucket, issue: .unknownModel, in: &accumulator)
+            result.markUnpriced(issue: .unknownModel)
         case .unsupportedServiceTier:
-            markUnpriced(bucket, issue: .unsupportedServiceTier, in: &accumulator)
+            result.markUnpriced(issue: .unsupportedServiceTier)
         case .unknownPricingVariant:
-            markUnpriced(bucket, issue: .unknownPricingVariant, in: &accumulator)
+            result.markUnpriced(issue: .unknownPricingVariant)
         case .priceEpochUnavailable:
-            markUnpriced(bucket, issue: .priceEpochUnavailable, in: &accumulator)
+            result.markUnpriced(issue: .priceEpochUnavailable)
         }
+
+        return result
     }
 
     private func classification(for bucket: APIUsageLedgerBucket) -> APIPriceClassification {
@@ -310,8 +346,11 @@ public struct APICostEstimator: Sendable {
         guard case let .priced(entry) = classification else {
             return classification
         }
+        guard entry.effectiveUntil.map({ bucket.lastObservedAt < $0 }) ?? true else {
+            return .priceEpochUnavailable
+        }
 
-        let crossedPriceBoundary = catalog.entries.contains {
+        let anotherEntryStartsDuringObservation = catalog.entries.contains {
             $0.provider == entry.provider
                 && $0.model == entry.model
                 && $0.serviceTier == entry.serviceTier
@@ -319,22 +358,100 @@ public struct APICostEstimator: Sendable {
                 && bucket.firstObservedAt < $0.effectiveFrom
                 && $0.effectiveFrom <= bucket.lastObservedAt
         }
-        return crossedPriceBoundary ? .priceEpochUnavailable : classification
+        return anotherEntryStartsDuringObservation ? .priceEpochUnavailable : classification
     }
 
-    private func markUnpriced(
-        _ bucket: APIUsageLedgerBucket,
-        issue: APICostIssue,
-        in accumulator: inout PeriodAccumulator
+    private func isValid(_ bucket: APIUsageLedgerBucket) -> Bool {
+        let counters = [
+            bucket.uncachedInputTokens,
+            bucket.cacheReadTokens,
+            bucket.cacheWriteTokens,
+            bucket.nonReasoningOutputTokens,
+            bucket.reasoningOutputTokens,
+            bucket.totalTokens,
+            bucket.requestCount,
+            bucket.failedRequestCount
+        ]
+        guard counters.allSatisfy({ $0 >= 0 }),
+              bucket.failedRequestCount <= bucket.requestCount,
+              bucket.firstObservedAt <= bucket.lastObservedAt,
+              checkedSum([
+                  bucket.uncachedInputTokens,
+                  bucket.cacheReadTokens,
+                  bucket.cacheWriteTokens,
+                  bucket.nonReasoningOutputTokens,
+                  bucket.reasoningOutputTokens
+              ]) == bucket.totalTokens else {
+            return false
+        }
+        return true
+    }
+
+    private func checkedSum(_ values: [Int64]) -> Int64? {
+        values.reduce(Optional(0)) { partial, value in
+            guard let partial else { return nil }
+            let (result, overflow) = partial.addingReportingOverflow(value)
+            return overflow ? nil : result
+        }
+    }
+
+    private func nestedDateDisposition(
+        localDate: String,
+        ledgerMonth: String,
+        bounds: APIUsagePeriodBounds
+    ) -> NestedDateDisposition {
+        guard let itemMonth = strictGregorianMonth(for: localDate) else {
+            return .malformed
+        }
+        let isCurrentDay = localDate == bounds.localDate
+        guard itemMonth == ledgerMonth, itemMonth == bounds.month else {
+            return .foreignMonth(isCurrentDay: isCurrentDay)
+        }
+        return .included(isCurrentDay: isCurrentDay)
+    }
+
+    private func strictGregorianMonth(for localDate: String) -> String? {
+        let bytes = Array(localDate.utf8)
+        guard bytes.count == 10,
+              bytes[4] == 45,
+              bytes[7] == 45,
+              bytes.enumerated().allSatisfy({ index, byte in
+                  index == 4 || index == 7 || (48...57).contains(byte)
+              }),
+              let year = Int(String(bytes: bytes[0..<4], encoding: .utf8)!),
+              let month = Int(String(bytes: bytes[5..<7], encoding: .utf8)!),
+              let day = Int(String(bytes: bytes[8..<10], encoding: .utf8)!) else {
+            return nil
+        }
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        guard let date = calendar.date(from: DateComponents(year: year, month: month, day: day)) else {
+            return nil
+        }
+        let components = calendar.dateComponents([.year, .month, .day], from: date)
+        guard components.year == year,
+              components.month == month,
+              components.day == day else {
+            return nil
+        }
+        return String(localDate.prefix(7))
+    }
+
+    private func markCorrupted(
+        _ disposition: NestedDateDisposition,
+        day: inout PeriodAccumulator,
+        month: inout PeriodAccumulator
     ) {
-        accumulator.unpricedRequestCount += bucket.requestCount
-        accumulator.add(issue: issue)
-    }
-
-    private func add(_ bucket: APIUsageLedgerIssueBucket, to accumulator: inout PeriodAccumulator) {
-        accumulator.requestCount += bucket.count
-        accumulator.unpricedRequestCount += bucket.count
-        accumulator.add(issue: costIssue(for: bucket.reason))
+        month.add(issue: .corruptedLedger)
+        switch disposition {
+        case let .included(isCurrentDay), let .foreignMonth(isCurrentDay):
+            if isCurrentDay {
+                day.add(issue: .corruptedLedger)
+            }
+        case .malformed:
+            day.add(issue: .corruptedLedger)
+        }
     }
 
     private func applies(
@@ -404,6 +521,33 @@ public struct APICostEstimator: Sendable {
     }
 }
 
+private enum NestedDateDisposition {
+    case included(isCurrentDay: Bool)
+    case foreignMonth(isCurrentDay: Bool)
+    case malformed
+}
+
+private struct BucketContribution {
+    var estimatedUSD: Decimal = 0
+    var totalTokens: Int64 = 0
+    var requestCount: Int64 = 0
+    var failedRequestCount: Int64 = 0
+    var pricedRequestCount: Int64 = 0
+    var unpricedRequestCount: Int64 = 0
+    var issues: [APICostIssue] = []
+
+    mutating func add(issue: APICostIssue) {
+        if !issues.contains(issue) {
+            issues.append(issue)
+        }
+    }
+
+    mutating func markUnpriced(issue: APICostIssue) {
+        unpricedRequestCount = requestCount
+        add(issue: issue)
+    }
+}
+
 private struct PeriodAccumulator {
     var estimatedUSD: Decimal = 0
     var totalTokens: Int64 = 0
@@ -412,6 +556,27 @@ private struct PeriodAccumulator {
     var pricedRequestCount: Int64 = 0
     var unpricedRequestCount: Int64 = 0
     var issues: [APICostIssue] = []
+
+    mutating func merge(_ contribution: BucketContribution) {
+        guard let totalTokens = checkedAdd(totalTokens, contribution.totalTokens),
+              let requestCount = checkedAdd(requestCount, contribution.requestCount),
+              let failedRequestCount = checkedAdd(failedRequestCount, contribution.failedRequestCount),
+              let pricedRequestCount = checkedAdd(pricedRequestCount, contribution.pricedRequestCount),
+              let unpricedRequestCount = checkedAdd(unpricedRequestCount, contribution.unpricedRequestCount) else {
+            add(issue: .corruptedLedger)
+            return
+        }
+
+        self.totalTokens = totalTokens
+        self.requestCount = requestCount
+        self.failedRequestCount = failedRequestCount
+        self.pricedRequestCount = pricedRequestCount
+        self.unpricedRequestCount = unpricedRequestCount
+        estimatedUSD += contribution.estimatedUSD
+        for issue in contribution.issues {
+            add(issue: issue)
+        }
+    }
 
     mutating func add(issue: APICostIssue) {
         if !issues.contains(issue) {
@@ -436,5 +601,10 @@ private struct PeriodAccumulator {
             intervalEnd: intervalEnd,
             issues: APICostIssue.allCases.filter { issues.contains($0) }
         )
+    }
+
+    private func checkedAdd(_ lhs: Int64, _ rhs: Int64) -> Int64? {
+        let (result, overflow) = lhs.addingReportingOverflow(rhs)
+        return overflow ? nil : result
     }
 }

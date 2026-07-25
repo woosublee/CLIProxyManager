@@ -375,6 +375,166 @@ final class APICostEstimatorTests: XCTestCase {
         XCTAssertEqual(issues, [.cacheWriteTTLAssumedDefault])
     }
 
+    func testNilPriceEpochEndingWithoutSuccessorRemainsUnpriced() {
+        let catalog = APIPriceCatalog(version: 1, entries: [
+            priceEntry(
+                from: iso("2026-07-25T00:00:00Z"),
+                until: iso("2026-07-25T12:00:00Z"),
+                input: "1"
+            )
+        ])
+        let bucket = makeBucket(
+            provider: .openAI,
+            model: "gpt-5.6-terra",
+            uncached: 1_000_000,
+            requests: 2,
+            priceEpochStart: nil,
+            firstObservedAt: iso("2026-07-25T10:00:00Z"),
+            lastObservedAt: iso("2026-07-25T13:00:00Z")
+        )
+        let ledger = readModel(bucket: bucket, at: iso("2026-07-25T14:00:00Z"))
+
+        let state = APICostEstimator(catalog: catalog)
+            .states(for: [.openAI: "codex-api"], ledger: ledger, now: ledger.bounds.intervalReference)["codex-api"]
+
+        guard case let .partial(snapshot, issues) = state else {
+            return XCTFail("Expected ending-only price epoch to remain partial")
+        }
+        XCTAssertEqual(snapshot.day.estimatedUSD, 0)
+        XCTAssertEqual(snapshot.day.pricedRequestCount, 0)
+        XCTAssertEqual(snapshot.day.unpricedRequestCount, 2)
+        XCTAssertEqual(issues, [.priceEpochUnavailable])
+    }
+
+    func testInvalidPersistedCountersAreExcludedAndMarkCorruptedLedger() {
+        let valid = makeBucket(
+            provider: .openAI,
+            model: "gpt-5.6-terra",
+            uncached: 1_000_000,
+            requests: 1
+        )
+        var negative = makeBucket(
+            provider: .openAI,
+            model: "gpt-5.6-terra",
+            uncached: 0,
+            requests: 0
+        )
+        negative.uncachedInputTokens = -10
+        negative.totalTokens = -10
+        negative.requestCount = -2
+        var inconsistent = makeBucket(
+            provider: .openAI,
+            model: "gpt-5.6-terra",
+            uncached: 100,
+            requests: 1
+        )
+        inconsistent.totalTokens = 99
+        let ledger = readModel(
+            buckets: [valid, negative, inconsistent],
+            issues: [
+                .init(
+                    localDate: "2026-07-25",
+                    profileID: "codex-api",
+                    provider: .openAI,
+                    reason: .incompleteTokenAccounting,
+                    count: -3
+                )
+            ]
+        )
+
+        let state = APICostEstimator(catalog: .current)
+            .states(for: [.openAI: "codex-api"], ledger: ledger, now: ledger.bounds.intervalReference)["codex-api"]
+
+        guard case let .partial(snapshot, issues) = state else {
+            return XCTFail("Expected invalid persisted counters to be partial")
+        }
+        XCTAssertEqual(snapshot.day.estimatedUSD, Decimal(string: "2.5"))
+        XCTAssertEqual(snapshot.day.totalTokens, 1_000_000)
+        XCTAssertEqual(snapshot.day.requestCount, 1)
+        XCTAssertEqual(snapshot.day.failedRequestCount, 0)
+        XCTAssertEqual(snapshot.day.pricedRequestCount, 1)
+        XCTAssertEqual(snapshot.day.unpricedRequestCount, 0)
+        XCTAssertEqual(snapshot.month.totalTokens, 1_000_000)
+        XCTAssertEqual(snapshot.month.requestCount, 1)
+        XCTAssertEqual(issues, [.corruptedLedger])
+    }
+
+    func testPeriodAggregationOverflowExcludesOverflowingBucketAndMarksCorruptedLedger() {
+        let large = Int64.max / 2 + 1
+        let first = makeBucket(
+            provider: .openAI,
+            model: "gpt-5.6-terra",
+            uncached: large,
+            requests: 1
+        )
+        let second = makeBucket(
+            provider: .openAI,
+            model: "gpt-5.6-terra",
+            uncached: large,
+            requests: 1
+        )
+        let ledger = readModel(buckets: [first, second])
+
+        let state = APICostEstimator(catalog: .current)
+            .states(for: [.openAI: "codex-api"], ledger: ledger, now: ledger.bounds.intervalReference)["codex-api"]
+
+        guard case let .partial(snapshot, issues) = state else {
+            return XCTFail("Expected overflow to produce a corrupted partial snapshot")
+        }
+        XCTAssertEqual(snapshot.day.totalTokens, large)
+        XCTAssertEqual(snapshot.day.requestCount, 1)
+        XCTAssertEqual(snapshot.day.pricedRequestCount, 1)
+        XCTAssertEqual(snapshot.day.unpricedRequestCount, 0)
+        XCTAssertEqual(snapshot.month.totalTokens, large)
+        XCTAssertEqual(snapshot.month.requestCount, 1)
+        XCTAssertEqual(issues, [.corruptedLedger])
+    }
+
+    func testForeignMonthItemsAreExcludedFromJulyMonthAndMarkOnlyMonthCorrupted() {
+        let july = makeBucket(
+            provider: .openAI,
+            model: "gpt-5.6-terra",
+            uncached: 1_000_000,
+            requests: 1,
+            localDate: "2026-07-25"
+        )
+        let august = makeBucket(
+            provider: .openAI,
+            model: "gpt-5.6-terra",
+            uncached: 2_000_000,
+            requests: 2,
+            localDate: "2026-08-01",
+            firstObservedAt: iso("2026-08-01T01:00:00Z"),
+            lastObservedAt: iso("2026-08-01T01:00:00Z")
+        )
+        let ledger = readModel(
+            buckets: [july, august],
+            issues: [
+                .init(
+                    localDate: "2026-08-01",
+                    profileID: "codex-api",
+                    provider: .openAI,
+                    reason: .incompleteTokenAccounting,
+                    count: 3
+                )
+            ]
+        )
+
+        let state = APICostEstimator(catalog: .current)
+            .states(for: [.openAI: "codex-api"], ledger: ledger, now: ledger.bounds.intervalReference)["codex-api"]
+
+        guard case let .partial(snapshot, issues) = state else {
+            return XCTFail("Expected foreign month entries to mark the month partial")
+        }
+        XCTAssertEqual(snapshot.day.estimatedUSD, Decimal(string: "2.5"))
+        XCTAssertEqual(snapshot.day.requestCount, 1)
+        XCTAssertEqual(snapshot.day.issues, [])
+        XCTAssertEqual(snapshot.month.estimatedUSD, Decimal(string: "2.5"))
+        XCTAssertEqual(snapshot.month.requestCount, 1)
+        XCTAssertEqual(snapshot.month.issues, [.corruptedLedger])
+        XCTAssertEqual(issues, [.corruptedLedger])
+    }
+
     private func makeBucket(
         provider: APIUsageProvider,
         model: String,
@@ -385,13 +545,14 @@ final class APICostEstimatorTests: XCTestCase {
         reasoning: Int64 = 0,
         requests: Int64,
         failedRequests: Int64 = 0,
+        localDate: String = "2026-07-25",
         priceEpochStart: Date? = ISO8601DateFormatter().date(from: "2026-07-25T00:00:00Z"),
         firstObservedAt: Date = ISO8601DateFormatter().date(from: "2026-07-25T12:00:00Z")!,
         lastObservedAt: Date = ISO8601DateFormatter().date(from: "2026-07-25T12:00:00Z")!
     ) -> APIUsageLedgerBucket {
         APIUsageLedgerBucket(
             key: .init(
-                localDate: "2026-07-25",
+                localDate: localDate,
                 profileID: provider.profileID,
                 provider: provider,
                 model: model,
@@ -416,6 +577,14 @@ final class APICostEstimatorTests: XCTestCase {
         bucket: APIUsageLedgerBucket,
         at: Date = ISO8601DateFormatter().date(from: "2026-07-25T12:00:00Z")!
     ) -> APIUsageLedgerReadModel {
+        readModel(buckets: [bucket], at: at)
+    }
+
+    private func readModel(
+        buckets: [APIUsageLedgerBucket],
+        issues: [APIUsageLedgerIssueBucket] = [],
+        at: Date = ISO8601DateFormatter().date(from: "2026-07-25T12:00:00Z")!
+    ) -> APIUsageLedgerReadModel {
         let bounds = APIUsagePeriodCalculator.bounds(at: at, timeZoneID: "UTC")
         let metadata = APIUsageTrackingMetadata(
             schemaVersion: 1,
@@ -430,8 +599,8 @@ final class APICostEstimatorTests: XCTestCase {
             schemaVersion: 1,
             month: bounds.month,
             reportingTimeZoneID: "UTC",
-            buckets: [bucket],
-            issues: []
+            buckets: buckets,
+            issues: issues
         )
         return .init(metadata: metadata, bounds: bounds, currentMonth: month)
     }
