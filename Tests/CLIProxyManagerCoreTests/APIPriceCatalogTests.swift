@@ -71,6 +71,38 @@ final class APIPriceCatalogTests: XCTestCase {
         ))
     }
 
+    func testCatalogRequiresExactModelSpelling() {
+        let catalog = APIPriceCatalog.current
+        let at = iso("2026-07-25T12:00:00Z")
+
+        for model in [" GPT-5.6-TERRA ", "gpt-5.6-Terra"] {
+            XCTAssertNil(catalog.entry(
+                provider: .openAI,
+                model: model,
+                serviceTier: "default",
+                variant: .standard,
+                at: at
+            ))
+            XCTAssertEqual(catalog.classification(
+                provider: .openAI,
+                model: model,
+                serviceTier: "default",
+                variant: .standard,
+                at: at
+            ), .unknownModel)
+        }
+    }
+
+    func testClassificationDistinguishesUnavailablePriceEpoch() {
+        XCTAssertEqual(APIPriceCatalog.current.classification(
+            provider: .openAI,
+            model: "gpt-5.6-terra",
+            serviceTier: "default",
+            variant: .standard,
+            at: iso("2026-07-24T23:59:59Z")
+        ), .priceEpochUnavailable)
+    }
+
     func testClassificationDistinguishesUnknownModelTierAndVariant() {
         let catalog = APIPriceCatalog.current
         let at = iso("2026-07-25T12:00:00Z")

@@ -52,6 +52,7 @@ public enum APIPriceClassification: Equatable, Sendable {
     case unknownModel
     case unsupportedServiceTier
     case unknownPricingVariant
+    case priceEpochUnavailable
 }
 
 public struct APIPriceCatalog: Equatable, Sendable {
@@ -106,7 +107,7 @@ public struct APIPriceCatalog: Equatable, Sendable {
         if let entry = entry(provider: provider, model: model, serviceTier: serviceTier, variant: variant, at: at) {
             return .priced(entry)
         }
-        return .unknownPricingVariant
+        return .priceEpochUnavailable
     }
 
     // Sources:
@@ -159,9 +160,8 @@ public struct APIPriceCatalog: Equatable, Sendable {
     ]
 
     private func canonicalModel(_ model: String, provider: APIUsageProvider) -> String {
-        let normalizedModel = normalized(model)
-        guard provider == .claude else { return normalizedModel }
-        return Self.claudeAliases[normalizedModel] ?? normalizedModel
+        guard provider == .claude else { return model }
+        return Self.claudeAliases[model] ?? model
     }
 
     private func normalized(_ value: String) -> String {
