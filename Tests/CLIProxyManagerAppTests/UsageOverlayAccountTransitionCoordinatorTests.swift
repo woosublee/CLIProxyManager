@@ -216,6 +216,29 @@ final class UsageOverlayAccountTransitionCoordinatorTests: XCTestCase {
         XCTAssertNil(coordinator.completeConceal(generation: 1))
     }
 
+    func testPreparingHiddenSettlementInvalidatesResizeAndKeepsLatestPresentation() {
+        let oneAccount = presentation([.claude])
+        let twoAccounts = presentation([.claude, .codex])
+        var coordinator = UsageOverlayAccountTransitionCoordinator(
+            initialPresentation: oneAccount
+        )
+        _ = coordinator.receive(
+            twoAccounts,
+            presentedProviderIDs: oneAccount.orderedProviderIDs,
+            allowsAnimation: true
+        )
+        _ = coordinator.completeConceal(generation: 1)
+        XCTAssertTrue(coordinator.beginResize(generation: 1))
+
+        let settlement = coordinator.prepareHiddenSettlement()
+
+        XCTAssertEqual(settlement.generation, 2)
+        XCTAssertEqual(settlement.presentation, twoAccounts)
+        XCTAssertEqual(coordinator.phase, .swapping)
+        XCTAssertFalse(coordinator.completeResize(generation: 1))
+        XCTAssertTrue(coordinator.beginResize(generation: 2))
+    }
+
     func testReduceMotionAppliesIdentityChangeImmediately() {
         let oneAccount = presentation([.claude])
         let twoAccounts = presentation([.claude, .codex])

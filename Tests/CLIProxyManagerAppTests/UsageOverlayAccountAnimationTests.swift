@@ -56,9 +56,10 @@ final class UsageOverlayAccountAnimationTests: XCTestCase {
         XCTAssertFalse(source.contains("isResizeScheduled"))
         XCTAssertTrue(
             immediateResize.contains(
-                "guard resizeCoordinator.requestResize(animated: animated) else { return }"
+                "_ = resizeCoordinator.requestResize(animated: animated)"
             )
         )
+        XCTAssertTrue(immediateResize.contains("performScheduledResize()"))
     }
 
     private func appSource(relativePath: String) throws -> String {

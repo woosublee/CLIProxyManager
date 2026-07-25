@@ -18,9 +18,18 @@ struct UsageOverlayView: View {
     }
 
     init(viewModel: DashboardViewModel) {
+        let accountPresentation = UsageOverlayAccountPresentation(
+            serverStatus: viewModel.serverStatus,
+            serverControlState: viewModel.serverControlState,
+            providerRows: viewModel.providerRows,
+            port: viewModel.config.port
+        )
         self.init(
             viewModel: viewModel,
-            presentationState: UsageOverlayPresentationState(displayMode: .expanded)
+            presentationState: UsageOverlayPresentationState(
+                displayMode: .expanded,
+                accountPresentation: accountPresentation
+            )
         )
     }
 

@@ -130,6 +130,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     private var isWaitingForModeTransitionResize = false
     private var screenGeometryGeneration = 0
     private var userMoveInterruptedTransition = false
+    private var userMoveInterruptedAccountGeneration: Int?
     private var isUserMoveInProgress = false
     private var isApplyingControllerFrame = false
     private var isUsingTemporaryScreenFallback = false
@@ -310,6 +311,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     }
 
     func toggleDisplayMode() {
+        settleAccountTransitionImmediately(interruptFrameAnimation: true)
         let original = displayMode
         let target = original.opposite
         let transitionAnchor = resizeCoordinator.authoritativeAnchor
@@ -431,6 +433,8 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     func hideForCurrentSession() {
         isSuppressedForCurrentSession = true
         userMoveInterruptedTransition = false
+        userMoveInterruptedAccountGeneration = nil
+        settleAccountTransitionImmediately(interruptFrameAnimation: true)
         interruptActiveTransition()
         panel.orderOut(nil)
         isVisible = false
@@ -445,6 +449,9 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             return
         }
         isUserMoveInProgress = true
+        if let generation = prepareAccountTransitionForHiddenSettlement() {
+            userMoveInterruptedAccountGeneration = generation
+        }
         guard resizeCoordinator.hasActiveTransition else { return }
         interruptActiveTransition()
         userMoveInterruptedTransition = true
@@ -458,6 +465,10 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         guard isUserMoveInProgress else { return }
         isUserMoveInProgress = false
         saveCurrentPlacement()
+        if let generation = userMoveInterruptedAccountGeneration {
+            userMoveInterruptedAccountGeneration = nil
+            beginAccountResize(generation: generation, animated: false)
+        }
         if userMoveInterruptedTransition {
             userMoveInterruptedTransition = false
             resizeToFittingContent(animated: false)
@@ -465,10 +476,34 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     }
 
     func requestContentResize(animated: Bool = false) {
+        if retargetActiveAccountResize() { return }
         resizeToFittingContent(animated: animated)
     }
 
+    private func retargetActiveAccountResize() -> Bool {
+        guard let generation = accountTransitionCoordinator.retargetResize() else {
+            return false
+        }
+        frameAnimationInterrupter(panel)
+        isApplyingControllerFrame = false
+        presentationState.accountTransitionPhase = .resizing
+        panel.contentView?.layoutSubtreeIfNeeded()
+        let fittingSize = fittingSizeProvider?()
+            ?? transitionFittingSize()
+            ?? panel.contentView?.fittingSize
+            ?? panel.frame.size
+        updateContentSize(
+            fittingSize,
+            animated: true,
+            transitionGeneration: nil
+        ) { [weak self] in
+            self?.completeAccountResize(generation: generation)
+        }
+        return true
+    }
+
     func updateAccountPresentation(_ presentation: UsageOverlayAccountPresentation) {
+        let wasResizing = accountTransitionPhase == .resizing
         let action = accountTransitionCoordinator.receive(
             presentation,
             presentedProviderIDs: presentedAccountPresentation.orderedProviderIDs,
@@ -476,6 +511,10 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
                 && !shouldReduceMotion()
                 && !presentationState.isContentHiddenForModeTransition
         )
+        if wasResizing, case .retargetHidden = action {
+            frameAnimationInterrupter(panel)
+            isApplyingControllerFrame = false
+        }
         applyAccountTransitionAction(action)
     }
 
@@ -487,9 +526,13 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             return
         case .applyImmediately(let presentation):
             presentationState.presentedAccountPresentation = presentation
-            presentationState.accountTransitionPhase = .visible
+            presentationState.accountTransitionPhase = accountTransitionCoordinator.phase
             if panel.isVisible {
-                resizeToFittingContent(animated: false)
+                if shouldReduceMotion() {
+                    resizeToFittingContentImmediately(animated: false)
+                } else {
+                    resizeToFittingContent(animated: false)
+                }
             }
         case .beginConceal(let generation):
             presentationState.accountTransitionPhase = .concealing
@@ -520,7 +563,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         }
     }
 
-    private func beginAccountResize(generation: Int) {
+    private func beginAccountResize(generation: Int, animated: Bool = true) {
         guard accountTransitionCoordinator.beginResize(generation: generation) else { return }
         presentationState.accountTransitionPhase = .resizing
         panel.contentView?.layoutSubtreeIfNeeded()
@@ -530,7 +573,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             ?? panel.frame.size
         updateContentSize(
             fittingSize,
-            animated: true,
+            animated: animated,
             transitionGeneration: nil
         ) { [weak self] in
             self?.completeAccountResize(generation: generation)
@@ -551,6 +594,28 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             }
             self.presentationState.accountTransitionPhase = .visible
         }
+    }
+
+    private func prepareAccountTransitionForHiddenSettlement() -> Int? {
+        guard accountTransitionPhase != .visible else { return nil }
+        if accountTransitionPhase == .resizing {
+            frameAnimationInterrupter(panel)
+            isApplyingControllerFrame = false
+        }
+        let settlement = accountTransitionCoordinator.prepareHiddenSettlement()
+        presentationState.presentedAccountPresentation = settlement.presentation
+        presentationState.accountTransitionPhase = .swapping
+        return settlement.generation
+    }
+
+    private func settleAccountTransitionImmediately(interruptFrameAnimation: Bool) {
+        if interruptFrameAnimation, accountTransitionPhase == .resizing {
+            frameAnimationInterrupter(panel)
+            isApplyingControllerFrame = false
+        }
+        presentationState.presentedAccountPresentation =
+            accountTransitionCoordinator.absorbLatestPresentation()
+        presentationState.accountTransitionPhase = .visible
     }
 
     func showForCurrentSession(using preferences: AppConfig.UsageOverlay) {
@@ -597,6 +662,8 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             resizeToFittingContent(animated: false)
         } else if !preferences.isVisible {
             userMoveInterruptedTransition = false
+            userMoveInterruptedAccountGeneration = nil
+            settleAccountTransitionImmediately(interruptFrameAnimation: true)
             interruptActiveTransition()
             panel.orderOut(nil)
             isVisible = false
@@ -615,7 +682,11 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     func handleScreenGeometryChange() {
         guard !isUserMoveInProgress else { return }
         userMoveInterruptedTransition = false
+        userMoveInterruptedAccountGeneration = nil
+        let accountSettlementGeneration = prepareAccountTransitionForHiddenSettlement()
         interruptActiveTransition()
+        presentationState.presentedDisplayMode = displayMode
+        presentationState.isContentHiddenForModeTransition = false
         updatePanelConstraints(for: displayMode)
         screenGeometryGeneration += 1
         let generation = screenGeometryGeneration
@@ -623,6 +694,13 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             guard let self, generation == self.screenGeometryGeneration else { return }
             if self.savedPlacement != nil || self.isUsingTemporaryScreenFallback {
                 self.restoreSavedPlacement(allowMigration: false)
+            }
+            if let accountSettlementGeneration {
+                self.beginAccountResize(
+                    generation: accountSettlementGeneration,
+                    animated: false
+                )
+                return
             }
             self.panel.contentView?.layoutSubtreeIfNeeded()
             let fittingSize = self.fittingSizeProvider?()
@@ -659,7 +737,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
                 viewModel: viewModel,
                 presentationState: presentationState,
                 onContentSizeInvalidated: { [weak self] in
-                    self?.resizeToFittingContent(animated: false)
+                    self?.requestContentResize(animated: false)
                 }
             ),
             viewModel: viewModel,
@@ -841,7 +919,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     }
 
     private func resizeToFittingContentImmediately(animated: Bool) {
-        guard resizeCoordinator.requestResize(animated: animated) else { return }
+        _ = resizeCoordinator.requestResize(animated: animated)
         resizeScheduleGeneration += 1
         performScheduledResize()
     }

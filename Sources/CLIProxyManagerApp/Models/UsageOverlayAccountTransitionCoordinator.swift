@@ -101,6 +101,15 @@ struct UsageOverlayAccountTransitionCoordinator {
         return true
     }
 
+    mutating func prepareHiddenSettlement() -> (
+        generation: Int,
+        presentation: UsageOverlayAccountPresentation
+    ) {
+        generation += 1
+        phase = .swapping
+        return (generation, desiredPresentation)
+    }
+
     mutating func absorbLatestPresentation() -> UsageOverlayAccountPresentation {
         generation += 1
         phase = .visible
