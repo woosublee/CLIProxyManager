@@ -33,7 +33,10 @@ struct CLIProxyManagerApp: App {
                 viewModel.beginTermination()
             },
             beforeTerminate: {
-                await viewModel.prepareForTermination()
+                try await viewModel.prepareForTermination()
+            },
+            cancelTerminationPreparation: {
+                viewModel.cancelTerminationPreparation()
             }
         )
         _quitCoordinator = StateObject(wrappedValue: quitCoordinator)

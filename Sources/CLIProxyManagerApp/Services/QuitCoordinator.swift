@@ -44,7 +44,8 @@ final class QuitCoordinator: ObservableObject {
     private let quitConfirmationPresenter: any QuitConfirmationPresenting
     private let shouldStopServerBeforeQuit: @MainActor @Sendable () -> Bool
     private let beginTermination: @MainActor @Sendable () -> Void
-    private let beforeTerminate: @MainActor @Sendable () async -> Void
+    private let beforeTerminate: @MainActor @Sendable () async throws -> Void
+    private let cancelTerminationPreparation: @MainActor @Sendable () -> Void
     private let terminationPreparationTimeoutNanoseconds: UInt64
     private let terminationSleep: @MainActor @Sendable (UInt64) async -> Void
     private var terminationState = TerminationState.idle
@@ -55,7 +56,8 @@ final class QuitCoordinator: ObservableObject {
         quitConfirmationPresenter: any QuitConfirmationPresenting = NSAlertQuitConfirmationPresenter(),
         shouldStopServerBeforeQuit: @escaping @MainActor @Sendable () -> Bool = { true },
         beginTermination: @escaping @MainActor @Sendable () -> Void = {},
-        beforeTerminate: @escaping @MainActor @Sendable () async -> Void = {},
+        beforeTerminate: @escaping @MainActor @Sendable () async throws -> Void = {},
+        cancelTerminationPreparation: @escaping @MainActor @Sendable () -> Void = {},
         terminationPreparationTimeoutNanoseconds: UInt64 = 20_000_000_000,
         terminationSleep: @escaping @MainActor @Sendable (UInt64) async -> Void = { delay in
             try? await Task.sleep(nanoseconds: delay)
@@ -67,6 +69,7 @@ final class QuitCoordinator: ObservableObject {
         self.shouldStopServerBeforeQuit = shouldStopServerBeforeQuit
         self.beginTermination = beginTermination
         self.beforeTerminate = beforeTerminate
+        self.cancelTerminationPreparation = cancelTerminationPreparation
         self.terminationPreparationTimeoutNanoseconds = terminationPreparationTimeoutNanoseconds
         self.terminationSleep = terminationSleep
     }
@@ -148,14 +151,16 @@ final class QuitCoordinator: ObservableObject {
             if shouldStopServer {
                 try await proxyService.stop()
             }
-            guard await prepareForTerminationWithinTimeout() else {
-                terminationState = .idle
-                quitErrorMessage = "Usage data could not be safely flushed before the timeout. Quit was cancelled."
-                if case .replyToApplication(let reply) = completion {
-                    reply(false)
-                }
-                return
-            }
+        } catch {
+            cancelTermination(
+                completion: completion,
+                message: "Failed to stop the CLIProxyAPI server. Quit was cancelled."
+            )
+            return
+        }
+
+        switch await prepareForTerminationWithinTimeout() {
+        case .succeeded:
             switch completion {
             case .terminateInternally:
                 terminationState = .authorizingInternalTermination
@@ -164,47 +169,75 @@ final class QuitCoordinator: ObservableObject {
                 terminationState = .idle
                 reply(true)
             }
-        } catch {
-            terminationState = .idle
-            quitErrorMessage = "Failed to stop the CLIProxyAPI server. Quit was cancelled."
-            if case .replyToApplication(let reply) = completion {
-                reply(false)
-            }
+        case .timedOut:
+            cancelTerminationPreparation()
+            cancelTermination(
+                completion: completion,
+                message: "Usage data could not be safely flushed before the timeout. Quit was cancelled."
+            )
+        case .failed:
+            cancelTerminationPreparation()
+            cancelTermination(
+                completion: completion,
+                message: "Usage data could not be safely flushed. Quit was cancelled."
+            )
         }
     }
 
-    private func prepareForTerminationWithinTimeout() async -> Bool {
+    private func cancelTermination(
+        completion: TerminationCompletion,
+        message: String
+    ) {
+        terminationState = .idle
+        quitErrorMessage = message
+        if case .replyToApplication(let reply) = completion {
+            reply(false)
+        }
+    }
+
+    fileprivate enum TerminationPreparationOutcome {
+        case succeeded
+        case timedOut
+        case failed
+    }
+
+    private func prepareForTerminationWithinTimeout() async -> TerminationPreparationOutcome {
         let race = TerminationPreparationRace()
         let preparationTask = Task { [beforeTerminate] in
-            await beforeTerminate()
-            await race.resolve(true)
+            do {
+                try await beforeTerminate()
+                await race.resolve(.succeeded)
+            } catch {
+                await race.resolve(.failed)
+            }
         }
         let timeoutTask = Task { [terminationSleep, terminationPreparationTimeoutNanoseconds] in
             await terminationSleep(terminationPreparationTimeoutNanoseconds)
-            await race.resolve(false)
+            await race.resolve(.timedOut)
         }
-        let succeeded = await race.value()
-        if succeeded {
+        let outcome = await race.value()
+        switch outcome {
+        case .succeeded, .failed:
             timeoutTask.cancel()
-        } else {
+        case .timedOut:
             preparationTask.cancel()
         }
-        return succeeded
+        return outcome
     }
 }
 
 private actor TerminationPreparationRace {
-    private var result: Bool?
-    private var continuation: CheckedContinuation<Bool, Never>?
+    private var result: QuitCoordinator.TerminationPreparationOutcome?
+    private var continuation: CheckedContinuation<QuitCoordinator.TerminationPreparationOutcome, Never>?
 
-    func resolve(_ value: Bool) {
+    func resolve(_ value: QuitCoordinator.TerminationPreparationOutcome) {
         guard result == nil else { return }
         result = value
         continuation?.resume(returning: value)
         continuation = nil
     }
 
-    func value() async -> Bool {
+    func value() async -> QuitCoordinator.TerminationPreparationOutcome {
         if let result { return result }
         return await withCheckedContinuation { continuation in
             if let result {

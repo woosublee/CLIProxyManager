@@ -125,6 +125,38 @@ public struct APIUsageQueueRecord: Decodable, Equatable, Sendable {
     }
 }
 
+public struct APIUsageQueueBatch: Decodable, Equatable, Sendable {
+    public let records: [APIUsageQueueRecord]
+    public let malformedRecordCount: Int
+
+    public var totalRecordCount: Int {
+        records.count + malformedRecordCount
+    }
+
+    public init(records: [APIUsageQueueRecord], malformedRecordCount: Int = 0) {
+        self.records = records
+        self.malformedRecordCount = malformedRecordCount
+    }
+
+    public init(from decoder: Decoder) throws {
+        var container = try decoder.unkeyedContainer()
+        var records: [APIUsageQueueRecord] = []
+        var malformedRecordCount = 0
+
+        while !container.isAtEnd {
+            let elementDecoder = try container.superDecoder()
+            do {
+                records.append(try APIUsageQueueRecord(from: elementDecoder))
+            } catch {
+                malformedRecordCount += 1
+            }
+        }
+
+        self.records = records
+        self.malformedRecordCount = malformedRecordCount
+    }
+}
+
 public enum APIUsageQueueClientError: Error, Equatable, Sendable {
     case invalidPort
     case invalidCount
@@ -137,5 +169,5 @@ public enum APIUsageQueueClientError: Error, Equatable, Sendable {
 }
 
 public protocol APIUsageQueueFetching: Sendable {
-    func popUsage(port: Int, count: Int) async throws -> [APIUsageQueueRecord]
+    func popUsage(port: Int, count: Int) async throws -> APIUsageQueueBatch
 }

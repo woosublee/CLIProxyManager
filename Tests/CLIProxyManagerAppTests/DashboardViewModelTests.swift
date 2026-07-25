@@ -3852,7 +3852,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         let launch = viewModel.beginApplicationLaunch()
         await healthClient.waitUntilSuspended()
-        await viewModel.prepareForTermination()
+        try? await viewModel.prepareForTermination()
         await launch.value
 
         XCTAssertTrue(proxyService.ports.isEmpty)
@@ -3880,7 +3880,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let launch = viewModel.beginApplicationLaunch()
         let didReachRestart = await proxyService.reachesRestartCount(1)
         XCTAssertTrue(didReachRestart)
-        await viewModel.prepareForTermination()
+        try? await viewModel.prepareForTermination()
         await launch.value
 
         XCTAssertEqual(proxyService.restartPorts.count, 1)
@@ -3908,7 +3908,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let launch = viewModel.beginApplicationLaunch()
         for _ in 0..<1_000 where proxyService.ports.isEmpty { await Task.yield() }
         let startsAtTermination = proxyService.ports.count
-        await viewModel.prepareForTermination()
+        try? await viewModel.prepareForTermination()
         await launch.value
 
         XCTAssertEqual(startsAtTermination, 1)
@@ -5295,7 +5295,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertTrue(viewModel.apiCostUsageStates.isEmpty)
 
         collector.resumeUpdate()
-        await viewModel.prepareForTermination()
+        try? await viewModel.prepareForTermination()
         await collector.finishReports()
     }
 
@@ -5413,6 +5413,67 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         await collector.finishReports()
     }
 
+    func testConcurrentTerminationWaitersShareInFlightStopInsteadOfSecondReturningEarly() async throws {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let collector = APIUsageCollectorDouble(suspendsStop: true)
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            apiUsageCollector: collector,
+            secretStore: InMemorySecretStore(values: [.claudeAPIKey: "key"])
+        )
+        let secondCompleted = TerminationCompletionFlag()
+
+        let first = Task { try await viewModel.prepareForTermination() }
+        await collector.waitForStop()
+        let second = Task {
+            try await viewModel.prepareForTermination()
+            await secondCompleted.markCompleted()
+        }
+        for _ in 0..<100 { await Task.yield() }
+
+        let completedBeforeResume = await secondCompleted.isCompleted()
+        let stopCountBeforeResume = await collector.stopCount()
+        XCTAssertFalse(completedBeforeResume)
+        XCTAssertEqual(stopCountBeforeResume, 1)
+
+        await collector.resumeStop()
+        _ = await first.result
+        _ = await second.result
+        let completedAfterResume = await secondCompleted.isCompleted()
+        let finalStopCount = await collector.stopCount()
+        XCTAssertTrue(completedAfterResume)
+        XCTAssertEqual(finalStopCount, 1)
+    }
+
+    func testTerminationFlushFailureCanRetryInsteadOfCachingSuccess() async throws {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let collector = APIUsageCollectorDouble(stopFailuresRemaining: 1)
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            apiUsageCollector: collector,
+            secretStore: InMemorySecretStore(values: [.claudeAPIKey: "key"])
+        )
+
+        do {
+            try await viewModel.prepareForTermination()
+            XCTFail("Expected first termination flush to fail")
+        } catch {
+            XCTAssertEqual(error as? APIUsageLedgerStoreError, .persistenceFailure)
+        }
+
+        try await viewModel.prepareForTermination()
+        let stopCount = await collector.stopCount()
+        XCTAssertEqual(stopCount, 2)
+    }
+
     func testTerminationInvalidatesQueuedAPIUsageUpdateBehindSuspendedReload() async throws {
         var config = AppConfig.default
         config.subscriptionUsage.showInMenuBar = true
@@ -5432,7 +5493,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let reload = Task { await viewModel.reloadUsage() }
         await collector.waitUntilReloadSuspended()
         try viewModel.savePort(19_001)
-        let termination = Task { await viewModel.prepareForTermination() }
+        let termination = Task { try? await viewModel.prepareForTermination() }
         for _ in 0..<100 { await Task.yield() }
         collector.resumeReload()
         await reload.value
@@ -5464,7 +5525,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         let reload = Task { await viewModel.reloadUsage() }
         await collector.waitForReloadToSuspend()
-        let termination = Task { await viewModel.prepareForTermination() }
+        let termination = Task { try? await viewModel.prepareForTermination() }
 
         await fulfillment(of: [stopExpectation], timeout: 1)
         collector.releaseAll()
@@ -5494,7 +5555,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         try viewModel.savePort(19_001)
         await collector.waitForUpdateToSuspend()
-        let termination = Task { await viewModel.prepareForTermination() }
+        let termination = Task { try? await viewModel.prepareForTermination() }
 
         await fulfillment(of: [stopExpectation], timeout: 1)
         collector.releaseAll()
@@ -6176,6 +6237,13 @@ private final class CPMInstallationDouble: CPMInstallationManaging {
     }
 }
 
+private actor TerminationCompletionFlag {
+    private var completed = false
+
+    func markCompleted() { completed = true }
+    func isCompleted() -> Bool { completed }
+}
+
 private actor APIUsageCollectorDouble: APIUsageCollecting {
     private let restoredReport: APIUsageCollectionReport
     private let reloadReport: APIUsageCollectionReport
@@ -6186,6 +6254,7 @@ private actor APIUsageCollectorDouble: APIUsageCollecting {
     private var startCalls = 0
     private var reloadCalls = 0
     private var stopCalls = 0
+    private var stopFailuresRemaining: Int
     private var updates: [APIUsageCollectorConfiguration] = []
     private var recordedStopReasons: [APIUsageCollectorStopReason] = []
     private var startWaiters: [(expectedCount: Int, continuation: CheckedContinuation<Void, Never>)] = []
@@ -6209,6 +6278,7 @@ private actor APIUsageCollectorDouble: APIUsageCollecting {
         suspendsReload: Bool = false,
         suspendsUpdate: Bool = false,
         suspendsStop: Bool = false,
+        stopFailuresRemaining: Int = 0,
         keepsReportStreamOpen: Bool = false
     ) {
         self.restoredReport = restoredReport
@@ -6216,6 +6286,7 @@ private actor APIUsageCollectorDouble: APIUsageCollecting {
         self.suspendsReload = suspendsReload
         self.suspendsUpdate = suspendsUpdate
         self.suspendsStop = suspendsStop
+        self.stopFailuresRemaining = stopFailuresRemaining
         self.keepsReportStreamOpen = keepsReportStreamOpen
     }
 
@@ -6271,7 +6342,7 @@ private actor APIUsageCollectorDouble: APIUsageCollecting {
         )
     }
 
-    func stop(reason: APIUsageCollectorStopReason, at: Date) async {
+    func stop(reason: APIUsageCollectorStopReason, at: Date) async throws {
         stopCalls += 1
         recordedStopReasons.append(reason)
         let waiters = stopWaiters
@@ -6281,6 +6352,10 @@ private actor APIUsageCollectorDouble: APIUsageCollecting {
             await withCheckedContinuation { continuation in
                 stopContinuation = continuation
             }
+        }
+        if stopFailuresRemaining > 0 {
+            stopFailuresRemaining -= 1
+            throw APIUsageLedgerStoreError.persistenceFailure
         }
     }
 
@@ -6514,7 +6589,7 @@ private actor IdentityAPIUsageCollectorDouble: APIUsageCollecting {
         updateReport
     }
 
-    func stop(reason: APIUsageCollectorStopReason, at: Date) async {}
+    func stop(reason: APIUsageCollectorStopReason, at: Date) async throws {}
 
     func emit(_ report: APIUsageCollectionReport) {
         continuation?.yield(report)
@@ -6576,7 +6651,7 @@ private actor CancellableLifecycleAPIUsageCollectorDouble: APIUsageCollecting {
         return nextReport()
     }
 
-    func stop(reason: APIUsageCollectorStopReason, at: Date) async {
+    func stop(reason: APIUsageCollectorStopReason, at: Date) async throws {
         recordedCalls.append(.stop(reason))
         onStop()
     }

@@ -280,7 +280,10 @@ final class DashboardViewModel: ObservableObject {
     private var apiUsageLifecycleGeneration = 0
     private var acceptedAPIUsageReportIdentity: APIUsageCollectorIdentity?
     private var isPreparingAPIUsageForTermination = false
-    private var hasStartedAPIUsageTerminationPreparation = false
+    private var apiUsageTerminationPreparationTask: Task<Void, Error>?
+    private var apiUsageTerminationPreparationID: UUID?
+    private var apiUsageTerminationPreparationSucceeded = false
+    private var shouldRecoverAfterTerminationPreparation = false
     private enum ProxyRuntimeCertainty {
         case confirmedStopped
         case mayBeRunning
@@ -445,7 +448,7 @@ final class DashboardViewModel: ObservableObject {
                 let proxyCouldServeRequests = proxyRuntimeCertainty != .confirmedStopped
                 let collector = apiUsageCollector
                 enqueueAPIUsageLifecycle(generation: generation) { _ in
-                    await collector.stop(
+                    try? await collector.stop(
                         reason: .trackingDisabled(proxyCouldServeRequests: proxyCouldServeRequests),
                         at: Date()
                     )
@@ -542,7 +545,7 @@ final class DashboardViewModel: ObservableObject {
             let proxyCouldServeRequests = proxyRuntimeCertainty != .confirmedStopped
             let collector = apiUsageCollector
             enqueueAPIUsageLifecycle(generation: generation) { _ in
-                await collector.stop(
+                try? await collector.stop(
                     reason: .trackingDisabled(proxyCouldServeRequests: proxyCouldServeRequests),
                     at: Date()
                 )
@@ -797,26 +800,71 @@ final class DashboardViewModel: ObservableObject {
         apiUsageLifecycleTasks.values.forEach { $0.cancel() }
     }
 
-    func prepareForTermination() async {
+    func prepareForTermination() async throws {
         beginTermination()
-        guard !hasStartedAPIUsageTerminationPreparation else { return }
-        hasStartedAPIUsageTerminationPreparation = true
+        shouldRecoverAfterTerminationPreparation = false
+        if apiUsageTerminationPreparationSucceeded { return }
+
+        if let task = apiUsageTerminationPreparationTask,
+           let id = apiUsageTerminationPreparationID {
+            try await finishTerminationPreparation(task, id: id)
+            return
+        }
 
         let launchTask = applicationLaunchTask
         let lifecycleTasks = Array(apiUsageLifecycleTasks.values)
         apiUsageLifecycleTasks.removeAll()
         apiUsageLifecycleTailTask = nil
         apiUsageLifecycleTailID = nil
-
         let collector = apiUsageCollector
-        await collector.stop(reason: .applicationTermination, at: Date())
-        for task in lifecycleTasks {
-            await task.value
+        let id = UUID()
+        let task = Task {
+            try await collector.stop(reason: .applicationTermination, at: Date())
+            for task in lifecycleTasks {
+                await task.value
+            }
+            await launchTask?.value
         }
-        await launchTask?.value
-        applicationLaunchTask = nil
-        apiUsageReportTask?.cancel()
-        apiUsageReportTask = nil
+        apiUsageTerminationPreparationID = id
+        apiUsageTerminationPreparationTask = task
+        try await finishTerminationPreparation(task, id: id)
+    }
+
+    func cancelTerminationPreparation() {
+        shouldRecoverAfterTerminationPreparation = true
+        if apiUsageTerminationPreparationSucceeded {
+            resetTerminationPreparationState()
+        }
+    }
+
+    private func finishTerminationPreparation(
+        _ task: Task<Void, Error>,
+        id: UUID
+    ) async throws {
+        do {
+            try await task.value
+            guard apiUsageTerminationPreparationID == id else { return }
+            applicationLaunchTask = nil
+            apiUsageReportTask?.cancel()
+            apiUsageReportTask = nil
+            apiUsageTerminationPreparationSucceeded = true
+            if shouldRecoverAfterTerminationPreparation {
+                resetTerminationPreparationState()
+            }
+        } catch {
+            if apiUsageTerminationPreparationID == id {
+                resetTerminationPreparationState()
+            }
+            throw error
+        }
+    }
+
+    private func resetTerminationPreparationState() {
+        apiUsageTerminationPreparationTask = nil
+        apiUsageTerminationPreparationID = nil
+        apiUsageTerminationPreparationSucceeded = false
+        shouldRecoverAfterTerminationPreparation = false
+        isPreparingAPIUsageForTermination = false
     }
 
     private func restoreSubscriptionUsageSnapshots() {

@@ -57,7 +57,7 @@ public protocol APIUsageCollecting: Sendable {
     func start(configuration: APIUsageCollectorConfiguration) async -> APIUsageCollectionReport
     func update(configuration: APIUsageCollectorConfiguration) async -> APIUsageCollectionReport
     func reload(configuration: APIUsageCollectorConfiguration) async -> APIUsageCollectionReport
-    func stop(reason: APIUsageCollectorStopReason, at: Date) async
+    func stop(reason: APIUsageCollectorStopReason, at: Date) async throws
 }
 
 public actor APIUsageCollector: APIUsageCollecting {
@@ -147,6 +147,10 @@ public actor APIUsageCollector: APIUsageCollecting {
         reloadTask?.cancel()
         initializationTask?.cancel()
         reportContinuation?.finish()
+        let ledgerStore = ledgerStore
+        Task {
+            await ledgerStore.releaseCollectorWriterLease()
+        }
     }
 
     public func reports() async -> AsyncStream<APIUsageCollectionReport> {
@@ -196,7 +200,7 @@ public actor APIUsageCollector: APIUsageCollecting {
         }
 
         guard configuration.usageEnabled else {
-            await stop(
+            try? await stop(
                 reason: .trackingDisabled(proxyCouldServeRequests: configuration.proxyReady),
                 at: now()
             )
@@ -304,7 +308,7 @@ public actor APIUsageCollector: APIUsageCollecting {
         let identity = nextIdentity()
 
         guard configuration.usageEnabled else {
-            await stop(
+            try? await stop(
                 reason: .trackingDisabled(proxyCouldServeRequests: configuration.proxyReady),
                 at: now()
             )
@@ -416,7 +420,7 @@ public actor APIUsageCollector: APIUsageCollecting {
         return result.report
     }
 
-    public func stop(reason: APIUsageCollectorStopReason, at: Date) async {
+    public func stop(reason: APIUsageCollectorStopReason, at: Date) async throws {
         lifecycleStopGeneration &+= 1
         initializationTask?.cancel()
         if activeDrainSource == .lifecycle {
@@ -438,17 +442,20 @@ public actor APIUsageCollector: APIUsageCollecting {
             case .applicationTermination:
                 try await ledgerStore.flush()
             }
+            await ledgerStore.releaseCollectorWriterLease()
         } catch {
-            guard let configuration else { return }
-            let ledger = try? await ledgerStore.readCurrentPeriods(at: at)
-            let report = report(
-                configuration: configuration,
-                identity: currentIdentity ?? .init(generation: 0),
-                ledger: ledger,
-                ledgerError: error,
-                at: at
-            )
-            publish(report, for: configuration)
+            if let configuration {
+                let ledger = try? await ledgerStore.readCurrentPeriods(at: at)
+                let report = report(
+                    configuration: configuration,
+                    identity: currentIdentity ?? .init(generation: 0),
+                    ledger: ledger,
+                    ledgerError: error,
+                    at: at
+                )
+                publish(report, for: configuration)
+            }
+            throw error
         }
     }
 
@@ -558,6 +565,7 @@ public actor APIUsageCollector: APIUsageCollecting {
         at: Date,
         forcePreparation: Bool
     ) async throws -> PreparedBaseline {
+        try await ledgerStore.acquireCollectorWriterLease()
         if forcePreparation {
             initializationRequiresFlush = true
             try await ledgerStore.prepareTracking(
@@ -676,14 +684,17 @@ public actor APIUsageCollector: APIUsageCollecting {
         }
 
         var latestTimestamp: Date?
+        let destructiveGapStart = initializedBaseline.metadata.lastSuccessfulDrainAt
+            ?? initializedBaseline.metadata.trackingStartedAt
+        var hasMalformedRecordGap = false
         while true {
             var processed = 0
             var shortBatchReceived = false
 
             while processed < Self.recordsPerPass {
-                let records: [APIUsageQueueRecord]
+                let batch: APIUsageQueueBatch
                 do {
-                    records = try await queueClient.popUsage(
+                    batch = try await queueClient.popUsage(
                         port: configuration.port,
                         count: Self.batchSize
                     )
@@ -697,12 +708,70 @@ public actor APIUsageCollector: APIUsageCollecting {
                     publish(report, for: configuration)
                     return .init(report: report, retryDisposition: .terminal)
                 } catch let error as APIUsageQueueClientError {
+                    let failedAt = now()
+                    if error == .schemaMismatch {
+                        do {
+                            try await ledgerStore.markCollectionGap(
+                                from: destructiveGapStart,
+                                to: failedAt
+                            )
+                            try await flushActiveDrainIfRequested()
+                            let ledger = try await ledgerStore.readCurrentPeriods(at: failedAt)
+                            let report = report(
+                                configuration: configuration,
+                                identity: identity,
+                                ledger: ledger,
+                                collectionIssue: issue(for: error),
+                                at: failedAt
+                            )
+                            publish(report, for: configuration)
+                            return .init(report: report, retryDisposition: .terminal)
+                        } catch {
+                            let report = report(
+                                configuration: configuration,
+                                identity: identity,
+                                ledger: baseline,
+                                ledgerError: error,
+                                at: failedAt
+                            )
+                            publish(report, for: configuration)
+                            return .init(report: report, retryDisposition: .terminal)
+                        }
+                    }
+                    if hasMalformedRecordGap {
+                        do {
+                            try await flushActiveDrainIfRequested()
+                            let ledger = try await ledgerStore.readCurrentPeriods(at: failedAt)
+                            let report = report(
+                                configuration: configuration,
+                                identity: identity,
+                                ledger: ledger,
+                                collectionIssue: issue(for: error),
+                                at: failedAt
+                            )
+                            publish(report, for: configuration)
+                            return .init(
+                                report: report,
+                                retryDisposition: retryDisposition(for: error)
+                            )
+                        } catch {
+                            let report = report(
+                                configuration: configuration,
+                                identity: identity,
+                                ledger: baseline,
+                                ledgerError: error,
+                                at: failedAt
+                            )
+                            publish(report, for: configuration)
+                            return .init(report: report, retryDisposition: .terminal)
+                        }
+                    }
                     let report = report(
                         configuration: configuration,
                         identity: identity,
                         ledger: baseline,
                         collectionIssue: issue(for: error),
-                        at: now()
+                        at: failedAt
                     )
                     publish(report, for: configuration)
                     return .init(
@@ -721,6 +790,28 @@ public actor APIUsageCollector: APIUsageCollecting {
                     return .init(report: report, retryDisposition: .retryable)
                 }
 
+                if batch.malformedRecordCount > 0 {
+                    let gapEnd = now()
+                    do {
+                        try await ledgerStore.markCollectionGap(
+                            from: destructiveGapStart,
+                            to: gapEnd
+                        )
+                        hasMalformedRecordGap = true
+                    } catch {
+                        let report = report(
+                            configuration: configuration,
+                            identity: identity,
+                            ledger: baseline,
+                            ledgerError: error,
+                            at: gapEnd
+                        )
+                        publish(report, for: configuration)
+                        return .init(report: report, retryDisposition: .terminal)
+                    }
+                }
+
+                let records = batch.records
                 let mutations = records.compactMap(makeMutation)
                 do {
                     try await ledgerStore.merge(mutations)
@@ -758,8 +849,8 @@ public actor APIUsageCollector: APIUsageCollecting {
                 for record in records {
                     latestTimestamp = maxDate(latestTimestamp, record.timestamp)
                 }
-                processed += records.count
-                shortBatchReceived = records.count < Self.batchSize
+                processed += batch.totalRecordCount
+                shortBatchReceived = batch.totalRecordCount < Self.batchSize
 
                 if Task.isCancelled {
                     let report = reportFromBaseline(

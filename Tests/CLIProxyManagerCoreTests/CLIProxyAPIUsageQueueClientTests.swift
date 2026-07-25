@@ -35,28 +35,56 @@ final class CLIProxyAPIUsageQueueClientTests: XCTestCase {
             transport: transport
         )
 
-        let records = try await client.popUsage(port: 18_317, count: 200)
+        let batch = try await client.popUsage(port: 18_317, count: 200)
 
-        XCTAssertEqual(records.count, 1)
-        XCTAssertEqual(records[0].model, "claude-opus-5")
-        XCTAssertTrue(records[0].hasAuthIndex)
-        XCTAssertEqual(records[0].tokenBreakdown.input.cacheWriteTokens, 1)
+        XCTAssertEqual(batch.records.count, 1)
+        XCTAssertEqual(batch.malformedRecordCount, 0)
+        XCTAssertEqual(batch.totalRecordCount, 1)
+        XCTAssertEqual(batch.records[0].model, "claude-opus-5")
+        XCTAssertTrue(batch.records[0].hasAuthIndex)
+        XCTAssertEqual(batch.records[0].tokenBreakdown.input.cacheWriteTokens, 1)
         let request = try XCTUnwrap(transport.requests.first)
         XCTAssertEqual(request.url?.absoluteString, "http://127.0.0.1:18317/v0/management/usage-queue?count=200")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer management-key")
-        let decodedLabels = Set(Mirror(reflecting: records[0]).children.compactMap(\.label))
+        let decodedLabels = Set(Mirror(reflecting: batch.records[0]).children.compactMap(\.label))
         XCTAssertTrue(decodedLabels.isDisjoint(with: ["apiKey", "requestID", "authIndex", "fail", "responseHeaders"]))
     }
 
-    func testDecodeFailureDoesNotExposeRawBody() async {
-        let transport = StubManagementTransport(data: Data(#"[{"api_key":"sk-secret"}]"#.utf8), statusCode: 200)
+    func testMalformedElementDoesNotDiscardValidRecordsOrExposeSensitiveFields() async throws {
+        let body = Data("[\(validUsageRecordJSON),{\"api_key\":\"sk-secret\"},\(validUsageRecordJSON)]".utf8)
         let client = CLIProxyAPIUsageQueueClient(
             keyStore: StubManagementKeyProvider(key: "management-key"),
-            transport: transport
+            transport: StubManagementTransport(data: body, statusCode: 200)
         )
 
+        let batch = try await client.popUsage(port: 18_317, count: 200)
+
+        XCTAssertEqual(batch.records.count, 2)
+        XCTAssertEqual(batch.malformedRecordCount, 1)
+        XCTAssertEqual(batch.totalRecordCount, 3)
+        XCTAssertFalse(String(describing: batch).contains("sk-secret"))
+    }
+
+    func testMalformedOnlyArrayReturnsFiniteBatchWhileTopLevelInvalidJSONIsSchemaMismatch() async throws {
+        let malformedOnly = CLIProxyAPIUsageQueueClient(
+            keyStore: StubManagementKeyProvider(key: "management-key"),
+            transport: StubManagementTransport(
+                data: Data(#"[{"api_key":"sk-secret"}]"#.utf8),
+                statusCode: 200
+            )
+        )
+
+        let batch = try await malformedOnly.popUsage(port: 18_317, count: 200)
+        XCTAssertEqual(batch.records, [])
+        XCTAssertEqual(batch.malformedRecordCount, 1)
+        XCTAssertEqual(batch.totalRecordCount, 1)
+
+        let invalidTopLevel = CLIProxyAPIUsageQueueClient(
+            keyStore: StubManagementKeyProvider(key: "management-key"),
+            transport: StubManagementTransport(data: Data(#"{"api_key":"sk-secret"}"#.utf8), statusCode: 200)
+        )
         do {
-            _ = try await client.popUsage(port: 18_317, count: 200)
+            _ = try await invalidTopLevel.popUsage(port: 18_317, count: 200)
             XCTFail("Expected schema mismatch")
         } catch {
             XCTAssertEqual(error as? APIUsageQueueClientError, .schemaMismatch)
@@ -100,6 +128,8 @@ final class CLIProxyAPIUsageQueueClientTests: XCTestCase {
         XCTAssertTrue(transport.requests.isEmpty)
     }
 }
+
+private let validUsageRecordJSON = #"{"timestamp":"2026-07-25T01:02:03Z","provider":"claude","executor_type":"ClaudeExecutor","model":"claude-opus-5","alias":"cpm-claude-api/claude-opus-5","auth_type":"apikey","auth_index":"auth-1","api_key":"sk-ant-secret","request_id":"req-secret","failed":false,"accounting_version":2,"token_breakdown":{"schema_version":2,"quality":"complete","total_tokens":30,"input":{"total_tokens":10,"uncached_tokens":7,"cache_read_tokens":2,"cache_write_tokens":1},"output":{"total_tokens":20,"non_reasoning_tokens":15,"reasoning_tokens":5},"unclassified_tokens":0},"service_tier":"default","response_service_tier":"standard","fail":{"status_code":500,"body":"sensitive"},"response_headers":{"Authorization":["secret"]}}"#
 
 private final class StubManagementTransport: ManagementAPIHTTPTransport, @unchecked Sendable {
     let data: Data

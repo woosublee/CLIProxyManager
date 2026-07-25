@@ -22,7 +22,7 @@ public struct CLIProxyAPIUsageQueueClient: APIUsageQueueFetching {
         self.transport = transport
     }
 
-    public func popUsage(port: Int, count: Int) async throws -> [APIUsageQueueRecord] {
+    public func popUsage(port: Int, count: Int) async throws -> APIUsageQueueBatch {
         guard (1...65_535).contains(port) else {
             throw APIUsageQueueClientError.invalidPort
         }
@@ -63,7 +63,7 @@ public struct CLIProxyAPIUsageQueueClient: APIUsageQueueFetching {
         }
 
         do {
-            return try makeDecoder().decode([APIUsageQueueRecord].self, from: data)
+            return try makeDecoder().decode(APIUsageQueueBatch.self, from: data)
         } catch is DecodingError {
             throw APIUsageQueueClientError.schemaMismatch
         }

@@ -11,9 +11,12 @@ public enum APIUsageLedgerStoreError: Error, Equatable, Sendable {
     case unsupportedSchemaVersion(Int)
     case invalidFile
     case persistenceFailure
+    case collectorLeaseUnavailable
 }
 
 public protocol APIUsageLedgerStoring: Sendable {
+    func acquireCollectorWriterLease() async throws
+    func releaseCollectorWriterLease() async
     func prepareTracking(at: Date, reportingTimeZoneID: String) async throws
     func merge(_ mutations: [APIUsageLedgerMutation]) async throws
     func markPersistenceFailure(for timestamps: [Date]) async throws
@@ -44,6 +47,7 @@ public actor APIUsageLedgerStore: APIUsageLedgerStoring {
     private var dirtyMonths: Set<String> = []
     private var pendingWriteTask: Task<Void, Never>?
     private var debounceGeneration: UInt64 = 0
+    private var collectorWriterLeaseDescriptor: Int32?
 
     public init(
         paths: ManagedPaths = ManagedPaths(),
@@ -70,6 +74,35 @@ public actor APIUsageLedgerStore: APIUsageLedgerStoring {
         self.writeDelayNanoseconds = writeDelayNanoseconds
         self.sleep = sleep
         self.beforeCorruptBackupMove = beforeCorruptBackupMove
+    }
+
+    deinit {
+        if let collectorWriterLeaseDescriptor {
+            close(collectorWriterLeaseDescriptor)
+        }
+    }
+
+    public func acquireCollectorWriterLease() throws {
+        guard collectorWriterLeaseDescriptor == nil else { return }
+        _ = try ensureUsageDirectory(createIfMissing: true, repairPermissions: true)
+        let descriptor = try openCollectorWriterLeaseFile()
+        while flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
+            if errno == EINTR { continue }
+            let lockError = errno
+            close(descriptor)
+            if lockError == EWOULDBLOCK || lockError == EAGAIN {
+                throw APIUsageLedgerStoreError.collectorLeaseUnavailable
+            }
+            throw APIUsageLedgerStoreError.persistenceFailure
+        }
+        collectorWriterLeaseDescriptor = descriptor
+    }
+
+    public func releaseCollectorWriterLease() {
+        guard let descriptor = collectorWriterLeaseDescriptor else { return }
+        collectorWriterLeaseDescriptor = nil
+        releaseExclusiveLock(descriptor)
+        close(descriptor)
     }
 
     public func prepareTracking(at: Date, reportingTimeZoneID: String) async throws {
@@ -642,8 +675,16 @@ public actor APIUsageLedgerStore: APIUsageLedgerStoring {
         return try body()
     }
 
+    private func openCollectorWriterLeaseFile() throws -> Int32 {
+        try openSecureLockFile(named: ".collector.lock")
+    }
+
     private func openStoreLockFile() throws -> Int32 {
-        let file = paths.apiUsageDirectory.appendingPathComponent(".store.lock")
+        try openSecureLockFile(named: ".store.lock")
+    }
+
+    private func openSecureLockFile(named name: String) throws -> Int32 {
+        let file = paths.apiUsageDirectory.appendingPathComponent(name)
         let flags = O_RDWR | O_CLOEXEC | O_NOFOLLOW
 
         while true {

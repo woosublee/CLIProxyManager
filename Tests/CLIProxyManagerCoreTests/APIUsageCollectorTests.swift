@@ -131,6 +131,83 @@ final class APIUsageCollectorTests: XCTestCase {
         XCTAssertEqual(delays, [])
     }
 
+    func testCollectorWriterLeasePreventsSecondProcessStyleWriterUntilFirstStops() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("APIUsageCollectorWriterLeaseTests")
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let paths = ManagedPaths(rootDirectory: root)
+        let at = iso("2026-07-25T12:00:00Z")
+        let firstQueue = RecordingQueueClient(results: [.success([makeQueueRecord()])])
+        let secondQueue = RecordingQueueClient(results: [.success([makeQueueRecord()])])
+        let firstStore = APIUsageLedgerStore(paths: paths, writeDelayNanoseconds: .max)
+        let secondStore = APIUsageLedgerStore(paths: paths, writeDelayNanoseconds: .max)
+        let firstCollector = APIUsageCollector(
+            queueClient: firstQueue,
+            ledgerStore: firstStore,
+            now: { at }
+        )
+        let secondCollector = APIUsageCollector(
+            queueClient: secondQueue,
+            ledgerStore: secondStore,
+            now: { at }
+        )
+
+        _ = await firstCollector.reload(configuration: enabledConfiguration())
+        let blocked = await secondCollector.reload(configuration: enabledConfiguration())
+
+        let firstQueueCalls = await firstQueue.callCount()
+        let blockedSecondQueueCalls = await secondQueue.callCount()
+        XCTAssertEqual(firstQueueCalls, 1)
+        XCTAssertEqual(blockedSecondQueueCalls, 0)
+        XCTAssertTrue(blocked.statesByProfileID["claude-api"]?.issues.contains(.persistenceFailure) == true)
+        let firstRead = try await firstStore.readCurrentPeriods(at: at)
+        XCTAssertEqual(firstRead.currentMonth.buckets.first?.requestCount, 1)
+
+        try await firstCollector.stop(reason: .applicationTermination, at: at)
+        _ = await secondCollector.reload(configuration: enabledConfiguration())
+
+        let acquiredSecondQueueCalls = await secondQueue.callCount()
+        XCTAssertEqual(acquiredSecondQueueCalls, 1)
+        let secondRead = try await secondStore.readCurrentPeriods(at: at)
+        XCTAssertEqual(secondRead.currentMonth.buckets.first?.requestCount, 2)
+        try await secondCollector.stop(reason: .applicationTermination, at: at)
+    }
+
+    func testCollectorDeinitReleasesWriterLeaseWhileReaderStoreRemainsAlive() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("APIUsageCollectorWriterLeaseDeinitTests")
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let paths = ManagedPaths(rootDirectory: root)
+        let at = iso("2026-07-25T12:00:00Z")
+        let retainedReaderStore = APIUsageLedgerStore(paths: paths, writeDelayNanoseconds: .max)
+        var firstCollector: APIUsageCollector? = APIUsageCollector(
+            queueClient: RecordingQueueClient(results: [.success([])]),
+            ledgerStore: retainedReaderStore,
+            now: { at }
+        )
+        _ = await firstCollector?.reload(configuration: enabledConfiguration())
+
+        firstCollector = nil
+        for _ in 0..<100 { await Task.yield() }
+
+        let secondQueue = RecordingQueueClient(results: [.success([makeQueueRecord()])])
+        let secondCollector = APIUsageCollector(
+            queueClient: secondQueue,
+            ledgerStore: APIUsageLedgerStore(paths: paths, writeDelayNanoseconds: .max),
+            now: { at }
+        )
+        _ = await secondCollector.reload(configuration: enabledConfiguration())
+
+        let secondQueueCalls = await secondQueue.callCount()
+        XCTAssertEqual(secondQueueCalls, 1)
+        try await secondCollector.stop(reason: .applicationTermination, at: at)
+        _ = retainedReaderStore
+    }
+
     func testConcurrentReloadsShareOneDrainWithoutDoubleMerge() async throws {
         let queue = SuspendedQueueClient(record: makeQueueRecord())
         let ledger = RecordingLedgerStore()
@@ -184,6 +261,140 @@ final class APIUsageCollectorTests: XCTestCase {
             )
         ])
         XCTAssertEqual(events, ["read", "gap"])
+    }
+
+    func testMalformedRecordInFullBatchMergesValidRecordsAndMarksDurableGap() async {
+        let validRecords = Array(repeating: makeQueueRecord(), count: 199)
+        let queue = RecordingQueueClient(batches: [
+            .success(.init(records: validRecords, malformedRecordCount: 1)),
+            .success(.init(records: []))
+        ])
+        let ledger = RecordingLedgerStore(
+            readModel: emptyReadModel(lastSuccessfulDrainAt: iso("2026-07-25T11:00:00Z"))
+        )
+        let collector = APIUsageCollector(
+            queueClient: queue,
+            ledgerStore: ledger,
+            now: { iso("2026-07-25T12:00:00Z") }
+        )
+
+        let report = await collector.reload(configuration: enabledConfiguration())
+
+        let aggregateCount = await ledger.aggregateMutationCount()
+        let requestedCounts = await queue.requestedCounts()
+        let gaps = await ledger.collectionGaps()
+        XCTAssertEqual(aggregateCount, 199)
+        XCTAssertEqual(requestedCounts, [200, 200])
+        XCTAssertEqual(gaps, [
+            .init(
+                start: iso("2026-07-25T11:00:00Z"),
+                end: iso("2026-07-25T12:00:00Z")
+            )
+        ])
+        XCTAssertTrue(report.statesByProfileID["claude-api"]?.issues.contains(.collectionGap) == true)
+    }
+
+    func testPublicReloadFlushesMalformedGapBeforeLaterQueueFailureReturns() async {
+        let queue = RecordingQueueClient(batches: [
+            .success(.init(
+                records: Array(repeating: makeQueueRecord(), count: 199),
+                malformedRecordCount: 1
+            )),
+            .failure(.transientFailure)
+        ])
+        let ledger = RecordingLedgerStore(
+            readModel: emptyReadModel(lastSuccessfulDrainAt: iso("2026-07-25T11:00:00Z"))
+        )
+        let collector = APIUsageCollector(
+            queueClient: queue,
+            ledgerStore: ledger,
+            now: { iso("2026-07-25T12:00:00Z") }
+        )
+
+        let report = await collector.reload(configuration: enabledConfiguration())
+
+        let flushCount = await ledger.flushCount()
+        XCTAssertEqual(flushCount, 1)
+        XCTAssertTrue(report.statesByProfileID["claude-api"]?.issues.contains(.collectionGap) == true)
+        XCTAssertTrue(report.statesByProfileID["claude-api"]?.issues.contains(.transientCollectionFailure) == true)
+    }
+
+    func testMalformedOnlyBatchTerminatesWithoutLoopAndKeepsGapWarning() async {
+        let queue = RecordingQueueClient(batches: [
+            .success(.init(records: [], malformedRecordCount: 1))
+        ])
+        let ledger = RecordingLedgerStore(
+            readModel: emptyReadModel(lastSuccessfulDrainAt: iso("2026-07-25T11:00:00Z"))
+        )
+        let collector = APIUsageCollector(
+            queueClient: queue,
+            ledgerStore: ledger,
+            now: { iso("2026-07-25T12:00:00Z") }
+        )
+
+        let report = await collector.reload(configuration: enabledConfiguration())
+
+        let queueCalls = await queue.callCount()
+        let aggregateCount = await ledger.aggregateMutationCount()
+        XCTAssertEqual(queueCalls, 1)
+        XCTAssertEqual(aggregateCount, 0)
+        XCTAssertTrue(report.statesByProfileID["claude-api"]?.issues.contains(.collectionGap) == true)
+    }
+
+    func testMalformedGapPersistsAcrossStoreRestart() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("APIUsageCollectorMalformedGapRestartTests")
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let paths = ManagedPaths(rootDirectory: root)
+        let trackingStartedAt = iso("2026-07-25T11:00:00Z")
+        let drainAt = iso("2026-07-25T12:00:00Z")
+        let firstStore = APIUsageLedgerStore(paths: paths, writeDelayNanoseconds: .max)
+        try await firstStore.prepareTracking(at: trackingStartedAt, reportingTimeZoneID: "UTC")
+        try await firstStore.flush()
+        let firstCollector = APIUsageCollector(
+            queueClient: RecordingQueueClient(batches: [
+                .success(.init(records: [], malformedRecordCount: 1))
+            ]),
+            ledgerStore: firstStore,
+            now: { drainAt }
+        )
+
+        _ = await firstCollector.reload(configuration: enabledConfiguration())
+        try await firstCollector.stop(reason: .applicationTermination, at: drainAt)
+
+        let secondStore = APIUsageLedgerStore(paths: paths, writeDelayNanoseconds: .max)
+        let restored = await APIUsageCollector(
+            queueClient: RecordingQueueClient(results: []),
+            ledgerStore: secondStore,
+            now: { drainAt }
+        ).restore(configuration: enabledConfiguration())
+
+        XCTAssertTrue(restored.statesByProfileID["claude-api"]?.issues.contains(.collectionGap) == true)
+    }
+
+    func testTopLevelSchemaMismatchMarksDurableGapBeforeReturningTerminalIssue() async {
+        let ledger = RecordingLedgerStore(
+            readModel: emptyReadModel(lastSuccessfulDrainAt: iso("2026-07-25T11:00:00Z"))
+        )
+        let collector = APIUsageCollector(
+            queueClient: RecordingQueueClient(results: [.failure(.schemaMismatch)]),
+            ledgerStore: ledger,
+            now: { iso("2026-07-25T12:00:00Z") }
+        )
+
+        let report = await collector.reload(configuration: enabledConfiguration())
+
+        let gaps = await ledger.collectionGaps()
+        XCTAssertEqual(gaps, [
+            .init(
+                start: iso("2026-07-25T11:00:00Z"),
+                end: iso("2026-07-25T12:00:00Z")
+            )
+        ])
+        XCTAssertTrue(report.statesByProfileID["claude-api"]?.issues.contains(.collectionGap) == true)
+        XCTAssertTrue(report.statesByProfileID["claude-api"]?.issues.contains(.managementAPINotSupported) == true)
     }
 
     func testQueueFailuresKeepStoredSnapshotAndMapTypedIssuesInAllCasesOrder() async {
@@ -348,7 +559,7 @@ final class APIUsageCollectorTests: XCTestCase {
         XCTAssertEqual(flushCount, 1)
         XCTAssertEqual(delays, [30_000_000_000])
 
-        await collector.stop(reason: .applicationTermination, at: iso("2026-07-25T12:01:00Z"))
+        try? await collector.stop(reason: .applicationTermination, at: iso("2026-07-25T12:01:00Z"))
     }
 
     func testPollingRetriesTransientAndProxyFailuresWithBackoffThenStopsOnTerminalError() async throws {
@@ -377,7 +588,7 @@ final class APIUsageCollectorTests: XCTestCase {
         XCTAssertEqual(delays, [60_000_000_000, 120_000_000_000])
         XCTAssertEqual(queueCalls, 3)
 
-        await collector.stop(reason: .applicationTermination, at: Date())
+        try? await collector.stop(reason: .applicationTermination, at: Date())
     }
 
     func testStopTrackingDisabledCancelsPollingMarksPauseAndFlushesWithoutDeletion() async throws {
@@ -391,7 +602,7 @@ final class APIUsageCollectorTests: XCTestCase {
         _ = await collector.start(configuration: enabledConfiguration())
         try await waitUntil { await sleep.recordedDelays().count == 1 }
 
-        await collector.stop(
+        try? await collector.stop(
             reason: .trackingDisabled(proxyCouldServeRequests: true),
             at: iso("2026-07-25T13:00:00Z")
         )
@@ -422,7 +633,7 @@ final class APIUsageCollectorTests: XCTestCase {
         try await waitUntil { await queue.isPollingPopSuspended() }
 
         let stopTask = Task {
-            await collector.stop(reason: .applicationTermination, at: Date())
+            try? await collector.stop(reason: .applicationTermination, at: Date())
         }
         let stoppedWithoutManualResume = await eventually {
             await ledger.flushCount() == 2
@@ -448,7 +659,7 @@ final class APIUsageCollectorTests: XCTestCase {
         try await waitUntil { await queue.isPopSuspended() }
 
         let stopTask = Task {
-            await collector.stop(reason: .applicationTermination, at: Date())
+            try? await collector.stop(reason: .applicationTermination, at: Date())
         }
         let stoppedWithoutManualResume = await eventually {
             await ledger.flushCount() == 2
@@ -506,7 +717,7 @@ final class APIUsageCollectorTests: XCTestCase {
         let preparedTimeZones = await ledger.preparedTimeZoneIDs()
         XCTAssertEqual(ports, [19_001])
         XCTAssertEqual(preparedTimeZones, ["Asia/Seoul"])
-        await collector.stop(reason: .applicationTermination, at: Date())
+        try? await collector.stop(reason: .applicationTermination, at: Date())
     }
 
     func testStartFlushFailureIsSharedByReloadAndUpdateWithoutPop() async throws {
@@ -612,7 +823,7 @@ final class APIUsageCollectorTests: XCTestCase {
         }
         for _ in 0..<20 { await Task.yield() }
         let stopTask = Task {
-            await collector.stop(reason: .applicationTermination, at: Date())
+            try? await collector.stop(reason: .applicationTermination, at: Date())
         }
         for _ in 0..<20 { await Task.yield() }
 
@@ -641,7 +852,7 @@ final class APIUsageCollectorTests: XCTestCase {
         async let started: APIUsageCollectionReport = collector.start(configuration: enabledConfiguration())
         try await waitUntil { await queue.isFirstCallSuspended() }
         let stopTask = Task {
-            await collector.stop(reason: .applicationTermination, at: Date())
+            try? await collector.stop(reason: .applicationTermination, at: Date())
             await stopped.markCompleted()
         }
 
@@ -662,6 +873,27 @@ final class APIUsageCollectorTests: XCTestCase {
         XCTAssertEqual(delays, [])
     }
 
+    func testApplicationTerminationFlushFailureThrowsAndSecondStopRetriesSuccessfully() async throws {
+        let ledger = RecordingLedgerStore(flushError: .persistenceFailure)
+        let collector = APIUsageCollector(
+            queueClient: RecordingQueueClient(results: []),
+            ledgerStore: ledger
+        )
+
+        do {
+            try await collector.stop(reason: .applicationTermination, at: Date())
+            XCTFail("Expected final flush failure")
+        } catch {
+            XCTAssertEqual(error as? APIUsageLedgerStoreError, .persistenceFailure)
+        }
+
+        await ledger.setFlushError(nil)
+        try await collector.stop(reason: .applicationTermination, at: Date())
+
+        let flushCount = await ledger.flushCount()
+        XCTAssertEqual(flushCount, 2)
+    }
+
     func testApplicationTerminationFlushesWithoutCreatingPartialInterval() async {
         let ledger = RecordingLedgerStore()
         let collector = APIUsageCollector(
@@ -669,7 +901,7 @@ final class APIUsageCollectorTests: XCTestCase {
             ledgerStore: ledger
         )
 
-        await collector.stop(reason: .applicationTermination, at: iso("2026-07-25T13:00:00Z"))
+        try? await collector.stop(reason: .applicationTermination, at: iso("2026-07-25T13:00:00Z"))
 
         let pauseArguments = await ledger.pauseArguments()
         let flushCount = await ledger.flushCount()
@@ -757,7 +989,7 @@ final class APIUsageCollectorTests: XCTestCase {
 
         let callsAfterReady = await queue.callCount()
         XCTAssertEqual(callsAfterReady, 1)
-        await collector.stop(reason: .applicationTermination, at: Date())
+        try? await collector.stop(reason: .applicationTermination, at: Date())
     }
 
     func testConfigurationChangeWaitsForActiveDrainThenUsesNewPort() async throws {
@@ -783,7 +1015,7 @@ final class APIUsageCollectorTests: XCTestCase {
 
         let ports = await queue.requestedPorts()
         XCTAssertEqual(ports, [18_317, 19_001])
-        await collector.stop(reason: .applicationTermination, at: Date())
+        try? await collector.stop(reason: .applicationTermination, at: Date())
     }
 
     func testDisabledUpdateDuringActiveStartWaitsThenKeepsDisabledLatestReport() async throws {
@@ -845,7 +1077,7 @@ final class APIUsageCollectorTests: XCTestCase {
         }
         for _ in 0..<20 { await Task.yield() }
         let stopTask = Task {
-            await collector.stop(reason: .applicationTermination, at: Date())
+            try? await collector.stop(reason: .applicationTermination, at: Date())
         }
         for _ in 0..<20 { await Task.yield() }
 
@@ -890,7 +1122,7 @@ final class APIUsageCollectorTests: XCTestCase {
 
         let delays = await sleep.recordedDelays()
         XCTAssertEqual(delays, [30_000_000_000])
-        await collector.stop(reason: .applicationTermination, at: Date())
+        try? await collector.stop(reason: .applicationTermination, at: Date())
     }
 
     func testStartFlushFailureKeepsStoredSnapshotAndMarksPersistenceFailure() async {
@@ -937,7 +1169,7 @@ final class APIUsageCollectorTests: XCTestCase {
 
         let flushCount = await ledger.flushCount()
         XCTAssertEqual(flushCount, 2)
-        await collector.stop(reason: .applicationTermination, at: Date())
+        try? await collector.stop(reason: .applicationTermination, at: Date())
     }
 
     func testReportsFinishReplacedSubscriberAndYieldLatestReportToNewSubscriber() async {
@@ -969,20 +1201,27 @@ final class APIUsageCollectorTests: XCTestCase {
 }
 
 private typealias QueueResult = Result<[APIUsageQueueRecord], APIUsageQueueClientError>
+private typealias BatchQueueResult = Result<APIUsageQueueBatch, APIUsageQueueClientError>
 
 private actor RecordingQueueClient: APIUsageQueueFetching {
-    private var results: [QueueResult]
+    private var results: [BatchQueueResult]
     private var counts: [Int] = []
     private var ports: [Int] = []
 
     init(results: [QueueResult]) {
-        self.results = results
+        self.results = results.map { result in
+            result.map { APIUsageQueueBatch(records: $0) }
+        }
     }
 
-    func popUsage(port: Int, count: Int) async throws -> [APIUsageQueueRecord] {
+    init(batches: [BatchQueueResult]) {
+        self.results = batches
+    }
+
+    func popUsage(port: Int, count: Int) async throws -> APIUsageQueueBatch {
         counts.append(count)
         ports.append(port)
-        guard !results.isEmpty else { return [] }
+        guard !results.isEmpty else { return APIUsageQueueBatch(records: []) }
         return try results.removeFirst().get()
     }
 
@@ -993,14 +1232,14 @@ private actor RecordingQueueClient: APIUsageQueueFetching {
 
 private actor SuspendedQueueClient: APIUsageQueueFetching {
     private let record: APIUsageQueueRecord
-    private var continuation: CheckedContinuation<[APIUsageQueueRecord], Error>?
+    private var continuation: CheckedContinuation<APIUsageQueueBatch, Error>?
     private var calls = 0
 
     init(record: APIUsageQueueRecord) {
         self.record = record
     }
 
-    func popUsage(port: Int, count: Int) async throws -> [APIUsageQueueRecord] {
+    func popUsage(port: Int, count: Int) async throws -> APIUsageQueueBatch {
         calls += 1
         return try await withCheckedThrowingContinuation { continuation = $0 }
     }
@@ -1009,7 +1248,7 @@ private actor SuspendedQueueClient: APIUsageQueueFetching {
     func callCount() -> Int { calls }
 
     func resume() {
-        continuation?.resume(returning: [record])
+        continuation?.resume(returning: APIUsageQueueBatch(records: [record]))
         continuation = nil
     }
 }
@@ -1018,12 +1257,12 @@ private actor FirstCallSuspendingQueueClient: APIUsageQueueFetching {
     private var ports: [Int] = []
     private var firstContinuation: CheckedContinuation<Void, Never>?
 
-    func popUsage(port: Int, count: Int) async throws -> [APIUsageQueueRecord] {
+    func popUsage(port: Int, count: Int) async throws -> APIUsageQueueBatch {
         ports.append(port)
         if ports.count == 1 {
             await withCheckedContinuation { firstContinuation = $0 }
         }
-        return []
+        return APIUsageQueueBatch(records: [])
     }
 
     func isFirstCallSuspended() -> Bool { firstContinuation != nil }
@@ -1036,9 +1275,9 @@ private actor FirstCallSuspendingQueueClient: APIUsageQueueFetching {
 }
 
 private actor CancellableLifecycleQueueClient: APIUsageQueueFetching {
-    private var continuation: CheckedContinuation<[APIUsageQueueRecord], Error>?
+    private var continuation: CheckedContinuation<APIUsageQueueBatch, Error>?
 
-    func popUsage(port: Int, count: Int) async throws -> [APIUsageQueueRecord] {
+    func popUsage(port: Int, count: Int) async throws -> APIUsageQueueBatch {
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation = $0 }
         } onCancel: {
@@ -1056,11 +1295,11 @@ private actor CancellableLifecycleQueueClient: APIUsageQueueFetching {
 
 private actor CancellablePollingQueueClient: APIUsageQueueFetching {
     private var calls = 0
-    private var pollingContinuation: CheckedContinuation<[APIUsageQueueRecord], Error>?
+    private var pollingContinuation: CheckedContinuation<APIUsageQueueBatch, Error>?
 
-    func popUsage(port: Int, count: Int) async throws -> [APIUsageQueueRecord] {
+    func popUsage(port: Int, count: Int) async throws -> APIUsageQueueBatch {
         calls += 1
-        guard calls > 1 else { return [] }
+        guard calls > 1 else { return APIUsageQueueBatch(records: []) }
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { pollingContinuation = $0 }
         } onCancel: {
@@ -1084,9 +1323,9 @@ private actor CancellingQueueClient: APIUsageQueueFetching {
         self.record = record
     }
 
-    func popUsage(port: Int, count: Int) async throws -> [APIUsageQueueRecord] {
+    func popUsage(port: Int, count: Int) async throws -> APIUsageQueueBatch {
         withUnsafeCurrentTask { $0?.cancel() }
-        return [record]
+        return APIUsageQueueBatch(records: [record])
     }
 }
 
@@ -1102,7 +1341,7 @@ private actor RecordingLedgerStore: APIUsageLedgerStoring {
     private var mergeError: APIUsageLedgerStoreError?
     private let markPersistenceError: APIUsageLedgerStoreError?
     private var readError: APIUsageLedgerStoreError?
-    private let flushError: APIUsageLedgerStoreError?
+    private var flushError: APIUsageLedgerStoreError?
     private let suspendReadCall: Int?
     private let suspendFlushCall: Int?
     private var shouldSuspendPrepare: Bool
@@ -1142,6 +1381,9 @@ private actor RecordingLedgerStore: APIUsageLedgerStoring {
         self.suspendFlushCall = suspendFlushCall
         self.shouldSuspendPrepare = suspendPrepare
     }
+
+    func acquireCollectorWriterLease() async throws {}
+    func releaseCollectorWriterLease() async {}
 
     func prepareTracking(at: Date, reportingTimeZoneID: String) async throws {
         events.append("prepare")
@@ -1203,6 +1445,18 @@ private actor RecordingLedgerStore: APIUsageLedgerStoring {
     func markCollectionGap(from: Date, to: Date) async throws {
         events.append("gap")
         gaps.append(.init(start: from, end: to))
+        guard to > from else { return }
+        var metadata = readModel.metadata
+        metadata.partialIntervals.append(.init(
+            start: from,
+            end: to,
+            reason: .collectionGap
+        ))
+        readModel = .init(
+            metadata: metadata,
+            bounds: readModel.bounds,
+            currentMonth: readModel.currentMonth
+        )
     }
 
     func markSuccessfulDrain(at: Date, lastObservedRequestAt: Date?) async throws {
@@ -1254,6 +1508,7 @@ private actor RecordingLedgerStore: APIUsageLedgerStoring {
         }
     }
 
+    func setFlushError(_ error: APIUsageLedgerStoreError?) { flushError = error }
     func flushCount() -> Int { flushes }
     func pauseArguments() -> [Bool] { pauseValues.map(\.1) }
     func pauseDates() -> [Date] { pauseValues.map(\.0) }
