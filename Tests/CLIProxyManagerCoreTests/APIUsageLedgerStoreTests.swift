@@ -264,6 +264,34 @@ final class APIUsageLedgerStoreTests: XCTestCase {
         XCTAssertTrue(metadata.partialIntervals.contains { $0.reason == .corruptedLedger })
     }
 
+    func testCorruptBackupExclusiveMoveDoesNotReplaceRacingDestination() async throws {
+        let paths = try makePaths()
+        let at = iso("2026-07-25T04:00:00Z")
+        let initial = APIUsageLedgerStore(paths: paths, writeDelayNanoseconds: 0)
+        try await initial.prepareTracking(at: at, reportingTimeZoneID: "UTC")
+        try await initial.flush()
+        let source = paths.apiUsageMonthlyLedgerFile(month: "2026-07")
+        try Data("not-json".utf8).write(to: source)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: source.path)
+
+        let collision = BackupCollisionHook()
+        let restored = APIUsageLedgerStore(
+            paths: paths,
+            writeDelayNanoseconds: 0,
+            beforeCorruptBackupMove: { try collision.install(at: $0) }
+        )
+        _ = try await restored.readCurrentPeriods(at: at)
+        try await restored.flush()
+
+        let occupied = try XCTUnwrap(collision.installedURL())
+        XCTAssertEqual(try Data(contentsOf: occupied), BackupCollisionHook.sentinel)
+        XCTAssertEqual(fileMode(occupied), 0o600)
+        let backups = try FileManager.default.contentsOfDirectory(at: paths.apiUsageDirectory, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("2026-07.corrupt-") }
+        XCTAssertEqual(backups.count, 2)
+        XCTAssertTrue(backups.allSatisfy { fileMode($0) == 0o600 })
+    }
+
     func testSymlinkLedgerPathIsRejectedWithoutTouchingTarget() async throws {
         let paths = try makePaths()
         try FileManager.default.createDirectory(at: paths.apiUsageDirectory, withIntermediateDirectories: true)
@@ -358,6 +386,70 @@ final class APIUsageLedgerStoreTests: XCTestCase {
             XCTAssertEqual(try Data(contentsOf: ledger), data)
             let names = try FileManager.default.contentsOfDirectory(atPath: paths.apiUsageDirectory.path)
             XCTAssertFalse(names.contains { $0.hasPrefix("2026-07.corrupt-") })
+        }
+    }
+
+    func testFlushDoesNotOverwriteFutureSchemaInstalledAfterCacheLoad() async throws {
+        let paths = try makePaths()
+        let at = iso("2026-07-25T04:00:00Z")
+        let store = APIUsageLedgerStore(paths: paths, writeDelayNanoseconds: .max)
+        try await store.prepareTracking(at: iso("2026-07-01T00:00:00Z"), reportingTimeZoneID: "UTC")
+        try await store.flush()
+        XCTAssertEqual(fileMode(paths.apiUsageDirectory.appendingPathComponent(".store.lock")), 0o600)
+        try await store.merge([.aggregate(makeAggregate(timestamp: at, profileID: "claude-api", provider: .claude, model: "claude-opus-5"), priceEpochStart: at)])
+        try await store.flush()
+        try await store.merge([.issue(.init(timestamp: at, profileID: "claude-api", provider: .claude, reason: .incompleteTokenAccounting))])
+
+        let file = paths.apiUsageMonthlyLedgerFile(month: "2026-07")
+        let future = Data(#"{"schemaVersion":99,"month":"2026-07","reportingTimeZoneID":"UTC","buckets":[],"issues":[]}"#.utf8)
+        try future.write(to: file)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+
+        do {
+            try await store.flush()
+            XCTFail("Expected unsupported schema")
+        } catch {
+            XCTAssertEqual(error as? APIUsageLedgerStoreError, .unsupportedSchemaVersion(99))
+            XCTAssertEqual(try Data(contentsOf: file), future)
+        }
+    }
+
+    func testOverflowMarksEveryDiscardedMutationDayPartial() async throws {
+        let paths = try makePaths()
+        let day24 = iso("2026-07-24T04:00:00Z")
+        let day25 = iso("2026-07-25T04:00:00Z")
+        let initial = APIUsageLedgerStore(paths: paths, writeDelayNanoseconds: 0)
+        try await initial.prepareTracking(at: iso("2026-07-01T00:00:00Z"), reportingTimeZoneID: "UTC")
+        try await initial.flush()
+
+        let overflowInput = makeAggregate(timestamp: day25, profileID: "claude-api", provider: .claude, model: "claude-opus-5")
+        let key = APIUsageLedgerBucketKey(localDate: "2026-07-25", profileID: overflowInput.profileID, provider: overflowInput.provider, model: overflowInput.model, effectiveServiceTier: overflowInput.effectiveServiceTier, pricingVariant: overflowInput.pricingVariant, priceEpochStart: day25)
+        let maxBucket = APIUsageLedgerBucket(key: key, uncachedInputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, nonReasoningOutputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0, requestCount: .max, failedRequestCount: 0, firstObservedAt: day25, lastObservedAt: day25)
+        let seeded = APIUsageMonthlyLedger(schemaVersion: 1, month: "2026-07", reportingTimeZoneID: "UTC", buckets: [maxBucket])
+        try JSONEncoder.apiUsage.encode(seeded).write(to: paths.apiUsageMonthlyLedgerFile(month: "2026-07"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: paths.apiUsageMonthlyLedgerFile(month: "2026-07").path)
+
+        let restored = APIUsageLedgerStore(paths: paths, writeDelayNanoseconds: 0)
+        let normalInput = makeAggregate(timestamp: day24, profileID: "claude-api", provider: .claude, model: "claude-opus-5")
+        do {
+            try await restored.merge([
+                .aggregate(normalInput, priceEpochStart: day24),
+                .aggregate(overflowInput, priceEpochStart: day25)
+            ])
+            XCTFail("Expected persistence failure")
+        } catch {
+            XCTAssertEqual(error as? APIUsageLedgerStoreError, .persistenceFailure)
+        }
+        try await restored.flush()
+
+        let read = try await restored.readCurrentPeriods(at: day25)
+        XCTAssertFalse(read.currentMonth.buckets.contains { $0.key.localDate == "2026-07-24" })
+        let failures = read.metadata.partialIntervals.filter { $0.reason == .persistenceFailure }
+        for timestamp in [day24, day25] {
+            let bounds = APIUsagePeriodCalculator.bounds(at: timestamp, timeZoneID: "UTC")
+            XCTAssertTrue(failures.contains {
+                $0.start < bounds.dayEnd && ($0.end ?? .distantFuture) > bounds.dayStart
+            })
         }
     }
 
@@ -457,6 +549,26 @@ final class APIUsageLedgerStoreTests: XCTestCase {
             }
             try await Task.sleep(nanoseconds: 1_000_000)
         }
+    }
+}
+
+private final class BackupCollisionHook: @unchecked Sendable {
+    static let sentinel = Data("existing-backup".utf8)
+
+    private let lock = NSLock()
+    private var installed: URL?
+
+    func install(at url: URL) throws {
+        try lock.withLock {
+            guard installed == nil else { return }
+            try Self.sentinel.write(to: url)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            installed = url
+        }
+    }
+
+    func installedURL() -> URL? {
+        lock.withLock { installed }
     }
 }
 

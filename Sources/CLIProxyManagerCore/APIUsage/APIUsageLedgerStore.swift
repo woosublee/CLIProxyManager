@@ -35,6 +35,7 @@ public actor APIUsageLedgerStore: APIUsageLedgerStoring {
     private let fileManager: FileManager
     private let writeDelayNanoseconds: UInt64
     private let sleep: @Sendable (UInt64) async throws -> Void
+    private let beforeCorruptBackupMove: @Sendable (URL) throws -> Void
 
     private var metadata: APIUsageTrackingMetadata?
     private var ledgers: [String: APIUsageMonthlyLedger] = [:]
@@ -53,6 +54,21 @@ public actor APIUsageLedgerStore: APIUsageLedgerStoring {
         self.fileManager = fileManager
         self.writeDelayNanoseconds = writeDelayNanoseconds
         self.sleep = sleep
+        self.beforeCorruptBackupMove = { _ in }
+    }
+
+    init(
+        paths: ManagedPaths = ManagedPaths(),
+        fileManager: FileManager = .default,
+        writeDelayNanoseconds: UInt64 = 1_000_000_000,
+        sleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) },
+        beforeCorruptBackupMove: @escaping @Sendable (URL) throws -> Void
+    ) {
+        self.paths = paths
+        self.fileManager = fileManager
+        self.writeDelayNanoseconds = writeDelayNanoseconds
+        self.sleep = sleep
+        self.beforeCorruptBackupMove = beforeCorruptBackupMove
     }
 
     public func prepareTracking(at: Date, reportingTimeZoneID: String) async throws {
@@ -92,10 +108,8 @@ public actor APIUsageLedgerStore: APIUsageLedgerStoring {
         try ensureMetadataLoaded()
         guard !mutations.isEmpty else { return }
 
-        var candidateLedgers: [String: APIUsageMonthlyLedger] = [:]
-        var touchedMonths: Set<String> = []
-
-        for mutation in mutations {
+        let storedTimeZoneID = metadata!.reportingTimeZoneID
+        let mutationBounds = mutations.map { mutation in
             let timestamp: Date
             switch mutation {
             case let .aggregate(input, _):
@@ -103,11 +117,14 @@ public actor APIUsageLedgerStore: APIUsageLedgerStoring {
             case let .issue(input):
                 timestamp = input.timestamp
             }
+            return APIUsagePeriodCalculator.bounds(at: timestamp, timeZoneID: storedTimeZoneID)
+        }
+        var candidateLedgers: [String: APIUsageMonthlyLedger] = [:]
+        var touchedMonths: Set<String> = []
 
-            let storedTimeZoneID = metadata!.reportingTimeZoneID
-            let bounds = APIUsagePeriodCalculator.bounds(at: timestamp, timeZoneID: storedTimeZoneID)
+        for (mutation, bounds) in zip(mutations, mutationBounds) {
             var ledger = try candidateLedgers[bounds.month]
-                ?? loadLedger(month: bounds.month, at: timestamp)
+                ?? loadLedger(month: bounds.month, at: bounds.intervalReference)
 
             do {
                 switch mutation {
@@ -122,7 +139,7 @@ public actor APIUsageLedgerStore: APIUsageLedgerStoring {
                     try mergeIssue(input, localDate: bounds.localDate, into: &ledger)
                 }
             } catch is CounterOverflow {
-                markPersistenceFailure(at: timestamp)
+                markPersistenceFailure(for: mutationBounds)
                 throw APIUsageLedgerStoreError.persistenceFailure
             }
 
@@ -287,10 +304,9 @@ public actor APIUsageLedgerStore: APIUsageLedgerStoring {
 
     private func recoverCorruptedLedger(month: String, at: Date) throws -> APIUsageMonthlyLedger {
         let source = paths.apiUsageMonthlyLedgerFile(month: month)
-        _ = try validateExistingFile(at: source)
-        let backup = try availableCorruptBackupURL(month: month, at: at)
-        guard rename(source.path, backup.path) == 0 else {
-            throw APIUsageLedgerStoreError.persistenceFailure
+        let backup = try withStoreLock {
+            _ = try validateExistingFile(at: source)
+            return try moveCorruptedLedgerExclusively(source: source, month: month, at: at)
         }
 
         let backupDescriptor = open(backup.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
@@ -321,16 +337,27 @@ public actor APIUsageLedgerStore: APIUsageLedgerStoring {
         return ledger
     }
 
-    private func availableCorruptBackupURL(month: String, at: Date) throws -> URL {
+    private func moveCorruptedLedgerExclusively(
+        source: URL,
+        month: String,
+        at: Date
+    ) throws -> URL {
         let unixTime = Int64(at.timeIntervalSince1970.rounded(.down))
         for suffix in 0 ..< 10_000 {
             let suffixText = suffix == 0 ? "" : "-\(suffix)"
             let candidate = paths.apiUsageDirectory
                 .appendingPathComponent("\(month).corrupt-\(unixTime)\(suffixText).json")
-            var status = stat()
-            if lstat(candidate.path, &status) != 0 {
-                if errno == ENOENT {
+            try beforeCorruptBackupMove(candidate)
+
+            while true {
+                if renamex_np(source.path, candidate.path, UInt32(RENAME_EXCL)) == 0 {
                     return candidate
+                }
+                if errno == EINTR {
+                    continue
+                }
+                if errno == EEXIST {
+                    break
                 }
                 throw APIUsageLedgerStoreError.persistenceFailure
             }
@@ -449,15 +476,16 @@ public actor APIUsageLedgerStore: APIUsageLedgerStoring {
         return result
     }
 
-    private func markPersistenceFailure(at: Date) {
-        let bounds = APIUsagePeriodCalculator.bounds(at: at, timeZoneID: metadata!.reportingTimeZoneID)
+    private func markPersistenceFailure(for bounds: [APIUsagePeriodBounds]) {
         var updatedMetadata = metadata!
-        addPartialInterval(
-            start: bounds.dayStart,
-            end: bounds.dayEnd,
-            reason: .persistenceFailure,
-            to: &updatedMetadata
-        )
+        for bound in bounds {
+            addPartialInterval(
+                start: bound.dayStart,
+                end: bound.dayEnd,
+                reason: .persistenceFailure,
+                to: &updatedMetadata
+            )
+        }
         metadata = updatedMetadata
         dirtyMetadata = true
         scheduleWrite()
@@ -546,32 +574,36 @@ public actor APIUsageLedgerStore: APIUsageLedgerStoring {
     }
 
     private func persistDirtyFiles() throws {
-        for month in dirtyMonths.sorted() {
-            guard let ledger = ledgers[month] else {
-                throw APIUsageLedgerStoreError.persistenceFailure
-            }
-            let data: Data
-            do {
-                data = try encoder().encode(ledger)
-            } catch {
-                throw APIUsageLedgerStoreError.persistenceFailure
-            }
-            try writeSecurely(data, to: paths.apiUsageMonthlyLedgerFile(month: month))
-            dirtyMonths.remove(month)
-        }
+        guard dirtyMetadata || !dirtyMonths.isEmpty else { return }
 
-        if dirtyMetadata {
-            guard let metadata else {
-                throw APIUsageLedgerStoreError.persistenceFailure
+        try withStoreLock {
+            for month in dirtyMonths.sorted() {
+                guard let ledger = ledgers[month] else {
+                    throw APIUsageLedgerStoreError.persistenceFailure
+                }
+                let data: Data
+                do {
+                    data = try encoder().encode(ledger)
+                } catch {
+                    throw APIUsageLedgerStoreError.persistenceFailure
+                }
+                try writeSecurely(data, to: paths.apiUsageMonthlyLedgerFile(month: month))
+                dirtyMonths.remove(month)
             }
-            let data: Data
-            do {
-                data = try encoder().encode(metadata)
-            } catch {
-                throw APIUsageLedgerStoreError.persistenceFailure
+
+            if dirtyMetadata {
+                guard let metadata else {
+                    throw APIUsageLedgerStoreError.persistenceFailure
+                }
+                let data: Data
+                do {
+                    data = try encoder().encode(metadata)
+                } catch {
+                    throw APIUsageLedgerStoreError.persistenceFailure
+                }
+                try writeSecurely(data, to: paths.apiUsageMetadataFile)
+                dirtyMetadata = false
             }
-            try writeSecurely(data, to: paths.apiUsageMetadataFile)
-            dirtyMetadata = false
         }
     }
 
@@ -586,6 +618,95 @@ public actor APIUsageLedgerStore: APIUsageLedgerStoring {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return decoder
+    }
+
+    private func withStoreLock<T>(_ body: () throws -> T) throws -> T {
+        _ = try ensureUsageDirectory(createIfMissing: true, repairPermissions: true)
+        let descriptor = try openStoreLockFile()
+        defer { close(descriptor) }
+
+        try acquireExclusiveLock(descriptor)
+        defer { releaseExclusiveLock(descriptor) }
+        return try body()
+    }
+
+    private func openStoreLockFile() throws -> Int32 {
+        let file = paths.apiUsageDirectory.appendingPathComponent(".store.lock")
+        let flags = O_RDWR | O_CLOEXEC | O_NOFOLLOW
+
+        while true {
+            let createdDescriptor = open(
+                file.path,
+                flags | O_CREAT | O_EXCL,
+                S_IRUSR | S_IWUSR
+            )
+            if createdDescriptor >= 0 {
+                guard fchmod(createdDescriptor, S_IRUSR | S_IWUSR) == 0 else {
+                    close(createdDescriptor)
+                    _ = unlink(file.path)
+                    throw APIUsageLedgerStoreError.persistenceFailure
+                }
+                do {
+                    try validateFileDescriptor(createdDescriptor)
+                    return createdDescriptor
+                } catch {
+                    close(createdDescriptor)
+                    _ = unlink(file.path)
+                    throw error
+                }
+            }
+            guard errno == EEXIST else {
+                throw APIUsageLedgerStoreError.persistenceFailure
+            }
+
+            let existingDescriptor = open(file.path, flags)
+            if existingDescriptor >= 0 {
+                do {
+                    try validateFileDescriptor(existingDescriptor)
+                    return existingDescriptor
+                } catch {
+                    close(existingDescriptor)
+                    throw error
+                }
+            }
+            if errno == ENOENT {
+                continue
+            }
+            throw APIUsageLedgerStoreError.invalidFile
+        }
+    }
+
+    private func acquireExclusiveLock(_ descriptor: Int32) throws {
+        while flock(descriptor, LOCK_EX) != 0 {
+            if errno != EINTR {
+                throw APIUsageLedgerStoreError.persistenceFailure
+            }
+        }
+    }
+
+    private func releaseExclusiveLock(_ descriptor: Int32) {
+        while flock(descriptor, LOCK_UN) != 0 {
+            if errno != EINTR {
+                return
+            }
+        }
+    }
+
+    private func validateTargetSchemaBeforeWrite(at file: URL) throws {
+        guard let data = try readSecureFile(at: file) else { return }
+
+        let version: Int
+        do {
+            version = try decoder().decode(SchemaVersionEnvelope.self, from: data).schemaVersion
+        } catch {
+            throw APIUsageLedgerStoreError.invalidFile
+        }
+        if version > APIUsageLedgerSchema.currentVersion {
+            throw APIUsageLedgerStoreError.unsupportedSchemaVersion(version)
+        }
+        guard version == APIUsageLedgerSchema.currentVersion else {
+            throw APIUsageLedgerStoreError.invalidFile
+        }
     }
 
     private func ensureUsageDirectory(
@@ -689,7 +810,7 @@ public actor APIUsageLedgerStore: APIUsageLedgerStoring {
 
     private func writeSecurely(_ data: Data, to file: URL) throws {
         _ = try ensureUsageDirectory(createIfMissing: true, repairPermissions: true)
-        _ = try validateExistingFile(at: file)
+        try validateTargetSchemaBeforeWrite(at: file)
 
         let temporaryFile = file.deletingLastPathComponent()
             .appendingPathComponent(".\(file.lastPathComponent).tmp-\(UUID().uuidString)")
