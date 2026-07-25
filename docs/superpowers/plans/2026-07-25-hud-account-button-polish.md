@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 계정 카드의 Usage HUD 버튼을 조용한 `macwindow` 표현으로 다듬고, Expanded와 Compact HUD에 계정을 다시 표시할 때 새 행만 동일하게 짧은 fade-in을 적용한다.
+**Goal:** 계정 카드의 Usage HUD 버튼을 조용한 `macwindow` 표현으로 유지하고, Expanded HUD에서만 새 행의 layout을 투명하게 먼저 준비한 뒤 다음 main-queue tick에 reveal하여 panel resize 전 깜빡임을 제거한다. Compact의 현재 transition-local fade는 변경하지 않는다.
 
-**Architecture:** 기존 `UsageOverlayAccountButtonPresentation`과 카드 action 구조를 유지하면서 symbol·foreground presentation만 교체한다. Expanded와 Compact의 새 account row가 transition-local opacity animation을 직접 소유하게 하여 기존 행과 removal reflow에 implicit animation이 전파되지 않도록 하고, Compact measurement stack에는 identity transition만 사용한다.
+**Architecture:** 기존 `UsageOverlayAccountButtonPresentation`과 카드 action 구조를 유지한다. Expanded는 내부 순수 state model이 revealed provider ID를 관리하고, provider ID 변경 시 removed ID를 prune한 뒤 pending ID를 다음 main-queue tick에만 reveal한다. row는 opacity `0/1`과 `.transition(.identity)`를 사용하므로 layout/panel fitting은 즉시 반영되고 reveal만 120ms `easeOut` animation으로 제한된다. Compact measurement/viewport 및 source는 수정하지 않는다.
 
 **Tech Stack:** Swift 5.10, SwiftUI, AppKit, XCTest, macOS 15, Swift Package Manager
 
@@ -16,12 +16,12 @@
 - 버튼의 선택 background를 제거한다.
 - HUD 표시 중에는 `BrandPalette.accent`, 숨김 상태에는 낮은 primary/secondary 계열 opacity를 사용한다.
 - Connected, Disabled, Disconnected action 순서를 유지한다.
-- Expanded와 Compact에서 추가되는 계정 행만 동일한 `0.12`초 `easeOut` opacity insertion을 사용한다.
-- animation은 stack-level implicit animation이 아니라 insertion transition 자체에 결합한다.
-- removal은 두 모드 모두 identity로 즉시 처리하고 기존 행의 reflow도 animate하지 않는다.
-- 기존 계정과 header에 crossfade, blur, scale, move animation을 추가하지 않는다.
-- Compact의 숨겨진 measurement stack에는 identity transition만 사용한다.
-- `accessibilityReduceMotion == true`이면 두 모드의 account transition은 identity다.
+- Expanded 새 ID는 첫 render에서 opacity `0`으로 layout에 참여하고, 다음 main-queue tick에서만 `0.12`초 `easeOut` reveal을 사용한다.
+- Expanded initial provider ID는 즉시 revealed 상태이며, 기존 행·header·removal reflow에는 animation이 없다.
+- Expanded row는 `.transition(.identity)`를 사용하고 stack-level implicit animation, movement, scale, blur, panel-size animation을 추가하지 않는다.
+- pending reveal은 generation과 현재 present ID를 확인하여 stale ID를 reveal하거나 state에 유지하지 않는다.
+- `accessibilityReduceMotion == true`이면 Expanded reveal은 다음 tick에서 animation 없이 실행한다.
+- Compact의 existing transition-local fade, identity measurement transition, source와 동작은 변경하지 않는다.
 - 저장, rollback, HUD filtering, menu bar, usage polling/cache, panel resize 정책을 변경하지 않는다.
 - 자동 검증은 관련 단위 테스트, 전체 `swift test`, `CONFIGURATION=debug` development app bundle build와 codesign verification까지 수행한다. 앱 실행과 수동 UI 확인은 사용자가 수행한다.
 
@@ -29,12 +29,10 @@
 
 - Modify: `Sources/CLIProxyManagerApp/Models/DashboardAccountSnapshot.swift` — HUD 버튼의 symbol과 상태별 semantic presentation을 제공한다.
 - Modify: `Sources/CLIProxyManagerApp/Views/DashboardView.swift` — 선택 background 없이 active/inactive foreground를 렌더링한다.
-- Modify: `Sources/CLIProxyManagerApp/Views/UsageOverlayView.swift` — Expanded 새 account row의 insertion transition 자체에 opacity animation을 적용한다.
-- Modify: `Sources/CLIProxyManagerApp/Views/CompactUsageOverlayView.swift` — Compact 새 account row에 같은 transition을 적용하고 measurement stack에는 identity transition을 전달한다.
-- Modify: `Tests/CLIProxyManagerAppTests/DashboardAccountSnapshotTests.swift` — `macwindow`와 기존 action copy/highlight 상태를 검증한다.
-- Modify: `Tests/CLIProxyManagerAppTests/UsageOverlayAccountVisibilityUITests.swift` — 버튼 click target, accessibility, background 제거, 상태 색상 계약을 검증한다.
-- Create: `Tests/CLIProxyManagerAppTests/UsageOverlayAccountAnimationTests.swift` — 두 모드의 동일한 insertion, removal identity, Reduce Motion, Compact measurement 비동작 계약을 검증한다.
-- Modify: `docs/superpowers/specs/2026-07-25-hud-account-button-polish-design.md` — 구현 및 자동 검증 완료 상태를 기록한다.
+- Modify: `Sources/CLIProxyManagerApp/Views/UsageOverlayView.swift` — internal insertion state 및 Expanded transparent-first/next-tick reveal을 제공한다.
+- Modify: `Tests/CLIProxyManagerAppTests/UsageOverlayAccountAnimationTests.swift` — pure state, staged source contract, Compact non-regression contract를 검증한다.
+- Modify: `docs/superpowers/specs/2026-07-25-hud-account-button-polish-design.md` — Expanded two-phase reveal과 Compact 유지 정책, 자동 검증 완료 상태를 기록한다.
+- Modify: `docs/superpowers/plans/2026-07-25-hud-account-button-polish.md` — staged reveal 구현 및 검증 계획을 기록한다.
 
 ---
 
@@ -168,181 +166,48 @@ git commit -m "style: refine Usage HUD account button"
 
 ---
 
-### Task 2: Expanded와 Compact 새 계정 행 insertion fade-in
+### Task 2: Expanded 투명 layout 준비 후 next-tick reveal
 
 **Files:**
-- Modify: `Sources/CLIProxyManagerApp/Views/UsageOverlayView.swift:217-260`
-- Modify: `Sources/CLIProxyManagerApp/Views/CompactUsageOverlayView.swift:4-120`
-- Create: `Tests/CLIProxyManagerAppTests/UsageOverlayAccountAnimationTests.swift`
+- Modify: `Sources/CLIProxyManagerApp/Views/UsageOverlayView.swift`
+- Modify: `Tests/CLIProxyManagerAppTests/UsageOverlayAccountAnimationTests.swift`
 
 **Interfaces:**
-- Consumes: `ExpandedUsageOverlayContent.providers: [MenuBarConnectedProvider]`, `CompactUsageOverlayView.providers: [MenuBarConnectedProvider]`, SwiftUI `accessibilityReduceMotion`
-- Produces: 두 모드의 새 행에 동일한 transition-local `.opacity.animation(.easeOut(duration: 0.12))`, removal 및 Reduce Motion용 identity transition
+- Consumes: `ExpandedUsageOverlayContent.providers: [MenuBarConnectedProvider]`, SwiftUI `accessibilityReduceMotion`
+- Produces: `ExpandedUsageOverlayInsertionState`, transparent-first layout, generation-guarded next-main-queue reveal
+- Preserves: `CompactUsageOverlayView` source, measurement/viewport, transition-local fade
 
-- [ ] **Step 1: transition scope source 계약 실패 테스트 작성**
+- [x] **Step 1: state model과 staged source 계약 RED 테스트 작성**
 
-`Tests/CLIProxyManagerAppTests/UsageOverlayAccountAnimationTests.swift`를 생성한다.
+`@testable import CLIProxyManagerApp`을 추가하고 다음 순수 state 동작을 테스트한다.
 
-```swift
-import Foundation
-import XCTest
+- 초기 provider ID는 즉시 revealed다.
+- `prepare(providerIDs:)`는 removed ID를 prune하고 새 ID만 pending으로 반환한다.
+- `reveal(_:presentProviderIDs:)`는 present인 pending ID만 reveal한다.
+- remove 후 re-add한 ID는 다시 pending이다.
 
-final class UsageOverlayAccountAnimationTests: XCTestCase {
-    func testExpandedAccountUsesTransitionLocalInsertionFade() throws {
-        let content = try sourceSection(
-            in: try source(named: "UsageOverlayView.swift"),
-            after: "private struct ExpandedUsageOverlayContent: View {",
-            before: "\nenum ExpandedUsageContentPresentation"
-        )
-        let accountStack = try sourceSection(
-            in: content,
-            after: "VStack(alignment: .leading, spacing: 14) {",
-            before: "\n                }"
-        )
+Expanded source 계약은 opacity `0/1`과 `.transition(.identity)`, provider ID 변경의 prepare, `DispatchQueue.main.async`, generation guard, regular-motion 전용 `withAnimation(.easeOut(duration: 0.12))`, Reduce Motion의 non-animated reveal, mounted `accountSurface`/`ForEach`, stack-level `.animation(..., value:)` 부재를 검증한다. Compact는 기존 source contract로 non-regression만 검증한다.
 
-        XCTAssertTrue(content.contains("@Environment(\\.accessibilityReduceMotion) private var accessibilityReduceMotion"))
-        XCTAssertTrue(accountStack.contains(".transition(accountTransition)"))
-        XCTAssertFalse(accountStack.contains(".animation("))
-        XCTAssertTrue(content.contains("private var accountTransition: AnyTransition"))
-        XCTAssertTrue(content.contains("insertion: .opacity.animation(.easeOut(duration: 0.12))"))
-        XCTAssertTrue(content.contains("removal: .identity"))
-        XCTAssertFalse(content.contains("value: providers.map(\\.id)"))
-    }
-
-    func testCompactVisibleRowsUseTransitionLocalFadeWhileMeasurementUsesIdentity() throws {
-        let content = try sourceSection(
-            in: try source(named: "CompactUsageOverlayView.swift"),
-            after: "struct CompactUsageOverlayView: View {",
-            before: "\nprivate struct CompactUsageAccountView"
-        )
-        let visibleStack = try sourceSection(
-            in: content,
-            after: "private var visibleAccountStack: some View {",
-            before: "\n    }\n\n    @ViewBuilder"
-        )
-        let measurementStack = try sourceSection(
-            in: content,
-            after: "private var measurementAccountStack: some View {",
-            before: "\n    }\n\n    private var visibleAccountStack"
-        )
-
-        XCTAssertTrue(content.contains("@Environment(\\.accessibilityReduceMotion) private var accessibilityReduceMotion"))
-        XCTAssertTrue(visibleStack.contains("accountRows(transition: accountTransition)"))
-        XCTAssertTrue(measurementStack.contains("accountRows(transition: .identity)"))
-        XCTAssertFalse(visibleStack.contains(".animation("))
-        XCTAssertFalse(measurementStack.contains(".animation("))
-        XCTAssertTrue(content.contains(".transition(transition)"))
-        XCTAssertTrue(content.contains("insertion: .opacity.animation(.easeOut(duration: 0.12))"))
-        XCTAssertTrue(content.contains("removal: .identity"))
-        XCTAssertFalse(content.contains("value: providerIDs"))
-    }
-
-    private func source(named filename: String) throws -> String {
-        try String(
-            contentsOf: repositoryRoot()
-                .appendingPathComponent("Sources/CLIProxyManagerApp/Views")
-                .appendingPathComponent(filename),
-            encoding: .utf8
-        )
-    }
-
-    private func sourceSection(
-        in source: String,
-        after startMarker: String,
-        before endMarker: String
-    ) throws -> String {
-        let start = try XCTUnwrap(source.range(of: startMarker)?.upperBound)
-        let suffix = source[start...]
-        let end = try XCTUnwrap(suffix.range(of: endMarker)?.lowerBound)
-        return String(suffix[..<end])
-    }
-
-    private func repositoryRoot() -> URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-    }
-}
-```
-
-- [ ] **Step 2: 강화한 테스트가 stack-level animation 구현에서 실패하는지 확인**
+- [x] **Step 2: RED 확인**
 
 Run: `swift test --filter UsageOverlayAccountAnimationTests`
 
-Expected: FAIL — 현재 stack-level `.animation(..., value:)` 구현과 shared Compact rows가 transition-local scope 계약을 위반
+Expected: FAIL — `ExpandedUsageOverlayInsertionState`가 아직 없어 test target이 compile하지 않는다. 이는 state model/staged contract 부재를 확인하는 expected RED다.
 
-- [ ] **Step 3: Expanded row가 transition-local animation을 소유하도록 변경**
+- [x] **Step 3: Expanded two-phase staged reveal 구현**
 
-Expanded provider stack에는 implicit animation을 두지 않고 row transition만 적용한다.
+`UsageOverlayView.swift`의 private Expanded view 외부에 internal `ExpandedUsageOverlayInsertionState`를 추가한다. custom `init`은 incoming provider ID로 `@State`를 초기화하여 initial presentation의 existing ID가 즉시 보이도록 한다. provider ID 변경은 generation을 먼저 증가시키고 `prepare`를 동기 호출한다. pending ID가 있으면 `DispatchQueue.main.async` closure가 generation을 재검증한 뒤 current present ID와 교차해 reveal한다.
 
-```swift
-VStack(alignment: .leading, spacing: 14) {
-    ForEach(providers) { provider in
-        ExpandedUsageOverlayAccountView(provider: provider)
-            .transition(accountTransition)
-    }
-}
-```
-
-같은 view에 Reduce Motion-aware transition을 추가한다.
+Expanded account row는 다음 계약을 사용한다.
 
 ```swift
-private var accountTransition: AnyTransition {
-    accessibilityReduceMotion
-        ? .identity
-        : .asymmetric(
-            insertion: .opacity.animation(.easeOut(duration: 0.12)),
-            removal: .identity
-        )
-}
+.opacity(insertionState.isRevealed(provider.id) ? 1 : 0)
+.transition(.identity)
 ```
 
-이 방식은 새 row opacity만 animate하고 기존 행의 위치·값과 removal reflow는 즉시 반영한다. empty state에서 첫 provider가 추가될 때도 row가 자체 transition animation을 소유한다.
+regular motion만 `withAnimation(.easeOut(duration: 0.12))`으로 reveal mutation을 감싼다. Reduce Motion은 동일한 next tick에서 animation 없이 mutation을 수행한다. Compact source를 변경하지 않는다.
 
-- [ ] **Step 4: Compact visible rows와 measurement rows의 transition을 분리**
-
-separator와 account가 함께 새 행으로 fade-in하도록 각 provider를 zero-spacing `VStack`으로 묶되, transition을 parameter로 전달한다.
-
-```swift
-private var measurementAccountStack: some View {
-    VStack(spacing: 0) {
-        accountRows(transition: .identity)
-    }
-}
-
-private var visibleAccountStack: some View {
-    LazyVStack(spacing: 0) {
-        accountRows(transition: accountTransition)
-    }
-}
-
-@ViewBuilder
-private func accountRows(transition: AnyTransition) -> some View {
-    ForEach(Array(providers.enumerated()), id: \.element.id) { index, provider in
-        VStack(spacing: 0) {
-            if index > 0 {
-                CompactUsageSeparator()
-            }
-            CompactUsageAccountView(provider: provider)
-        }
-        .transition(transition)
-    }
-}
-
-private var accountTransition: AnyTransition {
-    accessibilityReduceMotion
-        ? .identity
-        : .asymmetric(
-            insertion: .opacity.animation(.easeOut(duration: 0.12)),
-            removal: .identity
-        )
-}
-```
-
-보이는 stack과 measurement stack 모두에 `.animation(..., value:)`를 추가하지 않는다. 기존 measurement, viewport resize 및 display-mode blur/opacity animation은 변경하지 않는다.
-
-- [ ] **Step 5: animation focused tests 실행**
+- [x] **Step 4: focused regression tests 실행**
 
 Run: `swift test --filter UsageOverlayAccountAnimationTests`
 
@@ -350,13 +215,13 @@ Run: `swift test --filter UsageOverlayPresentationStateTests`
 
 Run: `swift test --filter UsageOverlayWindowControllerTests`
 
-Expected: transition scope tests, 기존 presentation state tests, window controller tests 모두 PASS
+Expected: staged state/source contract과 existing presentation/window-controller tests 모두 PASS
 
-- [ ] **Step 6: 커밋**
+- [ ] **Step 5: 지정된 단일 커밋 생성**
 
 ```bash
-git add Sources/CLIProxyManagerApp/Views/UsageOverlayView.swift Sources/CLIProxyManagerApp/Views/CompactUsageOverlayView.swift Tests/CLIProxyManagerAppTests/UsageOverlayAccountAnimationTests.swift
-git commit -m "fix: scope HUD animation to inserted rows"
+git add Sources/CLIProxyManagerApp/Views/UsageOverlayView.swift Tests/CLIProxyManagerAppTests/UsageOverlayAccountAnimationTests.swift docs/superpowers/specs/2026-07-25-hud-account-button-polish-design.md docs/superpowers/plans/2026-07-25-hud-account-button-polish.md
+git commit -m "fix: stage expanded HUD account reveal"
 ```
 
 ---
@@ -367,14 +232,10 @@ git commit -m "fix: scope HUD animation to inserted rows"
 - Modify: `docs/superpowers/specs/2026-07-25-hud-account-button-polish-design.md:3-4`
 
 **Interfaces:**
-- Consumes: Task 1~2의 버튼 및 Expanded/Compact insertion 변경
+- Consumes: 기존 버튼 polish와 Expanded staged reveal, 변경하지 않은 Compact behavior
 - Produces: 전체 테스트 통과, debug development app bundle 및 codesign 검증, 완료 상태 문서
 
-- [ ] **Step 1: 관련 focused tests 실행**
-
-Run: `swift test --filter DashboardAccountSnapshotTests`
-
-Run: `swift test --filter UsageOverlayAccountVisibilityUITests`
+- [x] **Step 1: 관련 focused tests 실행**
 
 Run: `swift test --filter UsageOverlayAccountAnimationTests`
 
@@ -382,9 +243,9 @@ Run: `swift test --filter UsageOverlayPresentationStateTests`
 
 Run: `swift test --filter UsageOverlayWindowControllerTests`
 
-Expected: 모든 focused tests PASS, `No matching test cases` 경고 없음
+Expected: staged reveal 및 기존 presentation/window controller tests 모두 PASS
 
-- [ ] **Step 2: 전체 test suite 실행**
+- [x] **Step 2: 전체 test suite 실행**
 
 Run: `swift test`
 
@@ -392,24 +253,24 @@ Expected: 전체 XCTest suite 0 failures, 0 unexpected failures
 
 실패 시 완료를 주장하지 않고 `superpowers:systematic-debugging`으로 원인을 찾은 뒤 해당 Task의 RED/GREEN cycle로 돌아간다.
 
-- [ ] **Step 3: debug development bundle과 local codesign 검증**
+- [x] **Step 3: debug development bundle과 local codesign 검증**
 
 기존 사용자의 실행 중 development bundle과 충돌하지 않도록 `/tmp`의 별도 build directory를 사용한다.
 
 Run:
 
 ```bash
-rm -rf /tmp/cliproxymanager-hud-button-polish-debug
+rm -rf /tmp/cliproxymanager-expanded-staged-reveal-debug
 make verify \
   CONFIGURATION=debug \
-  BUILD_DIR=/tmp/cliproxymanager-hud-button-polish-debug \
+  BUILD_DIR=/tmp/cliproxymanager-expanded-staged-reveal-debug \
   BUNDLE_ID=com.woosublee.CLIProxyManager.dev
 ```
 
 Expected:
 
 ```text
-Bundled /tmp/cliproxymanager-hud-button-polish-debug/CLIProxyManager.app
+Bundled /tmp/cliproxymanager-expanded-staged-reveal-debug/CLIProxyManager.app
 codesign verification passed
 ```
 
@@ -423,19 +284,19 @@ codesign verification passed
 **상태:** 구현 및 자동 검증 완료 — 수동 UI 확인 대기
 ```
 
-- [ ] **Step 5: diff와 worktree 검사**
+- [x] **Step 5: diff와 worktree 검사**
 
 Run: `git diff --check`
 
 Run: `git status --short --branch`
 
-Expected: 설계 상태 문서만 tracked modification으로 남고 whitespace error 없음. 기존 `build-development/`는 실행 중인 사용자의 development bundle artifact이므로 commit 대상에 포함하지 않는다.
+Expected: source, test, design spec, implementation plan만 tracked modification으로 남고 whitespace error 없음. 기존 `build-development/`는 사용자의 development bundle artifact이므로 commit 대상에 포함하지 않는다.
 
-- [ ] **Step 6: 상태 문서 커밋**
+- [ ] **Step 6: 지정된 단일 커밋 생성**
 
 ```bash
-git add docs/superpowers/specs/2026-07-25-hud-account-button-polish-design.md
-git commit -m "docs: mark HUD button polish verified"
+git add Sources/CLIProxyManagerApp/Views/UsageOverlayView.swift Tests/CLIProxyManagerAppTests/UsageOverlayAccountAnimationTests.swift docs/superpowers/specs/2026-07-25-hud-account-button-polish-design.md docs/superpowers/plans/2026-07-25-hud-account-button-polish.md
+git commit -m "fix: stage expanded HUD account reveal"
 ```
 
 - [ ] **Step 7: 사용자 수동 확인 목록 안내**
@@ -446,6 +307,6 @@ git commit -m "docs: mark HUD button polish verified"
 2. 표시 중/숨김 상태가 선택 background 없이 accent와 opacity만으로 구분되는지 확인한다.
 3. gear 및 ellipsis와 시각적 위계가 자연스러운지 확인한다.
 4. Expanded와 Compact에서 계정을 숨길 때 현재처럼 즉시 제거되는지 확인한다.
-5. Expanded에서 계정을 다시 켤 때 새 계정 행만 짧게 fade-in하고 기존 계정은 깜빡이지 않는지 확인한다.
-6. Compact에서도 계정을 다시 켤 때 새 계정 행이 Expanded와 같은 속도로 fade-in하는지 확인한다.
-7. Reduce Motion 활성화 시 두 모드 모두 새 계정이 즉시 나타나는지 확인한다.
+5. Expanded에서 계정을 다시 켤 때 새 계정 행이 투명 layout 준비 후 다음 tick에만 120ms reveal되고 기존 계정은 깜빡이지 않는지 확인한다.
+6. Compact의 기존 transition-local fade 동작이 유지되는지 확인한다.
+7. Reduce Motion 활성화 시 Expanded 새 계정이 다음 tick에 animation 없이 나타나는지 확인한다.

@@ -1,33 +1,100 @@
 import Foundation
+@testable import CLIProxyManagerApp
 import XCTest
 
 final class UsageOverlayAccountAnimationTests: XCTestCase {
-    func testExpandedKeepsAccountStackMountedAndUsesReduceMotionAwareRowTransition() throws {
-        let content = try source(named: "UsageOverlayView.swift")
+    func testInitialProviderIDsAreRevealedImmediately() {
+        let insertionState = ExpandedUsageOverlayInsertionState(
+            providerIDs: [.claude, .codex]
+        )
+
+        XCTAssertTrue(insertionState.isRevealed(.claude))
+        XCTAssertTrue(insertionState.isRevealed(.codex))
+        XCTAssertFalse(insertionState.isRevealed(.claudeAPI))
+    }
+
+    func testPreparePrunesRemovedIDsAndReturnsOnlyUnrevealedInsertions() {
+        var insertionState = ExpandedUsageOverlayInsertionState(
+            providerIDs: [.claude, .codex]
+        )
+
+        let pendingProviderIDs = insertionState.prepare(
+            providerIDs: [.codex, .claudeAPI]
+        )
+
+        XCTAssertEqual(pendingProviderIDs, [.claudeAPI])
+        XCTAssertFalse(insertionState.isRevealed(.claude))
+        XCTAssertTrue(insertionState.isRevealed(.codex))
+        XCTAssertFalse(insertionState.isRevealed(.claudeAPI))
+    }
+
+    func testRevealOnlyRevealsPendingIDsThatRemainPresent() {
+        var insertionState = ExpandedUsageOverlayInsertionState(providerIDs: [.claude])
+        let pendingProviderIDs = insertionState.prepare(
+            providerIDs: [.claude, .codex, .claudeAPI]
+        )
+
+        insertionState.reveal(
+            pendingProviderIDs,
+            presentProviderIDs: [.claude, .claudeAPI]
+        )
+
+        XCTAssertTrue(insertionState.isRevealed(.claude))
+        XCTAssertFalse(insertionState.isRevealed(.codex))
+        XCTAssertTrue(insertionState.isRevealed(.claudeAPI))
+    }
+
+    func testRemoveThenReaddMakesProviderPendingAgain() {
+        var insertionState = ExpandedUsageOverlayInsertionState(providerIDs: [.claude])
+
+        XCTAssertEqual(insertionState.prepare(providerIDs: []), [])
+        XCTAssertFalse(insertionState.isRevealed(.claude))
+        XCTAssertEqual(insertionState.prepare(providerIDs: [.claude]), [.claude])
+        XCTAssertFalse(insertionState.isRevealed(.claude))
+    }
+
+    func testExpandedUsesStagedRevealWithoutStackLevelAnimation() throws {
+        let content = try expandedContent()
         let body = try bodySection(
             in: content,
-            endingBeforeFirstOf: [
-                "\n    private var accountSurface: some View {",
-                "\n    private var accountTransition: AnyTransition {"
-            ]
+            endingBeforeFirstOf: ["\n    private var accountSurface: some View {"]
         )
-        let accountSurface = sourceSectionIfPresent(
+        let accountSurface = try sourceSection(
             in: content,
             after: "private var accountSurface: some View {",
-            before: "\n    private var accountTransition: AnyTransition {"
+            before: "\n    private var providerIDs: [ProviderRowState.ID]"
+        )
+        let reveal = try sourceSection(
+            in: content,
+            after: "private func scheduleReveal(for providerIDs: [ProviderRowState.ID]) {",
+            before: "\n    }\n}"
         )
 
         XCTAssertTrue(content.contains("@Environment(\\.accessibilityReduceMotion) private var accessibilityReduceMotion"))
+        XCTAssertTrue(content.contains("@State private var insertionState: ExpandedUsageOverlayInsertionState"))
+        XCTAssertTrue(content.contains("@State private var insertionGeneration = 0"))
+        XCTAssertTrue(content.contains("_insertionState = State(initialValue: ExpandedUsageOverlayInsertionState(providerIDs: providers.map(\\.id)))"))
         XCTAssertTrue(body.contains("accountSurface"))
+        XCTAssertTrue(body.contains(".onChange(of: providerIDs) { _, providerIDs in"))
         XCTAssertFalse(body.contains("if providers.isEmpty"))
-        XCTAssertTrue(content.contains("private var accountSurface: some View"))
+        XCTAssertTrue(body.contains("insertionState.prepare(providerIDs: providerIDs)"))
+        XCTAssertTrue(body.contains("scheduleReveal(for: pendingProviderIDs)"))
+
         XCTAssertTrue(accountSurface.contains("ZStack(alignment: .topLeading)"))
         XCTAssertTrue(accountSurface.contains("ForEach(providers)"))
-        XCTAssertTrue(accountSurface.contains(".transition(accountTransition)"))
-        XCTAssertTrue(accountSurface.contains("if providers.isEmpty"))
+        XCTAssertTrue(accountSurface.contains(".opacity(insertionState.isRevealed(provider.id) ? 1 : 0)"))
         XCTAssertTrue(accountSurface.contains(".transition(.identity)"))
-        assertReduceMotionTransition(in: content)
-        XCTAssertFalse(content.contains("value: providers.map(\\.id)"))
+        XCTAssertTrue(accountSurface.contains("if providers.isEmpty"))
+        XCTAssertFalse(accountSurface.contains(".transition(accountTransition)"))
+        XCTAssertFalse(accountSurface.contains(".animation("))
+        XCTAssertFalse(content.contains("private var accountTransition: AnyTransition"))
+
+        XCTAssertTrue(reveal.contains("DispatchQueue.main.async"))
+        XCTAssertTrue(reveal.contains("guard generation == insertionGeneration else { return }"))
+        XCTAssertTrue(reveal.contains("if accessibilityReduceMotion {"))
+        XCTAssertTrue(reveal.contains("insertionState.reveal(providerIDs, presentProviderIDs: self.providerIDs)"))
+        XCTAssertTrue(reveal.contains("withAnimation(.easeOut(duration: 0.12))"))
+        XCTAssertEqual(content.components(separatedBy: "withAnimation(").count - 1, 1)
     }
 
     func testCompactKeepsVisibleAccountStackMountedWithIdentityMeasurementRows() throws {
@@ -83,6 +150,14 @@ final class UsageOverlayAccountAnimationTests: XCTestCase {
             ),
             file: file,
             line: line
+        )
+    }
+
+    private func expandedContent() throws -> String {
+        try sourceSection(
+            in: try source(named: "UsageOverlayView.swift"),
+            after: "private struct ExpandedUsageOverlayContent: View {",
+            before: "\nenum ExpandedUsageContentPresentation"
         )
     }
 

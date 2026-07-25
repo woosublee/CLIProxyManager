@@ -166,6 +166,33 @@ private struct CompactUsageOverlayFittingSizePreferenceKey: PreferenceKey {
     }
 }
 
+struct ExpandedUsageOverlayInsertionState: Equatable {
+    private(set) var revealedProviderIDs: Set<ProviderRowState.ID>
+
+    init(providerIDs: [ProviderRowState.ID]) {
+        revealedProviderIDs = Set(providerIDs)
+    }
+
+    mutating func prepare(providerIDs: [ProviderRowState.ID]) -> [ProviderRowState.ID] {
+        let presentProviderIDs = Set(providerIDs)
+        revealedProviderIDs.formIntersection(presentProviderIDs)
+        return providerIDs.filter { !revealedProviderIDs.contains($0) }
+    }
+
+    mutating func reveal(
+        _ providerIDs: [ProviderRowState.ID],
+        presentProviderIDs: [ProviderRowState.ID]
+    ) {
+        revealedProviderIDs.formUnion(
+            Set(providerIDs).intersection(presentProviderIDs)
+        )
+    }
+
+    func isRevealed(_ providerID: ProviderRowState.ID) -> Bool {
+        revealedProviderIDs.contains(providerID)
+    }
+}
+
 struct UsageOverlayChrome: View {
     @ObservedObject var viewModel: DashboardViewModel
     let displayMode: AppConfig.UsageOverlay.DisplayMode
@@ -218,7 +245,20 @@ private struct ExpandedUsageOverlayContent: View {
     let providers: [MenuBarConnectedProvider]
     let emptyMessage: String
     let refreshStatus: String
+    @State private var insertionState: ExpandedUsageOverlayInsertionState
+    @State private var insertionGeneration = 0
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+
+    init(
+        providers: [MenuBarConnectedProvider],
+        emptyMessage: String,
+        refreshStatus: String
+    ) {
+        self.providers = providers
+        self.emptyMessage = emptyMessage
+        self.refreshStatus = refreshStatus
+        _insertionState = State(initialValue: ExpandedUsageOverlayInsertionState(providerIDs: providers.map(\.id)))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -237,6 +277,12 @@ private struct ExpandedUsageOverlayContent: View {
 
             accountSurface
         }
+        .onChange(of: providerIDs) { _, providerIDs in
+            insertionGeneration += 1
+            let pendingProviderIDs = insertionState.prepare(providerIDs: providerIDs)
+            guard !pendingProviderIDs.isEmpty else { return }
+            scheduleReveal(for: pendingProviderIDs)
+        }
     }
 
     private var accountSurface: some View {
@@ -244,7 +290,8 @@ private struct ExpandedUsageOverlayContent: View {
             VStack(alignment: .leading, spacing: 14) {
                 ForEach(providers) { provider in
                     ExpandedUsageOverlayAccountView(provider: provider)
-                        .transition(accountTransition)
+                        .opacity(insertionState.isRevealed(provider.id) ? 1 : 0)
+                        .transition(.identity)
                 }
             }
 
@@ -258,14 +305,22 @@ private struct ExpandedUsageOverlayContent: View {
         }
     }
 
-    private var accountTransition: AnyTransition {
-        if accessibilityReduceMotion {
-            return .identity
+    private var providerIDs: [ProviderRowState.ID] {
+        providers.map(\.id)
+    }
+
+    private func scheduleReveal(for providerIDs: [ProviderRowState.ID]) {
+        let generation = insertionGeneration
+        DispatchQueue.main.async {
+            guard generation == insertionGeneration else { return }
+            if accessibilityReduceMotion {
+                insertionState.reveal(providerIDs, presentProviderIDs: self.providerIDs)
+            } else {
+                withAnimation(.easeOut(duration: 0.12)) {
+                    insertionState.reveal(providerIDs, presentProviderIDs: self.providerIDs)
+                }
+            }
         }
-        return .asymmetric(
-            insertion: .opacity.animation(.easeOut(duration: 0.12)),
-            removal: .identity
-        )
     }
 }
 
