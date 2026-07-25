@@ -3445,7 +3445,6 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         )
 
         viewModel.resetAllSettings()
-        await collector.waitForStop()
 
         let stopCount = await collector.stopCount()
         XCTAssertEqual(stopCount, 0)
@@ -5083,7 +5082,6 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         try viewModel.saveSubscriptionUsageMenuBarVisible(false)
         await collector.waitForStop()
         try viewModel.saveSubscriptionUsageMenuBarVisible(true)
-        await collector.waitForStartCount(2)
 
         let startsBeforeStopCompletes = await collector.startCount()
         XCTAssertEqual(startsBeforeStopCompletes, 1)
@@ -5115,6 +5113,168 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         let startCount = await collector.startCount()
         XCTAssertEqual(startCount, 2)
+    }
+
+    func testDisablingUsageInvalidatesSuspendedAPIReloadResult() async throws {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let staleReport = reportWithClaudeCost(
+            cost: "9.99",
+            updatedAt: Date(timeIntervalSince1970: 300)
+        )
+        let collector = APIUsageCollectorDouble(
+            reloadReport: staleReport,
+            suspendsReload: true
+        )
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            apiUsageCollector: collector,
+            secretStore: InMemorySecretStore(values: [.claudeAPIKey: "key"])
+        )
+
+        let reload = Task { await viewModel.reloadUsage() }
+        await collector.waitUntilReloadSuspended()
+        try viewModel.saveSubscriptionUsageMenuBarVisible(false)
+        collector.resumeReload()
+        await reload.value
+        await collector.waitForStop()
+
+        XCTAssertTrue(viewModel.apiCostUsageStates.isEmpty)
+        let apiRow = try XCTUnwrap(viewModel.providerRows.first { $0.id == .claudeAPI })
+        XCTAssertEqual(apiRow.usageState, .apiCost(.disabled))
+    }
+
+    func testDisablingUsageIgnoresLateAPIUsageReportStreamValue() async throws {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let staleReport = reportWithClaudeCost(
+            cost: "9.99",
+            updatedAt: Date(timeIntervalSince1970: 300)
+        )
+        let collector = APIUsageCollectorDouble(keepsReportStreamOpen: true)
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            apiUsageCollector: collector,
+            secretStore: InMemorySecretStore(values: [.claudeAPIKey: "key"])
+        )
+        await viewModel.prepareUsage()
+        await collector.waitForReportSubscriber()
+
+        try viewModel.saveSubscriptionUsageMenuBarVisible(false)
+        await collector.waitForStop()
+        await collector.emit(staleReport)
+        await Task.yield()
+        await collector.finishReports()
+
+        XCTAssertTrue(viewModel.apiCostUsageStates.isEmpty)
+        let apiRow = try XCTUnwrap(viewModel.providerRows.first { $0.id == .claudeAPI })
+        XCTAssertEqual(apiRow.usageState, .apiCost(.disabled))
+    }
+
+    func testPortChangeIgnoresLateReportUntilCollectorUpdateCompletes() async throws {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let staleReport = reportWithClaudeCost(
+            cost: "7.77",
+            updatedAt: Date(timeIntervalSince1970: 400)
+        )
+        let collector = APIUsageCollectorDouble(
+            suspendsUpdate: true,
+            keepsReportStreamOpen: true
+        )
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            apiUsageCollector: collector,
+            secretStore: InMemorySecretStore(values: [.claudeAPIKey: "key"])
+        )
+        await viewModel.prepareUsage()
+        await collector.waitForReportSubscriber()
+        await collector.resetUpdates()
+
+        try viewModel.savePort(19_001)
+        await collector.waitUntilUpdateSuspended()
+        await collector.emit(staleReport)
+        for _ in 0..<100 { await Task.yield() }
+
+        XCTAssertTrue(viewModel.apiCostUsageStates.isEmpty)
+
+        collector.resumeUpdate()
+        await viewModel.prepareForTermination()
+        await collector.finishReports()
+    }
+
+    func testTerminationInvalidatesQueuedAPIUsageUpdateBehindSuspendedReload() async throws {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let collector = APIUsageCollectorDouble(suspendsReload: true)
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            apiUsageCollector: collector,
+            secretStore: InMemorySecretStore(values: [.claudeAPIKey: "key"])
+        )
+        await viewModel.prepareUsage()
+        viewModel.serverStatus = readyStatus()
+        await collector.resetUpdates()
+
+        let reload = Task { await viewModel.reloadUsage() }
+        await collector.waitUntilReloadSuspended()
+        try viewModel.savePort(19_001)
+        let termination = Task { await viewModel.prepareForTermination() }
+        for _ in 0..<100 { await Task.yield() }
+        collector.resumeReload()
+        await reload.value
+        await termination.value
+
+        let updateConfigurations = await collector.updateConfigurations()
+        let stopReasons = await collector.stopReasons()
+        XCTAssertEqual(updateConfigurations, [])
+        XCTAssertEqual(stopReasons, [.applicationTermination])
+    }
+
+    func testTrackingDisableTreatsOnlyConfirmedStoppedServerAsUnableToServe() async throws {
+        let cases: [(ServerControlState, Bool)] = [
+            (.stopped, false),
+            (.starting, true),
+            (.running, true),
+            (.stopping, true),
+            (.error("Health unavailable"), true)
+        ]
+
+        for (state, expected) in cases {
+            var config = AppConfig.default
+            config.subscriptionUsage.showInMenuBar = true
+            let collector = APIUsageCollectorDouble()
+            let viewModel = subscriptionUsageViewModel(
+                config: config,
+                configStore: StubConfigStore(config: config),
+                keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+                proxyService: StubProxyServiceStarter(),
+                apiUsageCollector: collector
+            )
+            viewModel.serverControlState = state
+
+            try viewModel.saveSubscriptionUsageMenuBarVisible(false)
+            await collector.waitForStop()
+
+            let reasons = await collector.stopReasons()
+            XCTAssertEqual(
+                reasons,
+                [.trackingDisabled(proxyCouldServeRequests: expected)],
+                "Unexpected tracking-pause policy for \(state)"
+            )
+        }
     }
 
     func testReloadUsageRefreshesQuotaAndImmediatelyDrainsAPIQueue() async {
@@ -5701,10 +5861,21 @@ private final class CPMInstallationDouble: CPMInstallationManaging {
 private actor APIUsageCollectorDouble: APIUsageCollecting {
     private let restoredReport: APIUsageCollectionReport
     private let reloadReport: APIUsageCollectionReport
+    private let suspendsReload: Bool
+    private let suspendsUpdate: Bool
     private let suspendsStop: Bool
+    private let keepsReportStreamOpen: Bool
     private var startCalls = 0
     private var reloadCalls = 0
     private var stopCalls = 0
+    private var updates: [APIUsageCollectorConfiguration] = []
+    private var recordedStopReasons: [APIUsageCollectorStopReason] = []
+    private var startWaiters: [(expectedCount: Int, continuation: CheckedContinuation<Void, Never>)] = []
+    private var stopWaiters: [CheckedContinuation<Void, Never>] = []
+    private var reportSubscriberWaiters: [CheckedContinuation<Void, Never>] = []
+    private var reportContinuation: AsyncStream<APIUsageCollectionReport>.Continuation?
+    private nonisolated let reloadGate = APIUsageReloadGate()
+    private nonisolated let updateGate = APIUsageUpdateGate()
     private var stopContinuation: CheckedContinuation<Void, Never>?
 
     init(
@@ -5716,15 +5887,29 @@ private actor APIUsageCollectorDouble: APIUsageCollecting {
             statesByProfileID: [:],
             collectedAt: Date(timeIntervalSince1970: 0)
         ),
-        suspendsStop: Bool = false
+        suspendsReload: Bool = false,
+        suspendsUpdate: Bool = false,
+        suspendsStop: Bool = false,
+        keepsReportStreamOpen: Bool = false
     ) {
         self.restoredReport = restoredReport
         self.reloadReport = reloadReport
+        self.suspendsReload = suspendsReload
+        self.suspendsUpdate = suspendsUpdate
         self.suspendsStop = suspendsStop
+        self.keepsReportStreamOpen = keepsReportStreamOpen
     }
 
     func reports() async -> AsyncStream<APIUsageCollectionReport> {
-        AsyncStream { $0.finish() }
+        guard keepsReportStreamOpen else {
+            return AsyncStream { $0.finish() }
+        }
+        return AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
+            reportContinuation = continuation
+            let waiters = reportSubscriberWaiters
+            reportSubscriberWaiters.removeAll()
+            waiters.forEach { $0.resume() }
+        }
     }
 
     func restore(configuration: APIUsageCollectorConfiguration) async -> APIUsageCollectionReport {
@@ -5733,22 +5918,60 @@ private actor APIUsageCollectorDouble: APIUsageCollecting {
 
     func start(configuration: APIUsageCollectorConfiguration) async {
         startCalls += 1
+        let readyWaiters = startWaiters.filter { startCalls >= $0.expectedCount }
+        startWaiters.removeAll { startCalls >= $0.expectedCount }
+        readyWaiters.forEach { $0.continuation.resume() }
     }
 
-    func update(configuration: APIUsageCollectorConfiguration) async {}
+    func update(configuration: APIUsageCollectorConfiguration) async {
+        updates.append(configuration)
+        if suspendsUpdate {
+            await updateGate.wait()
+        }
+    }
 
     func reload(configuration: APIUsageCollectorConfiguration) async -> APIUsageCollectionReport {
         reloadCalls += 1
-        return reloadReport
+        guard suspendsReload else { return reloadReport }
+        return await reloadGate.wait(returning: reloadReport)
     }
 
     func stop(reason: APIUsageCollectorStopReason, at: Date) async {
         stopCalls += 1
+        recordedStopReasons.append(reason)
+        let waiters = stopWaiters
+        stopWaiters.removeAll()
+        waiters.forEach { $0.resume() }
         if suspendsStop {
             await withCheckedContinuation { continuation in
                 stopContinuation = continuation
             }
         }
+    }
+
+    func emit(_ report: APIUsageCollectionReport) {
+        reportContinuation?.yield(report)
+    }
+
+    func finishReports() {
+        reportContinuation?.finish()
+        reportContinuation = nil
+    }
+
+    nonisolated func waitUntilReloadSuspended() async {
+        await reloadGate.waitUntilWaiting()
+    }
+
+    nonisolated func resumeReload() {
+        reloadGate.resume()
+    }
+
+    nonisolated func waitUntilUpdateSuspended() async {
+        await updateGate.waitUntilWaiting()
+    }
+
+    nonisolated func resumeUpdate() {
+        updateGate.resume()
     }
 
     func resumeStop() {
@@ -5759,20 +5982,109 @@ private actor APIUsageCollectorDouble: APIUsageCollecting {
     func startCount() -> Int { startCalls }
     func reloadCount() -> Int { reloadCalls }
     func stopCount() -> Int { stopCalls }
+    func updateConfigurations() -> [APIUsageCollectorConfiguration] { updates }
+    func resetUpdates() { updates.removeAll() }
+    func stopReasons() -> [APIUsageCollectorStopReason] { recordedStopReasons }
     func deleteLedgerCount() -> Int { 0 }
 
     func waitForStartCount(_ expectedCount: Int) async {
-        for _ in 0..<100 {
-            if startCalls >= expectedCount { return }
-            await Task.yield()
+        if startCalls >= expectedCount { return }
+        await withCheckedContinuation { continuation in
+            startWaiters.append((expectedCount, continuation))
+        }
+    }
+
+    func waitForReportSubscriber() async {
+        if reportContinuation != nil { return }
+        await withCheckedContinuation { continuation in
+            reportSubscriberWaiters.append(continuation)
         }
     }
 
     func waitForStop() async {
-        for _ in 0..<100 {
-            if stopCalls > 0 { return }
-            await Task.yield()
+        if stopCalls > 0 { return }
+        await withCheckedContinuation { continuation in
+            stopWaiters.append(continuation)
         }
+    }
+}
+
+private final class APIUsageReloadGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var waitingObservers: [CheckedContinuation<Void, Never>] = []
+
+    func wait(returning report: APIUsageCollectionReport) async -> APIUsageCollectionReport {
+        await withCheckedContinuation { continuation in
+            let observers = lock.withLock {
+                self.continuation = continuation
+                let observers = waitingObservers
+                waitingObservers.removeAll()
+                return observers
+            }
+            observers.forEach { $0.resume() }
+        }
+        return report
+    }
+
+    func waitUntilWaiting() async {
+        if lock.withLock({ continuation != nil }) { return }
+        await withCheckedContinuation { observer in
+            let shouldResume = lock.withLock {
+                if continuation != nil { return true }
+                waitingObservers.append(observer)
+                return false
+            }
+            if shouldResume { observer.resume() }
+        }
+    }
+
+    func resume() {
+        let continuation = lock.withLock {
+            let pending = self.continuation
+            self.continuation = nil
+            return pending
+        }
+        continuation?.resume()
+    }
+}
+
+private final class APIUsageUpdateGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var waitingObservers: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            let observers = lock.withLock {
+                self.continuation = continuation
+                let observers = waitingObservers
+                waitingObservers.removeAll()
+                return observers
+            }
+            observers.forEach { $0.resume() }
+        }
+    }
+
+    func waitUntilWaiting() async {
+        if lock.withLock({ continuation != nil }) { return }
+        await withCheckedContinuation { observer in
+            let shouldResume = lock.withLock {
+                if continuation != nil { return true }
+                waitingObservers.append(observer)
+                return false
+            }
+            if shouldResume { observer.resume() }
+        }
+    }
+
+    func resume() {
+        let continuation = lock.withLock {
+            let pending = self.continuation
+            self.continuation = nil
+            return pending
+        }
+        continuation?.resume()
     }
 }
 

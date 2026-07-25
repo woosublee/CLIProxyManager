@@ -273,6 +273,9 @@ final class DashboardViewModel: ObservableObject {
     private var subscriptionUsageRefreshTask: Task<Void, Never>?
     private var apiUsageReportTask: Task<Void, Never>?
     private var apiUsageLifecycleTask: Task<Void, Never>?
+    private var apiUsageLifecycleGeneration = 0
+    private var acceptedAPIUsageReportConfiguration: APIUsageCollectorConfiguration?
+    private var isPreparingAPIUsageForTermination = false
     private var hasStartedAPIUsageCollector = false
     private var subscriptionUsageRefreshIsForced = false
     private var pendingForcedSubscriptionUsageRefresh = false
@@ -414,6 +417,7 @@ final class DashboardViewModel: ObservableObject {
         } else {
             try savePrivacyOnlyConfig(updatedConfig)
             if wasEnabled && !willBeEnabled {
+                let generation = invalidateAPIUsageLifecycle()
                 cancelSubscriptionUsageWork()
                 let cleanupError: Error?
                 do {
@@ -428,9 +432,9 @@ final class DashboardViewModel: ObservableObject {
                 apiCostUsageStates.removeAll()
                 rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
                 hasStartedAPIUsageCollector = false
-                let proxyCouldServeRequests = serverControlState.isRunning
+                let proxyCouldServeRequests = serverControlState.couldServeRequestsDuringTrackingPause
                 let collector = apiUsageCollector
-                enqueueAPIUsageLifecycle {
+                enqueueAPIUsageLifecycle(generation: generation) { _ in
                     await collector.stop(
                         reason: .trackingDisabled(proxyCouldServeRequests: proxyCouldServeRequests),
                         at: Date()
@@ -443,9 +447,10 @@ final class DashboardViewModel: ObservableObject {
         }
 
         guard wasEnabled != willBeEnabled else { return }
+        let generation = invalidateAPIUsageLifecycle()
         requestServerRestartAfterConfigChange()
-        enqueueAPIUsageLifecycle { [weak self] in
-            await self?.performPrepareUsage()
+        enqueueAPIUsageLifecycle(generation: generation) { [weak self] generation in
+            await self?.performPrepareUsage(generation: generation)
         }
     }
 
@@ -507,6 +512,7 @@ final class DashboardViewModel: ObservableObject {
             return
         }
 
+        let generation = invalidateAPIUsageLifecycle()
         var cleanupError: Error?
         if shouldDeleteManagementKey {
             cancelSubscriptionUsageWork()
@@ -523,9 +529,9 @@ final class DashboardViewModel: ObservableObject {
         rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
         hasStartedAPIUsageCollector = false
         if shouldStopAPIUsageCollector {
-            let proxyCouldServeRequests = serverControlState.isRunning
+            let proxyCouldServeRequests = serverControlState.couldServeRequestsDuringTrackingPause
             let collector = apiUsageCollector
-            enqueueAPIUsageLifecycle {
+            enqueueAPIUsageLifecycle(generation: generation) { _ in
                 await collector.stop(
                     reason: .trackingDisabled(proxyCouldServeRequests: proxyCouldServeRequests),
                     at: Date()
@@ -574,18 +580,19 @@ final class DashboardViewModel: ObservableObject {
         let claudeStatus = await claudeConnector.status()
         updateStatuses(serverStatus: updatedServerStatus, claudeStatus: claudeStatus)
         if wasProxyReady != (updatedServerStatus.severity == .ready) {
-            await updateAPIUsageCollectorIfStarted()
+            scheduleAPIUsageCollectorUpdateIfStarted()
         }
     }
 
     func prepareUsage() async {
-        let task = enqueueAPIUsageLifecycle { [weak self] in
-            await self?.performPrepareUsage()
+        let generation = invalidateAPIUsageLifecycle()
+        let task = enqueueAPIUsageLifecycle(generation: generation) { [weak self] generation in
+            await self?.performPrepareUsage(generation: generation)
         }
         await task.value
     }
 
-    private func performPrepareUsage() async {
+    private func performPrepareUsage(generation: Int) async {
         var didRefreshUsageAfterRestart = false
         do {
             if config.isUsageEnabled {
@@ -606,10 +613,15 @@ final class DashboardViewModel: ObservableObject {
             return
         }
 
+        guard isCurrentAPIUsageLifecycle(generation: generation) else { return }
         observeAPIUsageReportsIfNeeded()
         let configuration = apiUsageCollectorConfiguration
         let restoredReport = await apiUsageCollector.restore(configuration: configuration)
-        applyAPIUsageReport(restoredReport)
+        guard isCurrentAPIUsageLifecycle(
+            generation: generation,
+            configuration: configuration
+        ) else { return }
+        applyAPIUsageReport(restoredReport, configuration: configuration)
         if configuration.usageEnabled {
             if hasStartedAPIUsageCollector {
                 await apiUsageCollector.update(configuration: configuration)
@@ -621,6 +633,13 @@ final class DashboardViewModel: ObservableObject {
             await apiUsageCollector.start(configuration: configuration)
             hasStartedAPIUsageCollector = false
         }
+        if configuration.usageEnabled,
+           isCurrentAPIUsageLifecycle(
+            generation: generation,
+            configuration: configuration
+           ) {
+            acceptedAPIUsageReportConfiguration = configuration
+        }
         if !didRefreshUsageAfterRestart {
             await refreshSubscriptionUsage()
         }
@@ -628,15 +647,34 @@ final class DashboardViewModel: ObservableObject {
 
     @discardableResult
     private func enqueueAPIUsageLifecycle(
-        _ operation: @escaping @MainActor @Sendable () async -> Void
+        generation: Int,
+        _ operation: @escaping @MainActor @Sendable (Int) async -> Void
     ) -> Task<Void, Never> {
         let previousTask = apiUsageLifecycleTask
         let task = Task {
             await previousTask?.value
-            await operation()
+            await operation(generation)
         }
         apiUsageLifecycleTask = task
         return task
+    }
+
+    @discardableResult
+    private func invalidateAPIUsageLifecycle() -> Int {
+        apiUsageLifecycleGeneration &+= 1
+        acceptedAPIUsageReportConfiguration = nil
+        return apiUsageLifecycleGeneration
+    }
+
+    private func isCurrentAPIUsageLifecycle(
+        generation: Int,
+        configuration: APIUsageCollectorConfiguration? = nil
+    ) -> Bool {
+        guard !isPreparingAPIUsageForTermination,
+              generation == apiUsageLifecycleGeneration else {
+            return false
+        }
+        return configuration.map { $0 == apiUsageCollectorConfiguration } ?? true
     }
 
     private func observeAPIUsageReportsIfNeeded() {
@@ -651,17 +689,40 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
-    private func applyAPIUsageReport(_ report: APIUsageCollectionReport) {
-        apiCostUsageStates = report.statesByProfileID
+    private func applyAPIUsageReport(
+        _ report: APIUsageCollectionReport,
+        configuration: APIUsageCollectorConfiguration? = nil
+    ) {
+        guard config.isUsageEnabled,
+              !isPreparingAPIUsageForTermination else {
+            return
+        }
+        let currentConfiguration = apiUsageCollectorConfiguration
+        if let configuration {
+            guard configuration == currentConfiguration else { return }
+        } else {
+            guard acceptedAPIUsageReportConfiguration == currentConfiguration else { return }
+        }
+        let enabledProfileIDs = enabledAPIUsageProfileIDs
+        apiCostUsageStates = report.statesByProfileID.filter { enabledProfileIDs.contains($0.key) }
         rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
     }
 
     func prepareForTermination() async {
-        await apiUsageLifecycleTask?.value
+        guard !isPreparingAPIUsageForTermination else {
+            await apiUsageLifecycleTask?.value
+            return
+        }
+        isPreparingAPIUsageForTermination = true
+        let generation = invalidateAPIUsageLifecycle()
+        let collector = apiUsageCollector
+        let task = enqueueAPIUsageLifecycle(generation: generation) { _ in
+            await collector.stop(reason: .applicationTermination, at: Date())
+        }
+        await task.value
         apiUsageLifecycleTask = nil
         apiUsageReportTask?.cancel()
         apiUsageReportTask = nil
-        await apiUsageCollector.stop(reason: .applicationTermination, at: Date())
     }
 
     private func restoreSubscriptionUsageSnapshots() {
@@ -767,8 +828,24 @@ final class DashboardViewModel: ObservableObject {
         await refresh()
         guard serverStatus.severity == .ready else { return }
         await refreshSubscriptionUsage(force: true)
-        let report = await apiUsageCollector.reload(configuration: apiUsageCollectorConfiguration)
-        applyAPIUsageReport(report)
+        let configuration = apiUsageCollectorConfiguration
+        let generation = apiUsageLifecycleGeneration
+        let collector = apiUsageCollector
+        let task = enqueueAPIUsageLifecycle(generation: generation) { [weak self] generation in
+            guard let self,
+                  self.isCurrentAPIUsageLifecycle(
+                    generation: generation,
+                    configuration: configuration
+                  ) else { return }
+            let report = await collector.reload(configuration: configuration)
+            guard self.isCurrentAPIUsageLifecycle(
+                generation: generation,
+                configuration: configuration
+            ) else { return }
+            self.acceptedAPIUsageReportConfiguration = configuration
+            self.applyAPIUsageReport(report, configuration: configuration)
+        }
+        await task.value
     }
 
     func refreshSubscriptionUsage(force: Bool = false) async {
@@ -2927,6 +3004,17 @@ final class DashboardViewModel: ObservableObject {
         )
     }
 
+    private var enabledAPIUsageProfileIDs: Set<String> {
+        var profileIDs: Set<String> = []
+        if isAPIKeyConfigured(.claudeAPIKey) {
+            profileIDs.insert(ProviderRowState.ID.claudeAPI.rawValue)
+        }
+        if isAPIKeyConfigured(.codexAPIKey) {
+            profileIDs.insert(ProviderRowState.ID.codexAPI.rawValue)
+        }
+        return profileIDs
+    }
+
     private var defaultSubscriptionUsageState: AccountSubscriptionUsageState {
         config.isUsageEnabled ? .managementKeyNotConfigured : .disabled
     }
@@ -3135,25 +3223,32 @@ final class DashboardViewModel: ObservableObject {
             throw ProxyRestartReadinessError(message: message)
         }
         serverControlState = .running
-        await updateAPIUsageCollectorIfStarted()
+        scheduleAPIUsageCollectorUpdateIfStarted()
     }
 
     private func refreshUsageAfterServerChange() async {
         await refreshSubscriptionUsage()
-        await updateAPIUsageCollectorIfStarted()
-    }
-
-    private func updateAPIUsageCollectorIfStarted() async {
-        guard hasStartedAPIUsageCollector else { return }
-        await apiUsageCollector.update(configuration: apiUsageCollectorConfiguration)
+        scheduleAPIUsageCollectorUpdateIfStarted()
     }
 
     private func scheduleAPIUsageCollectorUpdateIfStarted() {
-        guard hasStartedAPIUsageCollector else { return }
+        guard hasStartedAPIUsageCollector,
+              !isPreparingAPIUsageForTermination else { return }
+        let generation = invalidateAPIUsageLifecycle()
         let collector = apiUsageCollector
         let configuration = apiUsageCollectorConfiguration
-        Task {
+        enqueueAPIUsageLifecycle(generation: generation) { [weak self] generation in
+            guard let self,
+                  self.isCurrentAPIUsageLifecycle(
+                    generation: generation,
+                    configuration: configuration
+                  ) else { return }
             await collector.update(configuration: configuration)
+            guard self.isCurrentAPIUsageLifecycle(
+                generation: generation,
+                configuration: configuration
+            ) else { return }
+            self.acceptedAPIUsageReportConfiguration = configuration
         }
     }
 

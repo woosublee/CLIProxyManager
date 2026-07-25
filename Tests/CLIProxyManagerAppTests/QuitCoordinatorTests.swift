@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 import CLIProxyManagerCore
 @testable import CLIProxyManagerApp
@@ -68,6 +69,44 @@ final class QuitCoordinatorTests: XCTestCase {
         }
 
         XCTAssertEqual(events.values, ["flush", "terminate"])
+    }
+
+    func testApplicationShouldTerminateWaitsForAsyncPreparationAndRepliesOnce() async {
+        let preparation = SuspendedTerminationPreparation()
+        let terminator = StubAppTerminator()
+        let coordinator = QuitCoordinator(
+            appTerminator: terminator,
+            shouldStopServerBeforeQuit: { false },
+            beforeTerminate: {
+                await preparation.run()
+            }
+        )
+        let delegate = ApplicationTerminationDelegate()
+        delegate.quitCoordinator = coordinator
+        var replies: [Bool] = []
+        delegate.replyToApplicationShouldTerminate = { _, shouldTerminate in
+            replies.append(shouldTerminate)
+        }
+
+        let firstReply = delegate.applicationShouldTerminate(NSApplication.shared)
+        let duplicateReply = delegate.applicationShouldTerminate(NSApplication.shared)
+        await preparation.waitUntilStarted()
+
+        XCTAssertEqual(firstReply, .terminateLater)
+        XCTAssertEqual(duplicateReply, .terminateLater)
+        XCTAssertEqual(preparation.callCount, 1)
+        XCTAssertEqual(terminator.terminateCount, 0)
+        XCTAssertEqual(replies, [])
+
+        preparation.resume()
+        for _ in 0..<100 {
+            if !replies.isEmpty { break }
+            await Task.yield()
+        }
+
+        XCTAssertEqual(replies, [true])
+        XCTAssertEqual(preparation.callCount, 1)
+        XCTAssertEqual(terminator.terminateCount, 0)
     }
 
     func testRequestQuitAsksForConfirmationWhenServerIsStarting() {
@@ -181,6 +220,32 @@ private final class StubAppTerminator: AppTerminating, @unchecked Sendable {
     func terminate() {
         lock.withLock { _terminateCount += 1 }
         events?.append("terminate")
+    }
+}
+
+@MainActor
+private final class SuspendedTerminationPreparation {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private(set) var callCount = 0
+
+    func run() async {
+        callCount += 1
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func waitUntilStarted() async {
+        for _ in 0..<100 {
+            if continuation != nil { return }
+            await Task.yield()
+        }
+        XCTFail("Expected termination preparation to start.")
+    }
+
+    func resume() {
+        continuation?.resume()
+        continuation = nil
     }
 }
 
