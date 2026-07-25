@@ -3,6 +3,85 @@ import XCTest
 @testable import CLIProxyManagerCore
 
 final class APIUsageCollectorTests: XCTestCase {
+    func testReloadBeforeStartInitializesActualLedgerBeforeDestructivePop() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("APIUsageCollectorReloadBeforeStartTests")
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = APIUsageLedgerStore(
+            paths: ManagedPaths(rootDirectory: root),
+            writeDelayNanoseconds: .max
+        )
+        let queue = RecordingQueueClient(results: [.success([makeQueueRecord()])])
+        let at = iso("2026-07-25T12:00:00Z")
+        let collector = APIUsageCollector(
+            queueClient: queue,
+            ledgerStore: store,
+            now: { at }
+        )
+
+        let report = await collector.reload(configuration: enabledConfiguration())
+
+        let read = try await store.readCurrentPeriods(at: at)
+        XCTAssertEqual(read.currentMonth.buckets.first?.requestCount, 1)
+        XCTAssertNotEqual(report.statesByProfileID["claude-api"], .loading)
+        let queueCalls = await queue.callCount()
+        XCTAssertEqual(queueCalls, 1)
+    }
+
+    func testReloadInitializationFailureDoesNotPopAndReportsPersistenceFailure() async {
+        let ledger = RecordingLedgerStore(
+            prepareError: .persistenceFailure,
+            initiallyInitialized: false
+        )
+        let queue = RecordingQueueClient(results: [.success([makeQueueRecord()])])
+        let collector = APIUsageCollector(queueClient: queue, ledgerStore: ledger)
+
+        let report = await collector.reload(configuration: enabledConfiguration())
+
+        let queueCalls = await queue.callCount()
+        XCTAssertEqual(queueCalls, 0)
+        XCTAssertEqual(
+            report.statesByProfileID["claude-api"],
+            .unavailable(.persistenceFailure)
+        )
+    }
+
+    func testReloadReadFailuresDoNotPop() async {
+        let cases: [(APIUsageLedgerStoreError, APICostUsageState)] = [
+            (.unsupportedSchemaVersion(99), .unavailable(.unsupportedLedgerVersion)),
+            (.invalidFile, .unavailable(.persistenceFailure))
+        ]
+
+        for (readError, expectedState) in cases {
+            let ledger = RecordingLedgerStore(readError: readError)
+            let queue = RecordingQueueClient(results: [.success([makeQueueRecord()])])
+            let collector = APIUsageCollector(queueClient: queue, ledgerStore: ledger)
+
+            let report = await collector.reload(configuration: enabledConfiguration())
+
+            let queueCalls = await queue.callCount()
+            XCTAssertEqual(queueCalls, 0, "Unexpected pop for \(readError)")
+            XCTAssertEqual(report.statesByProfileID["claude-api"], expectedState)
+        }
+    }
+
+    func testReloadUninitializedPrepareFailureStaysLoadingWithoutPop() async {
+        let ledger = RecordingLedgerStore(
+            prepareError: .notInitialized,
+            initiallyInitialized: false
+        )
+        let queue = RecordingQueueClient(results: [.success([makeQueueRecord()])])
+        let collector = APIUsageCollector(queueClient: queue, ledgerStore: ledger)
+
+        let report = await collector.reload(configuration: enabledConfiguration())
+
+        let queueCalls = await queue.callCount()
+        XCTAssertEqual(queueCalls, 0)
+        XCTAssertEqual(report.statesByProfileID["claude-api"], .loading)
+    }
+
     func testReloadDrainsFullBatchesUntilShortBatchAndMergesEachRecordOnce() async {
         let queue = RecordingQueueClient(results: [
             .success(Array(repeating: makeQueueRecord(), count: 200)),
@@ -166,6 +245,23 @@ final class APIUsageCollectorTests: XCTestCase {
         XCTAssertTrue(issues.contains(.persistenceFailure))
         let successfulDrainCount = await ledger.successfulDrainCount()
         XCTAssertEqual(successfulDrainCount, 0)
+    }
+
+    func testPoppedBatchMarkerNotInitializedFailureStillReportsPersistenceLoss() async {
+        let ledger = RecordingLedgerStore(
+            readModel: readModelWithPricedClaudeUsage(),
+            mergeError: .persistenceFailure,
+            markPersistenceError: .notInitialized
+        )
+        let queue = RecordingQueueClient(results: [.success([makeQueueRecord()])])
+        let collector = APIUsageCollector(queueClient: queue, ledgerStore: ledger)
+
+        let report = await collector.reload(configuration: enabledConfiguration())
+
+        XCTAssertNotEqual(report.statesByProfileID["claude-api"], .loading)
+        XCTAssertTrue(
+            report.statesByProfileID["claude-api"]?.issues.contains(.persistenceFailure) == true
+        )
     }
 
     func testPoppedBatchMergeFailurePersistsLossSignalAcrossLaterSuccessfulDrain() async {
@@ -336,6 +432,38 @@ final class APIUsageCollectorTests: XCTestCase {
         XCTAssertTrue(stoppedWithoutManualResume)
         let queueCalls = await queue.callCount()
         XCTAssertEqual(queueCalls, 2)
+    }
+
+    func testConcurrentStartReloadStopDuringInitializationNeverPops() async throws {
+        let ledger = RecordingLedgerStore(
+            suspendPrepare: true,
+            initiallyInitialized: false
+        )
+        let queue = RecordingQueueClient(results: [.success([makeQueueRecord()])])
+        let collector = APIUsageCollector(queueClient: queue, ledgerStore: ledger)
+
+        let reloadTask = Task {
+            await collector.reload(configuration: enabledConfiguration())
+        }
+        try await waitUntil { await ledger.isPrepareSuspended() }
+        let startTask = Task {
+            await collector.start(configuration: enabledConfiguration())
+        }
+        for _ in 0..<20 { await Task.yield() }
+        let stopTask = Task {
+            await collector.stop(reason: .applicationTermination, at: Date())
+        }
+        for _ in 0..<20 { await Task.yield() }
+
+        let callsBeforePreparation = await queue.callCount()
+        XCTAssertEqual(callsBeforePreparation, 0)
+        await ledger.resumePrepare()
+        _ = await reloadTask.value
+        await startTask.value
+        await stopTask.value
+
+        let finalQueueCalls = await queue.callCount()
+        XCTAssertEqual(finalQueueCalls, 0)
     }
 
     func testStopWaitsForLifecycleDrainThenFlushesAndPreventsPollingRestart() async throws {
@@ -789,11 +917,15 @@ private struct RecordedGap: Equatable {
 
 private actor RecordingLedgerStore: APIUsageLedgerStoring {
     private var readModel: APIUsageLedgerReadModel
+    private var initialized: Bool
     private let prepareError: APIUsageLedgerStoreError?
     private var mergeError: APIUsageLedgerStoreError?
-    private let readError: APIUsageLedgerStoreError?
+    private let markPersistenceError: APIUsageLedgerStoreError?
+    private var readError: APIUsageLedgerStoreError?
     private let flushError: APIUsageLedgerStoreError?
     private let suspendReadCall: Int?
+    private var shouldSuspendPrepare: Bool
+    private var prepareContinuation: CheckedContinuation<Void, Never>?
     private var readCalls = 0
     private var readContinuation: CheckedContinuation<Void, Never>?
     private var mutations: [APIUsageLedgerMutation] = []
@@ -808,25 +940,40 @@ private actor RecordingLedgerStore: APIUsageLedgerStoring {
         readModel: APIUsageLedgerReadModel = emptyReadModel(lastSuccessfulDrainAt: nil),
         prepareError: APIUsageLedgerStoreError? = nil,
         mergeError: APIUsageLedgerStoreError? = nil,
+        markPersistenceError: APIUsageLedgerStoreError? = nil,
         readError: APIUsageLedgerStoreError? = nil,
         flushError: APIUsageLedgerStoreError? = nil,
-        suspendReadCall: Int? = nil
+        suspendReadCall: Int? = nil,
+        suspendPrepare: Bool = false,
+        initiallyInitialized: Bool = true
     ) {
         self.readModel = readModel
+        self.initialized = initiallyInitialized
         self.prepareError = prepareError
         self.mergeError = mergeError
+        self.markPersistenceError = markPersistenceError
         self.readError = readError
         self.flushError = flushError
         self.suspendReadCall = suspendReadCall
+        self.shouldSuspendPrepare = suspendPrepare
     }
 
     func prepareTracking(at: Date, reportingTimeZoneID: String) async throws {
         events.append("prepare")
+        if shouldSuspendPrepare {
+            shouldSuspendPrepare = false
+            await withCheckedContinuation { prepareContinuation = $0 }
+        }
         if let prepareError { throw prepareError }
+        initialized = true
+        if readError == .notInitialized {
+            readError = nil
+        }
     }
 
     func merge(_ values: [APIUsageLedgerMutation]) async throws {
         events.append("merge")
+        guard initialized else { throw APIUsageLedgerStoreError.notInitialized }
         if let mergeError {
             self.mergeError = nil
             throw mergeError
@@ -836,6 +983,8 @@ private actor RecordingLedgerStore: APIUsageLedgerStoring {
 
     func markPersistenceFailure(for timestamps: [Date]) async throws {
         events.append("persistenceFailure")
+        guard initialized else { throw APIUsageLedgerStoreError.notInitialized }
+        if let markPersistenceError { throw markPersistenceError }
         persistenceFailures.append(contentsOf: timestamps)
         var metadata = readModel.metadata
         for timestamp in timestamps {
@@ -888,6 +1037,7 @@ private actor RecordingLedgerStore: APIUsageLedgerStoring {
     func readCurrentPeriods(at: Date) async throws -> APIUsageLedgerReadModel {
         events.append("read")
         readCalls += 1
+        guard initialized else { throw APIUsageLedgerStoreError.notInitialized }
         if readCalls == suspendReadCall {
             await withCheckedContinuation { readContinuation = $0 }
         }
@@ -924,7 +1074,13 @@ private actor RecordingLedgerStore: APIUsageLedgerStoring {
     func successfulDrainCount() -> Int { successfulDrains }
     func allEvents() -> [String] { events }
     func eventsPrefix(_ count: Int) -> [String] { Array(events.prefix(count)) }
+    func isPrepareSuspended() -> Bool { prepareContinuation != nil }
     func isReadSuspended() -> Bool { readContinuation != nil }
+
+    func resumePrepare() {
+        prepareContinuation?.resume()
+        prepareContinuation = nil
+    }
 
     func resumeRead() {
         readContinuation?.resume()

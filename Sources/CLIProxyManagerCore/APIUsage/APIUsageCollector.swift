@@ -63,6 +63,11 @@ public actor APIUsageCollector: APIUsageCollecting {
         let retryDisposition: RetryDisposition
     }
 
+    private struct PreparedBaseline {
+        let ledger: APIUsageLedgerReadModel
+        let hadExistingTracking: Bool
+    }
+
     private static let batchSize = 200
     private static let recordsPerPass = 2_000
     private static let retentionSeconds: TimeInterval = 3_600
@@ -369,7 +374,12 @@ public actor APIUsageCollector: APIUsageCollecting {
         activeDrainSource = source
         flushRequestedForActiveDrain = flushAfterDrain
         activeDrainDidFlush = false
-        let task = Task { await self.performDrain(configuration: configuration) }
+        let task = Task {
+            await self.performDrain(
+                configuration: configuration,
+                stopGeneration: stopGeneration
+            )
+        }
         reloadTask = task
 
         let result = await task.value
@@ -387,27 +397,48 @@ public actor APIUsageCollector: APIUsageCollecting {
         activeDrainDidFlush = false
     }
 
+    private func preparedBaseline(
+        configuration: APIUsageCollectorConfiguration,
+        at: Date
+    ) async throws -> PreparedBaseline {
+        do {
+            return PreparedBaseline(
+                ledger: try await ledgerStore.readCurrentPeriods(at: at),
+                hadExistingTracking: true
+            )
+        } catch APIUsageLedgerStoreError.notInitialized {
+            try await ledgerStore.prepareTracking(
+                at: at,
+                reportingTimeZoneID: configuration.reportingTimeZoneID
+            )
+            try await ledgerStore.flush()
+            return PreparedBaseline(
+                ledger: try await ledgerStore.readCurrentPeriods(at: at),
+                hadExistingTracking: false
+            )
+        }
+    }
+
     private func performDrain(
-        configuration: APIUsageCollectorConfiguration
+        configuration: APIUsageCollectorConfiguration,
+        stopGeneration: UInt64
     ) async -> DrainResult {
         let drainStartedAt = now()
-        let baseline: APIUsageLedgerReadModel?
+        let prepared: PreparedBaseline
         do {
-            baseline = try await ledgerStore.readCurrentPeriods(at: drainStartedAt)
+            prepared = try await preparedBaseline(
+                configuration: configuration,
+                at: drainStartedAt
+            )
         } catch let error as APIUsageLedgerStoreError {
-            switch error {
-            case .notInitialized:
-                baseline = nil
-            case .unsupportedSchemaVersion, .invalidFile, .persistenceFailure:
-                let report = report(
-                    configuration: configuration,
-                    ledger: nil,
-                    ledgerError: error,
-                    at: drainStartedAt
-                )
-                publish(report, for: configuration)
-                return .init(report: report, retryDisposition: .terminal)
-            }
+            let report = report(
+                configuration: configuration,
+                ledger: nil,
+                ledgerError: error,
+                at: drainStartedAt
+            )
+            publish(report, for: configuration)
+            return .init(report: report, retryDisposition: .terminal)
         } catch {
             let report = report(
                 configuration: configuration,
@@ -419,7 +450,20 @@ public actor APIUsageCollector: APIUsageCollecting {
             return .init(report: report, retryDisposition: .terminal)
         }
 
-        if let lastSuccessfulDrainAt = baseline?.metadata.lastSuccessfulDrainAt,
+        let initializedBaseline = prepared.ledger
+        let baseline = prepared.hadExistingTracking ? initializedBaseline : nil
+        guard lifecycleStopGeneration == stopGeneration,
+              !Task.isCancelled else {
+            let report = reportFromBaseline(
+                configuration: configuration,
+                ledger: initializedBaseline,
+                at: now()
+            )
+            publish(report, for: configuration)
+            return .init(report: report, retryDisposition: .terminal)
+        }
+
+        if let lastSuccessfulDrainAt = initializedBaseline.metadata.lastSuccessfulDrainAt,
            drainStartedAt.timeIntervalSince(lastSuccessfulDrainAt) > Self.retentionSeconds {
             do {
                 try await ledgerStore.markCollectionGap(
@@ -505,7 +549,7 @@ public actor APIUsageCollector: APIUsageCollecting {
                         let report = report(
                             configuration: configuration,
                             ledger: baseline,
-                            ledgerError: error,
+                            ledgerError: mergeError,
                             at: failedAt
                         )
                         publish(report, for: configuration)
