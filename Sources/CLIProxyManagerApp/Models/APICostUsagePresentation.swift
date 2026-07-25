@@ -128,34 +128,29 @@ func apiCostRows(snapshot: APICostSnapshot) -> [APICostRowPresentation] {
     }
 }
 
+private let oneUSCent = Decimal(sign: .plus, exponent: -2, significand: 1)
+
 func apiCostCurrency(_ value: Decimal) -> String {
     if value == 0 { return "$0.00" }
-    if value > 0, value < Decimal(string: "0.01")! { return "<$0.01" }
+    if value > 0, value < oneUSCent { return "<$0.01" }
     let amount = currencyFormatter(minimum: 2, maximum: 2)
         .string(from: NSDecimalNumber(decimal: value)) ?? "0.00"
     return "$\(amount)"
 }
 
 func apiCostExactCurrency(_ value: Decimal) -> String {
-    let amount = currencyFormatter(minimum: 4, maximum: 8)
-        .string(from: NSDecimalNumber(decimal: value)) ?? "0.0000"
-    return "$\(amount)"
+    "$\(fixedDecimalString(value, minimumFractionDigits: 4))"
 }
 
 func compactTokenCount(_ value: Int64) -> String {
     guard value >= 1_000 else { return String(value) }
 
-    let divisor: Int64 = value >= 1_000_000 ? 1_000_000 : 1_000
-    let suffix = value >= 1_000_000 ? "M" : "K"
-    let compactValue = NSDecimalNumber(value: value).dividing(by: NSDecimalNumber(value: divisor))
-    let formatter = NumberFormatter()
-    formatter.locale = Locale(identifier: "en_US_POSIX")
-    formatter.numberStyle = .decimal
-    formatter.usesGroupingSeparator = false
-    formatter.minimumFractionDigits = 0
-    formatter.maximumFractionDigits = 1
-    formatter.roundingMode = .halfUp
-    return "\(formatter.string(from: compactValue) ?? compactValue.stringValue)\(suffix)"
+    let thousands = decimalQuotient(value, divisor: 1_000)
+    let usesMillions = value >= 1_000_000 || roundedCompactValue(thousands) >= 1_000
+    let divisor: Int64 = usesMillions ? 1_000_000 : 1_000
+    let suffix = usesMillions ? "M" : "K"
+    let compactValue = decimalQuotient(value, divisor: divisor)
+    return "\(compactNumberFormatter.string(from: NSDecimalNumber(decimal: compactValue)) ?? "0")\(suffix)"
 }
 
 func orderedAPICostIssues(_ issues: [APICostIssue]) -> [APICostIssue] {
@@ -169,6 +164,45 @@ private func apiCostPeriodRange(_ period: APICostPeriodSnapshot, timeZoneID: Str
     formatter.dateStyle = .medium
     formatter.timeStyle = .short
     return "\(formatter.string(from: period.intervalStart))–\(formatter.string(from: period.intervalEnd)) · \(timeZoneID)"
+}
+
+private func fixedDecimalString(
+    _ value: Decimal,
+    minimumFractionDigits: Int
+) -> String {
+    var normalized = value == 0 ? Decimal.zero : value
+    let rawValue = NSDecimalString(&normalized, Locale(identifier: "en_US_POSIX"))
+    guard !normalized.isNaN else { return rawValue }
+    guard let decimalSeparator = rawValue.firstIndex(of: ".") else {
+        return "\(rawValue).\(String(repeating: "0", count: minimumFractionDigits))"
+    }
+
+    let fractionStart = rawValue.index(after: decimalSeparator)
+    let fractionCount = rawValue.distance(from: fractionStart, to: rawValue.endIndex)
+    guard fractionCount < minimumFractionDigits else { return rawValue }
+    return rawValue + String(repeating: "0", count: minimumFractionDigits - fractionCount)
+}
+
+private func decimalQuotient(_ value: Int64, divisor: Int64) -> Decimal {
+    Decimal(value) / Decimal(divisor)
+}
+
+private func roundedCompactValue(_ value: Decimal) -> Decimal {
+    var value = value
+    var rounded = Decimal()
+    NSDecimalRound(&rounded, &value, 1, .plain)
+    return rounded
+}
+
+private var compactNumberFormatter: NumberFormatter {
+    let formatter = NumberFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.numberStyle = .decimal
+    formatter.usesGroupingSeparator = false
+    formatter.minimumFractionDigits = 0
+    formatter.maximumFractionDigits = 1
+    formatter.roundingMode = .halfUp
+    return formatter
 }
 
 private func currencyFormatter(minimum: Int, maximum: Int) -> NumberFormatter {

@@ -50,6 +50,46 @@ final class APICostUsagePresentationTests: XCTestCase {
         XCTAssertEqual(apiCostExactCurrency(Decimal(string: "12.345")!), "$12.3450")
     }
 
+    func testCurrencyThresholdIsStableForCommaDecimalLocaleInput() throws {
+        let frenchLocale = Locale(identifier: "fr_FR")
+        let tinyCost = try XCTUnwrap(Decimal(string: "0,004", locale: frenchLocale))
+        let oneCent = try XCTUnwrap(Decimal(string: "0,01", locale: frenchLocale))
+
+        XCTAssertEqual(tinyCost, Decimal(sign: .plus, exponent: -3, significand: 4))
+        XCTAssertEqual(apiCostCurrency(tinyCost), "<$0.01")
+        XCTAssertEqual(apiCostCurrency(oneCent), "$0.01")
+    }
+
+    func testExactCurrencyPreservesEstimatorDecimalPrecisionWithoutScientificNotation() {
+        let values: [(String, String)] = [
+            ("0.000003125", "$0.000003125"),
+            ("0.000000075", "$0.000000075"),
+            ("12345678901234567890.123456789", "$12345678901234567890.123456789"),
+            ("-0.000000075", "$-0.000000075")
+        ]
+
+        for (input, expected) in values {
+            let presentation = apiCostExactCurrency(Decimal(string: input, locale: Locale(identifier: "en_US_POSIX"))!)
+            XCTAssertEqual(presentation, expected)
+            XCTAssertFalse(presentation.lowercased().contains("e"))
+        }
+    }
+
+    func testExactCurrencyKeepsFourFractionDigitsAndNormalizesNegativeZero() {
+        XCTAssertEqual(apiCostExactCurrency(0), "$0.0000")
+        XCTAssertEqual(apiCostExactCurrency(Decimal(string: "12.34")!), "$12.3400")
+        XCTAssertEqual(apiCostExactCurrency(Decimal(string: "-0.0000")!), "$0.0000")
+    }
+
+    func testCompactTokenCountPromotesRoundedThousandsToMillions() {
+        XCTAssertEqual(compactTokenCount(84_000), "84K")
+        XCTAssertEqual(compactTokenCount(999_949), "999.9K")
+        XCTAssertEqual(compactTokenCount(999_950), "1M")
+        XCTAssertEqual(compactTokenCount(999_999), "1M")
+        XCTAssertEqual(compactTokenCount(1_000_000), "1M")
+        XCTAssertEqual(compactTokenCount(1_800_000), "1.8M")
+    }
+
     func testProviderUsageDisplayStateMapsAllAPICostStatesWithoutDroppingData() {
         let snapshot = makeCostSnapshot()
         let issues: [APICostIssue] = [.unknownModel, .persistenceFailure]
