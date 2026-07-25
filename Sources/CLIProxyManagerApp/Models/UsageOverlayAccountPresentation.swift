@@ -5,6 +5,14 @@ struct UsageOverlayAccountPresentation: Equatable {
     let emptyMessage: String?
 
     init(
+        providers: [MenuBarConnectedProvider],
+        emptyMessage: String?
+    ) {
+        self.providers = providers
+        self.emptyMessage = emptyMessage
+    }
+
+    init(
         serverStatus: DiagnosticStatus,
         serverControlState: ServerControlState,
         providerRows: [ProviderRowState],
@@ -27,5 +35,9 @@ struct UsageOverlayAccountPresentation: Equatable {
         } else {
             emptyMessage = nil
         }
+    }
+
+    var orderedProviderIDs: [ProviderRowState.ID] {
+        providers.map(\.id)
     }
 }
