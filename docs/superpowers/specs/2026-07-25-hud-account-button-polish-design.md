@@ -1,7 +1,7 @@
 # Usage HUD 계정 버튼 시각 개선 설계
 
 **작성일:** 2026-07-25  
-**상태:** 버튼 개선 완료 · 계정 행 모션 롤백 완료 — 재설계 대기
+**상태:** 버튼 개선 완료 · 계정 행 모션 롤백 유지 · buffered 콘텐츠 전환 구현 완료
 
 ## 현재 적용 범위
 
@@ -44,24 +44,21 @@ Compact 회귀를 우선 제거하기 위해 두 모드 모두 계정 insertion 
 
 ## 현재 HUD 동작
 
-- Expanded와 Compact 모두 provider 목록 변경을 즉시 렌더링한다.
-- 계정 제거와 재표시에 별도 row transition을 적용하지 않는다.
-- Compact는 기존 hidden measurement stack, viewport 계산, empty-state 측정 흐름을 사용한다.
-- Expanded는 기존 natural-height account stack과 AppKit fitting resize 흐름을 사용한다.
+- Expanded와 Compact 모두 row transition 없이 같은 buffered account content transaction을 사용한다.
+- Chrome 아래 전체 콘텐츠를 conceal한 뒤 최신 provider snapshot으로 교체한다.
+- 숨겨진 상태에서 AppKit fitting resize를 적용하고 최종 frame에서 콘텐츠를 reveal한다.
+- Compact는 기존 hidden measurement stack, viewport 계산, empty-state 측정 흐름을 유지한다.
+- 빠른 변경은 generation으로 coalesce하며 mode transition, panel 이동, screen 변경, HUD 숨김과 충돌해도 stale callback을 무시한다.
 - 저장, filtering, menu bar, usage polling/cache, panel placement 정책은 변경하지 않는다.
 
-## 남은 문제
+## 후속 buffered 전환
 
-Expanded에서 숨긴 계정을 다시 표시할 때 관찰되는 원래 깜빡임은 이번 롤백으로 해결하지 않는다.
+롤백 이후 재설계는 다음 문서에서 승인·구현됐다.
 
-후속 재설계에서는 timing patch가 아니라 다음 구조를 검토한다.
+- 설계: `docs/superpowers/specs/2026-07-25-hud-account-content-transition-design.md`
+- 구현 계획: `docs/superpowers/plans/2026-07-25-hud-account-content-transition.md`
 
-1. 최종 provider 목록을 계산하는 hidden measurement 계층
-2. 현재 사용자에게 보이는 provider 목록을 유지하는 visible 계층
-3. 목표 panel size를 먼저 적용한 뒤 visible 목록을 commit하는 명시적 단계
-4. 제거, 빠른 연속 변경, mode transition과의 상태 전이 정의
-
-이 후속 구조는 별도 설계 승인 전에는 구현하지 않는다.
+행 단위 insertion/removal animation은 계속 사용하지 않는다. 해결 방식은 `desired presentation`과 `presented presentation`을 분리한 뒤 Chrome 아래 콘텐츠 전체에 `conceal → swap → resize → reveal`을 적용하는 구조다.
 
 ## 회귀 테스트 계약
 

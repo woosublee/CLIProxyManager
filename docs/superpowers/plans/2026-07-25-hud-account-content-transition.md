@@ -1,6 +1,6 @@
 # Usage HUD Account Content Transition Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Expanded와 Compact Usage HUD에서 계정 목록 추가·제거를 Chrome 아래 전체 콘텐츠의 conceal→swap→resize→reveal transaction으로 표시한다.
 
@@ -51,7 +51,7 @@
 - Produces: `UsageOverlayAccountTransitionCoordinator.receive(_:presentedProviderIDs:allowsAnimation:)`
 - Produces: generation-guarded `completeConceal`, `beginResize`, `completeResize`, `completeReveal`, `retargetResize`, `absorbLatestPresentation`
 
-- [ ] **Step 1: Write failing coordinator tests**
+- [x] **Step 1: Write failing coordinator tests**
 
 Create focused tests covering the public behavior:
 
@@ -114,7 +114,7 @@ func testReduceMotionAppliesIdentityChangeImmediately() {
 
 Also test ordered reordering, stale resize/reveal completions, resizing retarget, and mode/lifecycle absorption.
 
-- [ ] **Step 2: Run the focused tests and verify RED**
+- [x] **Step 2: Run the focused tests and verify RED**
 
 Run:
 
@@ -124,7 +124,7 @@ swift test --filter UsageOverlayAccountTransitionCoordinatorTests
 
 Expected: compile/test failure because the coordinator and direct snapshot API do not exist.
 
-- [ ] **Step 3: Implement the minimal presentation helpers and coordinator**
+- [x] **Step 3: Implement the minimal presentation helpers and coordinator**
 
 Use a small action enum so the controller does not duplicate phase decisions:
 
@@ -154,7 +154,7 @@ struct UsageOverlayAccountTransitionCoordinator {
 
 Every callback method must return no action/value when its generation is stale. `receive` compares ordered IDs rather than sets.
 
-- [ ] **Step 4: Run coordinator tests and presentation model tests**
+- [x] **Step 4: Run coordinator tests and presentation model tests**
 
 Run:
 
@@ -165,7 +165,7 @@ swift test --filter UsageOverlayAccountPresentationTests
 
 Expected: all selected tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Sources/CLIProxyManagerApp/Models/UsageOverlayAccountPresentation.swift \
@@ -192,7 +192,7 @@ git commit -m "feat: model buffered HUD account transitions"
 - Produces: `UsageOverlayPresentationState.isContentHiddenForAccountTransition`
 - Produces: `UsageOverlayPresentationState.isContentConcealed`
 
-- [ ] **Step 1: Write failing presentation-state tests**
+- [x] **Step 1: Write failing presentation-state tests**
 
 Add tests with an initial snapshot:
 
@@ -231,7 +231,7 @@ func testPresentationStatePublishesBufferedAccountSnapshot() {
 
 Update source-contract tests to require `presentationState.presentedAccountPresentation` in both Expanded and Compact rendering while still forbidding row-level `.transition(` calls and insertion state.
 
-- [ ] **Step 2: Run focused tests and verify RED**
+- [x] **Step 2: Run focused tests and verify RED**
 
 ```bash
 swift test --filter UsageOverlayPresentationStateTests
@@ -240,7 +240,7 @@ swift test --filter UsageOverlayAccountAnimationTests
 
 Expected: failures for missing account presentation state and the view still using its local `accountPresentation`.
 
-- [ ] **Step 3: Implement presentation state and view changes**
+- [x] **Step 3: Implement presentation state and view changes**
 
 Initialize state with the initial snapshot and compose concealment:
 
@@ -262,7 +262,7 @@ var isContentConcealed: Bool {
 
 Remove `UsageOverlayView.accountPresentation`. Read one local `let accountPresentation = presentationState.presentedAccountPresentation` in `body` and use it for Expanded, Compact, and compact measurement content. Animate against `presentationState.isContentConcealed`, not only mode concealment.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 ```bash
 swift test --filter UsageOverlayPresentationStateTests
@@ -271,7 +271,7 @@ swift test --filter UsageOverlayAccountAnimationTests
 
 Expected: all selected tests pass; Compact measurement regression remains green.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Sources/CLIProxyManagerApp/Models/UsageOverlayPresentationState.swift \
@@ -295,7 +295,7 @@ git commit -m "feat: buffer Usage HUD account presentation"
 - Produces test-visible read-only `presentedAccountPresentation` and `accountTransitionPhase`
 - Adds injectable `accountConcealScheduler` and `accountRevealScheduler`
 
-- [ ] **Step 1: Write failing basic transaction tests**
+- [x] **Step 1: Write failing basic transaction tests**
 
 Construct the controller with `initialAccountPresentation`, captured schedulers, fixed fitting size, and captured frame completion. Show the panel through `showForCurrentSession` before sending a changed presentation.
 
@@ -346,7 +346,7 @@ func testAccountContentRevealsOnlyAfterFrameAndRevealCompletions() {
 
 Mirror the first test for account removal to prove both directions share the same flow.
 
-- [ ] **Step 2: Run controller tests and verify RED**
+- [x] **Step 2: Run controller tests and verify RED**
 
 ```bash
 swift test --filter UsageOverlayWindowControllerTests/testAccount
@@ -354,7 +354,7 @@ swift test --filter UsageOverlayWindowControllerTests/testAccount
 
 Expected: compile failures for the new initializer inputs and controller methods.
 
-- [ ] **Step 3: Add controller state, scheduling, and completion-safe resizing**
+- [x] **Step 3: Add controller state, scheduling, and completion-safe resizing**
 
 Add stored dependencies:
 
@@ -378,7 +378,7 @@ On conceal completion:
 6. calculate fitting size and call `updateContentSize(fittingSize, animated: true, transitionGeneration: nil, completion: accountResizeCompletion)`
 7. on latest frame completion, phase `.revealing` and schedule reveal completion
 
-- [ ] **Step 4: Connect ViewModel updates**
+- [x] **Step 4: Connect ViewModel updates**
 
 Replace the existing unconditional `viewModel.objectWillChange` resize with a next-main-queue snapshot calculation:
 
@@ -394,7 +394,7 @@ self.updateAccountPresentation(presentation)
 
 When the full presentation is equal, do nothing. Same ordered IDs with changed values apply immediately and request the existing non-animated fitting resize.
 
-- [ ] **Step 5: Run focused controller and view tests**
+- [x] **Step 5: Run focused controller and view tests**
 
 ```bash
 swift test --filter UsageOverlayWindowControllerTests/testAccount
@@ -404,7 +404,7 @@ swift test --filter UsageOverlayAccountAnimationTests
 
 Expected: basic add/remove transaction tests pass without row animation regressions.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add Sources/CLIProxyManagerApp/Services/UsageOverlayWindowController.swift \
@@ -427,7 +427,7 @@ git commit -m "feat: transition buffered HUD account content"
 - Produces account transaction absorption/retarget methods
 - Preserves existing window move and screen geometry APIs
 
-- [ ] **Step 1: Write failing rapid-update tests**
+- [x] **Step 1: Write failing rapid-update tests**
 
 Cover:
 
@@ -439,7 +439,7 @@ Cover:
 
 Use arrays of captured callbacks and assert exact phase/snapshot/frame-animation counts.
 
-- [ ] **Step 2: Write failing mode and lifecycle tests**
+- [x] **Step 2: Write failing mode and lifecycle tests**
 
 Add these concrete test cases:
 
@@ -452,7 +452,7 @@ Add these concrete test cases:
 
 Each stale callback must be invoked explicitly after the newer path completes to prove it cannot mutate state.
 
-- [ ] **Step 3: Run the new tests and verify RED**
+- [x] **Step 3: Run the new tests and verify RED**
 
 ```bash
 swift test --filter UsageOverlayAccountTransitionCoordinatorTests
@@ -467,27 +467,27 @@ swift test --filter UsageOverlayWindowControllerTests/testReduceMotionAppliesAcc
 
 Expected: behavior failures for unimplemented retarget/absorption paths.
 
-- [ ] **Step 4: Implement rapid retargeting**
+- [x] **Step 4: Implement rapid retargeting**
 
 On desired changes during `.resizing`, increment generation, interrupt the current account frame animation, commit the latest snapshot while hidden, and start a new fitting resize. Completion closures always call coordinator generation guards.
 
 On Compact measurement invalidation during `.resizing`, use `retargetResize()` to issue a new generation before fitting-size retarget so an earlier estimated-height completion cannot reveal.
 
-- [ ] **Step 5: Implement mode precedence**
+- [x] **Step 5: Implement mode precedence**
 
 At the start of `toggleDisplayMode`, absorb the latest account snapshot and invalidate account callbacks before enabling mode concealment. If account data changes while mode concealment is active, commit it immediately under mode concealment and request a mode-coordinated fitting retarget. Mode completion is the sole reveal owner.
 
-- [ ] **Step 6: Implement lifecycle settlement**
+- [x] **Step 6: Implement lifecycle settlement**
 
 - hide/session close: invalidate callbacks, commit latest snapshot, set account phase `.visible`, no account animation
 - user move during account resize: interrupt frame, keep account phase hidden, apply unanimated fitting size at `windowDidMove`, then reveal
 - screen geometry change during account resize: invalidate old completion, commit latest snapshot, keep hidden through deferred screen resize, then reveal
 
-- [ ] **Step 7: Implement Reduce Motion path**
+- [x] **Step 7: Implement Reduce Motion path**
 
 With Reduce Motion enabled, `updateAccountPresentation` immediately commits the latest snapshot, lays out, applies the fitting frame without animation, and leaves phase `.visible`. It must also invalidate any previously scheduled callbacks.
 
-- [ ] **Step 8: Run all focused HUD tests**
+- [x] **Step 8: Run all focused HUD tests**
 
 ```bash
 swift test --filter UsageOverlayAccountTransitionCoordinatorTests
@@ -498,7 +498,7 @@ swift test --filter UsageOverlayAccountAnimationTests
 
 Expected: all focused tests pass, including existing mode, placement, Compact measurement, and row-animation rollback tests.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add Sources/CLIProxyManagerApp/Models/UsageOverlayAccountTransitionCoordinator.swift \
@@ -520,7 +520,7 @@ git commit -m "fix: coalesce Usage HUD account transitions"
 **Interfaces:**
 - Documents final implementation status and verification evidence
 
-- [ ] **Step 1: Update rollback documents**
+- [x] **Step 1: Update rollback documents**
 
 Keep the historical rollback explanation, but replace “재설계 대기” with a link to:
 
@@ -531,7 +531,7 @@ docs/superpowers/plans/2026-07-25-hud-account-content-transition.md
 
 State explicitly that row animation remains absent and the new implementation is whole-content buffered concealment.
 
-- [ ] **Step 2: Run the complete test suite**
+- [x] **Step 2: Run the complete test suite**
 
 ```bash
 swift test
@@ -539,7 +539,7 @@ swift test
 
 Expected: all tests pass with zero failures.
 
-- [ ] **Step 3: Build and verify the development bundle**
+- [x] **Step 3: Build and verify the development bundle**
 
 ```bash
 make sign \
@@ -551,7 +551,7 @@ codesign --verify --deep --strict --verbose=2 build-development/CLIProxyManager.
 
 Expected: both commands exit `0`. Do not launch either development or production app.
 
-- [ ] **Step 4: Verify repository hygiene**
+- [x] **Step 4: Verify repository hygiene**
 
 ```bash
 git diff --check
@@ -560,11 +560,11 @@ git status --short
 
 Expected: no whitespace errors; `build-development/` remains untracked and excluded from commits.
 
-- [ ] **Step 5: Record verification evidence in this plan**
+- [x] **Step 5: Record verification evidence in this plan**
 
 Replace unchecked boxes with checked boxes and append the observed test count, failures, build result, and codesign result. Do not claim manual visual verification.
 
-- [ ] **Step 6: Commit documentation**
+- [x] **Step 6: Commit documentation**
 
 ```bash
 git add docs/superpowers/specs/2026-07-25-hud-account-button-polish-design.md \
@@ -572,3 +572,21 @@ git add docs/superpowers/specs/2026-07-25-hud-account-button-polish-design.md \
   docs/superpowers/plans/2026-07-25-hud-account-content-transition.md
 git commit -m "docs: verify buffered HUD account transitions"
 ```
+
+## Verification Evidence
+
+- Coordinator RED: missing `UsageOverlayAccountTransitionCoordinator` and snapshot APIs produced the expected compile failure.
+- Presentation state RED: missing buffered snapshot and account concealment properties produced the expected compile failure.
+- Controller basic RED: missing initializer dependencies and account transaction APIs produced the expected compile failure.
+- Collision/lifecycle RED: mode absorption, resize interruption, HUD hide settlement, screen/move settlement, and Reduce Motion assertions failed before their implementations.
+- Focused GREEN:
+  - `UsageOverlayAccountTransitionCoordinatorTests`: 12 tests, 0 failures
+  - `UsageOverlayPresentationStateTests`: 22 tests, 0 failures
+  - `UsageOverlayWindowControllerTests`: 65 tests, 0 failures
+  - `UsageOverlayAccountAnimationTests`: 3 tests, 0 failures
+- Full `swift test`: 1,039 tests, 0 failures.
+- Development bundle: `make sign CONFIGURATION=debug BUILD_DIR=build-development BUNDLE_ID=com.woosublee.CLIProxyManager.dev` exited successfully.
+- Codesign: `codesign --verify --deep --strict --verbose=2 build-development/CLIProxyManager.app` exited successfully; bundle is valid on disk and satisfies its Designated Requirement.
+- Bundle identifier: `com.woosublee.CLIProxyManager.dev` confirmed from `Info.plist` and code signature metadata.
+- `git diff --check`: no whitespace errors.
+- Runtime launch/manual visual verification: not performed; development and production apps were not launched or manipulated.

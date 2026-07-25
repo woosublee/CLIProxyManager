@@ -16,7 +16,7 @@
 - HUD 계정 선택 저장, filtering, menu bar, usage polling/cache 동작을 변경하지 않는다.
 - Compact empty-state 실제 높이 재측정 fix를 유지한다.
 - Expanded/Compact 계정 row에 insertion/removal animation을 추가하지 않는다.
-- 후속 hidden measurement/visible buffer 구조는 별도 설계 승인 전 구현하지 않는다.
+- 후속 buffered account content 구조는 별도 승인된 설계와 계획에서만 구현한다.
 
 ---
 
@@ -91,6 +91,7 @@ UsageOverlayWindowControllerTests: 53 tests, 0 failures
 ## 완료 후 상태
 
 - 계정 카드 HUD 버튼 개선: 유지
-- Expanded 계정 추가 깜빡임: 미해결, 후속 재설계 대기
-- Compact 계정 표시: motion 작업 전 rendering 구조로 복구
-- 계정 row animation: 두 모드 모두 없음
+- 실패한 계정 row animation: 두 모드 모두 롤백 상태 유지
+- Compact 계정 표시: 기존 measurement 및 empty-state 재측정 구조 유지
+- 후속 전체 콘텐츠 전환: `docs/superpowers/specs/2026-07-25-hud-account-content-transition-design.md` 및 `docs/superpowers/plans/2026-07-25-hud-account-content-transition.md`에서 구현
+- 최종 방식: row animation 없이 Chrome 아래 콘텐츠 전체를 `conceal → swap → resize → reveal`
