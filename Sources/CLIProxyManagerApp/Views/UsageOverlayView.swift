@@ -30,7 +30,7 @@ struct UsageOverlayView: View {
             serverControlState: viewModel.serverControlState,
             providers: viewModel.providerRows,
             port: viewModel.config.port,
-            showsSubscriptionUsage: true
+            showsUsage: true
         ).connectedProviders
     }
 
@@ -142,10 +142,10 @@ struct UsageOverlayView: View {
     }
 
     private var refreshStatus: String {
-        if viewModel.isSubscriptionUsageReloadActionInProgress {
+        if viewModel.isUsageReloadActionInProgress {
             return "REFRESHING"
         }
-        guard let refreshedAt = viewModel.lastSuccessfulSubscriptionUsageRefreshAt else {
+        guard let refreshedAt = viewModel.lastSuccessfulUsageRefreshAt else {
             return "NOT YET REFRESHED"
         }
         let minutes = max(0, Int(refreshStatusReferenceDate.timeIntervalSince(refreshedAt) / 60))
@@ -175,11 +175,11 @@ struct UsageOverlayChrome: View {
         HStack(spacing: 2) {
             chromeButton(
                 symbol: "arrow.clockwise",
-                accessibilityLabel: "Reload subscription usage",
+                accessibilityLabel: "Reload usage",
                 action: onRefresh
             )
-            .disabled(!viewModel.canReloadSubscriptionUsage || viewModel.isSubscriptionUsageReloadActionInProgress)
-            .opacity(viewModel.canReloadSubscriptionUsage ? 1 : 0.45)
+            .disabled(!viewModel.canReloadUsage || viewModel.isUsageReloadActionInProgress)
+            .opacity(viewModel.canReloadUsage ? 1 : 0.45)
             chromeButton(
                 symbol: displayMode.toggleSymbolName,
                 accessibilityLabel: displayMode.toggleAccessibilityLabel,
@@ -220,7 +220,7 @@ private struct ExpandedUsageOverlayContent: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Subscription Usage")
+                    Text("Usage")
                         .font(.system(size: 15, weight: .semibold))
                     Text(refreshStatus)
                         .font(.system(size: 10.5, design: .monospaced))
@@ -254,20 +254,29 @@ enum ExpandedUsageContentPresentation: Equatable {
 }
 
 func expandedUsageContentPresentation(
-    showsSubscriptionUsage: Bool,
-    subscriptionUsageState: AccountSubscriptionUsageState
+    showsUsage: Bool,
+    usageState: ProviderUsageState
 ) -> ExpandedUsageContentPresentation {
-    guard showsSubscriptionUsage else { return .headerOnly }
-    if case .unavailable(.proxyUnavailable) = subscriptionUsageState {
+    guard showsUsage else { return .headerOnly }
+    switch usageState {
+    case .subscription(.unavailable(.proxyUnavailable)),
+         .apiCost(.unavailable(.proxyUnavailable)):
         return .message("Start the server to check usage")
+    default:
+        break
     }
 
-    switch subscriptionUsageDisplayState(for: subscriptionUsageState) {
+    switch providerUsageDisplayState(for: usageState) {
     case .hidden:
-        return .message("Subscription usage is disabled")
+        switch usageState {
+        case .subscription:
+            return .message("Subscription usage is disabled")
+        case .apiCost:
+            return .message("API cost tracking is disabled")
+        }
     case .loading(let message), .unavailable(let message):
         return .message(message)
-    case .snapshot:
+    case .subscription, .apiCost:
         return .usage
     }
 }
@@ -293,8 +302,8 @@ private struct ExpandedUsageOverlayAccountView: View {
     @ViewBuilder
     private var usageContent: some View {
         switch expandedUsageContentPresentation(
-            showsSubscriptionUsage: provider.showsSubscriptionUsage,
-            subscriptionUsageState: provider.subscriptionUsageState
+            showsUsage: provider.showsUsage,
+            usageState: provider.usageState
         ) {
         case .headerOnly:
             EmptyView()
@@ -304,10 +313,48 @@ private struct ExpandedUsageOverlayAccountView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
         case .usage:
-            if case let .snapshot(snapshot, warning) = subscriptionUsageDisplayState(
-                for: provider.subscriptionUsageState
-            ) {
+            switch providerUsageDisplayState(for: provider.usageState) {
+            case let .subscription(snapshot, warning):
                 snapshotUsage(snapshot, warning: warning)
+            case let .apiCost(snapshot, issues):
+                apiCostUsage(snapshot, issues: issues)
+            case .hidden, .loading, .unavailable:
+                EmptyView()
+            }
+        }
+    }
+
+    private func apiCostUsage(
+        _ snapshot: APICostSnapshot,
+        issues: [APICostIssue]
+    ) -> some View {
+        let rows = apiCostRows(snapshot: snapshot)
+        let warningMessage = orderedAPICostIssues(issues)
+            .map(apiCostIssueMessage)
+            .joined(separator: " ")
+        return VStack(alignment: .leading, spacing: 6) {
+            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                UsageWarningAlignedRow(
+                    message: index == 0 && !warningMessage.isEmpty ? warningMessage : nil,
+                    reservesWarningSpace: !warningMessage.isEmpty
+                ) {
+                    HStack(spacing: 8) {
+                        Text(row.label)
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 28, alignment: .leading)
+                        Text(row.detail)
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text(row.cost)
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .frame(width: 58, alignment: .trailing)
+                    }
+                    .help(row.tooltip)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(row.accessibilityLabel)
+                }
             }
         }
     }

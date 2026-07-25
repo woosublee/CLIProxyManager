@@ -21,15 +21,6 @@ struct MenuBarConnectedProvider: Equatable, Identifiable {
     var menuBarConnectionDetail: String? {
         accountDetailHidden ? nil : connectionDetail
     }
-
-    // Temporary compatibility projection while Task 11/12 migrate view call sites.
-    var subscriptionUsageState: AccountSubscriptionUsageState {
-        usageState.subscriptionCompatibilityState
-    }
-
-    var showsSubscriptionUsage: Bool {
-        showsUsage && usageState.isSubscription
-    }
 }
 
 struct MenuBarStatusSnapshot: Equatable {
@@ -81,23 +72,6 @@ struct MenuBarStatusSnapshot: Equatable {
                 )
             }
         erroredCount = providers.filter(\.isErrored).count
-    }
-
-    // Temporary forwarding overload while Task 12 migrates the persisted-setting label.
-    init(
-        serverStatus: DiagnosticStatus,
-        serverControlState: ServerControlState = .stopped,
-        providers: [ProviderRowState],
-        port: Int = 18_317,
-        showsSubscriptionUsage: Bool
-    ) {
-        self.init(
-            serverStatus: serverStatus,
-            serverControlState: serverControlState,
-            providers: providers,
-            port: port,
-            showsUsage: showsSubscriptionUsage
-        )
     }
 
     private enum DisplayState: Equatable {

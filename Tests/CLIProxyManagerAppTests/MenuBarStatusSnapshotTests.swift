@@ -73,7 +73,7 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
         }
         XCTAssertFalse(provider.accountDetailHidden)
         XCTAssertEqual(provider.menuBarConnectionDetail, "claude@example.com")
-        guard case let .available(usage) = provider.subscriptionUsageState else {
+        guard case let .subscription(.available(usage)) = provider.usageState else {
             return XCTFail("Expected subscription usage")
         }
         XCTAssertEqual(usage.windows.map(\.id), ["five_hour"])
@@ -108,7 +108,7 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
         XCTAssertEqual(provider.menuBarDisplayName, "Personal")
         XCTAssertEqual(provider.usageOverlayDisplayName, "Personal")
         XCTAssertNil(provider.menuBarConnectionDetail)
-        guard case let .available(usage) = provider.subscriptionUsageState else {
+        guard case let .subscription(.available(usage)) = provider.usageState else {
             return XCTFail("Expected available subscription usage")
         }
         XCTAssertEqual(usage.windows.map(\.id), ["five_hour"])
@@ -161,7 +161,7 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
         )
 
         let windowIDs = snapshot.connectedProviders.map { provider -> [String] in
-            guard case let .available(usage) = provider.subscriptionUsageState else { return [] }
+            guard case let .subscription(.available(usage)) = provider.usageState else { return [] }
             return usage.windows.map(\.id)
         }
         XCTAssertEqual(windowIDs, [["five_hour", "seven_day"], ["primary"]])
@@ -186,12 +186,12 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
                 isConnected: true,
                 usageState: .subscription(available)
             )],
-            showsSubscriptionUsage: false
+            showsUsage: false
         )
 
         let provider = try XCTUnwrap(snapshot.connectedProviders.first)
-        XCTAssertFalse(provider.showsSubscriptionUsage)
-        XCTAssertEqual(provider.subscriptionUsageState, available)
+        XCTAssertFalse(provider.showsUsage)
+        XCTAssertEqual(provider.usageState, .subscription(available))
     }
 
     func testSnapshotKeepsProviderCapabilityDisabledWhenMenuBarPreferenceIsEnabled() throws {
@@ -208,10 +208,10 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
                 usageState: .apiCost(.disabled),
                 showsUsage: false
             )],
-            showsSubscriptionUsage: true
+            showsUsage: true
         )
 
-        XCTAssertFalse(try XCTUnwrap(snapshot.connectedProviders.first).showsSubscriptionUsage)
+        XCTAssertFalse(try XCTUnwrap(snapshot.connectedProviders.first).showsUsage)
     }
 
     func testUsageOverlayPresentationOmitsDisabledMessageForAPIKeyProvider() throws {
@@ -228,14 +228,14 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
                 usageState: .apiCost(.disabled),
                 showsUsage: false
             )],
-            showsSubscriptionUsage: true
+            showsUsage: true
         )
 
         let provider = try XCTUnwrap(snapshot.connectedProviders.first)
         XCTAssertEqual(
             expandedUsageContentPresentation(
-                showsSubscriptionUsage: provider.showsSubscriptionUsage,
-                subscriptionUsageState: provider.subscriptionUsageState
+                showsUsage: provider.showsUsage,
+                usageState: provider.usageState
             ),
             .headerOnly
         )
@@ -267,10 +267,10 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
                     showsUsage: true
                 )
             ],
-            showsSubscriptionUsage: true
+            showsUsage: true
         )
 
-        XCTAssertEqual(snapshot.connectedProviders.map(\.showsSubscriptionUsage), [true, false])
+        XCTAssertEqual(snapshot.connectedProviders.map(\.showsUsage), [true, true])
     }
 
     func testSnapshotShowsMenuBarUsageWhenPreferenceIsEnabled() throws {
@@ -285,13 +285,13 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
                 connectionDetail: "codex@example.com",
                 isConnected: true
             )],
-            showsSubscriptionUsage: true
+            showsUsage: true
         )
 
-        XCTAssertTrue(try XCTUnwrap(snapshot.connectedProviders.first).showsSubscriptionUsage)
+        XCTAssertTrue(try XCTUnwrap(snapshot.connectedProviders.first).showsUsage)
     }
 
-    func testSnapshotCarriesAPICostUsageAndCompatibilityProjection() throws {
+    func testSnapshotCarriesAPICostUsageWithoutCompatibilityProjection() throws {
         let snapshot = MenuBarStatusSnapshot(
             serverStatus: DiagnosticStatus(severity: .ready, title: "Running", message: "Ready"),
             providers: [ProviderRowState(
@@ -312,8 +312,6 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
         XCTAssertEqual(provider.id, .claudeAPI)
         XCTAssertEqual(provider.usageState, .apiCost(.loading))
         XCTAssertTrue(provider.showsUsage)
-        XCTAssertEqual(provider.subscriptionUsageState, .disabled)
-        XCTAssertFalse(provider.showsSubscriptionUsage)
     }
 
     func testSnapshotUsagePreferenceDoesNotDiscardAPICostState() throws {
@@ -403,7 +401,7 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
             ]
         )
 
-        guard case let .available(usage)? = snapshot.connectedProviders.first?.subscriptionUsageState else {
+        guard case let .subscription(.available(usage))? = snapshot.connectedProviders.first?.usageState else {
             return XCTFail("Expected available subscription usage")
         }
         XCTAssertTrue(usage.windows.isEmpty)
@@ -428,7 +426,10 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
         )
 
         let provider = try! XCTUnwrap(snapshot.connectedProviders.first)
-        XCTAssertFalse(provider.subscriptionUsageState.shouldDisplayInMenuBar)
+        guard case let .subscription(state) = provider.usageState else {
+            return XCTFail("Expected subscription usage state")
+        }
+        XCTAssertFalse(state.shouldDisplayInMenuBar)
     }
 
     func testUsageProgressToneThresholds() {
@@ -505,8 +506,8 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
         XCTAssertEqual(snapshot.connectedProviders.map(\.id), [.claudeAPI])
         XCTAssertEqual(snapshot.connectedProviders.first?.displayName, "Work API")
         XCTAssertEqual(snapshot.connectedProviders.first?.menuBarDisplayName, "Work API")
-        XCTAssertEqual(snapshot.connectedProviders.first?.subscriptionUsageState, .disabled)
-        XCTAssertEqual(snapshot.connectedProviders.first?.showsSubscriptionUsage, false)
+        XCTAssertEqual(snapshot.connectedProviders.first?.usageState, .apiCost(.disabled))
+        XCTAssertEqual(snapshot.connectedProviders.first?.showsUsage, true)
     }
 
     func testSnapshotPropagatesSubscriptionUsageCapabilityForOAuthAccounts() {
@@ -527,7 +528,7 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
             ]
         )
 
-        XCTAssertEqual(snapshot.connectedProviders.first?.showsSubscriptionUsage, true)
+        XCTAssertEqual(snapshot.connectedProviders.first?.showsUsage, true)
     }
 
     func testSnapshotShowsEmptyMessageWhenNoProviderIsConnected() {

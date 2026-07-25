@@ -86,15 +86,6 @@ struct ProviderRowState: Identifiable, Equatable {
         return trimmedNickname.isEmpty ? name : trimmedNickname
     }
 
-    // Temporary compatibility projection while Task 11/12 migrate view call sites.
-    var subscriptionUsageState: AccountSubscriptionUsageState {
-        usageState.subscriptionCompatibilityState
-    }
-
-    var showsSubscriptionUsage: Bool {
-        showsUsage && usageState.isSubscription
-    }
-
     private static func inferredProviderType(from id: ID) -> AuthProfileType {
         id.inferredProviderType
     }
