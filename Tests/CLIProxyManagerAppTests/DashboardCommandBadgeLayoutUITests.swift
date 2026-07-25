@@ -18,6 +18,41 @@ final class DashboardCommandBadgeLayoutUITests: XCTestCase {
         XCTAssertTrue(commandText.contains(".truncationMode(.tail)"))
     }
 
+    func testDashboardMovesCommandBadgeBeforeAccountActions() throws {
+        let providerCard = try sourceSection(
+            in: dashboardSource(),
+            after: "private struct ProviderAccountCardView: View {",
+            before: "private struct ProviderAccountDragPreview: View"
+        )
+        let cardBody = try sourceSection(
+            in: providerCard,
+            after: "var body: some View {",
+            before: "private var trailingControls: some View {"
+        )
+        let accountInfo = try sourceSection(
+            in: cardBody,
+            after: "VStack(alignment: .leading, spacing: 4) {",
+            before: "\n\n            trailingControls"
+        )
+        let trailingControls = try sourceSection(
+            in: providerCard,
+            after: "private var trailingControls: some View {",
+            before: "\n    }\n\n    private var dragHandle"
+        )
+
+        XCTAssertFalse(accountInfo.contains("SlugPill(slug: account.commandName)"))
+
+        let badgeRange = try XCTUnwrap(
+            trailingControls.range(of: "SlugPill(slug: account.commandName)")
+        )
+        let actionsRange = try XCTUnwrap(trailingControls.range(of: "actions"))
+        XCTAssertLessThan(
+            trailingControls.distance(from: trailingControls.startIndex, to: badgeRange.lowerBound),
+            trailingControls.distance(from: trailingControls.startIndex, to: actionsRange.lowerBound)
+        )
+        XCTAssertTrue(trailingControls.contains(".layoutPriority(1)"))
+    }
+
     private func dashboardSource() throws -> String {
         try source(at: "Sources/CLIProxyManagerApp/Views/DashboardView.swift")
     }

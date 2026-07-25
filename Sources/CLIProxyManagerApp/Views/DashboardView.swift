@@ -659,21 +659,16 @@ private struct ProviderAccountCardView: View {
             ProviderAvatar(providerID: account.id, providerType: account.providerType)
 
             VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    Text(account.title)
-                        .font(.system(size: 13, weight: .semibold))
-                        .lineLimit(1)
-                    SlugPill(slug: account.commandName)
-                    Spacer(minLength: 0)
-                }
+                Text(account.title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
 
                 accountDetailRow
                     .padding(.top, 2)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
-            Spacer(minLength: 4)
-
-            actions
+            trailingControls
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -706,6 +701,15 @@ private struct ProviderAccountCardView: View {
             Button("Remove", role: .destructive) { remove() }
         } message: {
             Text("The auth profile will be deleted from CLIProxyAPI. You can reconnect at any time via Add provider.")
+        }
+    }
+
+    private var trailingControls: some View {
+        HStack(spacing: 4) {
+            SlugPill(slug: account.commandName)
+                .layoutPriority(1)
+
+            actions
         }
     }
 
