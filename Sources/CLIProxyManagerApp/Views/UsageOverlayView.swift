@@ -317,11 +317,16 @@ private struct ExpandedUsageOverlayAccountView: View {
         _ snapshot: SubscriptionUsageSnapshot,
         warning: SubscriptionUsageIssue?
     ) -> some View {
-        if snapshot.windows.isEmpty {
-            SubscriptionUsageWarningAlignedRow(
-                warning: warning,
-                reservesWarningSpace: warning != nil,
+        let warningMessage = warning.map {
+            SubscriptionUsageWarningPresentation.message(
+                issue: $0,
                 lastUpdatedAt: snapshot.fetchedAt
+            )
+        }
+        if snapshot.windows.isEmpty {
+            UsageWarningAlignedRow(
+                message: warningMessage,
+                reservesWarningSpace: warningMessage != nil
             ) {
                 Text("Usage details unavailable")
                     .font(.system(size: 10.5))
@@ -347,11 +352,16 @@ private struct ExpandedUsageOverlayProgressRow: View {
     var body: some View {
         let window = row.window
         let percent = min(max(window.usedPercent, 0), 100)
-        VStack(alignment: .leading, spacing: 2) {
-            SubscriptionUsageWarningAlignedRow(
-                warning: row.warning,
-                reservesWarningSpace: row.reservesWarningSpace,
+        let warningMessage = row.warning.map {
+            SubscriptionUsageWarningPresentation.message(
+                issue: $0,
                 lastUpdatedAt: lastUpdatedAt
+            )
+        }
+        VStack(alignment: .leading, spacing: 2) {
+            UsageWarningAlignedRow(
+                message: warningMessage,
+                reservesWarningSpace: row.reservesWarningSpace
             ) {
                 HStack(spacing: 8) {
                     Text(subscriptionUsageDisplayLabel(for: window))

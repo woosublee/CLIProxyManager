@@ -3,6 +3,14 @@ import CLIProxyManagerCore
 @testable import CLIProxyManagerApp
 
 final class SubscriptionUsageWarningIconTests: XCTestCase {
+    func testUsageWarningIconAcceptsAPIMessageWithoutSubscriptionIssue() {
+        let message = "Estimated API cost is partial. Time zone: Asia/Seoul."
+        let icon = UsageWarningIcon(message: message)
+
+        XCTAssertEqual(icon.message, message)
+        XCTAssertEqual(UsageWarningLayout.iconFrameSize, CGSize(width: 12, height: 12))
+    }
+
     func testStaleStateKeepsSnapshotAndAddsWarningPresentation() {
         let snapshot = SubscriptionUsageSnapshot(
             profileID: "codex.json",

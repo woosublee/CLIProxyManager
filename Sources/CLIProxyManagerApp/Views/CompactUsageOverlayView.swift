@@ -96,7 +96,7 @@ private struct CompactUsageAccountView: View {
     let provider: MenuBarConnectedProvider
 
     var body: some View {
-        let presentation = compactUsagePresentation(for: provider.subscriptionUsageState)
+        let presentation = compactUsagePresentation(for: provider.usageState)
         VStack(spacing: 7) {
             VStack(spacing: 4) {
                 ProviderAvatar(providerID: provider.id, size: 26)
@@ -104,10 +104,10 @@ private struct CompactUsageAccountView: View {
                         if let indicator = presentation.headerIndicator {
                             CompactUsageIndicatorView(indicator: indicator)
                                 .frame(
-                                    width: SubscriptionUsageWarningLayout.iconFrameSize.width,
-                                    height: SubscriptionUsageWarningLayout.iconFrameSize.height
+                                    width: UsageWarningLayout.iconFrameSize.width,
+                                    height: UsageWarningLayout.iconFrameSize.height
                                 )
-                                .offset(x: SubscriptionUsageWarningLayout.compactAvatarTrailingOffset)
+                                .offset(x: UsageWarningLayout.compactAvatarTrailingOffset)
                         }
                     }
                 Text(provider.usageOverlayDisplayName)
