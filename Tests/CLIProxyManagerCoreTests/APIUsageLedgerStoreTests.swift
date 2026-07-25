@@ -188,6 +188,30 @@ final class APIUsageLedgerStoreTests: XCTestCase {
         XCTAssertEqual(pause.end, iso("2026-07-25T06:00:00Z"))
     }
 
+    func testMarkPersistenceFailurePersistsEveryImpactedLocalDayAfterRestart() async throws {
+        let paths = try makePaths()
+        let store = APIUsageLedgerStore(paths: paths, writeDelayNanoseconds: 0)
+        let day24 = iso("2026-07-24T04:00:00Z")
+        let day25 = iso("2026-07-25T04:00:00Z")
+        try await store.prepareTracking(
+            at: iso("2026-07-01T00:00:00Z"),
+            reportingTimeZoneID: "UTC"
+        )
+
+        try await store.markPersistenceFailure(for: [day24, day25])
+        try await store.flush()
+
+        let restored = APIUsageLedgerStore(paths: paths, writeDelayNanoseconds: 0)
+        let metadata = try await restored.readCurrentPeriods(at: day25).metadata
+        let failures = metadata.partialIntervals.filter { $0.reason == .persistenceFailure }
+        for timestamp in [day24, day25] {
+            let bounds = APIUsagePeriodCalculator.bounds(at: timestamp, timeZoneID: "UTC")
+            XCTAssertTrue(failures.contains {
+                $0.start <= bounds.dayStart && ($0.end ?? .distantFuture) >= bounds.dayEnd
+            })
+        }
+    }
+
     func testSuccessfulDrainPersistsLatestObservedRequestWithoutErasingIt() async throws {
         let paths = try makePaths()
         let store = APIUsageLedgerStore(paths: paths, writeDelayNanoseconds: 0)

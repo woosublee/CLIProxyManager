@@ -168,6 +168,31 @@ final class APIUsageCollectorTests: XCTestCase {
         XCTAssertEqual(successfulDrainCount, 0)
     }
 
+    func testPoppedBatchMergeFailurePersistsLossSignalAcrossLaterSuccessfulDrain() async {
+        let timestamp = iso("2026-07-25T12:00:00Z")
+        let ledger = RecordingLedgerStore(
+            readModel: readModelWithPricedClaudeUsage(),
+            mergeError: .persistenceFailure
+        )
+        let queue = RecordingQueueClient(results: [
+            .success([makeQueueRecord()]),
+            .success([])
+        ])
+        let collector = APIUsageCollector(
+            queueClient: queue,
+            ledgerStore: ledger,
+            now: { timestamp }
+        )
+
+        let failed = await collector.reload(configuration: enabledConfiguration())
+        let recovered = await collector.reload(configuration: enabledConfiguration())
+
+        XCTAssertTrue(failed.statesByProfileID["claude-api"]?.issues.contains(.persistenceFailure) == true)
+        XCTAssertTrue(recovered.statesByProfileID["claude-api"]?.issues.contains(.persistenceFailure) == true)
+        let markedTimestamps = await ledger.persistenceFailureTimestamps()
+        XCTAssertEqual(markedTimestamps, [timestamp])
+    }
+
     func testRestoreNeverCallsNetworkAndReturnsDisabledLoadingStoredAndUnsupportedStates() async {
         let queue = RecordingQueueClient(results: [.success([makeQueueRecord()])])
 
@@ -313,6 +338,42 @@ final class APIUsageCollectorTests: XCTestCase {
         XCTAssertEqual(queueCalls, 2)
     }
 
+    func testStopWaitsForLifecycleDrainThenFlushesAndPreventsPollingRestart() async throws {
+        let queue = FirstCallSuspendingQueueClient()
+        let ledger = RecordingLedgerStore()
+        let sleep = StepSleepRecorder()
+        let stopped = CompletionFlag()
+        let collector = APIUsageCollector(
+            queueClient: queue,
+            ledgerStore: ledger,
+            sleep: { try await sleep.sleep($0) }
+        )
+
+        async let started: Void = collector.start(configuration: enabledConfiguration())
+        try await waitUntil { await queue.isFirstCallSuspended() }
+        let stopTask = Task {
+            await collector.stop(reason: .applicationTermination, at: Date())
+            await stopped.markCompleted()
+        }
+
+        let returnedBeforePopCompleted = await eventually {
+            await stopped.isCompleted()
+        }
+        XCTAssertFalse(returnedBeforePopCompleted)
+
+        await queue.resumeFirstCall()
+        await started
+        await stopTask.value
+        for _ in 0..<20 { await Task.yield() }
+
+        let events = await ledger.allEvents()
+        let successfulDrainIndex = try XCTUnwrap(events.lastIndex(of: "successfulDrain"))
+        let finalFlushIndex = try XCTUnwrap(events.lastIndex(of: "flush"))
+        let delays = await sleep.recordedDelays()
+        XCTAssertGreaterThan(finalFlushIndex, successfulDrainIndex)
+        XCTAssertEqual(delays, [])
+    }
+
     func testApplicationTerminationFlushesWithoutCreatingPartialInterval() async {
         let ledger = RecordingLedgerStore()
         let collector = APIUsageCollector(
@@ -437,11 +498,13 @@ final class APIUsageCollectorTests: XCTestCase {
         await collector.stop(reason: .applicationTermination, at: Date())
     }
 
-    func testDisabledUpdateDuringActiveStartKeepsDisabledLatestReport() async throws {
+    func testDisabledUpdateDuringActiveStartWaitsThenKeepsDisabledLatestReport() async throws {
         let queue = FirstCallSuspendingQueueClient()
+        let ledger = RecordingLedgerStore()
+        let updated = CompletionFlag()
         let collector = APIUsageCollector(
             queueClient: queue,
-            ledgerStore: RecordingLedgerStore()
+            ledgerStore: ledger
         )
         let disabledConfiguration = APIUsageCollectorConfiguration(
             usageEnabled: false,
@@ -453,14 +516,63 @@ final class APIUsageCollectorTests: XCTestCase {
 
         async let started: Void = collector.start(configuration: enabledConfiguration())
         try await waitUntil { await queue.isFirstCallSuspended() }
-        await collector.update(configuration: disabledConfiguration)
+        let updateTask = Task {
+            await collector.update(configuration: disabledConfiguration)
+            await updated.markCompleted()
+        }
+        let returnedBeforePopCompleted = await eventually {
+            await updated.isCompleted()
+        }
+        XCTAssertFalse(returnedBeforePopCompleted)
+
         await queue.resumeFirstCall()
         await started
+        await updateTask.value
 
         let stream = await collector.reports()
         var iterator = stream.makeAsyncIterator()
         let latest = await iterator.next()
         XCTAssertEqual(latest?.statesByProfileID["claude-api"], .disabled)
+        let events = await ledger.allEvents()
+        let successfulDrainIndex = try XCTUnwrap(events.lastIndex(of: "successfulDrain"))
+        let finalFlushIndex = try XCTUnwrap(events.lastIndex(of: "flush"))
+        XCTAssertGreaterThan(finalFlushIndex, successfulDrainIndex)
+    }
+
+    func testStopInvalidatesConfigurationChangeWaitingBehindLifecycleDrain() async throws {
+        let queue = FirstCallSuspendingQueueClient()
+        let ledger = RecordingLedgerStore()
+        let collector = APIUsageCollector(queueClient: queue, ledgerStore: ledger)
+        let secondConfiguration = APIUsageCollectorConfiguration(
+            usageEnabled: true,
+            proxyReady: true,
+            port: 19_001,
+            enabledProviders: [.claude, .openAI],
+            reportingTimeZoneID: "UTC"
+        )
+
+        async let started: Void = collector.start(configuration: enabledConfiguration())
+        try await waitUntil { await queue.isFirstCallSuspended() }
+        let updateTask = Task {
+            await collector.update(configuration: secondConfiguration)
+        }
+        for _ in 0..<20 { await Task.yield() }
+        let stopTask = Task {
+            await collector.stop(reason: .applicationTermination, at: Date())
+        }
+        for _ in 0..<20 { await Task.yield() }
+
+        await queue.resumeFirstCall()
+        await started
+        await updateTask.value
+        await stopTask.value
+
+        let ports = await queue.requestedPorts()
+        XCTAssertEqual(ports, [18_317])
+        let events = await ledger.allEvents()
+        let successfulDrainIndex = try XCTUnwrap(events.lastIndex(of: "successfulDrain"))
+        let finalFlushIndex = try XCTUnwrap(events.lastIndex(of: "flush"))
+        XCTAssertGreaterThan(finalFlushIndex, successfulDrainIndex)
     }
 
     func testConfigurationChangeDuringStartCreatesOnlyNewPollingDeadline() async throws {
@@ -678,7 +790,7 @@ private struct RecordedGap: Equatable {
 private actor RecordingLedgerStore: APIUsageLedgerStoring {
     private var readModel: APIUsageLedgerReadModel
     private let prepareError: APIUsageLedgerStoreError?
-    private let mergeError: APIUsageLedgerStoreError?
+    private var mergeError: APIUsageLedgerStoreError?
     private let readError: APIUsageLedgerStoreError?
     private let flushError: APIUsageLedgerStoreError?
     private let suspendReadCall: Int?
@@ -688,6 +800,7 @@ private actor RecordingLedgerStore: APIUsageLedgerStoring {
     private var flushes = 0
     private var pauseValues: [(Date, Bool)] = []
     private var gaps: [RecordedGap] = []
+    private var persistenceFailures: [Date] = []
     private var successfulDrains = 0
     private var events: [String] = []
 
@@ -714,8 +827,33 @@ private actor RecordingLedgerStore: APIUsageLedgerStoring {
 
     func merge(_ values: [APIUsageLedgerMutation]) async throws {
         events.append("merge")
-        if let mergeError { throw mergeError }
+        if let mergeError {
+            self.mergeError = nil
+            throw mergeError
+        }
         mutations.append(contentsOf: values)
+    }
+
+    func markPersistenceFailure(for timestamps: [Date]) async throws {
+        events.append("persistenceFailure")
+        persistenceFailures.append(contentsOf: timestamps)
+        var metadata = readModel.metadata
+        for timestamp in timestamps {
+            let bounds = APIUsagePeriodCalculator.bounds(
+                at: timestamp,
+                timeZoneID: metadata.reportingTimeZoneID
+            )
+            metadata.partialIntervals.append(.init(
+                start: bounds.dayStart,
+                end: bounds.dayEnd,
+                reason: .persistenceFailure
+            ))
+        }
+        readModel = .init(
+            metadata: metadata,
+            bounds: readModel.bounds,
+            currentMonth: readModel.currentMonth
+        )
     }
 
     func markPaused(at: Date, proxyCouldServeRequests: Bool) async throws {
@@ -782,6 +920,7 @@ private actor RecordingLedgerStore: APIUsageLedgerStoring {
     func pauseDates() -> [Date] { pauseValues.map(\.0) }
     func deleteCount() -> Int { 0 }
     func collectionGaps() -> [RecordedGap] { gaps }
+    func persistenceFailureTimestamps() -> [Date] { persistenceFailures }
     func successfulDrainCount() -> Int { successfulDrains }
     func allEvents() -> [String] { events }
     func eventsPrefix(_ count: Int) -> [String] { Array(events.prefix(count)) }
@@ -790,6 +929,18 @@ private actor RecordingLedgerStore: APIUsageLedgerStoring {
     func resumeRead() {
         readContinuation?.resume()
         readContinuation = nil
+    }
+}
+
+private actor CompletionFlag {
+    private var completed = false
+
+    func markCompleted() {
+        completed = true
+    }
+
+    func isCompleted() -> Bool {
+        completed
     }
 }
 

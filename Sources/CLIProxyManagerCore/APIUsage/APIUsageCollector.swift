@@ -93,6 +93,7 @@ public actor APIUsageCollector: APIUsageCollecting {
     private var activeDrainDidFlush = false
     private var pollingTask: Task<Void, Never>?
     private var pollingGeneration: UInt64 = 0
+    private var lifecycleStopGeneration: UInt64 = 0
     private var reportContinuation: AsyncStream<APIUsageCollectionReport>.Continuation?
     private var reportContinuationID: UUID?
     private var latestReport: APIUsageCollectionReport?
@@ -149,8 +150,10 @@ public actor APIUsageCollector: APIUsageCollecting {
     }
 
     public func start(configuration: APIUsageCollectorConfiguration) async {
+        let stopGeneration = lifecycleStopGeneration
         self.configuration = configuration
         await cancelPolling()
+        guard lifecycleStopGeneration == stopGeneration else { return }
 
         guard configuration.usageEnabled else {
             await stop(
@@ -167,8 +170,11 @@ public actor APIUsageCollector: APIUsageCollecting {
                 at: startedAt,
                 reportingTimeZoneID: configuration.reportingTimeZoneID
             )
+            guard lifecycleStopGeneration == stopGeneration else { return }
             try await ledgerStore.flush()
+            guard lifecycleStopGeneration == stopGeneration else { return }
             try await ledgerStore.markResumed(at: startedAt)
+            guard lifecycleStopGeneration == stopGeneration else { return }
         } catch {
             let failedAt = now()
             let ledger = try? await ledgerStore.readCurrentPeriods(at: failedAt)
@@ -196,15 +202,22 @@ public actor APIUsageCollector: APIUsageCollecting {
         let result = await sharedDrain(
             configuration: configuration,
             flushAfterDrain: false,
-            source: .lifecycle
+            source: .lifecycle,
+            stopGeneration: stopGeneration
         )
-        startPolling(after: result, configuration: configuration)
+        startPolling(
+            after: result,
+            configuration: configuration,
+            stopGeneration: stopGeneration
+        )
     }
 
     public func update(configuration: APIUsageCollectorConfiguration) async {
+        let stopGeneration = lifecycleStopGeneration
         let previous = self.configuration
         self.configuration = configuration
         await cancelPolling()
+        guard lifecycleStopGeneration == stopGeneration else { return }
 
         guard configuration.usageEnabled else {
             await stop(
@@ -234,17 +247,27 @@ public actor APIUsageCollector: APIUsageCollecting {
         let result = await sharedDrain(
             configuration: configuration,
             flushAfterDrain: false,
-            source: .lifecycle
+            source: .lifecycle,
+            stopGeneration: stopGeneration
         )
-        startPolling(after: result, configuration: configuration)
+        startPolling(
+            after: result,
+            configuration: configuration,
+            stopGeneration: stopGeneration
+        )
     }
 
     public func reload(
         configuration: APIUsageCollectorConfiguration
     ) async -> APIUsageCollectionReport {
+        let stopGeneration = lifecycleStopGeneration
         self.configuration = configuration
         let shouldRestartPolling = pollingTask != nil
         await cancelPolling()
+        guard lifecycleStopGeneration == stopGeneration else {
+            if let latestReport { return latestReport }
+            return await restoredReport(configuration: configuration, at: now())
+        }
 
         guard configuration.usageEnabled else {
             let report = disabledReport(configuration: configuration, at: now())
@@ -265,15 +288,25 @@ public actor APIUsageCollector: APIUsageCollecting {
         let result = await sharedDrain(
             configuration: configuration,
             flushAfterDrain: true,
-            source: .lifecycle
+            source: .lifecycle,
+            stopGeneration: stopGeneration
         )
-        if shouldRestartPolling, self.configuration == configuration {
-            startPolling(after: result, configuration: configuration)
+        if shouldRestartPolling,
+           self.configuration == configuration,
+           lifecycleStopGeneration == stopGeneration {
+            startPolling(
+                after: result,
+                configuration: configuration,
+                stopGeneration: stopGeneration
+            )
         }
         return result.report
     }
 
     public func stop(reason: APIUsageCollectorStopReason, at: Date) async {
+        lifecycleStopGeneration &+= 1
+        await cancelPolling()
+        await waitForActiveLifecycleDrain()
         await cancelPolling()
 
         do {
@@ -303,7 +336,8 @@ public actor APIUsageCollector: APIUsageCollecting {
     private func sharedDrain(
         configuration: APIUsageCollectorConfiguration,
         flushAfterDrain: Bool,
-        source: DrainSource
+        source: DrainSource,
+        stopGeneration: UInt64
     ) async -> DrainResult {
         if let reloadTask, let generation = activeReloadGeneration {
             if activeDrainConfiguration == configuration {
@@ -315,12 +349,16 @@ public actor APIUsageCollector: APIUsageCollecting {
                 return result
             }
 
-            _ = await reloadTask.value
+            let result = await reloadTask.value
             finishReload(generation: generation)
+            guard lifecycleStopGeneration == stopGeneration else {
+                return result
+            }
             return await sharedDrain(
                 configuration: configuration,
                 flushAfterDrain: flushAfterDrain,
-                source: source
+                source: source,
+                stopGeneration: stopGeneration
             )
         }
 
@@ -447,14 +485,32 @@ public actor APIUsageCollector: APIUsageCollecting {
                 do {
                     try await ledgerStore.merge(mutations)
                 } catch {
-                    let report = report(
-                        configuration: configuration,
-                        ledger: baseline,
-                        ledgerError: error,
-                        at: now()
-                    )
-                    publish(report, for: configuration)
-                    return .init(report: report, retryDisposition: .terminal)
+                    let mergeError = error
+                    let failedAt = now()
+                    let lossTimestamps = records.map(\.timestamp)
+                    do {
+                        try await ledgerStore.markPersistenceFailure(for: lossTimestamps)
+                        try await flushActiveDrainIfRequested()
+                        let ledger = try await ledgerStore.readCurrentPeriods(at: failedAt)
+                        try await flushActiveDrainIfRequested()
+                        let report = report(
+                            configuration: configuration,
+                            ledger: ledger,
+                            ledgerError: mergeError,
+                            at: failedAt
+                        )
+                        publish(report, for: configuration)
+                        return .init(report: report, retryDisposition: .terminal)
+                    } catch {
+                        let report = report(
+                            configuration: configuration,
+                            ledger: baseline,
+                            ledgerError: error,
+                            at: failedAt
+                        )
+                        publish(report, for: configuration)
+                        return .init(report: report, retryDisposition: .terminal)
+                    }
                 }
 
                 for record in records {
@@ -518,9 +574,11 @@ public actor APIUsageCollector: APIUsageCollecting {
 
     private func startPolling(
         after result: DrainResult,
-        configuration: APIUsageCollectorConfiguration
+        configuration: APIUsageCollectorConfiguration,
+        stopGeneration: UInt64
     ) {
         guard self.configuration == configuration,
+              lifecycleStopGeneration == stopGeneration,
               pollingTask == nil,
               configuration.usageEnabled,
               configuration.proxyReady,
@@ -536,7 +594,8 @@ public actor APIUsageCollector: APIUsageCollecting {
             await self.poll(
                 configuration: configuration,
                 initialDisposition: result.retryDisposition,
-                generation: generation
+                generation: generation,
+                stopGeneration: stopGeneration
             )
         }
         pollingTask = task
@@ -545,7 +604,8 @@ public actor APIUsageCollector: APIUsageCollecting {
     private func poll(
         configuration: APIUsageCollectorConfiguration,
         initialDisposition: RetryDisposition,
-        generation: UInt64
+        generation: UInt64,
+        stopGeneration: UInt64
     ) async {
         var disposition = initialDisposition
         var retryIndex = 0
@@ -570,7 +630,8 @@ public actor APIUsageCollector: APIUsageCollecting {
                 return
             }
             guard !Task.isCancelled,
-                  self.configuration == configuration else {
+                  self.configuration == configuration,
+                  lifecycleStopGeneration == stopGeneration else {
                 finishPolling(generation: generation)
                 return
             }
@@ -578,7 +639,8 @@ public actor APIUsageCollector: APIUsageCollecting {
             let result = await sharedDrain(
                 configuration: configuration,
                 flushAfterDrain: false,
-                source: .polling
+                source: .polling,
+                stopGeneration: stopGeneration
             )
             disposition = result.retryDisposition
             if disposition == .retryable {
@@ -608,6 +670,16 @@ public actor APIUsageCollector: APIUsageCollecting {
         }
         task.cancel()
         await task.value
+    }
+
+    private func waitForActiveLifecycleDrain() async {
+        guard activeDrainSource == .lifecycle,
+              let task = reloadTask,
+              let generation = activeReloadGeneration else {
+            return
+        }
+        _ = await task.value
+        finishReload(generation: generation)
     }
 
     private func makeMutation(_ record: APIUsageQueueRecord) -> APIUsageLedgerMutation? {

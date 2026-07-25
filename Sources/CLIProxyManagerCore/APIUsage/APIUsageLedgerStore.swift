@@ -16,6 +16,7 @@ public enum APIUsageLedgerStoreError: Error, Equatable, Sendable {
 public protocol APIUsageLedgerStoring: Sendable {
     func prepareTracking(at: Date, reportingTimeZoneID: String) async throws
     func merge(_ mutations: [APIUsageLedgerMutation]) async throws
+    func markPersistenceFailure(for timestamps: [Date]) async throws
     func markPaused(at: Date, proxyCouldServeRequests: Bool) async throws
     func markResumed(at: Date) async throws
     func markCollectionGap(from: Date, to: Date) async throws
@@ -139,7 +140,7 @@ public actor APIUsageLedgerStore: APIUsageLedgerStoring {
                     try mergeIssue(input, localDate: bounds.localDate, into: &ledger)
                 }
             } catch is CounterOverflow {
-                markPersistenceFailure(for: mutationBounds)
+                addPersistenceFailureIntervals(for: mutationBounds)
                 throw APIUsageLedgerStoreError.persistenceFailure
             }
 
@@ -152,6 +153,17 @@ public actor APIUsageLedgerStore: APIUsageLedgerStoring {
         }
         dirtyMonths.formUnion(touchedMonths)
         scheduleWrite()
+    }
+
+    public func markPersistenceFailure(for timestamps: [Date]) async throws {
+        try ensureMetadataLoaded()
+        guard !timestamps.isEmpty else { return }
+
+        let storedTimeZoneID = metadata!.reportingTimeZoneID
+        let bounds = timestamps.map {
+            APIUsagePeriodCalculator.bounds(at: $0, timeZoneID: storedTimeZoneID)
+        }
+        addPersistenceFailureIntervals(for: bounds)
     }
 
     public func markPaused(at: Date, proxyCouldServeRequests: Bool) async throws {
@@ -476,7 +488,7 @@ public actor APIUsageLedgerStore: APIUsageLedgerStoring {
         return result
     }
 
-    private func markPersistenceFailure(for bounds: [APIUsagePeriodBounds]) {
+    private func addPersistenceFailureIntervals(for bounds: [APIUsagePeriodBounds]) {
         var updatedMetadata = metadata!
         for bound in bounds {
             addPartialInterval(
