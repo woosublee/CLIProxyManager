@@ -78,7 +78,7 @@ Management key는 CLIProxyAPI 로컬 관리 API의 `remote-management.secret-key
 
 ```text
 Claude
-woosub@classting.com
+user@example.com
 5h       [████████░░░░░░░░] 37%
 7d       [██████████████░░] 68%
 다음 초기화: 오늘 오후 8:42
