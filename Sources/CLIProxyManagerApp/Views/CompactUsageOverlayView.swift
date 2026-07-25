@@ -61,9 +61,7 @@ struct CompactUsageOverlayView: View {
             }
         }
         .onChange(of: providerIDs, initial: true) { _, providerIDs in
-            if measurementState.updateProviderIDs(providerIDs) {
-                onMeasurementChange(measurementState.viewportHeight(maximumHeight: maximumAccountHeight))
-            }
+            _ = measurementState.updateProviderIDs(providerIDs)
         }
     }
 

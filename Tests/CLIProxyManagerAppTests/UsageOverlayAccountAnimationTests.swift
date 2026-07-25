@@ -40,6 +40,11 @@ final class UsageOverlayAccountAnimationTests: XCTestCase {
         XCTAssertTrue(content.contains("measurementAccountStack"))
         XCTAssertTrue(content.contains("ScrollView(.vertical, showsIndicators: needsScrolling)"))
         XCTAssertTrue(content.contains("private var accountRows: some View"))
+        XCTAssertFalse(
+            content.contains(
+                "onMeasurementChange(measurementState.viewportHeight(maximumHeight: maximumAccountHeight))"
+            )
+        )
     }
 
     func testWindowControllerDoesNotCoordinateExpandedInsertionReveal() throws {

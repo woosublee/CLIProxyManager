@@ -20,13 +20,19 @@ final class UsageOverlayFrameLayoutTests: XCTestCase {
         XCTAssertEqual(target.maxY, current.maxY)
     }
 
-    func testExpandedFrameClampsToMinimumAndMaximumHeight() {
+    func testExpandedFrameUsesContentHeightAndClampsOnlySafetyBounds() {
         let current = CGRect(x: 500, y: 100, width: 108, height: 200)
         let screen = CGRect(x: 0, y: 0, width: 1440, height: 900)
 
+        let fitted = UsageOverlayFrameLayout.targetFrame(
+            currentFrame: current,
+            targetContentHeight: 180,
+            mode: .expanded,
+            visibleFrame: screen
+        )
         let minimum = UsageOverlayFrameLayout.targetFrame(
             currentFrame: current,
-            targetContentHeight: 100,
+            targetContentHeight: 40,
             mode: .expanded,
             visibleFrame: screen
         )
@@ -37,7 +43,8 @@ final class UsageOverlayFrameLayoutTests: XCTestCase {
             visibleFrame: screen
         )
 
-        XCTAssertEqual(minimum.height, 260)
+        XCTAssertEqual(fitted.height, 180)
+        XCTAssertEqual(minimum.height, 72)
         XCTAssertEqual(maximum.height, 720)
     }
 

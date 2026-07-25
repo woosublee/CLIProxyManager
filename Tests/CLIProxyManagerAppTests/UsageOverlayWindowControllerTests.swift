@@ -503,6 +503,42 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         XCTAssertEqual(controller.accountTransitionPhase, .resizing)
     }
 
+    func testCompactAccountSwapWaitsForMeasuredContentBeforeStartingResize() async {
+        let oneAccount = accountPresentation([.claude])
+        let twoAccounts = accountPresentation([.claude, .codex])
+        let panel = makePanel(x: 500, y: 400, width: 108, height: 180)
+        var completeConceal: (@MainActor () -> Void)?
+        var frameCompletions: [@MainActor () -> Void] = []
+        let controller = UsageOverlayWindowController(
+            panel: panel,
+            initialDisplayMode: .compact,
+            initialAccountPresentation: oneAccount,
+            persistDisplayMode: { _ in true },
+            shouldReduceMotion: { false },
+            visibleFrameProvider: visibleFrame,
+            accountConcealScheduler: { completeConceal = $0 },
+            accountRevealScheduler: { _ in },
+            fittingSizeProvider: { CGSize(width: 108, height: 280) },
+            frameAnimator: { _, _, completion in
+                frameCompletions.append(completion)
+            }
+        )
+        controller.showForCurrentSession(using: .init(isVisible: true, displayMode: .compact))
+
+        controller.updateAccountPresentation(twoAccounts)
+        completeConceal?()
+        await drainMainQueue()
+
+        XCTAssertEqual(controller.presentedAccountPresentation, twoAccounts)
+        XCTAssertEqual(controller.accountTransitionPhase, .swapping)
+        XCTAssertTrue(frameCompletions.isEmpty)
+
+        controller.requestContentResize(animated: false)
+
+        XCTAssertEqual(controller.accountTransitionPhase, .resizing)
+        XCTAssertEqual(frameCompletions.count, 1)
+    }
+
     func testContentMeasurementRetargetsActiveAccountResizeBeforeReveal() async {
         let oneAccount = accountPresentation([.claude])
         let twoAccounts = accountPresentation([.claude, .codex])
@@ -529,7 +565,12 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         controller.updateAccountPresentation(twoAccounts)
         completeConceal?()
         await drainMainQueue()
+        XCTAssertTrue(frameCompletions.isEmpty)
+        XCTAssertEqual(controller.accountTransitionPhase, .swapping)
+
+        controller.requestContentResize(animated: false)
         XCTAssertEqual(frameCompletions.count, 1)
+        XCTAssertEqual(controller.accountTransitionPhase, .resizing)
 
         controller.requestContentResize(animated: false)
         await drainMainQueue()
@@ -1643,7 +1684,7 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
 
         controller.updateContentSize(CGSize(width: 0, height: 1), animated: false)
 
-        XCTAssertEqual(panel.frame.size, CGSize(width: 300, height: 260))
+        XCTAssertEqual(panel.frame.size, CGSize(width: 300, height: 72))
         XCTAssertEqual(panel.frame.maxX, originalAnchor.x)
         XCTAssertEqual(panel.frame.maxY, originalAnchor.y)
     }

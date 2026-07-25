@@ -8,7 +8,7 @@ enum AppWindowMetrics {
     static let menuBarWidth: CGFloat = 248
     static let usageOverlayExpandedWidth: CGFloat = 300
     static let usageOverlayCompactWidth: CGFloat = 108
-    static let usageOverlayExpandedMinimumHeight: CGFloat = 260
+    static let usageOverlayExpandedMinimumHeight: CGFloat = 72
     static let usageOverlayMaximumHeight: CGFloat = 720
     static let usageOverlayScreenMargin: CGFloat = 16
 }

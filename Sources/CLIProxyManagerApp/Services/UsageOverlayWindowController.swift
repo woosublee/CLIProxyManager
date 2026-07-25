@@ -476,6 +476,13 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     }
 
     func requestContentResize(animated: Bool = false) {
+        if displayMode == .compact, accountTransitionPhase == .swapping {
+            beginAccountResize(
+                generation: accountTransitionCoordinator.generation,
+                animated: true
+            )
+            return
+        }
         if retargetActiveAccountResize() { return }
         resizeToFittingContent(animated: animated)
     }
@@ -544,7 +551,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         case .retargetHidden(let generation, let presentation):
             presentationState.accountTransitionPhase = .swapping
             presentationState.presentedAccountPresentation = presentation
-            scheduleAccountResize(generation: generation)
+            scheduleAccountResizeWhenReady(generation: generation)
         }
     }
 
@@ -554,6 +561,11 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         ) else { return }
         presentationState.accountTransitionPhase = .swapping
         presentationState.presentedAccountPresentation = presentation
+        scheduleAccountResizeWhenReady(generation: generation)
+    }
+
+    private func scheduleAccountResizeWhenReady(generation: Int) {
+        guard displayMode == .expanded else { return }
         scheduleAccountResize(generation: generation)
     }
 

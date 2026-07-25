@@ -243,6 +243,39 @@ final class UsageOverlayPresentationStateTests: XCTestCase {
         XCTAssertEqual(state.height, 360)
     }
 
+    func testCompactProviderChangePublishesOnlyFinalMeasuredHeight() async {
+        let model = CompactUsageMeasurementHarnessModel(
+            providers: [compactProvider(id: .claude, index: 0)],
+            emptyMessage: "No connected accounts"
+        )
+        let hostingView = NSHostingView(rootView: CompactUsageMeasurementHarness(model: model))
+        hostingView.frame = CGRect(x: 0, y: 0, width: 108, height: 640)
+
+        let measuredInitialState = await waitUntil {
+            hostingView.layoutSubtreeIfNeeded()
+            return !model.measurements.isEmpty
+        }
+        XCTAssertTrue(measuredInitialState)
+        let measurementCountBeforeAddition = model.measurements.count
+
+        model.providers.append(compactProvider(id: .codex, index: 1))
+
+        let measuredTwoAccounts = await waitUntil {
+            hostingView.layoutSubtreeIfNeeded()
+            return model.measurements.dropFirst(measurementCountBeforeAddition).contains {
+                $0 > CompactUsageMeasurementState.estimatedHeight
+            }
+        }
+        XCTAssertTrue(measuredTwoAccounts)
+        let firstMeasurementAfterAddition = model.measurements
+            .dropFirst(measurementCountBeforeAddition)
+            .first
+        XCTAssertGreaterThan(
+            firstMeasurementAfterAddition ?? 0,
+            CompactUsageMeasurementState.estimatedHeight
+        )
+    }
+
     func testCompactViewRemeasuresRenderedEmptyStateAfterLastProviderIsRemoved() async {
         let model = CompactUsageMeasurementHarnessModel(
             providers: [
@@ -283,6 +316,22 @@ final class UsageOverlayPresentationStateTests: XCTestCase {
         XCTAssertGreaterThan(
             model.measurements.last ?? 0,
             CompactUsageMeasurementState.estimatedHeight
+        )
+    }
+
+    private func compactProvider(
+        id: ProviderRowState.ID,
+        index: Int
+    ) -> MenuBarConnectedProvider {
+        MenuBarConnectedProvider(
+            id: id,
+            name: "Provider \(index)",
+            displayName: "Account \(index)",
+            functionName: "provider-\(index)",
+            connectionDetail: "account-\(index)@example.com",
+            accountDetailHidden: true,
+            subscriptionUsageState: .disabled,
+            showsSubscriptionUsage: true
         )
     }
 
