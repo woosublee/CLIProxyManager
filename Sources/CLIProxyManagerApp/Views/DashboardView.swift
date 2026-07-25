@@ -632,7 +632,7 @@ private struct ServerHeroView: View {
 
 // MARK: - Account card
 
-private struct ProviderAccountCardView: View {
+struct ProviderAccountCardView: View {
     let account: DashboardAccountSnapshot
     let canReorder: Bool
     let isDropTarget: Bool
@@ -659,16 +659,21 @@ private struct ProviderAccountCardView: View {
             ProviderAvatar(providerID: account.id, providerType: account.providerType)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(account.title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(account.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1)
+
+                    Spacer(minLength: 0)
+
+                    trailingControls
+                        .layoutPriority(1)
+                }
 
                 accountDetailRow
                     .padding(.top, 2)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-
-            trailingControls
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -707,7 +712,6 @@ private struct ProviderAccountCardView: View {
     private var trailingControls: some View {
         HStack(spacing: 4) {
             SlugPill(slug: account.commandName)
-                .layoutPriority(1)
 
             actions
         }
