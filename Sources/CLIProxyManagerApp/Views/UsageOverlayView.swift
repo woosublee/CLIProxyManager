@@ -18,23 +18,23 @@ struct UsageOverlayView: View {
     }
 
     init(viewModel: DashboardViewModel) {
+        let accountPresentation = UsageOverlayAccountPresentation(
+            serverStatus: viewModel.serverStatus,
+            serverControlState: viewModel.serverControlState,
+            providerRows: viewModel.providerRows,
+            port: viewModel.config.port
+        )
         self.init(
             viewModel: viewModel,
-            presentationState: UsageOverlayPresentationState(displayMode: .expanded)
+            presentationState: UsageOverlayPresentationState(
+                displayMode: .expanded,
+                accountPresentation: accountPresentation
+            )
         )
     }
 
-    private var providers: [MenuBarConnectedProvider] {
-        MenuBarStatusSnapshot(
-            serverStatus: viewModel.serverStatus,
-            serverControlState: viewModel.serverControlState,
-            providers: viewModel.providerRows,
-            port: viewModel.config.port,
-            showsSubscriptionUsage: true
-        ).connectedProviders
-    }
-
     var body: some View {
+        let accountPresentation = presentationState.presentedAccountPresentation
         VStack(alignment: .leading, spacing: presentationState.presentedDisplayMode == .expanded ? 12 : 4) {
             if presentationState.presentedDisplayMode == .compact {
                 Color.clear
@@ -45,12 +45,14 @@ struct UsageOverlayView: View {
                 switch presentationState.presentedDisplayMode {
                 case .expanded:
                     ExpandedUsageOverlayContent(
-                        providers: providers,
+                        providers: accountPresentation.providers,
+                        emptyMessage: accountPresentation.emptyMessage ?? "No connected accounts",
                         refreshStatus: refreshStatus
                     )
                 case .compact:
                     CompactUsageOverlayView(
-                        providers: providers,
+                        providers: accountPresentation.providers,
+                        emptyMessage: accountPresentation.emptyMessage ?? "No connected accounts",
                         maximumAccountHeight: presentationState.compactAccountMaximumHeight,
                         onMeasurementChange: recordCompactAccountHeight
                     )
@@ -58,7 +60,7 @@ struct UsageOverlayView: View {
             }
             .blur(radius: presentationState.contentBlurRadius)
             .opacity(presentationState.contentOpacity)
-            .animation(.easeInOut(duration: 0.14), value: presentationState.isContentHiddenForModeTransition)
+            .animation(.easeInOut(duration: 0.14), value: presentationState.isContentConcealed)
         }
         .overlay(alignment: .topTrailing) {
             if presentationState.displayMode == .compact,
@@ -100,7 +102,9 @@ struct UsageOverlayView: View {
                 onClose: {}
             )
             CompactUsageOverlayView(
-                providers: providers,
+                providers: presentationState.presentedAccountPresentation.providers,
+                emptyMessage: presentationState.presentedAccountPresentation.emptyMessage
+                    ?? "No connected accounts",
                 maximumAccountHeight: presentationState.compactAccountMaximumHeight,
                 onMeasurementChange: recordCompactAccountHeight
             )
@@ -214,6 +218,7 @@ struct UsageOverlayChrome: View {
 
 private struct ExpandedUsageOverlayContent: View {
     let providers: [MenuBarConnectedProvider]
+    let emptyMessage: String
     let refreshStatus: String
 
     var body: some View {
@@ -232,7 +237,7 @@ private struct ExpandedUsageOverlayContent: View {
             }
 
             if providers.isEmpty {
-                Text("No connected accounts")
+                Text(emptyMessage)
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 140, alignment: .center)

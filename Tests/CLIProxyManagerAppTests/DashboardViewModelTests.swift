@@ -317,6 +317,180 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.connectionDetail, "codex@example.com")
     }
 
+    func testProviderRowDefaultsToShowingInUsageOverlay() {
+        let row = ProviderRowState(
+            id: .claude,
+            name: "Claude OAuth",
+            nickname: "",
+            functionName: "cc",
+            connectionTitle: "Connected",
+            connectionDetail: "claude@example.com",
+            isConnected: true
+        )
+
+        XCTAssertTrue(row.showsInUsageOverlay)
+    }
+
+    func testProviderRowsReflectUsageOverlayHiddenAccountIDs() {
+        var config = AppConfig.default
+        config.usageOverlay.hiddenAccountIDs = [ProviderRowState.ID.codex.rawValue]
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false),
+                AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_123", expired: nil, disabled: false)
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
+        )
+
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.showsInUsageOverlay, true)
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.showsInUsageOverlay, false)
+    }
+
+    func testSetAccountVisibleInUsageOverlayPersistsHiddenIDAndUpdatesRow() throws {
+        let store = StubConfigStore(config: .default)
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
+        )
+
+        try viewModel.setAccountVisibleInUsageOverlay(.claude, isVisible: false)
+
+        XCTAssertEqual(viewModel.config.usageOverlay.hiddenAccountIDs, ["claude"])
+        XCTAssertEqual(store.savedConfigs.last?.usageOverlay.hiddenAccountIDs, ["claude"])
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.showsInUsageOverlay, false)
+
+        try viewModel.setAccountVisibleInUsageOverlay(.claude, isVisible: true)
+
+        XCTAssertEqual(viewModel.config.usageOverlay.hiddenAccountIDs, [])
+        XCTAssertEqual(store.savedConfigs.last?.usageOverlay.hiddenAccountIDs, [])
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.showsInUsageOverlay, true)
+    }
+
+    func testSetAccountVisibleInUsageOverlaySkipsUnknownAndUnchangedAccounts() throws {
+        let store = StubConfigStore(config: .default)
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
+        )
+
+        try viewModel.setAccountVisibleInUsageOverlay(.claude, isVisible: true)
+        try viewModel.setAccountVisibleInUsageOverlay("missing", isVisible: false)
+
+        XCTAssertEqual(store.savedConfigs, [])
+    }
+
+    func testSetAccountVisibleInUsageOverlayRollsBackWhenSaveFails() {
+        let store = StubConfigStore(
+            config: .default,
+            saveError: NSError(
+                domain: "UsageOverlayAccountVisibility",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Save failed"]
+            )
+        )
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
+        )
+
+        XCTAssertThrowsError(
+            try viewModel.setAccountVisibleInUsageOverlay(.claude, isVisible: false)
+        ) { error in
+            XCTAssertEqual(
+                error.localizedDescription,
+                "Usage HUD account visibility could not be saved: Save failed"
+            )
+        }
+        XCTAssertEqual(viewModel.config.usageOverlay.hiddenAccountIDs, [])
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.showsInUsageOverlay, true)
+        XCTAssertEqual(store.savedConfigs, [])
+    }
+
+    func testSetAccountVisibleInUsageOverlayDoesNotChangeUsageBackendLifecycle() throws {
+        var config = AppConfig.default
+        config.usageOverlay.isVisible = true
+        let proxyService = StubProxyServiceStarter()
+        let keyStore = SubscriptionUsageManagementKeyDouble(isConfiguredValue: true)
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            subscriptionUsageKeyStore: keyStore,
+            secretStore: InMemorySecretStore()
+        )
+
+        try viewModel.setAccountVisibleInUsageOverlay(.claude, isVisible: false)
+
+        XCTAssertEqual(proxyService.restartPorts, [])
+        XCTAssertEqual(keyStore.createCallCount, 0)
+        XCTAssertEqual(keyStore.deleteCallCount, 0)
+        XCTAssertTrue(viewModel.config.isSubscriptionUsageEnabled)
+    }
+
+    func testSetAccountVisibleInUsageOverlayPreservesCachedSnapshot() throws {
+        var config = AppConfig.default
+        config.usageOverlay.isVisible = true
+        let profile = AuthProfile(
+            fileName: "claude.json",
+            type: .claude,
+            email: "claude@example.com",
+            accountID: nil,
+            expired: nil,
+            disabled: false
+        )
+        let snapshot = SubscriptionUsageSnapshot(
+            profileID: profile.id,
+            provider: .claude,
+            windows: [UsageWindow(id: "five_hour", label: "5h", usedPercent: 25, resetAt: nil)],
+            fetchedAt: Date(timeIntervalSince1970: 60)
+        )
+        let cache = SubscriptionUsageSnapshotCacheDouble(snapshots: [profile.id: snapshot])
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [profile],
+            subscriptionUsageSnapshotCache: cache
+        )
+
+        try viewModel.setAccountVisibleInUsageOverlay(.claude, isVisible: false)
+
+        XCTAssertEqual(viewModel.subscriptionUsageStates[profile.id], .available(snapshot))
+        XCTAssertEqual(cache.load(), [profile.id: snapshot])
+    }
+
     func testProviderRowsReflectConfiguredAccountPrivacy() {
         var config = AppConfig.default
         config.accountPrivacy = AppConfig.AccountPrivacy(claudeHidden: false, codexHidden: true)
@@ -5255,6 +5429,7 @@ final class DashboardAccountOrderingTests: XCTestCase {
     func testDeletingAccountRemovesItsIDAndPreservesSurvivorOrder() {
         var config = threeAccountConfig()
         config.accountOrder = ["c", "b", "a"]
+        config.usageOverlay.hiddenAccountIDs = ["b", "c"]
         let store = StubConfigStore(config: config)
         let authStore = StubAuthProfileStore(profiles: threeProfiles(), supportsIDDelete: true)
         let viewModel = makeViewModel(
@@ -5268,6 +5443,8 @@ final class DashboardAccountOrderingTests: XCTestCase {
 
         XCTAssertEqual(viewModel.providerRows.map(\.id.rawValue), ["c", "a"])
         XCTAssertEqual(store.savedConfigs.last?.accountOrder, ["c", "a"])
+        XCTAssertEqual(viewModel.config.usageOverlay.hiddenAccountIDs, ["c"])
+        XCTAssertEqual(store.savedConfigs.last?.usageOverlay.hiddenAccountIDs, ["c"])
     }
 
     func testAPIKeyReRegistrationAppendsAfterSurvivingAccounts() throws {
@@ -5276,6 +5453,7 @@ final class DashboardAccountOrderingTests: XCTestCase {
             commandProfile(id: "a", authProfileID: "a.json", provider: .claude)
         ]
         config.accountOrder = ["claude-api", "a"]
+        config.usageOverlay.hiddenAccountIDs = [ProviderRowState.ID.claudeAPI.rawValue]
         let store = StubConfigStore(config: config)
         let secrets = InMemorySecretStore()
         try secrets.set("old-key", for: .claudeAPIKey)
@@ -5289,6 +5467,8 @@ final class DashboardAccountOrderingTests: XCTestCase {
         viewModel.removeAPIProvider(.claudeAPI)
         XCTAssertEqual(viewModel.config.accountOrder, ["a"])
         XCTAssertEqual(store.savedConfigs.last?.accountOrder, ["a"])
+        XCTAssertEqual(viewModel.config.usageOverlay.hiddenAccountIDs, [])
+        XCTAssertEqual(store.savedConfigs.last?.usageOverlay.hiddenAccountIDs, [])
 
         try viewModel.saveClaudeAPISettings(
             functionName: "ccapi",
@@ -5299,6 +5479,7 @@ final class DashboardAccountOrderingTests: XCTestCase {
 
         XCTAssertEqual(viewModel.providerRows.map(\.id.rawValue), ["a", "claude-api"])
         XCTAssertEqual(store.savedConfigs.last?.accountOrder, ["a", "claude-api"])
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .claudeAPI }?.showsInUsageOverlay, true)
     }
 
     private func threeAccountConfig() -> AppConfig {

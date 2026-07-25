@@ -46,6 +46,7 @@ struct ProviderRowState: Identifiable, Equatable {
     let accountDetailHidden: Bool
     let subscriptionUsageState: AccountSubscriptionUsageState
     let showsSubscriptionUsage: Bool
+    let showsInUsageOverlay: Bool
 
     init(
         id: ID,
@@ -62,7 +63,8 @@ struct ProviderRowState: Identifiable, Equatable {
         isErrored: Bool = false,
         accountDetailHidden: Bool = true,
         subscriptionUsageState: AccountSubscriptionUsageState = .disabled,
-        showsSubscriptionUsage: Bool = true
+        showsSubscriptionUsage: Bool = true,
+        showsInUsageOverlay: Bool = true
     ) {
         self.id = id
         self.providerType = providerType ?? Self.inferredProviderType(from: id)
@@ -79,6 +81,7 @@ struct ProviderRowState: Identifiable, Equatable {
         self.accountDetailHidden = accountDetailHidden
         self.subscriptionUsageState = subscriptionUsageState
         self.showsSubscriptionUsage = showsSubscriptionUsage
+        self.showsInUsageOverlay = showsInUsageOverlay
     }
 
     var displayTitle: String {

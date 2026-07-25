@@ -60,10 +60,11 @@ GitHub Releases에서 직접 내려받은 배포본만 사용하세요.
 
 ## 사용량 HUD
 
-**Server Settings → Subscription Usage**를 켠 뒤, **General → Usage Overlay**에서 별도 사용량 창을 표시할 수 있습니다.
+**Settings → Usage**에서 메뉴바 사용량과 별도 Usage HUD 표시를 각각 설정할 수 있습니다.
 
 - 창의 투명도와 항상 위 표시 여부를 설정할 수 있습니다.
 - 메뉴바에서 HUD를 다시 표시하거나 숨길 수 있습니다.
+- 메인 화면의 각 계정 카드에서 Usage HUD 버튼을 눌러 HUD에 표시할 계정을 선택할 수 있습니다. 선택은 전체 보기와 compact 보기에 함께 적용되고 앱 재실행 후에도 유지됩니다.
 - Claude와 Codex 계정별 사용량·초기화 시각을 보여 줍니다.
 - Codex는 API가 보고한 실제 기간을 표시합니다. 일반 계정은 `5h`·`7d`, Team 플랜의 월간 윈도우는 `1mo`로 표시됩니다.
 - HUD 우측 상단의 축소·확장 버튼으로 300pt 폭의 전체 보기와 108pt 폭의 compact 보기를 전환할 수 있습니다.

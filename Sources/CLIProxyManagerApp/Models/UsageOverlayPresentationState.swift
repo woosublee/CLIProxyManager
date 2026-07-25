@@ -10,23 +10,43 @@ final class UsageOverlayPresentationState: ObservableObject {
     @Published var compactAccountMaximumHeight: CGFloat
     @Published var compactFittingSize: CGSize?
     @Published var isContentHiddenForModeTransition = false
+    @Published var presentedAccountPresentation: UsageOverlayAccountPresentation
+    @Published var accountTransitionPhase: UsageOverlayAccountTransitionPhase = .visible
 
     init(
         displayMode: AppConfig.UsageOverlay.DisplayMode,
-        compactAccountMaximumHeight: CGFloat = 640
+        compactAccountMaximumHeight: CGFloat = 640,
+        accountPresentation: UsageOverlayAccountPresentation = .init(
+            providers: [],
+            emptyMessage: "No connected accounts"
+        )
     ) {
         self.displayMode = displayMode
         self.presentedDisplayMode = displayMode
         self.compactAccountMaximumHeight = compactAccountMaximumHeight
         self.compactFittingSize = nil
+        self.presentedAccountPresentation = accountPresentation
+    }
+
+    var isContentHiddenForAccountTransition: Bool {
+        switch accountTransitionPhase {
+        case .concealing, .swapping, .resizing:
+            true
+        case .revealing, .visible:
+            false
+        }
+    }
+
+    var isContentConcealed: Bool {
+        isContentHiddenForModeTransition || isContentHiddenForAccountTransition
     }
 
     var contentBlurRadius: CGFloat {
-        isContentHiddenForModeTransition ? 8 : 0
+        isContentConcealed ? 8 : 0
     }
 
     var contentOpacity: Double {
-        isContentHiddenForModeTransition ? 0 : 1
+        isContentConcealed ? 0 : 1
     }
 
     var chromeOpacity: Double { 1 }

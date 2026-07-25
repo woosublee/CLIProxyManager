@@ -159,6 +159,14 @@ final class DashboardViewModel: ObservableObject {
         var errorDescription: String? { message }
     }
 
+    private struct UsageOverlayAccountVisibilitySaveError: LocalizedError {
+        let underlyingError: Error
+
+        var errorDescription: String? {
+            "Usage HUD account visibility could not be saved: \(underlyingError.localizedDescription)"
+        }
+    }
+
     @Published var cards: [ProfileCard]
     @Published var serverStatus: DiagnosticStatus
     @Published var serverControlState: ServerControlState = .stopped
@@ -893,6 +901,27 @@ final class DashboardViewModel: ObservableObject {
         return index < providerRows.index(before: providerRows.endIndex)
     }
 
+    func setAccountVisibleInUsageOverlay(
+        _ id: ProviderRowState.ID,
+        isVisible: Bool
+    ) throws {
+        guard let row = providerRows.first(where: { $0.id == id }) else { return }
+        guard row.showsInUsageOverlay != isVisible else { return }
+
+        var updatedConfig = config
+        if isVisible {
+            updatedConfig.usageOverlay.hiddenAccountIDs.removeAll { $0 == id.rawValue }
+        } else if !updatedConfig.usageOverlay.hiddenAccountIDs.contains(id.rawValue) {
+            updatedConfig.usageOverlay.hiddenAccountIDs.append(id.rawValue)
+        }
+
+        do {
+            try savePrivacyOnlyConfig(updatedConfig)
+        } catch {
+            throw UsageOverlayAccountVisibilitySaveError(underlyingError: error)
+        }
+    }
+
     func moveAccountUp(_ id: ProviderRowState.ID) {
         guard let index = providerRows.firstIndex(where: { $0.id == id }), index > 0 else { return }
         moveAccount(id, before: providerRows[index - 1].id)
@@ -1592,6 +1621,7 @@ final class DashboardViewModel: ObservableObject {
         do {
             let credentialChanged = try withAPIKeyTransaction(key: key, replacement: nil) {
                 var updatedConfig = config
+                updatedConfig.usageOverlay.hiddenAccountIDs.removeAll { $0 == provider.rawValue }
                 if provider == .codexAPI {
                     updatedConfig.commands.ccodexapi = ""
                 } else {
@@ -2404,6 +2434,7 @@ final class DashboardViewModel: ObservableObject {
 
     private func resetProviderSettings(_ provider: ProviderRowState.ID) throws {
         var updatedConfig = config
+        updatedConfig.usageOverlay.hiddenAccountIDs.removeAll { $0 == provider.rawValue }
         if let index = updatedConfig.oauthCommandProfiles.firstIndex(where: { $0.id == provider.rawValue }) {
             updatedConfig.oauthCommandProfiles.remove(at: index)
             resetLegacyFields(for: oauthProviderType(for: provider), in: &updatedConfig)
@@ -2771,6 +2802,10 @@ final class DashboardViewModel: ObservableObject {
         config.isSubscriptionUsageEnabled ? .managementKeyNotConfigured : .disabled
     }
 
+    private func showsInUsageOverlay(_ id: ProviderRowState.ID) -> Bool {
+        !config.usageOverlay.hiddenAccountIDs.contains(id.rawValue)
+    }
+
     private func rebuildProviderRows(claudeStatus: DiagnosticStatus?, codexStatus: DiagnosticStatus?) {
         let authProfilesByID = Dictionary(uniqueKeysWithValues: authProfiles.map { ($0.id, $0) })
         var rows: [ProviderRowState]
@@ -2799,7 +2834,8 @@ final class DashboardViewModel: ObservableObject {
                     isConnected: enabledProfile != nil, isDisabled: isDisabled,
                     isErrored: isProviderErrored(providerType: authProfile.type, enabledProfile: enabledProfile, diagnosticStatus: diagnosticStatus),
                     accountDetailHidden: authProfile.type == .codex ? config.accountPrivacy.codexHidden : config.accountPrivacy.claudeHidden,
-                    subscriptionUsageState: subscriptionUsageStates[authProfile.id] ?? defaultSubscriptionUsageState
+                    subscriptionUsageState: subscriptionUsageStates[authProfile.id] ?? defaultSubscriptionUsageState,
+                    showsInUsageOverlay: showsInUsageOverlay(ProviderRowState.ID(rawValue: rowID))
                 )
             }
         } else {
@@ -2821,7 +2857,8 @@ final class DashboardViewModel: ObservableObject {
                     isConnected: enabledProfile != nil, isDisabled: isDisabled,
                     isErrored: isProviderErrored(providerType: commandProfile.provider, enabledProfile: enabledProfile, diagnosticStatus: diagnosticStatus),
                     accountDetailHidden: commandProfile.accountDetailHidden,
-                    subscriptionUsageState: subscriptionUsageStates[authProfile.id] ?? defaultSubscriptionUsageState
+                    subscriptionUsageState: subscriptionUsageStates[authProfile.id] ?? defaultSubscriptionUsageState,
+                    showsInUsageOverlay: showsInUsageOverlay(ProviderRowState.ID(rawValue: commandProfile.id))
                 )
             }
         }
@@ -2832,7 +2869,8 @@ final class DashboardViewModel: ObservableObject {
                 functionName: config.commands.ccapi, connectionTitle: "Configured",
                 connectionDetail: "CLIProxyAPI",
                 isConnected: true, accountDetailHidden: true, subscriptionUsageState: .disabled,
-                showsSubscriptionUsage: false
+                showsSubscriptionUsage: false,
+                showsInUsageOverlay: showsInUsageOverlay(.claudeAPI)
             ))
         }
         if isAPIKeyConfigured(.codexAPIKey) {
@@ -2841,7 +2879,8 @@ final class DashboardViewModel: ObservableObject {
                 functionName: config.commands.ccodexapi, connectionTitle: "Configured",
                 connectionDetail: "CLIProxyAPI", isConnected: true,
                 accountDetailHidden: true, subscriptionUsageState: .disabled,
-                showsSubscriptionUsage: false
+                showsSubscriptionUsage: false,
+                showsInUsageOverlay: showsInUsageOverlay(.codexAPI)
             ))
         }
         let orderedRows = AccountOrdering.orderedRows(rows, storedIDs: config.accountOrder)
