@@ -56,14 +56,14 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
                     connectionDetail: "claude@example.com",
                     isConnected: true,
                     accountDetailHidden: false,
-                    subscriptionUsageState: .available(
+                    usageState: .subscription(.available(
                         SubscriptionUsageSnapshot(
                             profileID: "claude.json",
                             provider: .claude,
                             windows: [UsageWindow(id: "five_hour", label: "5h", usedPercent: 52, resetAt: nil)],
                             fetchedAt: Date(timeIntervalSince1970: 0)
                         )
-                    )
+                    ))
                 )
             ]
         )
@@ -92,14 +92,14 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
                     connectionDetail: "private@example.com",
                     isConnected: true,
                     accountDetailHidden: true,
-                    subscriptionUsageState: .available(
+                    usageState: .subscription(.available(
                         SubscriptionUsageSnapshot(
                             profileID: "claude.json",
                             provider: .claude,
                             windows: [UsageWindow(id: "five_hour", label: "5h", usedPercent: 52, resetAt: nil)],
                             fetchedAt: Date(timeIntervalSince1970: 0)
                         )
-                    )
+                    ))
                 )
             ]
         )
@@ -127,7 +127,7 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
                     connectionDetail: "claude@example.com",
                     isConnected: true,
                     accountDetailHidden: false,
-                    subscriptionUsageState: .available(
+                    usageState: .subscription(.available(
                         SubscriptionUsageSnapshot(
                             profileID: "claude.json",
                             provider: .claude,
@@ -137,7 +137,7 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
                             ],
                             fetchedAt: Date(timeIntervalSince1970: 0)
                         )
-                    )
+                    ))
                 ),
                 ProviderRowState(
                     id: .codex,
@@ -148,14 +148,14 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
                     connectionDetail: "codex@example.com",
                     isConnected: true,
                     accountDetailHidden: false,
-                    subscriptionUsageState: .available(
+                    usageState: .subscription(.available(
                         SubscriptionUsageSnapshot(
                             profileID: "codex.json",
                             provider: .codex,
                             windows: [UsageWindow(id: "primary", label: "Primary", usedPercent: 60, resetAt: nil)],
                             fetchedAt: Date(timeIntervalSince1970: 0)
                         )
-                    )
+                    ))
                 )
             ]
         )
@@ -184,7 +184,7 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
                 connectionTitle: "Connected",
                 connectionDetail: "codex@example.com",
                 isConnected: true,
-                subscriptionUsageState: available
+                usageState: .subscription(available)
             )],
             showsSubscriptionUsage: false
         )
@@ -205,8 +205,8 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
                 connectionTitle: "Configured",
                 connectionDetail: "API key configured",
                 isConnected: true,
-                subscriptionUsageState: .disabled,
-                showsSubscriptionUsage: false
+                usageState: .apiCost(.disabled),
+                showsUsage: false
             )],
             showsSubscriptionUsage: true
         )
@@ -225,8 +225,8 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
                 connectionTitle: "Configured",
                 connectionDetail: "API key configured",
                 isConnected: true,
-                subscriptionUsageState: .disabled,
-                showsSubscriptionUsage: false
+                usageState: .apiCost(.disabled),
+                showsUsage: false
             )],
             showsSubscriptionUsage: true
         )
@@ -253,7 +253,7 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
                     connectionTitle: "Connected",
                     connectionDetail: "codex@example.com",
                     isConnected: true,
-                    showsSubscriptionUsage: true
+                    showsUsage: true
                 ),
                 ProviderRowState(
                     id: .codexAPI,
@@ -263,7 +263,8 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
                     connectionTitle: "Configured",
                     connectionDetail: "API key configured",
                     isConnected: true,
-                    showsSubscriptionUsage: false
+                    usageState: .apiCost(.disabled),
+                    showsUsage: true
                 )
             ],
             showsSubscriptionUsage: true
@@ -288,6 +289,54 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
         )
 
         XCTAssertTrue(try XCTUnwrap(snapshot.connectedProviders.first).showsSubscriptionUsage)
+    }
+
+    func testSnapshotCarriesAPICostUsageAndCompatibilityProjection() throws {
+        let snapshot = MenuBarStatusSnapshot(
+            serverStatus: DiagnosticStatus(severity: .ready, title: "Running", message: "Ready"),
+            providers: [ProviderRowState(
+                id: .claudeAPI,
+                name: "Claude API Key",
+                nickname: "",
+                functionName: "claude-api",
+                connectionTitle: "Configured",
+                connectionDetail: "CLIProxyAPI",
+                isConnected: true,
+                usageState: .apiCost(.loading),
+                showsUsage: true
+            )],
+            showsUsage: true
+        )
+
+        let provider = try XCTUnwrap(snapshot.connectedProviders.first)
+        XCTAssertEqual(provider.id, .claudeAPI)
+        XCTAssertEqual(provider.usageState, .apiCost(.loading))
+        XCTAssertTrue(provider.showsUsage)
+        XCTAssertEqual(provider.subscriptionUsageState, .disabled)
+        XCTAssertFalse(provider.showsSubscriptionUsage)
+    }
+
+    func testSnapshotUsagePreferenceDoesNotDiscardAPICostState() throws {
+        let snapshot = MenuBarStatusSnapshot(
+            serverStatus: DiagnosticStatus(severity: .ready, title: "Running", message: "Ready"),
+            providers: [ProviderRowState(
+                id: .codexAPI,
+                name: "OpenAI API Key",
+                nickname: "",
+                functionName: "codex-api",
+                connectionTitle: "Configured",
+                connectionDetail: "CLIProxyAPI",
+                isConnected: true,
+                usageState: .apiCost(.loading),
+                showsUsage: true
+            )],
+            showsUsage: false
+        )
+
+        let provider = try XCTUnwrap(snapshot.connectedProviders.first)
+        XCTAssertEqual(provider.id.rawValue, "codex-api")
+        XCTAssertEqual(provider.usageState, .apiCost(.loading))
+        XCTAssertFalse(provider.showsUsage)
     }
 
     func testCodexUsageWindowLabelsUseReportedPeriods() {
@@ -342,14 +391,14 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
                     connectionDetail: "claude@example.com",
                     isConnected: true,
                     accountDetailHidden: false,
-                    subscriptionUsageState: .available(
+                    usageState: .subscription(.available(
                         SubscriptionUsageSnapshot(
                             profileID: "claude.json",
                             provider: .claude,
                             windows: [],
                             fetchedAt: Date(timeIntervalSince1970: 0)
                         )
-                    )
+                    ))
                 )
             ]
         )
@@ -373,7 +422,7 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
                     connectionDetail: "claude@example.com",
                     isConnected: true,
                     accountDetailHidden: false,
-                    subscriptionUsageState: .unavailable(.proxyUnavailable)
+                    usageState: .subscription(.unavailable(.proxyUnavailable))
                 )
             ]
         )
@@ -447,7 +496,8 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
                     connectionTitle: "Configured",
                     connectionDetail: "API key configured",
                     isConnected: true,
-                    showsSubscriptionUsage: false
+                    usageState: .apiCost(.disabled),
+                    showsUsage: true
                 )
             ]
         )
@@ -471,8 +521,8 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
                     connectionTitle: "Connected",
                     connectionDetail: "claude@example.com",
                     isConnected: true,
-                    subscriptionUsageState: .disabled,
-                    showsSubscriptionUsage: true
+                    usageState: .subscription(.disabled),
+                    showsUsage: true
                 )
             ]
         )

@@ -2799,7 +2799,7 @@ final class DashboardViewModel: ObservableObject {
                     isConnected: enabledProfile != nil, isDisabled: isDisabled,
                     isErrored: isProviderErrored(providerType: authProfile.type, enabledProfile: enabledProfile, diagnosticStatus: diagnosticStatus),
                     accountDetailHidden: authProfile.type == .codex ? config.accountPrivacy.codexHidden : config.accountPrivacy.claudeHidden,
-                    subscriptionUsageState: subscriptionUsageStates[authProfile.id] ?? defaultSubscriptionUsageState
+                    usageState: .subscription(subscriptionUsageStates[authProfile.id] ?? defaultSubscriptionUsageState)
                 )
             }
         } else {
@@ -2821,7 +2821,7 @@ final class DashboardViewModel: ObservableObject {
                     isConnected: enabledProfile != nil, isDisabled: isDisabled,
                     isErrored: isProviderErrored(providerType: commandProfile.provider, enabledProfile: enabledProfile, diagnosticStatus: diagnosticStatus),
                     accountDetailHidden: commandProfile.accountDetailHidden,
-                    subscriptionUsageState: subscriptionUsageStates[authProfile.id] ?? defaultSubscriptionUsageState
+                    usageState: .subscription(subscriptionUsageStates[authProfile.id] ?? defaultSubscriptionUsageState)
                 )
             }
         }
@@ -2831,8 +2831,7 @@ final class DashboardViewModel: ObservableObject {
                 id: .claudeAPI, providerType: .claude, name: "Claude API Key", nickname: config.ccapi.nickname,
                 functionName: config.commands.ccapi, connectionTitle: "Configured",
                 connectionDetail: "CLIProxyAPI",
-                isConnected: true, accountDetailHidden: true, subscriptionUsageState: .disabled,
-                showsSubscriptionUsage: false
+                isConnected: true, accountDetailHidden: true, usageState: .apiCost(.disabled)
             ))
         }
         if isAPIKeyConfigured(.codexAPIKey) {
@@ -2840,8 +2839,7 @@ final class DashboardViewModel: ObservableObject {
                 id: .codexAPI, providerType: .codex, name: "OpenAI API Key", nickname: config.codexAPI.nickname,
                 functionName: config.commands.ccodexapi, connectionTitle: "Configured",
                 connectionDetail: "CLIProxyAPI", isConnected: true,
-                accountDetailHidden: true, subscriptionUsageState: .disabled,
-                showsSubscriptionUsage: false
+                accountDetailHidden: true, usageState: .apiCost(.disabled)
             ))
         }
         let orderedRows = AccountOrdering.orderedRows(rows, storedIDs: config.accountOrder)

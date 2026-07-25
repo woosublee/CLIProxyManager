@@ -60,6 +60,19 @@ struct CompactUsagePresentation: Equatable {
 }
 
 func compactUsagePresentation(
+    for state: ProviderUsageState,
+    now: Date = .now
+) -> CompactUsagePresentation {
+    switch state {
+    case let .subscription(subscriptionState):
+        compactUsagePresentation(for: subscriptionState, now: now)
+    case let .apiCost(apiCostState):
+        compactAPICostPresentation(for: apiCostState)
+    }
+}
+
+// Temporary compatibility overload while Task 12 migrates compact view call sites.
+func compactUsagePresentation(
     for state: AccountSubscriptionUsageState,
     now: Date = .now
 ) -> CompactUsagePresentation {
@@ -89,6 +102,54 @@ func compactUsagePresentation(
             indicator: compactUnavailableIndicator(for: issue)
         )
     }
+}
+
+private func compactAPICostPresentation(
+    for state: APICostUsageState
+) -> CompactUsagePresentation {
+    switch state {
+    case .disabled:
+        return .placeholder(
+            "—",
+            indicator: .disabled(message: "API cost tracking is disabled.")
+        )
+    case .loading:
+        return .placeholder(
+            "—",
+            indicator: .loading(message: "Calculating API cost…")
+        )
+    case let .available(snapshot):
+        return compactAPICostSnapshotPresentation(snapshot, issues: [])
+    case let .partial(snapshot, issues):
+        return compactAPICostSnapshotPresentation(snapshot, issues: issues)
+    case let .unavailable(issue):
+        return .placeholder(
+            "—",
+            indicator: .unavailable(message: apiCostIssueMessage(issue))
+        )
+    }
+}
+
+private func compactAPICostSnapshotPresentation(
+    _ snapshot: APICostSnapshot,
+    issues: [APICostIssue]
+) -> CompactUsagePresentation {
+    let rows = apiCostRows(snapshot: snapshot).map { row in
+        CompactUsageRowPresentation(
+            id: row.id,
+            label: row.label,
+            value: row.cost,
+            accessibilityLabel: row.accessibilityLabel
+        )
+    }
+    let warning = orderedAPICostIssues(issues)
+        .map(apiCostIssueMessage)
+        .joined(separator: " ")
+    return CompactUsagePresentation(
+        rows: rows,
+        placeholder: nil,
+        indicator: warning.isEmpty ? nil : .warning(message: warning)
+    )
 }
 
 private func compactUnavailableIndicator(for issue: SubscriptionUsageIssue) -> CompactUsageIndicator {

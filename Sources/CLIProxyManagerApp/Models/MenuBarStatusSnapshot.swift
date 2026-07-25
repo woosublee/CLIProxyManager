@@ -7,8 +7,8 @@ struct MenuBarConnectedProvider: Equatable, Identifiable {
     let functionName: String
     let connectionDetail: String
     let accountDetailHidden: Bool
-    let subscriptionUsageState: AccountSubscriptionUsageState
-    let showsSubscriptionUsage: Bool
+    let usageState: ProviderUsageState
+    let showsUsage: Bool
 
     var menuBarDisplayName: String {
         displayName
@@ -20,6 +20,15 @@ struct MenuBarConnectedProvider: Equatable, Identifiable {
 
     var menuBarConnectionDetail: String? {
         accountDetailHidden ? nil : connectionDetail
+    }
+
+    // Temporary compatibility projection while Task 11/12 migrate view call sites.
+    var subscriptionUsageState: AccountSubscriptionUsageState {
+        usageState.subscriptionCompatibilityState
+    }
+
+    var showsSubscriptionUsage: Bool {
+        showsUsage && usageState.isSubscription
     }
 }
 
@@ -46,7 +55,7 @@ struct MenuBarStatusSnapshot: Equatable {
         serverControlState: ServerControlState = .stopped,
         providers: [ProviderRowState],
         port: Int = 18_317,
-        showsSubscriptionUsage: Bool = true
+        showsUsage: Bool = true
     ) {
         let displayState = Self.displayState(serverStatus: serverStatus, serverControlState: serverControlState)
         serverTitle = serverStatus.title
@@ -67,11 +76,28 @@ struct MenuBarStatusSnapshot: Equatable {
                     functionName: provider.functionName,
                     connectionDetail: provider.connectionDetail,
                     accountDetailHidden: provider.accountDetailHidden,
-                    subscriptionUsageState: provider.subscriptionUsageState,
-                    showsSubscriptionUsage: provider.showsSubscriptionUsage && showsSubscriptionUsage
+                    usageState: provider.usageState,
+                    showsUsage: provider.showsUsage && showsUsage
                 )
             }
         erroredCount = providers.filter(\.isErrored).count
+    }
+
+    // Temporary forwarding overload while Task 12 migrates the persisted-setting label.
+    init(
+        serverStatus: DiagnosticStatus,
+        serverControlState: ServerControlState = .stopped,
+        providers: [ProviderRowState],
+        port: Int = 18_317,
+        showsSubscriptionUsage: Bool
+    ) {
+        self.init(
+            serverStatus: serverStatus,
+            serverControlState: serverControlState,
+            providers: providers,
+            port: port,
+            showsUsage: showsSubscriptionUsage
+        )
     }
 
     private enum DisplayState: Equatable {

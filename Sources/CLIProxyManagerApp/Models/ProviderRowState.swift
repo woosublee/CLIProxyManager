@@ -44,8 +44,8 @@ struct ProviderRowState: Identifiable, Equatable {
     let isDisabled: Bool
     let isErrored: Bool
     let accountDetailHidden: Bool
-    let subscriptionUsageState: AccountSubscriptionUsageState
-    let showsSubscriptionUsage: Bool
+    let usageState: ProviderUsageState
+    let showsUsage: Bool
 
     init(
         id: ID,
@@ -61,8 +61,8 @@ struct ProviderRowState: Identifiable, Equatable {
         isDisabled: Bool = false,
         isErrored: Bool = false,
         accountDetailHidden: Bool = true,
-        subscriptionUsageState: AccountSubscriptionUsageState = .disabled,
-        showsSubscriptionUsage: Bool = true
+        usageState: ProviderUsageState = .subscription(.disabled),
+        showsUsage: Bool = true
     ) {
         self.id = id
         self.providerType = providerType ?? Self.inferredProviderType(from: id)
@@ -77,13 +77,22 @@ struct ProviderRowState: Identifiable, Equatable {
         self.isDisabled = isDisabled
         self.isErrored = isErrored
         self.accountDetailHidden = accountDetailHidden
-        self.subscriptionUsageState = subscriptionUsageState
-        self.showsSubscriptionUsage = showsSubscriptionUsage
+        self.usageState = usageState
+        self.showsUsage = showsUsage
     }
 
     var displayTitle: String {
         let trimmedNickname = nickname.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmedNickname.isEmpty ? name : trimmedNickname
+    }
+
+    // Temporary compatibility projection while Task 11/12 migrate view call sites.
+    var subscriptionUsageState: AccountSubscriptionUsageState {
+        usageState.subscriptionCompatibilityState
+    }
+
+    var showsSubscriptionUsage: Bool {
+        showsUsage && usageState.isSubscription
     }
 
     private static func inferredProviderType(from id: ID) -> AuthProfileType {
