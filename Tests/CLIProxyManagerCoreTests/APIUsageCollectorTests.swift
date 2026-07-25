@@ -335,7 +335,7 @@ final class APIUsageCollectorTests: XCTestCase {
             sleep: { try await sleep.sleep($0) }
         )
 
-        await collector.start(configuration: enabledConfiguration())
+        _ = await collector.start(configuration: enabledConfiguration())
         try await waitUntil { await sleep.recordedDelays().count == 1 }
 
         let events = await ledger.allEvents()
@@ -364,7 +364,7 @@ final class APIUsageCollectorTests: XCTestCase {
             sleep: { try await sleep.sleep($0) }
         )
 
-        await collector.start(configuration: enabledConfiguration())
+        _ = await collector.start(configuration: enabledConfiguration())
         try await waitUntil { await sleep.recordedDelays().count == 1 }
         await sleep.resumeNext()
         try await waitUntil { await sleep.recordedDelays().count == 2 }
@@ -388,7 +388,7 @@ final class APIUsageCollectorTests: XCTestCase {
             ledgerStore: ledger,
             sleep: { try await sleep.sleep($0) }
         )
-        await collector.start(configuration: enabledConfiguration())
+        _ = await collector.start(configuration: enabledConfiguration())
         try await waitUntil { await sleep.recordedDelays().count == 1 }
 
         await collector.stop(
@@ -416,7 +416,7 @@ final class APIUsageCollectorTests: XCTestCase {
             sleep: { try await sleep.sleep($0) }
         )
 
-        await collector.start(configuration: enabledConfiguration())
+        _ = await collector.start(configuration: enabledConfiguration())
         try await waitUntil { await sleep.recordedDelays().count == 1 }
         await sleep.resumeNext()
         try await waitUntil { await queue.isPollingPopSuspended() }
@@ -435,6 +435,31 @@ final class APIUsageCollectorTests: XCTestCase {
         XCTAssertTrue(stoppedWithoutManualResume)
         let queueCalls = await queue.callCount()
         XCTAssertEqual(queueCalls, 2)
+    }
+
+    func testStopCancelsActiveLifecyclePopBeforeFinalFlush() async throws {
+        let queue = CancellableLifecycleQueueClient()
+        let ledger = RecordingLedgerStore()
+        let collector = APIUsageCollector(queueClient: queue, ledgerStore: ledger)
+
+        async let started: APIUsageCollectionReport = collector.start(
+            configuration: enabledConfiguration()
+        )
+        try await waitUntil { await queue.isPopSuspended() }
+
+        let stopTask = Task {
+            await collector.stop(reason: .applicationTermination, at: Date())
+        }
+        let stoppedWithoutManualResume = await eventually {
+            await ledger.flushCount() == 2
+        }
+        if !stoppedWithoutManualResume {
+            await queue.forceCancellation()
+        }
+        await stopTask.value
+        _ = await started
+
+        XCTAssertTrue(stoppedWithoutManualResume)
     }
 
     func testStartFlushInitializationGateBlocksReloadAndUpdateThenDrainsLatestConfigurationOnce() async throws {
@@ -464,10 +489,10 @@ final class APIUsageCollectorTests: XCTestCase {
             reportingTimeZoneID: "UTC"
         )
 
-        let startTask = Task { await collector.start(configuration: firstConfiguration) }
+        let startTask = Task { _ = await collector.start(configuration: firstConfiguration) }
         try await waitUntil { await ledger.isFlushSuspended() }
         let reloadTask = Task { await collector.reload(configuration: latestConfiguration) }
-        let updateTask = Task { await collector.update(configuration: latestConfiguration) }
+        let updateTask = Task { _ = await collector.update(configuration: latestConfiguration) }
         for _ in 0..<20 { await Task.yield() }
 
         let callsBeforeInitialization = await queue.callCount()
@@ -507,10 +532,10 @@ final class APIUsageCollectorTests: XCTestCase {
             reportingTimeZoneID: "UTC"
         )
 
-        let startTask = Task { await collector.start(configuration: firstConfiguration) }
+        let startTask = Task { _ = await collector.start(configuration: firstConfiguration) }
         try await waitUntil { await ledger.isFlushSuspended() }
         let reloadTask = Task { await collector.reload(configuration: latestConfiguration) }
-        let updateTask = Task { await collector.update(configuration: latestConfiguration) }
+        let updateTask = Task { _ = await collector.update(configuration: latestConfiguration) }
         for _ in 0..<20 { await Task.yield() }
 
         let callsBeforeFailure = await queue.callCount()
@@ -546,10 +571,10 @@ final class APIUsageCollectorTests: XCTestCase {
             reportingTimeZoneID: "UTC"
         )
 
-        let startTask = Task { await collector.start(configuration: enabledConfiguration()) }
+        let startTask = Task { _ = await collector.start(configuration: enabledConfiguration()) }
         try await waitUntil { await ledger.isFlushSuspended() }
         let updateTask = Task {
-            await collector.update(configuration: disabledConfiguration)
+            _ = await collector.update(configuration: disabledConfiguration)
             await completed.markCompleted()
         }
         for _ in 0..<20 { await Task.yield() }
@@ -583,7 +608,7 @@ final class APIUsageCollectorTests: XCTestCase {
         }
         try await waitUntil { await ledger.isPrepareSuspended() }
         let startTask = Task {
-            await collector.start(configuration: enabledConfiguration())
+            _ = await collector.start(configuration: enabledConfiguration())
         }
         for _ in 0..<20 { await Task.yield() }
         let stopTask = Task {
@@ -613,7 +638,7 @@ final class APIUsageCollectorTests: XCTestCase {
             sleep: { try await sleep.sleep($0) }
         )
 
-        async let started: Void = collector.start(configuration: enabledConfiguration())
+        async let started: APIUsageCollectionReport = collector.start(configuration: enabledConfiguration())
         try await waitUntil { await queue.isFirstCallSuspended() }
         let stopTask = Task {
             await collector.stop(reason: .applicationTermination, at: Date())
@@ -626,15 +651,14 @@ final class APIUsageCollectorTests: XCTestCase {
         XCTAssertFalse(returnedBeforePopCompleted)
 
         await queue.resumeFirstCall()
-        await started
+        _ = await started
         await stopTask.value
         for _ in 0..<20 { await Task.yield() }
 
         let events = await ledger.allEvents()
-        let successfulDrainIndex = try XCTUnwrap(events.lastIndex(of: "successfulDrain"))
-        let finalFlushIndex = try XCTUnwrap(events.lastIndex(of: "flush"))
         let delays = await sleep.recordedDelays()
-        XCTAssertGreaterThan(finalFlushIndex, successfulDrainIndex)
+        XCTAssertNil(events.lastIndex(of: "successfulDrain"))
+        XCTAssertEqual(events.last, "flush")
         XCTAssertEqual(delays, [])
     }
 
@@ -662,7 +686,7 @@ final class APIUsageCollectorTests: XCTestCase {
             now: { now }
         )
 
-        await collector.update(configuration: .init(
+        _ = await collector.update(configuration: .init(
             usageEnabled: false,
             proxyReady: true,
             port: 18_317,
@@ -695,7 +719,7 @@ final class APIUsageCollectorTests: XCTestCase {
             reportingTimeZoneID: "UTC"
         )
 
-        await collector.start(configuration: configuration)
+        _ = await collector.start(configuration: configuration)
         for _ in 0..<20 { await Task.yield() }
 
         let queueCalls = await queue.callCount()
@@ -728,8 +752,8 @@ final class APIUsageCollectorTests: XCTestCase {
         let callsBeforeReady = await queue.callCount()
         XCTAssertEqual(callsBeforeReady, 0)
 
-        await collector.update(configuration: notReady)
-        await collector.update(configuration: enabledConfiguration())
+        _ = await collector.update(configuration: notReady)
+        _ = await collector.update(configuration: enabledConfiguration())
 
         let callsAfterReady = await queue.callCount()
         XCTAssertEqual(callsAfterReady, 1)
@@ -751,11 +775,11 @@ final class APIUsageCollectorTests: XCTestCase {
 
         async let first = collector.reload(configuration: firstConfiguration)
         try await waitUntil { await queue.isFirstCallSuspended() }
-        async let updated: Void = collector.update(configuration: secondConfiguration)
+        async let updated: APIUsageCollectionReport = collector.update(configuration: secondConfiguration)
         for _ in 0..<20 { await Task.yield() }
         await queue.resumeFirstCall()
         _ = await first
-        await updated
+        _ = await updated
 
         let ports = await queue.requestedPorts()
         XCTAssertEqual(ports, [18_317, 19_001])
@@ -778,10 +802,10 @@ final class APIUsageCollectorTests: XCTestCase {
             reportingTimeZoneID: "UTC"
         )
 
-        async let started: Void = collector.start(configuration: enabledConfiguration())
+        async let started: APIUsageCollectionReport = collector.start(configuration: enabledConfiguration())
         try await waitUntil { await queue.isFirstCallSuspended() }
         let updateTask = Task {
-            await collector.update(configuration: disabledConfiguration)
+            _ = await collector.update(configuration: disabledConfiguration)
             await updated.markCompleted()
         }
         let returnedBeforePopCompleted = await eventually {
@@ -790,7 +814,7 @@ final class APIUsageCollectorTests: XCTestCase {
         XCTAssertFalse(returnedBeforePopCompleted)
 
         await queue.resumeFirstCall()
-        await started
+        _ = await started
         await updateTask.value
 
         let stream = await collector.reports()
@@ -798,9 +822,8 @@ final class APIUsageCollectorTests: XCTestCase {
         let latest = await iterator.next()
         XCTAssertEqual(latest?.statesByProfileID["claude-api"], .disabled)
         let events = await ledger.allEvents()
-        let successfulDrainIndex = try XCTUnwrap(events.lastIndex(of: "successfulDrain"))
-        let finalFlushIndex = try XCTUnwrap(events.lastIndex(of: "flush"))
-        XCTAssertGreaterThan(finalFlushIndex, successfulDrainIndex)
+        XCTAssertNil(events.lastIndex(of: "successfulDrain"))
+        XCTAssertEqual(events.last, "flush")
     }
 
     func testStopInvalidatesConfigurationChangeWaitingBehindLifecycleDrain() async throws {
@@ -815,10 +838,10 @@ final class APIUsageCollectorTests: XCTestCase {
             reportingTimeZoneID: "UTC"
         )
 
-        async let started: Void = collector.start(configuration: enabledConfiguration())
+        async let started: APIUsageCollectionReport = collector.start(configuration: enabledConfiguration())
         try await waitUntil { await queue.isFirstCallSuspended() }
         let updateTask = Task {
-            await collector.update(configuration: secondConfiguration)
+            _ = await collector.update(configuration: secondConfiguration)
         }
         for _ in 0..<20 { await Task.yield() }
         let stopTask = Task {
@@ -827,16 +850,15 @@ final class APIUsageCollectorTests: XCTestCase {
         for _ in 0..<20 { await Task.yield() }
 
         await queue.resumeFirstCall()
-        await started
+        _ = await started
         await updateTask.value
         await stopTask.value
 
         let ports = await queue.requestedPorts()
         XCTAssertEqual(ports, [18_317])
         let events = await ledger.allEvents()
-        let successfulDrainIndex = try XCTUnwrap(events.lastIndex(of: "successfulDrain"))
-        let finalFlushIndex = try XCTUnwrap(events.lastIndex(of: "flush"))
-        XCTAssertGreaterThan(finalFlushIndex, successfulDrainIndex)
+        XCTAssertNil(events.lastIndex(of: "successfulDrain"))
+        XCTAssertEqual(events.last, "flush")
     }
 
     func testConfigurationChangeDuringStartCreatesOnlyNewPollingDeadline() async throws {
@@ -857,13 +879,13 @@ final class APIUsageCollectorTests: XCTestCase {
             reportingTimeZoneID: "UTC"
         )
 
-        async let started: Void = collector.start(configuration: firstConfiguration)
+        async let started: APIUsageCollectionReport = collector.start(configuration: firstConfiguration)
         try await waitUntil { await queue.isFirstCallSuspended() }
-        async let updated: Void = collector.update(configuration: secondConfiguration)
+        async let updated: APIUsageCollectionReport = collector.update(configuration: secondConfiguration)
         for _ in 0..<20 { await Task.yield() }
         await queue.resumeFirstCall()
-        await started
-        await updated
+        _ = await started
+        _ = await updated
         try await waitUntil { await sleep.recordedDelays().count >= 1 }
 
         let delays = await sleep.recordedDelays()
@@ -881,7 +903,7 @@ final class APIUsageCollectorTests: XCTestCase {
             ledgerStore: ledger
         )
 
-        await collector.start(configuration: enabledConfiguration())
+        _ = await collector.start(configuration: enabledConfiguration())
         let stream = await collector.reports()
         var iterator = stream.makeAsyncIterator()
         let report = await iterator.next()
@@ -905,12 +927,12 @@ final class APIUsageCollectorTests: XCTestCase {
         )
         let configuration = enabledConfiguration()
 
-        async let started: Void = collector.start(configuration: configuration)
+        async let started: APIUsageCollectionReport = collector.start(configuration: configuration)
         try await waitUntil { await ledger.isReadSuspended() }
         async let reloaded = collector.reload(configuration: configuration)
         for _ in 0..<20 { await Task.yield() }
         await ledger.resumeRead()
-        await started
+        _ = await started
         _ = await reloaded
 
         let flushCount = await ledger.flushCount()
@@ -1010,6 +1032,25 @@ private actor FirstCallSuspendingQueueClient: APIUsageQueueFetching {
     func resumeFirstCall() {
         firstContinuation?.resume()
         firstContinuation = nil
+    }
+}
+
+private actor CancellableLifecycleQueueClient: APIUsageQueueFetching {
+    private var continuation: CheckedContinuation<[APIUsageQueueRecord], Error>?
+
+    func popUsage(port: Int, count: Int) async throws -> [APIUsageQueueRecord] {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation = $0 }
+        } onCancel: {
+            Task { await self.forceCancellation() }
+        }
+    }
+
+    func isPopSuspended() -> Bool { continuation != nil }
+
+    func forceCancellation() {
+        continuation?.resume(throwing: CancellationError())
+        continuation = nil
     }
 }
 

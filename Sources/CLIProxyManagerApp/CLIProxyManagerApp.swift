@@ -22,13 +22,15 @@ struct CLIProxyManagerApp: App {
                 placementPersistence: .userDefaults()
             )
         )
-        Task {
-            await viewModel.startApplication()
+        viewModel.beginApplicationLaunch {
             cliProxyAPIUpdateService.reloadStoredStatus()
         }
         let quitCoordinator = QuitCoordinator(
             shouldStopServerBeforeQuit: {
                 viewModel.serverControlState.shouldStopServerBeforeQuit
+            },
+            beginTermination: {
+                viewModel.beginTermination()
             },
             beforeTerminate: {
                 await viewModel.prepareForTermination()

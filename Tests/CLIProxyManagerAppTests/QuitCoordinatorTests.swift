@@ -109,6 +109,44 @@ final class QuitCoordinatorTests: XCTestCase {
         XCTAssertEqual(terminator.terminateCount, 0)
     }
 
+    func testApplicationTerminationTimesOutAndCancelsQuitWhenPreparationIgnoresCancellation() async {
+        let preparation = CancellationIgnoringTerminationPreparation()
+        let timeout = SuspendedTerminationTimeout()
+        let coordinator = QuitCoordinator(
+            shouldStopServerBeforeQuit: { false },
+            beforeTerminate: {
+                await preparation.run()
+            },
+            terminationPreparationTimeoutNanoseconds: 20_000_000_000,
+            terminationSleep: { delay in
+                await timeout.sleep(delay)
+            }
+        )
+        let delegate = ApplicationTerminationDelegate()
+        delegate.quitCoordinator = coordinator
+        var replies: [Bool] = []
+        delegate.replyToApplicationShouldTerminate = { _, shouldTerminate in
+            replies.append(shouldTerminate)
+        }
+
+        let initialReply = delegate.applicationShouldTerminate(NSApplication.shared)
+        await preparation.waitUntilStarted()
+        await timeout.waitUntilStarted()
+        timeout.resume()
+        for _ in 0..<100 where replies.isEmpty { await Task.yield() }
+
+        XCTAssertEqual(initialReply, .terminateLater)
+        XCTAssertEqual(replies, [false])
+        XCTAssertEqual(
+            coordinator.quitErrorMessage,
+            "Usage data could not be safely flushed before the timeout. Quit was cancelled."
+        )
+
+        preparation.resume()
+        for _ in 0..<100 { await Task.yield() }
+        XCTAssertEqual(replies, [false])
+    }
+
     func testRequestQuitAsksForConfirmationWhenServerIsStarting() {
         let presenter = StubQuitConfirmationPresenter(shouldConfirm: false)
         let coordinator = QuitCoordinator(
@@ -241,6 +279,56 @@ private final class SuspendedTerminationPreparation {
             await Task.yield()
         }
         XCTFail("Expected termination preparation to start.")
+    }
+
+    func resume() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+@MainActor
+private final class CancellationIgnoringTerminationPreparation {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private(set) var callCount = 0
+
+    func run() async {
+        callCount += 1
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func waitUntilStarted() async {
+        for _ in 0..<100 {
+            if continuation != nil { return }
+            await Task.yield()
+        }
+        XCTFail("Expected termination preparation to start.")
+    }
+
+    func resume() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+@MainActor
+private final class SuspendedTerminationTimeout {
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func sleep(_ delay: UInt64) async {
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func waitUntilStarted() async {
+        for _ in 0..<100 {
+            if continuation != nil { return }
+            await Task.yield()
+        }
+        XCTFail("Expected termination timeout to start.")
     }
 
     func resume() {

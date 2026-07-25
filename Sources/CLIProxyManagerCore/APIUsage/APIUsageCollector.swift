@@ -22,11 +22,25 @@ public struct APIUsageCollectorConfiguration: Equatable, Sendable {
     }
 }
 
+public struct APIUsageCollectorIdentity: Equatable, Hashable, Sendable {
+    public let generation: UInt64
+
+    public init(generation: UInt64) {
+        self.generation = generation
+    }
+}
+
 public struct APIUsageCollectionReport: Equatable, Sendable {
+    public let identity: APIUsageCollectorIdentity
     public let statesByProfileID: [String: APICostUsageState]
     public let collectedAt: Date
 
-    public init(statesByProfileID: [String: APICostUsageState], collectedAt: Date) {
+    public init(
+        identity: APIUsageCollectorIdentity = .init(generation: 0),
+        statesByProfileID: [String: APICostUsageState],
+        collectedAt: Date
+    ) {
+        self.identity = identity
         self.statesByProfileID = statesByProfileID
         self.collectedAt = collectedAt
     }
@@ -40,8 +54,8 @@ public enum APIUsageCollectorStopReason: Equatable, Sendable {
 public protocol APIUsageCollecting: Sendable {
     func reports() async -> AsyncStream<APIUsageCollectionReport>
     func restore(configuration: APIUsageCollectorConfiguration) async -> APIUsageCollectionReport
-    func start(configuration: APIUsageCollectorConfiguration) async
-    func update(configuration: APIUsageCollectorConfiguration) async
+    func start(configuration: APIUsageCollectorConfiguration) async -> APIUsageCollectionReport
+    func update(configuration: APIUsageCollectorConfiguration) async -> APIUsageCollectionReport
     func reload(configuration: APIUsageCollectorConfiguration) async -> APIUsageCollectionReport
     func stop(reason: APIUsageCollectorStopReason, at: Date) async
 }
@@ -106,6 +120,8 @@ public actor APIUsageCollector: APIUsageCollecting {
     private var reportContinuation: AsyncStream<APIUsageCollectionReport>.Continuation?
     private var reportContinuationID: UUID?
     private var latestReport: APIUsageCollectionReport?
+    private var reportGeneration: UInt64 = 0
+    private var currentIdentity: APIUsageCollectorIdentity?
 
     public init(
         queueClient: any APIUsageQueueFetching = CLIProxyAPIUsageQueueClient(),
@@ -153,25 +169,44 @@ public actor APIUsageCollector: APIUsageCollecting {
     public func restore(
         configuration: APIUsageCollectorConfiguration
     ) async -> APIUsageCollectionReport {
+        let identity = nextIdentity()
         self.configuration = configuration
-        let report = await restoredReport(configuration: configuration, at: now())
+        let report = await restoredReport(
+            configuration: configuration,
+            identity: identity,
+            at: now()
+        )
         publish(report, for: configuration)
         return report
     }
 
-    public func start(configuration: APIUsageCollectorConfiguration) async {
+    public func start(
+        configuration: APIUsageCollectorConfiguration
+    ) async -> APIUsageCollectionReport {
+        let identity = nextIdentity()
         let stopGeneration = lifecycleStopGeneration
         self.configuration = configuration
         await cancelPolling()
-        guard lifecycleStopGeneration == stopGeneration else { return }
+        guard lifecycleStopGeneration == stopGeneration else {
+            return await restoredReport(
+                configuration: configuration,
+                identity: identity,
+                at: now()
+            )
+        }
 
         guard configuration.usageEnabled else {
             await stop(
                 reason: .trackingDisabled(proxyCouldServeRequests: configuration.proxyReady),
                 at: now()
             )
-            publish(disabledReport(configuration: configuration, at: now()))
-            return
+            let report = disabledReport(
+                configuration: configuration,
+                identity: identity,
+                at: now()
+            )
+            publish(report, for: configuration)
+            return report
         }
 
         let startedAt = now()
@@ -183,39 +218,57 @@ public actor APIUsageCollector: APIUsageCollecting {
             )
             guard lifecycleStopGeneration == stopGeneration,
                   self.configuration?.usageEnabled == true else {
-                return
+                return await restoredReport(
+                    configuration: configuration,
+                    identity: identity,
+                    at: now()
+                )
             }
             try await ledgerStore.markResumed(at: startedAt)
             guard lifecycleStopGeneration == stopGeneration,
                   self.configuration == configuration else {
-                return
+                return await restoredReport(
+                    configuration: configuration,
+                    identity: identity,
+                    at: now()
+                )
             }
         } catch {
             let failedAt = now()
             let ledger = try? await ledgerStore.readCurrentPeriods(at: failedAt)
             let report = report(
                 configuration: configuration,
+                identity: identity,
                 ledger: ledger,
                 ledgerError: error,
                 at: failedAt
             )
             publish(report, for: configuration)
-            return
+            return report
         }
 
         guard !configuration.enabledProviders.isEmpty else {
-            let report = await restoredReport(configuration: configuration, at: now())
+            let report = await restoredReport(
+                configuration: configuration,
+                identity: identity,
+                at: now()
+            )
             publish(report, for: configuration)
-            return
+            return report
         }
         guard configuration.proxyReady else {
-            let report = await restoredReport(configuration: configuration, at: now())
+            let report = await restoredReport(
+                configuration: configuration,
+                identity: identity,
+                at: now()
+            )
             publish(report, for: configuration)
-            return
+            return report
         }
 
         let result = await sharedDrain(
             configuration: configuration,
+            identity: identity,
             flushAfterDrain: false,
             source: .lifecycle,
             stopGeneration: stopGeneration
@@ -223,44 +276,69 @@ public actor APIUsageCollector: APIUsageCollecting {
         startPolling(
             after: result,
             configuration: configuration,
+            identity: identity,
             stopGeneration: stopGeneration
         )
+        return result.report
     }
 
-    public func update(configuration: APIUsageCollectorConfiguration) async {
+    public func update(
+        configuration: APIUsageCollectorConfiguration
+    ) async -> APIUsageCollectionReport {
         let stopGeneration = lifecycleStopGeneration
         let previous = self.configuration
         self.configuration = configuration
         await cancelPolling()
-        guard lifecycleStopGeneration == stopGeneration else { return }
+        guard lifecycleStopGeneration == stopGeneration else {
+            let identity = nextIdentity()
+            return await restoredReport(
+                configuration: configuration,
+                identity: identity,
+                at: now()
+            )
+        }
+
+        if previous == nil || previous?.usageEnabled == false {
+            return await start(configuration: configuration)
+        }
+        let identity = nextIdentity()
 
         guard configuration.usageEnabled else {
             await stop(
                 reason: .trackingDisabled(proxyCouldServeRequests: configuration.proxyReady),
                 at: now()
             )
-            publish(disabledReport(configuration: configuration, at: now()))
-            return
-        }
-
-        if previous == nil || previous?.usageEnabled == false {
-            await start(configuration: configuration)
-            return
+            let report = disabledReport(
+                configuration: configuration,
+                identity: identity,
+                at: now()
+            )
+            publish(report, for: configuration)
+            return report
         }
 
         guard !configuration.enabledProviders.isEmpty else {
-            let report = await restoredReport(configuration: configuration, at: now())
+            let report = await restoredReport(
+                configuration: configuration,
+                identity: identity,
+                at: now()
+            )
             publish(report, for: configuration)
-            return
+            return report
         }
         guard configuration.proxyReady else {
-            let report = await restoredReport(configuration: configuration, at: now())
+            let report = await restoredReport(
+                configuration: configuration,
+                identity: identity,
+                at: now()
+            )
             publish(report, for: configuration)
-            return
+            return report
         }
 
         let result = await sharedDrain(
             configuration: configuration,
+            identity: identity,
             flushAfterDrain: false,
             source: .lifecycle,
             stopGeneration: stopGeneration
@@ -268,40 +346,59 @@ public actor APIUsageCollector: APIUsageCollecting {
         startPolling(
             after: result,
             configuration: configuration,
+            identity: identity,
             stopGeneration: stopGeneration
         )
+        return result.report
     }
 
     public func reload(
         configuration: APIUsageCollectorConfiguration
     ) async -> APIUsageCollectionReport {
+        let identity = nextIdentity()
         let stopGeneration = lifecycleStopGeneration
         self.configuration = configuration
         let shouldRestartPolling = pollingTask != nil
         await cancelPolling()
         guard lifecycleStopGeneration == stopGeneration else {
-            if let latestReport { return latestReport }
-            return await restoredReport(configuration: configuration, at: now())
+            return await restoredReport(
+                configuration: configuration,
+                identity: identity,
+                at: now()
+            )
         }
 
         guard configuration.usageEnabled else {
-            let report = disabledReport(configuration: configuration, at: now())
+            let report = disabledReport(
+                configuration: configuration,
+                identity: identity,
+                at: now()
+            )
             publish(report, for: configuration)
             return report
         }
         guard !configuration.enabledProviders.isEmpty else {
-            let report = await restoredReport(configuration: configuration, at: now())
+            let report = await restoredReport(
+                configuration: configuration,
+                identity: identity,
+                at: now()
+            )
             publish(report, for: configuration)
             return report
         }
         guard configuration.proxyReady else {
-            let report = await restoredReport(configuration: configuration, at: now())
+            let report = await restoredReport(
+                configuration: configuration,
+                identity: identity,
+                at: now()
+            )
             publish(report, for: configuration)
             return report
         }
 
         let result = await sharedDrain(
             configuration: configuration,
+            identity: identity,
             flushAfterDrain: true,
             source: .lifecycle,
             stopGeneration: stopGeneration
@@ -312,6 +409,7 @@ public actor APIUsageCollector: APIUsageCollecting {
             startPolling(
                 after: result,
                 configuration: configuration,
+                identity: identity,
                 stopGeneration: stopGeneration
             )
         }
@@ -320,6 +418,10 @@ public actor APIUsageCollector: APIUsageCollecting {
 
     public func stop(reason: APIUsageCollectorStopReason, at: Date) async {
         lifecycleStopGeneration &+= 1
+        initializationTask?.cancel()
+        if activeDrainSource == .lifecycle {
+            reloadTask?.cancel()
+        }
         await cancelPolling()
         await waitForActiveInitialization()
         await waitForActiveLifecycleDrain()
@@ -341,6 +443,7 @@ public actor APIUsageCollector: APIUsageCollecting {
             let ledger = try? await ledgerStore.readCurrentPeriods(at: at)
             let report = report(
                 configuration: configuration,
+                identity: currentIdentity ?? .init(generation: 0),
                 ledger: ledger,
                 ledgerError: error,
                 at: at
@@ -351,6 +454,7 @@ public actor APIUsageCollector: APIUsageCollecting {
 
     private func sharedDrain(
         configuration: APIUsageCollectorConfiguration,
+        identity: APIUsageCollectorIdentity,
         flushAfterDrain: Bool,
         source: DrainSource,
         stopGeneration: UInt64
@@ -372,6 +476,7 @@ public actor APIUsageCollector: APIUsageCollecting {
             }
             return await sharedDrain(
                 configuration: configuration,
+                identity: identity,
                 flushAfterDrain: flushAfterDrain,
                 source: source,
                 stopGeneration: stopGeneration
@@ -388,6 +493,7 @@ public actor APIUsageCollector: APIUsageCollecting {
         let task = Task {
             await self.performDrain(
                 configuration: configuration,
+                identity: identity,
                 stopGeneration: stopGeneration
             )
         }
@@ -501,6 +607,7 @@ public actor APIUsageCollector: APIUsageCollecting {
 
     private func performDrain(
         configuration: APIUsageCollectorConfiguration,
+        identity: APIUsageCollectorIdentity,
         stopGeneration: UInt64
     ) async -> DrainResult {
         let drainStartedAt = now()
@@ -514,6 +621,7 @@ public actor APIUsageCollector: APIUsageCollecting {
         } catch let error as APIUsageLedgerStoreError {
             let report = report(
                 configuration: configuration,
+                identity: identity,
                 ledger: nil,
                 ledgerError: error,
                 at: drainStartedAt
@@ -523,6 +631,7 @@ public actor APIUsageCollector: APIUsageCollecting {
         } catch {
             let report = report(
                 configuration: configuration,
+                identity: identity,
                 ledger: nil,
                 ledgerError: error,
                 at: drainStartedAt
@@ -538,6 +647,7 @@ public actor APIUsageCollector: APIUsageCollecting {
               !Task.isCancelled else {
             let report = reportFromBaseline(
                 configuration: configuration,
+                identity: identity,
                 ledger: initializedBaseline,
                 at: now()
             )
@@ -555,6 +665,7 @@ public actor APIUsageCollector: APIUsageCollecting {
             } catch {
                 let report = report(
                     configuration: configuration,
+                    identity: identity,
                     ledger: baseline,
                     ledgerError: error,
                     at: drainStartedAt
@@ -579,6 +690,7 @@ public actor APIUsageCollector: APIUsageCollecting {
                 } catch is CancellationError {
                     let report = reportFromBaseline(
                         configuration: configuration,
+                        identity: identity,
                         ledger: baseline,
                         at: now()
                     )
@@ -587,6 +699,7 @@ public actor APIUsageCollector: APIUsageCollecting {
                 } catch let error as APIUsageQueueClientError {
                     let report = report(
                         configuration: configuration,
+                        identity: identity,
                         ledger: baseline,
                         collectionIssue: issue(for: error),
                         at: now()
@@ -599,6 +712,7 @@ public actor APIUsageCollector: APIUsageCollecting {
                 } catch {
                     let report = report(
                         configuration: configuration,
+                        identity: identity,
                         ledger: baseline,
                         collectionIssue: .transientCollectionFailure,
                         at: now()
@@ -621,6 +735,7 @@ public actor APIUsageCollector: APIUsageCollecting {
                         try await flushActiveDrainIfRequested()
                         let report = report(
                             configuration: configuration,
+                            identity: identity,
                             ledger: ledger,
                             ledgerError: mergeError,
                             at: failedAt
@@ -630,6 +745,7 @@ public actor APIUsageCollector: APIUsageCollecting {
                     } catch {
                         let report = report(
                             configuration: configuration,
+                            identity: identity,
                             ledger: baseline,
                             ledgerError: mergeError,
                             at: failedAt
@@ -648,6 +764,7 @@ public actor APIUsageCollector: APIUsageCollecting {
                 if Task.isCancelled {
                     let report = reportFromBaseline(
                         configuration: configuration,
+                        identity: identity,
                         ledger: baseline,
                         at: now()
                     )
@@ -675,6 +792,7 @@ public actor APIUsageCollector: APIUsageCollecting {
             try await flushActiveDrainIfRequested()
             let report = reportFromBaseline(
                 configuration: configuration,
+                identity: identity,
                 ledger: ledger,
                 at: collectedAt
             )
@@ -683,6 +801,7 @@ public actor APIUsageCollector: APIUsageCollecting {
         } catch {
             let report = report(
                 configuration: configuration,
+                identity: identity,
                 ledger: baseline,
                 ledgerError: error,
                 at: collectedAt
@@ -701,6 +820,7 @@ public actor APIUsageCollector: APIUsageCollecting {
     private func startPolling(
         after result: DrainResult,
         configuration: APIUsageCollectorConfiguration,
+        identity: APIUsageCollectorIdentity,
         stopGeneration: UInt64
     ) {
         guard self.configuration == configuration,
@@ -719,6 +839,7 @@ public actor APIUsageCollector: APIUsageCollecting {
             guard let self else { return }
             await self.poll(
                 configuration: configuration,
+                identity: identity,
                 initialDisposition: result.retryDisposition,
                 generation: generation,
                 stopGeneration: stopGeneration
@@ -729,6 +850,7 @@ public actor APIUsageCollector: APIUsageCollecting {
 
     private func poll(
         configuration: APIUsageCollectorConfiguration,
+        identity: APIUsageCollectorIdentity,
         initialDisposition: RetryDisposition,
         generation: UInt64,
         stopGeneration: UInt64
@@ -764,6 +886,7 @@ public actor APIUsageCollector: APIUsageCollecting {
 
             let result = await sharedDrain(
                 configuration: configuration,
+                identity: identity,
                 flushAfterDrain: false,
                 source: .polling,
                 stopGeneration: stopGeneration
@@ -837,16 +960,18 @@ public actor APIUsageCollector: APIUsageCollecting {
 
     private func restoredReport(
         configuration: APIUsageCollectorConfiguration,
+        identity: APIUsageCollectorIdentity,
         at: Date
     ) async -> APIUsageCollectionReport {
         guard configuration.usageEnabled else {
-            return disabledReport(configuration: configuration, at: at)
+            return disabledReport(configuration: configuration, identity: identity, at: at)
         }
 
         do {
             let ledger = try await ledgerStore.readCurrentPeriods(at: at)
             var report = reportFromBaseline(
                 configuration: configuration,
+                identity: identity,
                 ledger: ledger,
                 at: at
             )
@@ -857,6 +982,7 @@ public actor APIUsageCollector: APIUsageCollecting {
         } catch {
             return report(
                 configuration: configuration,
+                identity: identity,
                 ledger: nil,
                 ledgerError: error,
                 at: at
@@ -866,9 +992,11 @@ public actor APIUsageCollector: APIUsageCollecting {
 
     private func disabledReport(
         configuration: APIUsageCollectorConfiguration,
+        identity: APIUsageCollectorIdentity,
         at: Date
     ) -> APIUsageCollectionReport {
         APIUsageCollectionReport(
+            identity: identity,
             statesByProfileID: Dictionary(uniqueKeysWithValues: configuration.enabledProviders.map {
                 ($0.profileID, APICostUsageState.disabled)
             }),
@@ -878,11 +1006,13 @@ public actor APIUsageCollector: APIUsageCollecting {
 
     private func reportFromBaseline(
         configuration: APIUsageCollectorConfiguration,
+        identity: APIUsageCollectorIdentity,
         ledger: APIUsageLedgerReadModel?,
         at: Date
     ) -> APIUsageCollectionReport {
         guard let ledger else {
             return APIUsageCollectionReport(
+                identity: identity,
                 statesByProfileID: states(
                     configuration: configuration,
                     makeState: { .loading }
@@ -892,6 +1022,7 @@ public actor APIUsageCollector: APIUsageCollecting {
         }
 
         return APIUsageCollectionReport(
+            identity: identity,
             statesByProfileID: estimator.states(
                 for: profiles(configuration),
                 ledger: ledger,
@@ -903,12 +1034,14 @@ public actor APIUsageCollector: APIUsageCollecting {
 
     private func report(
         configuration: APIUsageCollectorConfiguration,
+        identity: APIUsageCollectorIdentity,
         ledger: APIUsageLedgerReadModel?,
         collectionIssue: APICostIssue,
         at: Date
     ) -> APIUsageCollectionReport {
         let base = reportFromBaseline(
             configuration: configuration,
+            identity: identity,
             ledger: ledger,
             at: at
         )
@@ -917,6 +1050,7 @@ public actor APIUsageCollector: APIUsageCollecting {
 
     private func report(
         configuration: APIUsageCollectorConfiguration,
+        identity: APIUsageCollectorIdentity,
         ledger: APIUsageLedgerReadModel?,
         ledgerError: Error,
         at: Date
@@ -924,6 +1058,7 @@ public actor APIUsageCollector: APIUsageCollecting {
         if let ledgerError = ledgerError as? APIUsageLedgerStoreError,
            ledgerError == .notInitialized {
             return APIUsageCollectionReport(
+                identity: identity,
                 statesByProfileID: states(
                     configuration: configuration,
                     makeState: { .loading }
@@ -941,6 +1076,7 @@ public actor APIUsageCollector: APIUsageCollecting {
         }
         return report(
             configuration: configuration,
+            identity: identity,
             ledger: ledger,
             collectionIssue: issue,
             at: at
@@ -952,6 +1088,7 @@ public actor APIUsageCollector: APIUsageCollecting {
         to report: APIUsageCollectionReport
     ) -> APIUsageCollectionReport {
         APIUsageCollectionReport(
+            identity: report.identity,
             statesByProfileID: report.statesByProfileID.mapValues {
                 adding(issue: issue, to: $0)
             },
@@ -1054,6 +1191,13 @@ public actor APIUsageCollector: APIUsageCollecting {
     private func maxDate(_ lhs: Date?, _ rhs: Date) -> Date {
         guard let lhs else { return rhs }
         return max(lhs, rhs)
+    }
+
+    private func nextIdentity() -> APIUsageCollectorIdentity {
+        reportGeneration &+= 1
+        let identity = APIUsageCollectorIdentity(generation: reportGeneration)
+        currentIdentity = identity
+        return identity
     }
 
     private func publish(

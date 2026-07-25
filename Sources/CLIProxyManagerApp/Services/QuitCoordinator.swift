@@ -43,7 +43,10 @@ final class QuitCoordinator: ObservableObject {
     private let appTerminator: any AppTerminating
     private let quitConfirmationPresenter: any QuitConfirmationPresenting
     private let shouldStopServerBeforeQuit: @MainActor @Sendable () -> Bool
+    private let beginTermination: @MainActor @Sendable () -> Void
     private let beforeTerminate: @MainActor @Sendable () async -> Void
+    private let terminationPreparationTimeoutNanoseconds: UInt64
+    private let terminationSleep: @MainActor @Sendable (UInt64) async -> Void
     private var terminationState = TerminationState.idle
 
     init(
@@ -51,13 +54,21 @@ final class QuitCoordinator: ObservableObject {
         appTerminator: any AppTerminating = NSApplicationTerminator(),
         quitConfirmationPresenter: any QuitConfirmationPresenting = NSAlertQuitConfirmationPresenter(),
         shouldStopServerBeforeQuit: @escaping @MainActor @Sendable () -> Bool = { true },
-        beforeTerminate: @escaping @MainActor @Sendable () async -> Void = {}
+        beginTermination: @escaping @MainActor @Sendable () -> Void = {},
+        beforeTerminate: @escaping @MainActor @Sendable () async -> Void = {},
+        terminationPreparationTimeoutNanoseconds: UInt64 = 20_000_000_000,
+        terminationSleep: @escaping @MainActor @Sendable (UInt64) async -> Void = { delay in
+            try? await Task.sleep(nanoseconds: delay)
+        }
     ) {
         self.proxyService = proxyService
         self.appTerminator = appTerminator
         self.quitConfirmationPresenter = quitConfirmationPresenter
         self.shouldStopServerBeforeQuit = shouldStopServerBeforeQuit
+        self.beginTermination = beginTermination
         self.beforeTerminate = beforeTerminate
+        self.terminationPreparationTimeoutNanoseconds = terminationPreparationTimeoutNanoseconds
+        self.terminationSleep = terminationSleep
     }
 
     func requestQuit() {
@@ -67,6 +78,7 @@ final class QuitCoordinator: ObservableObject {
             return
         }
 
+        beginTermination()
         terminationState = .preparingInternalRequest
         Task {
             await completeTermination(
@@ -94,6 +106,7 @@ final class QuitCoordinator: ObservableObject {
             return .terminateCancel
         }
 
+        beginTermination()
         terminationState = .preparingApplicationRequest
         Task {
             await completeTermination(
@@ -111,6 +124,7 @@ final class QuitCoordinator: ObservableObject {
 
     func confirmQuit() async {
         if case .idle = terminationState {
+            beginTermination()
             terminationState = .preparingInternalRequest
         }
         await completeTermination(
@@ -134,7 +148,14 @@ final class QuitCoordinator: ObservableObject {
             if shouldStopServer {
                 try await proxyService.stop()
             }
-            await beforeTerminate()
+            guard await prepareForTerminationWithinTimeout() else {
+                terminationState = .idle
+                quitErrorMessage = "Usage data could not be safely flushed before the timeout. Quit was cancelled."
+                if case .replyToApplication(let reply) = completion {
+                    reply(false)
+                }
+                return
+            }
             switch completion {
             case .terminateInternally:
                 terminationState = .authorizingInternalTermination
@@ -148,6 +169,48 @@ final class QuitCoordinator: ObservableObject {
             quitErrorMessage = "Failed to stop the CLIProxyAPI server. Quit was cancelled."
             if case .replyToApplication(let reply) = completion {
                 reply(false)
+            }
+        }
+    }
+
+    private func prepareForTerminationWithinTimeout() async -> Bool {
+        let race = TerminationPreparationRace()
+        let preparationTask = Task { [beforeTerminate] in
+            await beforeTerminate()
+            await race.resolve(true)
+        }
+        let timeoutTask = Task { [terminationSleep, terminationPreparationTimeoutNanoseconds] in
+            await terminationSleep(terminationPreparationTimeoutNanoseconds)
+            await race.resolve(false)
+        }
+        let succeeded = await race.value()
+        if succeeded {
+            timeoutTask.cancel()
+        } else {
+            preparationTask.cancel()
+        }
+        return succeeded
+    }
+}
+
+private actor TerminationPreparationRace {
+    private var result: Bool?
+    private var continuation: CheckedContinuation<Bool, Never>?
+
+    func resolve(_ value: Bool) {
+        guard result == nil else { return }
+        result = value
+        continuation?.resume(returning: value)
+        continuation = nil
+    }
+
+    func value() async -> Bool {
+        if let result { return result }
+        return await withCheckedContinuation { continuation in
+            if let result {
+                continuation.resume(returning: result)
+            } else {
+                self.continuation = continuation
             }
         }
     }
@@ -170,11 +233,6 @@ final class ApplicationTerminationDelegate: NSObject, NSApplicationDelegate {
 }
 
 extension ServerControlState {
-    var couldServeRequestsDuringTrackingPause: Bool {
-        if case .stopped = self { return false }
-        return true
-    }
-
     var shouldStopServerBeforeQuit: Bool {
         switch self {
         case .starting, .running, .stopping:

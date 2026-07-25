@@ -3830,6 +3830,93 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertTrue(viewModel.settingsMessage?.contains("Bundled CLIProxyAPI update failed") == true)
     }
 
+    func testTerminationCancelsOwnedLaunchDuringSuspendedHealthCheck() async {
+        let config = AppConfig.default
+        let healthClient = CancellableProxyHealthClientDouble(
+            resumedStatus: DiagnosticStatus(
+                severity: .warning,
+                title: "CLIProxyAPI Stopped",
+                message: ""
+            )
+        )
+        let proxyService = StubProxyServiceStarter()
+        let collector = CancellableLifecycleAPIUsageCollectorDouble(onStop: {})
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(),
+            proxyService: proxyService,
+            proxyHealthClient: healthClient,
+            apiUsageCollector: collector
+        )
+
+        let launch = viewModel.beginApplicationLaunch()
+        await healthClient.waitUntilSuspended()
+        await viewModel.prepareForTermination()
+        await launch.value
+
+        XCTAssertTrue(proxyService.ports.isEmpty)
+        XCTAssertTrue(proxyService.restartPorts.isEmpty)
+        let calls = await collector.calls()
+        XCTAssertEqual(calls.last, .stop(.applicationTermination))
+    }
+
+    func testTerminationCancelsOwnedLaunchDuringUsageRepairRestart() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let proxyService = StubProxyServiceStarter(suspendedRestartCount: 1)
+        let collector = CancellableLifecycleAPIUsageCollectorDouble(onStop: {})
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(),
+            proxyService: proxyService,
+            proxyHealthClient: ProxyHealthClient(
+                httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))
+            ),
+            apiUsageCollector: collector
+        )
+
+        let launch = viewModel.beginApplicationLaunch()
+        let didReachRestart = await proxyService.reachesRestartCount(1)
+        XCTAssertTrue(didReachRestart)
+        await viewModel.prepareForTermination()
+        await launch.value
+
+        XCTAssertEqual(proxyService.restartPorts.count, 1)
+        let calls = await collector.calls()
+        XCTAssertFalse(calls.contains(.start))
+        XCTAssertEqual(calls.last, .stop(.applicationTermination))
+    }
+
+    func testTerminationCancelsOwnedLaunchDuringAutostartWithoutAdditionalStart() async {
+        var config = AppConfig.default
+        config.autostartServer = true
+        let proxyService = StubProxyServiceStarter(startDelayNanoseconds: .max)
+        let collector = CancellableLifecycleAPIUsageCollectorDouble(onStop: {})
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(),
+            proxyService: proxyService,
+            proxyHealthClient: ProxyHealthClient(
+                httpClient: StubHTTPClient(result: .failure(URLError(.cannotConnectToHost)))
+            ),
+            apiUsageCollector: collector
+        )
+
+        let launch = viewModel.beginApplicationLaunch()
+        for _ in 0..<1_000 where proxyService.ports.isEmpty { await Task.yield() }
+        let startsAtTermination = proxyService.ports.count
+        await viewModel.prepareForTermination()
+        await launch.value
+
+        XCTAssertEqual(startsAtTermination, 1)
+        XCTAssertEqual(proxyService.ports.count, startsAtTermination)
+        let calls = await collector.calls()
+        XCTAssertEqual(calls.last, .stop(.applicationTermination))
+    }
+
     func testPrepareSubscriptionUsageRepairsEnabledConfigWithMissingKeyBeforeFirstRefresh() async throws {
         var config = AppConfig.default
         config.subscriptionUsage.showInMenuBar = true
@@ -5212,6 +5299,120 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         await collector.finishReports()
     }
 
+    func testStartAppliesReportPublishedBeforeLifecycleOperationReturns() async throws {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let restored = reportWithClaudeCost(
+            cost: "1.00",
+            updatedAt: Date(timeIntervalSince1970: 100),
+            identity: .init(generation: 1)
+        )
+        let started = reportWithClaudeCost(
+            cost: "2.00",
+            updatedAt: Date(timeIntervalSince1970: 200),
+            identity: .init(generation: 2)
+        )
+        let collector = IdentityAPIUsageCollectorDouble(
+            restoredReport: restored,
+            startReport: started,
+            updateReport: started,
+            publishesBeforeReturning: true
+        )
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            apiUsageCollector: collector,
+            secretStore: InMemorySecretStore(values: [.claudeAPIKey: "key"])
+        )
+
+        await viewModel.prepareUsage()
+
+        XCTAssertEqual(
+            viewModel.apiCostUsageStates[ProviderRowState.ID.claudeAPI.rawValue],
+            started.statesByProfileID[ProviderRowState.ID.claudeAPI.rawValue]
+        )
+    }
+
+    func testUpdateAppliesImmediateAuthoritativeReportWithoutWaitingForPolling() async throws {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let started = reportWithClaudeCost(
+            cost: "1.00",
+            updatedAt: Date(timeIntervalSince1970: 100),
+            identity: .init(generation: 1)
+        )
+        let updated = reportWithClaudeCost(
+            cost: "3.00",
+            updatedAt: Date(timeIntervalSince1970: 300),
+            identity: .init(generation: 2)
+        )
+        let collector = IdentityAPIUsageCollectorDouble(
+            restoredReport: started,
+            startReport: started,
+            updateReport: updated,
+            publishesBeforeReturning: true
+        )
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            apiUsageCollector: collector,
+            secretStore: InMemorySecretStore(values: [.claudeAPIKey: "key"])
+        )
+        await viewModel.prepareUsage()
+
+        await viewModel.prepareUsage()
+
+        XCTAssertEqual(
+            viewModel.apiCostUsageStates[ProviderRowState.ID.claudeAPI.rawValue],
+            updated.statesByProfileID[ProviderRowState.ID.claudeAPI.rawValue]
+        )
+    }
+
+    func testOldStreamIdentityCannotOverwriteAcceptedUpdateReport() async throws {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let oldReport = reportWithClaudeCost(
+            cost: "1.00",
+            updatedAt: Date(timeIntervalSince1970: 100),
+            identity: .init(generation: 1)
+        )
+        let updated = reportWithClaudeCost(
+            cost: "4.00",
+            updatedAt: Date(timeIntervalSince1970: 400),
+            identity: .init(generation: 2)
+        )
+        let collector = IdentityAPIUsageCollectorDouble(
+            restoredReport: oldReport,
+            startReport: oldReport,
+            updateReport: updated,
+            publishesBeforeReturning: true
+        )
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            apiUsageCollector: collector,
+            secretStore: InMemorySecretStore(values: [.claudeAPIKey: "key"])
+        )
+        await viewModel.prepareUsage()
+        await collector.waitForReportSubscriber()
+        await viewModel.prepareUsage()
+
+        await collector.emit(oldReport)
+        for _ in 0..<100 { await Task.yield() }
+
+        XCTAssertEqual(
+            viewModel.apiCostUsageStates[ProviderRowState.ID.claudeAPI.rawValue],
+            updated.statesByProfileID[ProviderRowState.ID.claudeAPI.rawValue]
+        )
+        await collector.finishReports()
+    }
+
     func testTerminationInvalidatesQueuedAPIUsageUpdateBehindSuspendedReload() async throws {
         var config = AppConfig.default
         config.subscriptionUsage.showInMenuBar = true
@@ -5243,16 +5444,76 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(stopReasons, [.applicationTermination])
     }
 
-    func testTrackingDisableTreatsOnlyConfirmedStoppedServerAsUnableToServe() async throws {
-        let cases: [(ServerControlState, Bool)] = [
-            (.stopped, false),
-            (.starting, true),
-            (.running, true),
-            (.stopping, true),
-            (.error("Health unavailable"), true)
+    func testTerminationCancelsActiveReloadAndStopsCollectorLast() async throws {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let stopExpectation = expectation(description: "collector stopped")
+        let collector = CancellableLifecycleAPIUsageCollectorDouble {
+            stopExpectation.fulfill()
+        }
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            apiUsageCollector: collector,
+            secretStore: InMemorySecretStore(values: [.claudeAPIKey: "key"])
+        )
+        await viewModel.prepareUsage()
+        viewModel.serverStatus = readyStatus()
+
+        let reload = Task { await viewModel.reloadUsage() }
+        await collector.waitForReloadToSuspend()
+        let termination = Task { await viewModel.prepareForTermination() }
+
+        await fulfillment(of: [stopExpectation], timeout: 1)
+        collector.releaseAll()
+        await reload.value
+        await termination.value
+
+        let calls = await collector.calls()
+        XCTAssertEqual(calls.last, .stop(.applicationTermination))
+    }
+
+    func testTerminationCancelsActiveUpdateAndStopsCollectorLast() async throws {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let stopExpectation = expectation(description: "collector stopped")
+        let collector = CancellableLifecycleAPIUsageCollectorDouble {
+            stopExpectation.fulfill()
+        }
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            apiUsageCollector: collector,
+            secretStore: InMemorySecretStore(values: [.claudeAPIKey: "key"])
+        )
+        await viewModel.prepareUsage()
+
+        try viewModel.savePort(19_001)
+        await collector.waitForUpdateToSuspend()
+        let termination = Task { await viewModel.prepareForTermination() }
+
+        await fulfillment(of: [stopExpectation], timeout: 1)
+        collector.releaseAll()
+        await termination.value
+
+        let calls = await collector.calls()
+        XCTAssertEqual(calls.last, .stop(.applicationTermination))
+    }
+
+    func testTrackingDisableDoesNotTreatDisplayControlStateAsRuntimeCertainty() async throws {
+        let cases: [ServerControlState] = [
+            .stopped,
+            .starting,
+            .running,
+            .stopping,
+            .error("Health unavailable")
         ]
 
-        for (state, expected) in cases {
+        for state in cases {
             var config = AppConfig.default
             config.subscriptionUsage.showInMenuBar = true
             let collector = APIUsageCollectorDouble()
@@ -5271,10 +5532,67 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             let reasons = await collector.stopReasons()
             XCTAssertEqual(
                 reasons,
-                [.trackingDisabled(proxyCouldServeRequests: expected)],
-                "Unexpected tracking-pause policy for \(state)"
+                [.trackingDisabled(proxyCouldServeRequests: true)],
+                "Display control state must not reduce runtime uncertainty for \(state)"
             )
         }
+    }
+
+    func testPassiveHealthTimeoutRemainsConservativeWhenUsageIsDisabled() async throws {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let collector = APIUsageCollectorDouble()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            proxyHealthClient: ProxyHealthClient(
+                httpClient: StubHTTPClient(result: .failure(HTTPClientError.timedOut)),
+                timeout: 0.01
+            ),
+            apiUsageCollector: collector
+        )
+
+        await viewModel.refresh()
+        XCTAssertEqual(viewModel.serverStatus.severity, .warning)
+        XCTAssertEqual(viewModel.serverControlState, .stopped)
+        try viewModel.saveSubscriptionUsageMenuBarVisible(false)
+        await collector.waitForStop()
+
+        let stopReasons = await collector.stopReasons()
+        XCTAssertEqual(
+            stopReasons,
+            [.trackingDisabled(proxyCouldServeRequests: true)]
+        )
+    }
+
+    func testPassiveHealthConfirmedStoppedMarksTrackingPauseUnableToServe() async throws {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let collector = APIUsageCollectorDouble()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            proxyHealthClient: ProxyHealthClient(
+                httpClient: StubHTTPClient(result: .failure(URLError(.cannotConnectToHost))),
+                timeout: 0.01
+            ),
+            apiUsageCollector: collector
+        )
+
+        await viewModel.refresh()
+        XCTAssertEqual(viewModel.serverStatus.title, "CLIProxyAPI Stopped")
+        try viewModel.saveSubscriptionUsageMenuBarVisible(false)
+        await collector.waitForStop()
+
+        let stopReasons = await collector.stopReasons()
+        XCTAssertEqual(
+            stopReasons,
+            [.trackingDisabled(proxyCouldServeRequests: false)]
+        )
     }
 
     func testReloadUsageRefreshesQuotaAndImmediatelyDrainsAPIQueue() async {
@@ -5408,7 +5726,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         quotaClient: any SubscriptionQuotaFetching = StubSubscriptionQuotaClient(),
         subscriptionUsageSnapshotCache: any SubscriptionUsageSnapshotCaching = SubscriptionUsageSnapshotCacheDouble(),
         appAppearanceService: (any AppAppearanceApplying)? = nil,
-        proxyHealthClient: ProxyHealthClient? = nil,
+        proxyHealthClient: (any ProxyHealthChecking)? = nil,
         bundledProxyReconciler: any BundledProxyReconciling = BundledProxyReconcilerDouble(
             result: .unchanged(version: CLIProxyAPIVersion("7.2.91")!)
         ),
@@ -5874,6 +6192,7 @@ private actor APIUsageCollectorDouble: APIUsageCollecting {
     private var stopWaiters: [CheckedContinuation<Void, Never>] = []
     private var reportSubscriberWaiters: [CheckedContinuation<Void, Never>] = []
     private var reportContinuation: AsyncStream<APIUsageCollectionReport>.Continuation?
+    private var reportGeneration: UInt64 = 0
     private nonisolated let reloadGate = APIUsageReloadGate()
     private nonisolated let updateGate = APIUsageUpdateGate()
     private var stopContinuation: CheckedContinuation<Void, Never>?
@@ -5913,27 +6232,43 @@ private actor APIUsageCollectorDouble: APIUsageCollecting {
     }
 
     func restore(configuration: APIUsageCollectorConfiguration) async -> APIUsageCollectionReport {
-        restoredReport
+        identified(restoredReport)
     }
 
-    func start(configuration: APIUsageCollectorConfiguration) async {
+    func start(
+        configuration: APIUsageCollectorConfiguration
+    ) async -> APIUsageCollectionReport {
         startCalls += 1
         let readyWaiters = startWaiters.filter { startCalls >= $0.expectedCount }
         startWaiters.removeAll { startCalls >= $0.expectedCount }
         readyWaiters.forEach { $0.continuation.resume() }
+        return identified(restoredReport)
     }
 
-    func update(configuration: APIUsageCollectorConfiguration) async {
+    func update(
+        configuration: APIUsageCollectorConfiguration
+    ) async -> APIUsageCollectionReport {
         updates.append(configuration)
         if suspendsUpdate {
             await updateGate.wait()
         }
+        return identified(restoredReport)
     }
 
     func reload(configuration: APIUsageCollectorConfiguration) async -> APIUsageCollectionReport {
         reloadCalls += 1
-        guard suspendsReload else { return reloadReport }
-        return await reloadGate.wait(returning: reloadReport)
+        let report = identified(reloadReport)
+        guard suspendsReload else { return report }
+        return await reloadGate.wait(returning: report)
+    }
+
+    private func identified(_ report: APIUsageCollectionReport) -> APIUsageCollectionReport {
+        reportGeneration &+= 1
+        return APIUsageCollectionReport(
+            identity: .init(generation: reportGeneration),
+            statesByProfileID: report.statesByProfileID,
+            collectedAt: report.collectedAt
+        )
     }
 
     func stop(reason: APIUsageCollectorStopReason, at: Date) async {
@@ -6088,7 +6423,11 @@ private final class APIUsageUpdateGate: @unchecked Sendable {
     }
 }
 
-private func reportWithClaudeCost(cost: String, updatedAt: Date) -> APIUsageCollectionReport {
+private func reportWithClaudeCost(
+    cost: String,
+    updatedAt: Date,
+    identity: APIUsageCollectorIdentity = .init(generation: 0)
+) -> APIUsageCollectionReport {
     let day = APICostPeriodSnapshot(
         period: .day,
         estimatedUSD: Decimal(string: cost)!,
@@ -6122,9 +6461,196 @@ private func reportWithClaudeCost(cost: String, updatedAt: Date) -> APIUsageColl
         updatedAt: updatedAt
     )
     return .init(
+        identity: identity,
         statesByProfileID: ["claude-api": .available(snapshot)],
         collectedAt: updatedAt
     )
+}
+
+private actor IdentityAPIUsageCollectorDouble: APIUsageCollecting {
+    private let restoredReport: APIUsageCollectionReport
+    private let startReport: APIUsageCollectionReport
+    private let updateReport: APIUsageCollectionReport
+    private let publishesBeforeReturning: Bool
+    private var continuation: AsyncStream<APIUsageCollectionReport>.Continuation?
+    private var subscriberWaiters: [CheckedContinuation<Void, Never>] = []
+
+    init(
+        restoredReport: APIUsageCollectionReport,
+        startReport: APIUsageCollectionReport,
+        updateReport: APIUsageCollectionReport,
+        publishesBeforeReturning: Bool
+    ) {
+        self.restoredReport = restoredReport
+        self.startReport = startReport
+        self.updateReport = updateReport
+        self.publishesBeforeReturning = publishesBeforeReturning
+    }
+
+    func reports() async -> AsyncStream<APIUsageCollectionReport> {
+        AsyncStream(bufferingPolicy: .bufferingNewest(10)) { continuation in
+            self.continuation = continuation
+            let waiters = subscriberWaiters
+            subscriberWaiters.removeAll()
+            waiters.forEach { $0.resume() }
+        }
+    }
+
+    func restore(configuration: APIUsageCollectorConfiguration) async -> APIUsageCollectionReport {
+        restoredReport
+    }
+
+    func start(configuration: APIUsageCollectorConfiguration) async -> APIUsageCollectionReport {
+        if publishesBeforeReturning { continuation?.yield(startReport) }
+        return startReport
+    }
+
+    func update(configuration: APIUsageCollectorConfiguration) async -> APIUsageCollectionReport {
+        if publishesBeforeReturning { continuation?.yield(updateReport) }
+        return updateReport
+    }
+
+    func reload(configuration: APIUsageCollectorConfiguration) async -> APIUsageCollectionReport {
+        updateReport
+    }
+
+    func stop(reason: APIUsageCollectorStopReason, at: Date) async {}
+
+    func emit(_ report: APIUsageCollectionReport) {
+        continuation?.yield(report)
+    }
+
+    func finishReports() {
+        continuation?.finish()
+        continuation = nil
+    }
+
+    func waitForReportSubscriber() async {
+        if continuation != nil { return }
+        await withCheckedContinuation { subscriberWaiters.append($0) }
+    }
+}
+
+private actor CancellableLifecycleAPIUsageCollectorDouble: APIUsageCollecting {
+    enum Call: Equatable {
+        case restore
+        case start
+        case update
+        case reload
+        case stop(APIUsageCollectorStopReason)
+    }
+
+    private let reloadGate = CancellableOperationGate()
+    private let updateGate = CancellableOperationGate()
+    private let onStop: @Sendable () -> Void
+    private var recordedCalls: [Call] = []
+    private var generation: UInt64 = 0
+
+    init(onStop: @escaping @Sendable () -> Void) {
+        self.onStop = onStop
+    }
+
+    func reports() async -> AsyncStream<APIUsageCollectionReport> {
+        AsyncStream { $0.finish() }
+    }
+
+    func restore(configuration: APIUsageCollectorConfiguration) async -> APIUsageCollectionReport {
+        recordedCalls.append(.restore)
+        return nextReport()
+    }
+
+    func start(configuration: APIUsageCollectorConfiguration) async -> APIUsageCollectionReport {
+        recordedCalls.append(.start)
+        return nextReport()
+    }
+
+    func update(configuration: APIUsageCollectorConfiguration) async -> APIUsageCollectionReport {
+        recordedCalls.append(.update)
+        await updateGate.wait()
+        return nextReport()
+    }
+
+    func reload(configuration: APIUsageCollectorConfiguration) async -> APIUsageCollectionReport {
+        recordedCalls.append(.reload)
+        await reloadGate.wait()
+        return nextReport()
+    }
+
+    func stop(reason: APIUsageCollectorStopReason, at: Date) async {
+        recordedCalls.append(.stop(reason))
+        onStop()
+    }
+
+    nonisolated func waitForReloadToSuspend() async {
+        await reloadGate.waitUntilWaiting()
+    }
+
+    nonisolated func waitForUpdateToSuspend() async {
+        await updateGate.waitUntilWaiting()
+    }
+
+    nonisolated func releaseAll() {
+        reloadGate.resume()
+        updateGate.resume()
+    }
+
+    func calls() -> [Call] { recordedCalls }
+
+    private func nextReport() -> APIUsageCollectionReport {
+        generation &+= 1
+        return APIUsageCollectionReport(
+            identity: .init(generation: generation),
+            statesByProfileID: [:],
+            collectedAt: Date(timeIntervalSince1970: TimeInterval(generation))
+        )
+    }
+}
+
+private final class CancellableOperationGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var waitingObservers: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                let (shouldResume, observers) = lock.withLock {
+                    if Task.isCancelled {
+                        return (true, [CheckedContinuation<Void, Never>]())
+                    }
+                    self.continuation = continuation
+                    let observers = waitingObservers
+                    waitingObservers.removeAll()
+                    return (false, observers)
+                }
+                observers.forEach { $0.resume() }
+                if shouldResume { continuation.resume() }
+            }
+        } onCancel: {
+            self.resume()
+        }
+    }
+
+    func waitUntilWaiting() async {
+        if lock.withLock({ continuation != nil }) { return }
+        await withCheckedContinuation { observer in
+            let shouldResume = lock.withLock {
+                if continuation != nil { return true }
+                waitingObservers.append(observer)
+                return false
+            }
+            if shouldResume { observer.resume() }
+        }
+    }
+
+    func resume() {
+        let continuation = lock.withLock {
+            let pending = self.continuation
+            self.continuation = nil
+            return pending
+        }
+        continuation?.resume()
+    }
 }
 
 private struct StubSubscriptionQuotaClient: SubscriptionQuotaFetching {
@@ -6821,6 +7347,32 @@ private final class DeferredCancellationOAuthLoginService: OAuthLoginStarting, @
         invocation.continuation = nil
         invocation.lock.unlock()
         continuation?.resume()
+    }
+}
+
+private final class CancellableProxyHealthClientDouble: ProxyHealthChecking, @unchecked Sendable {
+    private let gate = CancellableOperationGate()
+    private let resumedStatus: DiagnosticStatus
+    private let lock = NSLock()
+    private var callCount = 0
+
+    init(resumedStatus: DiagnosticStatus) {
+        self.resumedStatus = resumedStatus
+    }
+
+    func status(port: Int) async -> DiagnosticStatus {
+        let shouldSuspend = lock.withLock {
+            callCount += 1
+            return callCount == 1
+        }
+        if shouldSuspend {
+            await gate.wait()
+        }
+        return resumedStatus
+    }
+
+    func waitUntilSuspended() async {
+        await gate.waitUntilWaiting()
     }
 }
 

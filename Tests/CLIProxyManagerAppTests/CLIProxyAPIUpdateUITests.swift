@@ -206,7 +206,7 @@ final class CLIProxyAPIUpdateUITests: XCTestCase {
             contentsOf: repositoryRoot().appendingPathComponent("Sources/CLIProxyManagerApp/CLIProxyManagerApp.swift"),
             encoding: .utf8
         )
-        let startRange = try XCTUnwrap(appSource.range(of: "await viewModel.startApplication()"))
+        let startRange = try XCTUnwrap(appSource.range(of: "viewModel.beginApplicationLaunch"))
         let reloadRange = try XCTUnwrap(appSource.range(of: "cliProxyAPIUpdateService.reloadStoredStatus()"))
 
         XCTAssertLessThan(startRange.lowerBound, reloadRange.lowerBound)
