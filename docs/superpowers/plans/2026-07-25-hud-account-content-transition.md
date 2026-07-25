@@ -586,7 +586,7 @@ git commit -m "docs: verify buffered HUD account transitions"
   - `UsageOverlayAccountAnimationTests`: 3 tests, 0 failures
 - Full `swift test`: 1,039 tests, 0 failures.
 - Development bundle: `make sign CONFIGURATION=debug BUILD_DIR=build-development BUNDLE_ID=com.woosublee.CLIProxyManager.dev` exited successfully.
-- Codesign: `codesign --verify --deep --strict --verbose=2 build-development/CLIProxyManager.app` exited successfully; bundle is valid on disk and satisfies its Designated Requirement.
+- Codesign: build 직후 검증은 통과했다. 이후 worktree의 File Provider가 Sparkle 내부 app/XPC에 Finder/file-provider xattr를 다시 부착해 재검증이 한 차례 실패했으며, `xattr -r -c build-development/CLIProxyManager.app`로 해당 metadata를 제거한 뒤 `codesign --verify --deep --strict --verbose=2`가 다시 통과했다. 최종 bundle은 valid on disk 상태이며 Designated Requirement를 만족한다.
 - Bundle identifier: `com.woosublee.CLIProxyManager.dev` confirmed from `Info.plist` and code signature metadata.
 - `git diff --check`: no whitespace errors.
 - Runtime launch/manual visual verification: not performed; development and production apps were not launched or manipulated.
