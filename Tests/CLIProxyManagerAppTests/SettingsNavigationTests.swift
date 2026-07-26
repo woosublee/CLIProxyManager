@@ -87,11 +87,11 @@ final class SettingsNavigationTests: XCTestCase {
             .deletingLastPathComponent()
     }
 
-    func testLegacyCodexModelsSheetPreservesFastModeThroughSaveNormalization() {
+    func testCodexModelsSheetPreservesFastModeThroughSaveNormalization() {
         let supportedOption = CodexModelOption(id: "gpt-5.5", supportsFastMode: true)
         let unsupportedOption = CodexModelOption(id: "custom-model", supportsFastMode: false)
         let sheet = ModelsSettingsSheet(
-            config: .default,
+            codex: .default,
             availableModels: [supportedOption, unsupportedOption],
             refreshModels: {},
             save: { _ in }

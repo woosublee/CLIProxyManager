@@ -3,6 +3,7 @@ import SwiftUI
 
 struct CompactUsageOverlayView: View {
     let providers: [MenuBarConnectedProvider]
+    let emptyMessage: String
     let maximumAccountHeight: CGFloat
     var onMeasurementChange: (CGFloat) -> Void = { _ in }
     @State private var measurementState = CompactUsageMeasurementState()
@@ -13,13 +14,22 @@ struct CompactUsageOverlayView: View {
                 VStack(spacing: 7) {
                     Image(systemName: "person.crop.circle.badge.questionmark")
                         .font(.system(size: 20))
-                    Text("No accounts")
+                    Text(emptyMessage)
                         .font(.system(size: 9.5, weight: .medium))
                         .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, minHeight: 72)
                 .accessibilityElement(children: .combine)
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: CompactAccountHeightPreferenceKey.self,
+                            value: proxy.size.height
+                        )
+                    }
+                )
             } else {
                 ZStack(alignment: .top) {
                     measurementAccountStack
@@ -42,18 +52,16 @@ struct CompactUsageOverlayView: View {
                     .scrollDisabled(!needsScrolling)
                     .frame(height: viewportHeight)
                 }
-                .onPreferenceChange(CompactAccountHeightPreferenceKey.self) { height in
-                    let measuredHeight = max(1, height)
-                    if measurementState.record(height: measuredHeight, providerIDs: providerIDs) {
-                        onMeasurementChange(min(measuredHeight, maximumAccountHeight))
-                    }
-                }
+            }
+        }
+        .onPreferenceChange(CompactAccountHeightPreferenceKey.self) { height in
+            let measuredHeight = max(1, height)
+            if measurementState.record(height: measuredHeight, providerIDs: providerIDs) {
+                onMeasurementChange(min(measuredHeight, maximumAccountHeight))
             }
         }
         .onChange(of: providerIDs, initial: true) { _, providerIDs in
-            if measurementState.updateProviderIDs(providerIDs) {
-                onMeasurementChange(measurementState.viewportHeight(maximumHeight: maximumAccountHeight))
-            }
+            _ = measurementState.updateProviderIDs(providerIDs)
         }
     }
 

@@ -1,3 +1,5 @@
+import AppKit
+import SwiftUI
 import XCTest
 @testable import CLIProxyManagerApp
 @testable import CLIProxyManagerCore
@@ -33,6 +35,75 @@ final class UsageOverlayPresentationStateTests: XCTestCase {
         state.isContentHiddenForModeTransition = true
         XCTAssertEqual(state.contentBlurRadius, 8)
         XCTAssertEqual(state.contentOpacity, 0)
+    }
+
+    func testAccountTransitionConcealsContentWithoutConcealingChrome() {
+        let presentation = accountPresentation([.claude])
+        let state = UsageOverlayPresentationState(
+            displayMode: .expanded,
+            accountPresentation: presentation
+        )
+
+        state.accountTransitionPhase = .concealing
+
+        XCTAssertEqual(state.contentBlurRadius, 8)
+        XCTAssertEqual(state.contentOpacity, 0)
+        XCTAssertEqual(state.chromeOpacity, 1)
+        XCTAssertTrue(state.isContentHiddenForAccountTransition)
+    }
+
+    func testModeAndAccountConcealmentComposeUntilBothRelease() {
+        let state = UsageOverlayPresentationState(
+            displayMode: .expanded,
+            accountPresentation: accountPresentation([.claude])
+        )
+        state.isContentHiddenForModeTransition = true
+        state.accountTransitionPhase = .resizing
+
+        state.isContentHiddenForModeTransition = false
+        XCTAssertEqual(state.contentOpacity, 0)
+        XCTAssertTrue(state.isContentConcealed)
+
+        state.accountTransitionPhase = .revealing
+        XCTAssertEqual(state.contentOpacity, 1)
+        XCTAssertFalse(state.isContentConcealed)
+    }
+
+    func testPresentationStatePublishesBufferedAccountSnapshot() {
+        let original = accountPresentation([.claude])
+        let updated = accountPresentation([.claude, .codex])
+        let state = UsageOverlayPresentationState(
+            displayMode: .expanded,
+            accountPresentation: original
+        )
+
+        state.presentedAccountPresentation = updated
+
+        XCTAssertEqual(state.presentedAccountPresentation, updated)
+    }
+
+    func testAccountTransitionConcealmentCoversOnlyHiddenPhases() {
+        let state = UsageOverlayPresentationState(
+            displayMode: .expanded,
+            accountPresentation: accountPresentation([])
+        )
+
+        for phase in [
+            UsageOverlayAccountTransitionPhase.concealing,
+            .swapping,
+            .resizing,
+        ] {
+            state.accountTransitionPhase = phase
+            XCTAssertTrue(state.isContentHiddenForAccountTransition)
+        }
+
+        for phase in [
+            UsageOverlayAccountTransitionPhase.revealing,
+            .visible,
+        ] {
+            state.accountTransitionPhase = phase
+            XCTAssertFalse(state.isContentHiddenForAccountTransition)
+        }
     }
 
     func testModePresentationUsesAvailableMacOS15SymbolsAndLabels() {
@@ -230,5 +301,159 @@ final class UsageOverlayPresentationStateTests: XCTestCase {
             reportingTimeZoneID: "UTC",
             updatedAt: end
         )
+    }
+
+    func testCompactProviderChangePublishesOnlyFinalMeasuredHeight() async {
+        let model = CompactUsageMeasurementHarnessModel(
+            providers: [compactProvider(id: .claude, index: 0)],
+            emptyMessage: "No connected accounts"
+        )
+        let hostingView = NSHostingView(rootView: CompactUsageMeasurementHarness(model: model))
+        hostingView.frame = CGRect(x: 0, y: 0, width: 108, height: 640)
+
+        let measuredInitialState = await waitUntil {
+            hostingView.layoutSubtreeIfNeeded()
+            return !model.measurements.isEmpty
+        }
+        XCTAssertTrue(measuredInitialState)
+        let measurementCountBeforeAddition = model.measurements.count
+
+        model.providers.append(compactProvider(id: .codex, index: 1))
+
+        let measuredTwoAccounts = await waitUntil {
+            hostingView.layoutSubtreeIfNeeded()
+            return model.measurements.dropFirst(measurementCountBeforeAddition).contains {
+                $0 > CompactUsageMeasurementState.estimatedHeight
+            }
+        }
+        XCTAssertTrue(measuredTwoAccounts)
+        let firstMeasurementAfterAddition = model.measurements
+            .dropFirst(measurementCountBeforeAddition)
+            .first
+        XCTAssertGreaterThan(
+            firstMeasurementAfterAddition ?? 0,
+            CompactUsageMeasurementState.estimatedHeight
+        )
+    }
+
+    func testCompactViewRemeasuresRenderedEmptyStateAfterLastProviderIsRemoved() async {
+        let model = CompactUsageMeasurementHarnessModel(
+            providers: [
+                MenuBarConnectedProvider(
+                    id: .claude,
+                    name: "Claude OAuth",
+                    displayName: "Work",
+                    functionName: "cc-work",
+                    connectionDetail: "work@example.com",
+                    accountDetailHidden: true,
+                    usageState: .subscription(.disabled),
+                    showsUsage: true
+                )
+            ],
+            emptyMessage: Array(repeating: "No accounts selected", count: 16).joined(separator: "\n")
+        )
+        let hostingView = NSHostingView(rootView: CompactUsageMeasurementHarness(model: model))
+        hostingView.frame = CGRect(x: 0, y: 0, width: 108, height: 640)
+
+        let measuredNonEmptyState = await waitUntil {
+            hostingView.layoutSubtreeIfNeeded()
+            return model.measurements.contains {
+                abs($0 - CompactUsageMeasurementState.estimatedHeight) > 0.5
+            }
+        }
+        XCTAssertTrue(measuredNonEmptyState)
+        let measurementCountBeforeRemoval = model.measurements.count
+
+        model.providers = []
+
+        let measuredRenderedEmptyState = await waitUntil {
+            hostingView.layoutSubtreeIfNeeded()
+            return model.measurements.dropFirst(measurementCountBeforeRemoval).contains {
+                $0 > CompactUsageMeasurementState.estimatedHeight
+            }
+        }
+        XCTAssertTrue(measuredRenderedEmptyState)
+        XCTAssertGreaterThan(
+            model.measurements.last ?? 0,
+            CompactUsageMeasurementState.estimatedHeight
+        )
+    }
+
+    private func compactProvider(
+        id: ProviderRowState.ID,
+        index: Int
+    ) -> MenuBarConnectedProvider {
+        MenuBarConnectedProvider(
+            id: id,
+            name: "Provider \(index)",
+            displayName: "Account \(index)",
+            functionName: "provider-\(index)",
+            connectionDetail: "account-\(index)@example.com",
+            accountDetailHidden: true,
+            usageState: .subscription(.disabled),
+            showsUsage: true
+        )
+    }
+
+    private func accountPresentation(
+        _ ids: [ProviderRowState.ID]
+    ) -> UsageOverlayAccountPresentation {
+        UsageOverlayAccountPresentation(
+            providers: ids.enumerated().map { index, id in
+                MenuBarConnectedProvider(
+                    id: id,
+                    name: "Provider \(index)",
+                    displayName: "Account \(index)",
+                    functionName: "provider-\(index)",
+                    connectionDetail: "account-\(index)@example.com",
+                    accountDetailHidden: true,
+                    usageState: .subscription(.disabled),
+                    showsUsage: true
+                )
+            },
+            emptyMessage: ids.isEmpty ? "No connected accounts" : nil
+        )
+    }
+
+    private func waitUntil(
+        attempts: Int = 200,
+        condition: @escaping @MainActor () -> Bool
+    ) async -> Bool {
+        for _ in 0..<attempts {
+            if condition() { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return condition()
+    }
+}
+
+@MainActor
+private final class CompactUsageMeasurementHarnessModel: ObservableObject {
+    @Published var providers: [MenuBarConnectedProvider]
+    let emptyMessage: String
+    private(set) var measurements: [CGFloat] = []
+
+    init(providers: [MenuBarConnectedProvider], emptyMessage: String) {
+        self.providers = providers
+        self.emptyMessage = emptyMessage
+    }
+
+    func record(_ height: CGFloat) {
+        measurements.append(height)
+    }
+}
+
+private struct CompactUsageMeasurementHarness: View {
+    @ObservedObject var model: CompactUsageMeasurementHarnessModel
+
+    var body: some View {
+        CompactUsageOverlayView(
+            providers: model.providers,
+            emptyMessage: model.emptyMessage,
+            maximumAccountHeight: 640,
+            onMeasurementChange: model.record
+        )
+        .frame(width: 108)
+        .fixedSize(horizontal: false, vertical: true)
     }
 }

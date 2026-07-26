@@ -4,6 +4,20 @@ import CLIProxyManagerCore
 
 @MainActor
 final class ProviderSettingsViewModelTests: XCTestCase {
+    func testNewCodexAPIKeyStartsWithBlankNickname() {
+        XCTAssertEqual(
+            codexAPIInitialNickname(isConfigured: false, savedNickname: "Saved nickname"),
+            ""
+        )
+    }
+
+    func testConfiguredCodexAPIKeyKeepsSavedNickname() {
+        XCTAssertEqual(
+            codexAPIInitialNickname(isConfigured: true, savedNickname: "Saved nickname"),
+            "Saved nickname"
+        )
+    }
+
     func testDefaultProviderRowsHideProfilesUntilAuthExists() {
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: .default),
@@ -34,8 +48,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
 
     func testConfiguredAPIKeyRowsExposePersistedNicknames() {
         var config = AppConfig.default
-        config.ccapi = .init(nickname: "Anthropic Work")
-        config.codexAPI = .init(codex: config.ccodex, nickname: "OpenAI Personal")
+        config.claudeAPI = .init(nickname: "Anthropic Work")
+        config.codexAPI = .init(nickname: "OpenAI Personal")
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
@@ -67,10 +81,10 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         )
 
         XCTAssertEqual(try secretStore.get(.claudeAPIKey), "secret-value")
-        XCTAssertEqual(store.config.commands.ccapi, "ccapi")
-        XCTAssertEqual(store.config.ccapi.nickname, "Anthropic Work")
-        XCTAssertEqual(store.config.ccapi.connectionMode, .proxy)
-        XCTAssertTrue(store.config.ccapi.dangerousPermissionsEnabled)
+        XCTAssertEqual(store.config.claudeAPI.commandName, "ccapi")
+        XCTAssertEqual(store.config.claudeAPI.nickname, "Anthropic Work")
+        XCTAssertEqual(store.config.claudeAPI.connectionMode, .proxy)
+        XCTAssertTrue(store.config.claudeAPI.dangerousPermissionsEnabled)
         XCTAssertFalse(String(data: try JSONEncoder().encode(store.config), encoding: .utf8)!.contains("secret-value"))
     }
 
@@ -96,7 +110,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
 
     func testRemoveAPIProviderRestoresKeyWhenConfigSaveFails() throws {
         var config = AppConfig.default
-        config.commands.ccapi = "ccapi"
+        config.claudeAPI.commandName = "ccapi"
         let store = StubConfigStore(config: config, saveError: NSError(domain: "test", code: 1))
         let secretStore = InMemorySecretStore(values: [.claudeAPIKey: "old-key"])
         let viewModel = DashboardViewModel(
@@ -110,7 +124,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         viewModel.removeAPIProvider(.claudeAPI)
 
         XCTAssertEqual(try secretStore.get(.claudeAPIKey), "old-key")
-        XCTAssertEqual(viewModel.config.commands.ccapi, "ccapi")
+        XCTAssertEqual(viewModel.config.claudeAPI.commandName, "ccapi")
     }
 
     func testSaveCodexAPISettingsNormalizesPrefixedModelsBeforePersisting() throws {
@@ -165,11 +179,10 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         )
 
         XCTAssertEqual(try secretStore.get(.codexAPIKey), "codex-secret")
-        XCTAssertEqual(store.config.commands.ccodexapi, "ccodexapi")
+        XCTAssertEqual(store.config.codexAPI.commandName, "ccodexapi")
         XCTAssertEqual(store.config.codexAPI.nickname, "OpenAI Personal")
         XCTAssertEqual(store.config.codexAPI.codex, routing)
         XCTAssertTrue(store.config.codexAPI.dangerousPermissionsEnabled)
-        XCTAssertFalse(store.config.includeDangerouslySkipPermissions)
     }
 
     func testRollbackLegacyFallbackProviderRowsUseUniqueIDsForMultipleSameProviderAuthProfiles() {
@@ -209,13 +222,17 @@ final class ProviderSettingsViewModelTests: XCTestCase {
 
         try viewModel.saveClaudeFunctionName("myclaude")
 
-        XCTAssertEqual(store.savedConfigs.last?.commands.cc, "myclaude")
+        XCTAssertEqual(store.savedConfigs.last?.oauthCommandProfiles.first?.commandName, "myclaude")
         XCTAssertEqual(viewModel.providerRows.first?.functionName, "myclaude")
     }
 
 
     func testSaveClaudeFunctionNameRejectsInvalidShellName() throws {
-        let store = StubConfigStore(config: .default)
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "claude", provider: .claude, authProfileID: "claude.json", modelPrefix: "claude-account")
+        ]
+        let store = StubConfigStore(config: config)
         let viewModel = DashboardViewModel(
             configStore: store,
             shellInstaller: StubShellInstaller(),
@@ -230,11 +247,15 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         }
 
         XCTAssertEqual(store.savedConfigs, [])
-        XCTAssertEqual(viewModel.config.commands.cc, "")
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.first?.commandName, "")
     }
 
     func testSaveClaudeOAuthSettingsRejectsInvalidShellName() throws {
-        let store = StubConfigStore(config: .default)
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "claude", provider: .claude, authProfileID: "claude.json", modelPrefix: "claude-account")
+        ]
+        let store = StubConfigStore(config: config)
         let viewModel = DashboardViewModel(
             configStore: store,
             shellInstaller: StubShellInstaller(),
@@ -249,11 +270,15 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         }
 
         XCTAssertEqual(store.savedConfigs, [])
-        XCTAssertEqual(viewModel.config.commands.cc, "")
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.first?.commandName, "")
     }
 
     func testSaveClaudeOAuthSettingsValidatesActiveFunctionNameBeforePersisting() throws {
-        let store = StubConfigStore(config: .default)
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "claude", provider: .claude, authProfileID: "claude.json", modelPrefix: "claude-account")
+        ]
+        let store = StubConfigStore(config: config)
         let installer = StubShellInstaller(validationError: ShellProfileInstallerError.functionNameConflicts(["cc"]))
         let viewModel = DashboardViewModel(
             configStore: store,
@@ -274,17 +299,38 @@ final class ProviderSettingsViewModelTests: XCTestCase {
 
     func testInitialOAuthSettingsDisableDangerousPermissionsByDefault() {
         var config = AppConfig.default
-        config.includeDangerouslySkipPermissions = true
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "claude",
+                provider: .claude,
+                authProfileID: "claude.json",
+                dangerousPermissionsEnabled: true
+            )
+        ]
 
         XCTAssertFalse(oauthSettingsDangerousPermissionDefault(config: config, isInitialSetup: true))
     }
 
     func testInitialOAuthSettingsLeaveCommandNamesEmptyAndNicknameBlank() {
         var config = AppConfig.default
-        config.commands.cc = "customclaude"
-        config.commands.ccodex = "ccmcodex"
-        config.nicknames = AppConfig.Nicknames(cc: "old-claude", ccodex: "old-codex")
-        config.includeDangerouslySkipPermissions = true
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "claude",
+                provider: .claude,
+                authProfileID: "claude.json",
+                commandName: "customclaude",
+                nickname: "old-claude",
+                dangerousPermissionsEnabled: true
+            ),
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccmcodex",
+                nickname: "old-codex",
+                dangerousPermissionsEnabled: true
+            )
+        ]
 
         XCTAssertEqual(oauthSettingsInitialState(config: config, provider: .claude, isInitialSetup: true), OAuthSettingsInitialState(
             functionName: "",
@@ -302,21 +348,42 @@ final class ProviderSettingsViewModelTests: XCTestCase {
 
     func testInitialCodexSettingsUseDefaultModelRouting() {
         var config = AppConfig.default
-        config.ccodex = AppConfig.Codex(
-            opus: AppConfig.CodexRole(model: "old-opus", reasoning: .high),
-            sonnet: AppConfig.CodexRole(model: "old-sonnet", reasoning: .medium),
-            haiku: AppConfig.CodexRole(model: "old-haiku", reasoning: .low)
-        )
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                codex: AppConfig.Codex(
+                    opus: AppConfig.CodexRole(model: "old-opus", reasoning: .high),
+                    sonnet: AppConfig.CodexRole(model: "old-sonnet", reasoning: .medium),
+                    haiku: AppConfig.CodexRole(model: "old-haiku", reasoning: .low)
+                )
+            )
+        ]
 
-        XCTAssertEqual(oauthSettingsInitialCodex(config: config, isInitialSetup: true), AppConfig.default.ccodex)
+        XCTAssertEqual(oauthSettingsInitialCodex(config: config, provider: .codex, isInitialSetup: true), .default)
     }
 
     func testExistingOAuthSettingsUseConfiguredCommandNamesAndNickname() {
         var config = AppConfig.default
-        config.commands.cc = "customclaude"
-        config.commands.ccodex = "ccmcodex"
-        config.nicknames = AppConfig.Nicknames(cc: "work", ccodex: "personal")
-        config.includeDangerouslySkipPermissions = true
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "claude",
+                provider: .claude,
+                authProfileID: "claude.json",
+                commandName: "customclaude",
+                nickname: "work",
+                dangerousPermissionsEnabled: true
+            ),
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccmcodex",
+                nickname: "personal",
+                dangerousPermissionsEnabled: true
+            )
+        ]
 
         XCTAssertEqual(oauthSettingsInitialState(config: config, provider: .claude, isInitialSetup: false), OAuthSettingsInitialState(
             functionName: "customclaude",
@@ -332,7 +399,14 @@ final class ProviderSettingsViewModelTests: XCTestCase {
 
     func testExistingOAuthSettingsUseCurrentDangerousPermissionValue() {
         var config = AppConfig.default
-        config.includeDangerouslySkipPermissions = true
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "claude",
+                provider: .claude,
+                authProfileID: "claude.json",
+                dangerousPermissionsEnabled: true
+            )
+        ]
 
         XCTAssertTrue(oauthSettingsDangerousPermissionDefault(config: config, isInitialSetup: false))
     }
@@ -409,7 +483,22 @@ final class ProviderSettingsViewModelTests: XCTestCase {
 
     func testCommandNameAvailabilityReportsDuplicateActiveProviderNames() async {
         var config = AppConfig.default
-        config.commands.ccodex = "same"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "claude",
+                provider: .claude,
+                authProfileID: "claude.json",
+                modelPrefix: "claude-account"
+            ),
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "same",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
@@ -451,7 +540,22 @@ final class ProviderSettingsViewModelTests: XCTestCase {
 
     func testSaveClaudeOAuthSettingsRejectsDuplicateActiveProviderNames() throws {
         var config = AppConfig.default
-        config.commands.ccodex = "same"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "claude",
+                provider: .claude,
+                authProfileID: "claude.json",
+                modelPrefix: "claude-account"
+            ),
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "same",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
         let store = StubConfigStore(config: config)
         let viewModel = DashboardViewModel(
             configStore: store,
@@ -482,18 +586,27 @@ final class ProviderSettingsViewModelTests: XCTestCase {
 
         try viewModel.saveClaudeOAuthSettings(functionName: " myclaude ", nickname: "", dangerousPermissionsEnabled: false)
 
-        XCTAssertEqual(store.savedConfigs.last?.commands.cc, "myclaude")
-        XCTAssertEqual(viewModel.config.commands.cc, "myclaude")
+        XCTAssertEqual(store.savedConfigs.last?.oauthCommandProfiles.first { $0.provider == .claude }?.commandName, "myclaude")
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.first { $0.provider == .claude }?.commandName, "myclaude")
     }
 
     func testSaveClaudeOAuthSettingsIgnoresInvalidInactiveProviderCommandName() throws {
         var config = AppConfig.default
-        config.commands.ccodex = "bad;rm"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "bad;rm",
+                codex: .default,
+                isEnabled: false
+            )
+        ]
         let store = StubConfigStore(config: config)
         let viewModel = DashboardViewModel(
             configStore: store,
             shellInstaller: StubShellInstaller(),
-            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile(), codexProfile()]),
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
@@ -501,20 +614,22 @@ final class ProviderSettingsViewModelTests: XCTestCase {
 
         try viewModel.saveClaudeOAuthSettings(functionName: "myclaude", nickname: "", dangerousPermissionsEnabled: false)
 
-        XCTAssertEqual(store.savedConfigs.last?.commands.cc, "myclaude")
-        XCTAssertEqual(store.savedConfigs.last?.commands.ccodex, "bad;rm")
+        XCTAssertEqual(store.savedConfigs.last?.oauthCommandProfiles.first { $0.provider == .claude }?.commandName, "myclaude")
+        XCTAssertEqual(store.savedConfigs.last?.oauthCommandProfiles.first { $0.provider == .codex }?.commandName, "bad;rm")
     }
 
     func testSaveClaudeAPISettingsValidatesEditedCommandNameOnly() throws {
         var config = AppConfig.default
-        config.commands.cc = "bad;rm"
-        config.commands.ccodex = "also;bad"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "claude", provider: .claude, authProfileID: "claude.json", commandName: "bad;rm", modelPrefix: "claude-account", isEnabled: false),
+            AppConfig.OAuthCommandProfile(id: "codex", provider: .codex, authProfileID: "codex.json", commandName: "also;bad", codex: .default, modelPrefix: "codex-account", isEnabled: false)
+        ]
         let store = StubConfigStore(config: config)
         let installer = StubShellInstaller(conflictingFunctionNames: ["ccapi"])
         let viewModel = DashboardViewModel(
             configStore: store,
             shellInstaller: installer,
-            authProfileStore: StubAuthProfileStore(profiles: []),
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile(), codexProfile()]),
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
@@ -554,15 +669,15 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             key: nil
         )
 
-        XCTAssertEqual(store.savedConfigs.last?.commands.ccapi, "myapi")
-        XCTAssertEqual(store.savedConfigs.last?.ccapi.connectionMode, .proxy)
-        XCTAssertEqual(store.savedConfigs.last?.ccapi.claude, routing)
-        XCTAssertTrue(store.savedConfigs.last?.ccapi.dangerousPermissionsEnabled ?? false)
+        XCTAssertEqual(store.savedConfigs.last?.claudeAPI.commandName, "myapi")
+        XCTAssertEqual(store.savedConfigs.last?.claudeAPI.connectionMode, .proxy)
+        XCTAssertEqual(store.savedConfigs.last?.claudeAPI.claude, routing)
+        XCTAssertTrue(store.savedConfigs.last?.claudeAPI.dangerousPermissionsEnabled ?? false)
     }
 
     func testSaveClaudeAPISettingsAllowsBlankCommandNameToDisableFunction() throws {
         var config = AppConfig.default
-        config.commands.ccapi = "oldapi"
+        config.claudeAPI.commandName = "oldapi"
         let store = StubConfigStore(config: config)
         let installer = StubShellInstaller()
         let viewModel = DashboardViewModel(
@@ -581,9 +696,9 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             key: nil
         )
 
-        XCTAssertEqual(store.savedConfigs.last?.commands.ccapi, "")
-        XCTAssertEqual(store.savedConfigs.last?.ccapi.connectionMode, .proxy)
-        XCTAssertFalse(store.savedConfigs.last?.ccapi.dangerousPermissionsEnabled ?? true)
+        XCTAssertEqual(store.savedConfigs.last?.claudeAPI.commandName, "")
+        XCTAssertEqual(store.savedConfigs.last?.claudeAPI.connectionMode, .proxy)
+        XCTAssertFalse(store.savedConfigs.last?.claudeAPI.dangerousPermissionsEnabled ?? true)
         XCTAssertEqual(installer.validatedFunctionNames, [])
     }
 
@@ -600,8 +715,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
 
         try viewModel.saveCodexSettings(functionName: " mycodex ", nickname: "", codex: testCodex(), dangerousPermissionsEnabled: false)
 
-        XCTAssertEqual(store.savedConfigs.last?.commands.ccodex, "mycodex")
-        XCTAssertEqual(viewModel.config.commands.ccodex, "mycodex")
+        XCTAssertEqual(store.savedConfigs.last?.oauthCommandProfiles.first { $0.provider == .codex }?.commandName, "mycodex")
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.first { $0.provider == .codex }?.commandName, "mycodex")
     }
 
     func testSaveCodexSettingsIgnoresClaudeZshrcConflict() throws {
@@ -622,14 +737,16 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         try viewModel.saveCodexSettings(functionName: "ccd123", nickname: "", codex: testCodex(), dangerousPermissionsEnabled: false)
 
         XCTAssertEqual(installer.validatedFunctionNames, [["ccd123"]])
-        XCTAssertEqual(store.savedConfigs.last?.commands.ccodex, "ccd123")
+        XCTAssertEqual(store.savedConfigs.last?.oauthCommandProfiles.first { $0.provider == .codex }?.commandName, "ccd123")
         XCTAssertTrue(installer.installedScript?.contains("ccd123() {") == true)
     }
 
     func testInitialShellInstallKeepsCodexFunctionWhenClaudeNameConflictsInZshrc() {
         var config = AppConfig.default
-        config.commands.cc = "cc"
-        config.commands.ccodex = "ccd123"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "claude", provider: .claude, authProfileID: "claude.json", commandName: "cc"),
+            AppConfig.OAuthCommandProfile(id: "codex", provider: .codex, authProfileID: "codex.json", commandName: "ccd123", codex: .default)
+        ]
         let installer = StubShellInstaller(conflictingFunctionNames: ["cc"])
         let automaticInstaller = AutomaticShellInstallService(installer: installer)
         let viewModel = DashboardViewModel(
@@ -828,9 +945,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.roundRobinSettings(for: .codex).availability, .available(count: 2))
     }
 
-    func testRoundRobinSettingsExistingCodexProfileFallsBackToConfiguredCodexRoles() {
+    func testRoundRobinSettingsExistingCodexProfileFallsBackToCanonicalDefaultCodexRoles() {
         var config = AppConfig.default
-        config.ccodex = testCodex(model: "custom-gpt")
         config.roundRobinProfiles = [
             AppConfig.RoundRobinProfile(id: "codex-default", provider: .codex, commandName: "ccodex", includedAuthProfileIDs: ["codex-fast.json", "codex-deep.json"])
         ]
@@ -846,7 +962,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             secretStore: InMemorySecretStore()
         )
 
-        XCTAssertEqual(viewModel.roundRobinSettings(for: .codex).profile.codex, config.ccodex)
+        XCTAssertEqual(viewModel.roundRobinSettings(for: .codex).profile.codex, .default)
     }
 
     func testSaveRoundRobinSettingsPersistsCodexRoleReasoningAndContextWindow() throws {
@@ -1008,7 +1124,9 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         let viewModel = DashboardViewModel(
             configStore: store,
             shellInstaller: StubShellInstaller(),
-            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "claude-work.json", type: .claude, email: "work@example.com", accountID: nil, expired: nil, disabled: false)
+            ]),
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
@@ -1046,8 +1164,9 @@ final class ProviderSettingsViewModelTests: XCTestCase {
 
         try viewModel.saveClaudeOAuthSettings(functionName: "myclaude", nickname: "", dangerousPermissionsEnabled: true)
 
-        XCTAssertEqual(store.savedConfigs.last?.commands.cc, "myclaude")
-        XCTAssertEqual(store.savedConfigs.last?.includeDangerouslySkipPermissions, true)
+        let savedProfile = try XCTUnwrap(store.savedConfigs.last?.oauthCommandProfiles.first { $0.provider == .claude })
+        XCTAssertEqual(savedProfile.commandName, "myclaude")
+        XCTAssertTrue(savedProfile.dangerousPermissionsEnabled)
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.functionName, "myclaude")
     }
 
@@ -1065,9 +1184,10 @@ final class ProviderSettingsViewModelTests: XCTestCase {
 
         try viewModel.saveCodexSettings(functionName: "mycodex", nickname: "", codex: codex, dangerousPermissionsEnabled: true)
 
-        XCTAssertEqual(store.savedConfigs.last?.commands.ccodex, "mycodex")
-        XCTAssertEqual(store.savedConfigs.last?.ccodex, codex)
-        XCTAssertEqual(store.savedConfigs.last?.includeDangerouslySkipPermissions, true)
+        let savedProfile = try XCTUnwrap(store.savedConfigs.last?.oauthCommandProfiles.first { $0.provider == .codex })
+        XCTAssertEqual(savedProfile.commandName, "mycodex")
+        XCTAssertEqual(savedProfile.codex, codex)
+        XCTAssertTrue(savedProfile.dangerousPermissionsEnabled)
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.functionName, "mycodex")
     }
 
@@ -1114,7 +1234,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             AppConfig.OAuthCommandProfile(
                 id: "codex-team",
                 provider: .codex,
-                authProfileID: "codex-18c2ca10-woosub-classting-com-team.json",
+                authProfileID: "codex-work123-team.json",
                 commandName: "ccteam",
                 nickname: "Team",
                 codex: testCodex(),
@@ -1123,7 +1243,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         ]
         let store = StubConfigStore(config: config)
         let authStore = StubAuthProfileStore(profiles: [
-            AuthProfile(fileName: "codex-18c2ca10-woosub-classting-com-team.json", type: .codex, email: "team@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-team")
+            AuthProfile(fileName: "codex-work123-team.json", type: .codex, email: "team@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-team")
         ])
         let viewModel = DashboardViewModel(
             configStore: store,
@@ -1142,9 +1262,9 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             dangerousPermissionsEnabled: false
         )
 
-        XCTAssertEqual(store.savedConfigs.last?.oauthCommandProfiles.map(\.modelPrefix), ["codex-18c2ca10"])
-        XCTAssertEqual(viewModel.config.oauthCommandProfiles.map(\.modelPrefix), ["codex-18c2ca10"])
-        XCTAssertEqual(authStore.prefixUpdates, [PrefixUpdate(id: "codex-18c2ca10-woosub-classting-com-team.json", prefix: "codex-18c2ca10")])
+        XCTAssertEqual(store.savedConfigs.last?.oauthCommandProfiles.map(\.modelPrefix), ["codex-work123"])
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.map(\.modelPrefix), ["codex-work123"])
+        XCTAssertEqual(authStore.prefixUpdates, [PrefixUpdate(id: "codex-work123-team.json", prefix: "codex-work123")])
     }
 
     func testSaveClaudeOAuthSettingsPrefixSyncFailureBlocksShellInstall() {
@@ -1321,7 +1441,17 @@ final class ProviderSettingsViewModelTests: XCTestCase {
     }
 
     func testSaveCodexSettingsKeepsCurrentConfigWhenShellApplyFails() {
-        let store = StubConfigStore(config: .default)
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
+        let store = StubConfigStore(config: config)
         let installer = StubShellInstaller(installError: NSError(domain: "shell", code: 1))
         let automaticInstaller = AutomaticShellInstallService(installer: installer)
         let viewModel = DashboardViewModel(
@@ -1340,7 +1470,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertThrowsError(try viewModel.saveCodexSettings(functionName: "mycodex", nickname: "team", codex: codex, dangerousPermissionsEnabled: true))
 
         XCTAssertEqual(store.savedConfigs, [])
-        XCTAssertEqual(store.config, .default)
+        XCTAssertEqual(store.config, config)
         XCTAssertEqual(viewModel.config, initialConfig)
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.functionName, "")
     }
@@ -1367,15 +1497,30 @@ final class ProviderSettingsViewModelTests: XCTestCase {
 
     func testRemoveClaudeProviderResetsClaudeSettings() {
         var config = AppConfig.default
-        config.commands.cc = "customclaude"
-        config.commands.ccodex = "teamcodex"
-        config.nicknames = AppConfig.Nicknames(cc: "old-claude", ccodex: "keep-codex")
-        config.includeDangerouslySkipPermissions = true
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "claude",
+                provider: .claude,
+                authProfileID: "claude.json",
+                commandName: "customclaude",
+                nickname: "old-claude",
+                dangerousPermissionsEnabled: true
+            ),
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "teamcodex",
+                nickname: "keep-codex",
+                dangerousPermissionsEnabled: true,
+                codex: .default
+            )
+        ]
         let store = StubConfigStore(config: config)
         let viewModel = DashboardViewModel(
             configStore: store,
             shellInstaller: StubShellInstaller(),
-            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile()]),
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile(), codexProfile()]),
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
@@ -1383,26 +1528,39 @@ final class ProviderSettingsViewModelTests: XCTestCase {
 
         viewModel.removeProvider(.claude)
 
-        XCTAssertEqual(viewModel.config.commands.cc, AppConfig.default.commands.cc)
-        XCTAssertEqual(viewModel.config.commands.ccodex, "teamcodex")
-        XCTAssertEqual(viewModel.config.nicknames.cc, "")
-        XCTAssertEqual(viewModel.config.nicknames.ccodex, "keep-codex")
-        XCTAssertFalse(viewModel.config.includeDangerouslySkipPermissions)
-        XCTAssertEqual(store.savedConfigs.last?.commands.cc, AppConfig.default.commands.cc)
+        XCTAssertNil(viewModel.config.oauthCommandProfiles.first { $0.provider == .claude })
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.first { $0.provider == .codex }?.commandName, "teamcodex")
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.first { $0.provider == .codex }?.nickname, "keep-codex")
+        XCTAssertTrue(viewModel.config.oauthCommandProfiles.first { $0.provider == .codex }?.dangerousPermissionsEnabled == true)
+        XCTAssertNil(store.savedConfigs.last?.oauthCommandProfiles.first { $0.provider == .claude })
     }
 
     func testRemoveCodexProviderResetsCodexSettings() {
         var config = AppConfig.default
-        config.commands.cc = "teamclaude"
-        config.commands.ccodex = "customcodex"
-        config.nicknames = AppConfig.Nicknames(cc: "keep-claude", ccodex: "old-codex")
-        config.ccodex = testCodex(model: "custom-model")
-        config.includeDangerouslySkipPermissions = true
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "claude",
+                provider: .claude,
+                authProfileID: "claude.json",
+                commandName: "teamclaude",
+                nickname: "keep-claude",
+                dangerousPermissionsEnabled: true
+            ),
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "customcodex",
+                nickname: "old-codex",
+                dangerousPermissionsEnabled: true,
+                codex: testCodex(model: "custom-model")
+            )
+        ]
         let store = StubConfigStore(config: config)
         let viewModel = DashboardViewModel(
             configStore: store,
             shellInstaller: StubShellInstaller(),
-            authProfileStore: StubAuthProfileStore(profiles: [codexProfile()]),
+            authProfileStore: StubAuthProfileStore(profiles: [claudeProfile(), codexProfile()]),
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
@@ -1410,21 +1568,20 @@ final class ProviderSettingsViewModelTests: XCTestCase {
 
         viewModel.removeProvider(.codex)
 
-        XCTAssertEqual(viewModel.config.commands.cc, "teamclaude")
-        XCTAssertEqual(viewModel.config.commands.ccodex, AppConfig.default.commands.ccodex)
-        XCTAssertEqual(viewModel.config.nicknames.cc, "keep-claude")
-        XCTAssertEqual(viewModel.config.nicknames.ccodex, "")
-        XCTAssertEqual(viewModel.config.ccodex, AppConfig.default.ccodex)
-        XCTAssertFalse(viewModel.config.includeDangerouslySkipPermissions)
-        XCTAssertEqual(store.savedConfigs.last?.commands.ccodex, AppConfig.default.commands.ccodex)
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.first { $0.provider == .claude }?.commandName, "teamclaude")
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.first { $0.provider == .claude }?.nickname, "keep-claude")
+        XCTAssertNil(viewModel.config.oauthCommandProfiles.first { $0.provider == .codex })
+        XCTAssertNil(store.savedConfigs.last?.oauthCommandProfiles.first { $0.provider == .codex })
     }
 
     func testRemoveProviderRewritesShellFunctionsWithoutDeletedProvider() {
         let installer = StubShellInstaller()
         let authStore = StubAuthProfileStore(profiles: [claudeProfile(), codexProfile()])
         var config = AppConfig.default
-        config.commands.cc = "cc"
-        config.commands.ccodex = "ccodex"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "claude", provider: .claude, authProfileID: "claude.json", commandName: "cc"),
+            AppConfig.OAuthCommandProfile(id: "codex", provider: .codex, authProfileID: "codex.json", commandName: "ccodex", codex: .default)
+        ]
         let automaticInstaller = AutomaticShellInstallService(installer: installer)
         _ = DashboardViewModel(
             configStore: StubConfigStore(config: config),
@@ -1509,16 +1666,16 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             AppConfig.OAuthCommandProfile(
                 id: "codex-team",
                 provider: .codex,
-                authProfileID: "codex-18c2ca10-woosub-classting-com-team.json",
+                authProfileID: "codex-work123-team.json",
                 nickname: "Team",
-                modelPrefix: "codex-codex-18c2ca10-woosub-classting-com-team-json"
+                modelPrefix: "codex-codex-work123-team-json"
             ),
             AppConfig.OAuthCommandProfile(
                 id: "codex-team-secondary",
                 provider: .codex,
-                authProfileID: "codex-dntjqdlekd-gmail-com-pro.json",
+                authProfileID: "codex-personal456-pro.json",
                 nickname: "Team",
-                modelPrefix: "codex-codex-dntjqdlekd-gmail-com-pro-json"
+                modelPrefix: "codex-codex-personal456-pro-json"
             )
         ]
 
@@ -1527,8 +1684,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: [
                 AuthProfile(fileName: "claude-work.json", type: .claude, email: "work@example.com", accountID: nil, expired: nil, disabled: false, prefix: "claude-claude-work-json"),
-                AuthProfile(fileName: "codex-18c2ca10-woosub-classting-com-team.json", type: .codex, email: "team@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-codex-18c2ca10-woosub-classting-com-team-json"),
-                AuthProfile(fileName: "codex-dntjqdlekd-gmail-com-pro.json", type: .codex, email: "personal@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-codex-dntjqdlekd-gmail-com-pro-json")
+                AuthProfile(fileName: "codex-work123-team.json", type: .codex, email: "team@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-codex-work123-team-json"),
+                AuthProfile(fileName: "codex-personal456-pro.json", type: .codex, email: "personal@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-codex-personal456-pro-json")
             ]),
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector(),
@@ -1548,9 +1705,9 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             AppConfig.OAuthCommandProfile(
                 id: "codex-team",
                 provider: .codex,
-                authProfileID: "codex-18c2ca10-woosub-classting-com-team.json",
+                authProfileID: "codex-work123-team.json",
                 nickname: "   ",
-                modelPrefix: "codex-codex-18c2ca10-woosub-classting-com-team-json"
+                modelPrefix: "codex-codex-work123-team-json"
             )
         ]
 
@@ -1558,14 +1715,14 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
             authProfileStore: StubAuthProfileStore(profiles: [
-                AuthProfile(fileName: "codex-18c2ca10-woosub-classting-com-team.json", type: .codex, email: "team@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-codex-18c2ca10-woosub-classting-com-team-json")
+                AuthProfile(fileName: "codex-work123-team.json", type: .codex, email: "team@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-codex-work123-team-json")
             ]),
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
 
-        XCTAssertEqual(viewModel.config.oauthCommandProfiles.map(\.modelPrefix), ["codex-18c2ca10"])
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.map(\.modelPrefix), ["codex-work123"])
     }
 
     func testRemoveExplicitCommandProfileDeletesOnlySelectedAccount() {
@@ -1703,7 +1860,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
 
     func testDormantAPICommandDoesNotBlockOAuthCommandValidationWhenKeyIsMissing() async {
         var config = AppConfig.default
-        config.commands.ccapi = "shared"
+        config.claudeAPI.commandName = "shared"
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
@@ -1719,8 +1876,10 @@ final class ProviderSettingsViewModelTests: XCTestCase {
 
     func testClaudeAPICommandNameAvailabilityChecksAgainstOAuthCommands() async {
         var config = AppConfig.default
-        config.commands.cc = "claudeoauth"
-        config.commands.ccapi = "claudeapi"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "claude", provider: .claude, authProfileID: "claude.json", commandName: "claudeoauth")
+        ]
+        config.claudeAPI.commandName = "claudeapi"
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
@@ -1739,8 +1898,10 @@ final class ProviderSettingsViewModelTests: XCTestCase {
 
     func testCodexAPICommandNameAvailabilityChecksAgainstOAuthCommands() async {
         var config = AppConfig.default
-        config.commands.ccodex = "codexoauth"
-        config.commands.ccodexapi = "codexapi"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "codex", provider: .codex, authProfileID: "codex.json", commandName: "codexoauth", codex: .default)
+        ]
+        config.codexAPI.commandName = "codexapi"
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),

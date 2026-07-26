@@ -60,10 +60,11 @@ Only use release builds downloaded directly from GitHub Releases.
 
 ## Usage HUD
 
-Enable **Server Settings → Subscription Usage**, then use **General → Usage Overlay** to display a separate usage window.
+Use **Settings → Usage** to configure subscription usage in the menu bar and the separate Usage HUD independently.
 
 - Adjust window opacity and always-on-top behavior.
 - Show or hide the HUD from the menu bar.
+- Use the Usage HUD button on each account card in the main window to choose which accounts appear in the HUD. The selection applies to both full and compact views and is restored after relaunch.
 - See per-account usage and reset times for Claude and Codex.
 - Codex shows the actual period reported by the API: `5h` and `7d` for typical accounts, and `1mo` for Team plan monthly windows.
 - Use the compact/expand control in the HUD header to switch between the 300pt-wide full view and the 108pt-wide compact view.

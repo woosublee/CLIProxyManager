@@ -510,6 +510,26 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
         XCTAssertEqual(snapshot.connectedProviders.first?.showsUsage, true)
     }
 
+    func testMenuBarSnapshotIgnoresUsageOverlayVisibility() {
+        let provider = ProviderRowState(
+            id: .claude,
+            name: "Claude OAuth",
+            nickname: "Work",
+            functionName: "cc-work",
+            connectionTitle: "Connected",
+            connectionDetail: "work@example.com",
+            isConnected: true,
+            showsInUsageOverlay: false
+        )
+
+        let snapshot = MenuBarStatusSnapshot(
+            serverStatus: DiagnosticStatus(severity: .ready, title: "Running", message: "Ready"),
+            providers: [provider]
+        )
+
+        XCTAssertEqual(snapshot.connectedProviders.map(\.id), [.claude])
+    }
+
     func testSnapshotPropagatesSubscriptionUsageCapabilityForOAuthAccounts() {
         let snapshot = MenuBarStatusSnapshot(
             serverStatus: DiagnosticStatus(severity: .ready, title: "CLIProxyAPI Running", message: "Ready"),

@@ -10,21 +10,17 @@ final class AppConfigTests: XCTestCase {
         #else
         XCTAssertEqual(config.port, 18_317)
         #endif
-        XCTAssertEqual(config.commands.cc, "")
-        XCTAssertEqual(config.commands.ccapi, "")
-        XCTAssertEqual(config.commands.ccodex, "")
-        XCTAssertEqual(config.commands.ccodexapi, "")
-        XCTAssertEqual(config.ccapi.connectionMode, .proxy)
-        XCTAssertEqual(config.ccapi.claude, .automatic)
-        XCTAssertEqual(config.ccapi.nickname, "")
-        XCTAssertFalse(config.ccapi.dangerousPermissionsEnabled)
-        XCTAssertEqual(config.codexAPI.codex, config.ccodex)
+        XCTAssertEqual(config.schemaVersion, AppConfig.currentSchemaVersion)
+        XCTAssertEqual(config.claudeAPI.commandName, "")
+        XCTAssertEqual(config.claudeAPI.connectionMode, .proxy)
+        XCTAssertEqual(config.claudeAPI.claude, .automatic)
+        XCTAssertEqual(config.claudeAPI.nickname, "")
+        XCTAssertFalse(config.claudeAPI.dangerousPermissionsEnabled)
+        XCTAssertEqual(config.codexAPI.commandName, "")
         XCTAssertEqual(config.codexAPI.nickname, "")
         XCTAssertFalse(config.codexAPI.dangerousPermissionsEnabled)
-        XCTAssertEqual(config.ccodex.opus, AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .xhigh))
-        XCTAssertEqual(config.ccodex.sonnet, AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .medium))
-        XCTAssertEqual(config.ccodex.haiku, AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .low))
-        XCTAssertFalse(config.includeDangerouslySkipPermissions)
+        XCTAssertEqual(config.codexAPI.codex, .default)
+        XCTAssertEqual(config.oauthCommandProfiles, [])
         XCTAssertFalse(config.startAtLogin)
         XCTAssertTrue(config.showDockIcon)
         XCTAssertTrue(config.showMenuBarIcon)
@@ -60,7 +56,7 @@ final class AppConfigTests: XCTestCase {
         }
         """#.utf8)
 
-        let config = try JSONDecoder().decode(AppConfig.self, from: data)
+        let config = try LegacyAppConfigDecoder.decode(data).config
 
         XCTAssertEqual(config.accountOrder, [])
     }
@@ -74,17 +70,17 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(decoded.accountOrder, ["codex-api", "claude-work", "claude-api"])
     }
 
-    func testDefaultCodexRoutingUsesTerraWithRoleSpecificReasoning() {
+    func testCodexDefaultUsesTerraWithRoleSpecificReasoning() {
         XCTAssertEqual(
-            AppConfig.default.ccodex.opus,
+            AppConfig.Codex.default.opus,
             AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .xhigh)
         )
         XCTAssertEqual(
-            AppConfig.default.ccodex.sonnet,
+            AppConfig.Codex.default.sonnet,
             AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .medium)
         )
         XCTAssertEqual(
-            AppConfig.default.ccodex.haiku,
+            AppConfig.Codex.default.haiku,
             AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .low)
         )
     }
@@ -186,6 +182,46 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(AppConfig.default.usageOverlay.displayMode, .expanded)
     }
 
+    func testUsageOverlayDefaultsHiddenAccountIDsToEmpty() {
+        XCTAssertEqual(AppConfig.UsageOverlay().hiddenAccountIDs, [])
+        XCTAssertEqual(AppConfig.default.usageOverlay.hiddenAccountIDs, [])
+    }
+
+    func testUsageOverlayMissingHiddenAccountIDsDecodesAsEmpty() throws {
+        let data = Data(#"{"isVisible":true,"alwaysOnTop":false,"backgroundOpacity":0.7,"displayMode":"compact"}"#.utf8)
+
+        let decoded = try JSONDecoder().decode(AppConfig.UsageOverlay.self, from: data)
+
+        XCTAssertEqual(decoded.hiddenAccountIDs, [])
+        XCTAssertEqual(decoded.displayMode, .compact)
+    }
+
+    func testUsageOverlayDeduplicatesHiddenAccountIDsWhenDecoding() throws {
+        let data = Data(#"{"hiddenAccountIDs":["claude","codex","claude","claude-api","codex"]}"#.utf8)
+
+        let decoded = try JSONDecoder().decode(AppConfig.UsageOverlay.self, from: data)
+
+        XCTAssertEqual(decoded.hiddenAccountIDs, ["claude", "codex", "claude-api"])
+    }
+
+    func testUsageOverlayHiddenAccountIDsRoundTrip() throws {
+        let overlay = AppConfig.UsageOverlay(
+            isVisible: true,
+            alwaysOnTop: true,
+            backgroundOpacity: 0.45,
+            displayMode: .compact,
+            hiddenAccountIDs: ["codex-work", "claude-api"]
+        )
+
+        let decoded = try JSONDecoder().decode(
+            AppConfig.UsageOverlay.self,
+            from: JSONEncoder().encode(overlay)
+        )
+
+        XCTAssertEqual(decoded, overlay)
+        XCTAssertEqual(decoded.hiddenAccountIDs, ["codex-work", "claude-api"])
+    }
+
     func testUsageOverlayDisplayModeRoundTrips() throws {
         let overlay = AppConfig.UsageOverlay(
             isVisible: true,
@@ -229,16 +265,22 @@ final class AppConfigTests: XCTestCase {
         }
         """#.utf8)
 
-        let config = try JSONDecoder().decode(AppConfig.self, from: data)
+        let result = try LegacyAppConfigDecoder.decode(data)
+        let config = result.config
 
-        XCTAssertEqual(config.commands.cc, "savedcc")
-        XCTAssertEqual(config.commands.ccapi, "savedapi")
-        XCTAssertEqual(config.commands.ccodex, "savedcodex")
-        XCTAssertEqual(config.commands.ccodexapi, "")
-        XCTAssertEqual(config.ccapi.connectionMode, .proxy)
-        XCTAssertEqual(config.ccapi.claude, .automatic)
-        XCTAssertFalse(config.ccapi.dangerousPermissionsEnabled)
-        XCTAssertEqual(config.codexAPI.codex, config.ccodex)
+        XCTAssertEqual(result.legacyOAuthDefaults?.claude?.commandName, "savedcc")
+        XCTAssertEqual(config.claudeAPI.commandName, "savedapi")
+        XCTAssertEqual(result.legacyOAuthDefaults?.codex?.commandName, "savedcodex")
+        XCTAssertEqual(config.codexAPI.commandName, "")
+        XCTAssertEqual(config.claudeAPI.connectionMode, .proxy)
+        XCTAssertEqual(config.claudeAPI.claude, .automatic)
+        XCTAssertFalse(config.claudeAPI.dangerousPermissionsEnabled)
+        XCTAssertEqual(config.codexAPI.codex.opus.model, "gpt-5.5")
+        XCTAssertEqual(config.codexAPI.codex.opus.reasoning, .xhigh)
+        XCTAssertEqual(config.codexAPI.codex.sonnet.model, "gpt-5.5")
+        XCTAssertEqual(config.codexAPI.codex.sonnet.reasoning, .medium)
+        XCTAssertEqual(config.codexAPI.codex.haiku.model, "gpt-5.5")
+        XCTAssertEqual(config.codexAPI.codex.haiku.reasoning, .low)
         XCTAssertFalse(config.codexAPI.dangerousPermissionsEnabled)
     }
 
@@ -264,26 +306,28 @@ final class AppConfigTests: XCTestCase {
         }
         """#.utf8)
 
-        let config = try JSONDecoder().decode(AppConfig.self, from: data)
-        let encodedString = String(decoding: try JSONEncoder().encode(config), as: UTF8.self)
+        let config = try LegacyAppConfigDecoder.decode(data).config
+        let encodedString = try XCTUnwrap(
+            String(data: JSONEncoder().encode(config), encoding: .utf8)
+        )
 
-        XCTAssertTrue(config.ccapi.dangerousPermissionsEnabled)
+        XCTAssertTrue(config.claudeAPI.dangerousPermissionsEnabled)
         XCTAssertFalse(encodedString.contains("claude-sonnet-4-6"))
         XCTAssertFalse(encodedString.contains("connectionMode"))
     }
 
     func testAPIKeyNicknamesRoundTripAndLegacyConfigsDefaultToEmpty() throws {
         var config = AppConfig.default
-        config.ccapi = .init(nickname: "Anthropic Work", dangerousPermissionsEnabled: true)
+        config.claudeAPI = .init(nickname: "Anthropic Work", dangerousPermissionsEnabled: true)
         config.codexAPI = .init(
-            codex: config.ccodex,
+            codex: .default,
             nickname: "OpenAI Personal",
             dangerousPermissionsEnabled: true
         )
 
         let roundTripped = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))
 
-        XCTAssertEqual(roundTripped.ccapi.nickname, "Anthropic Work")
+        XCTAssertEqual(roundTripped.claudeAPI.nickname, "Anthropic Work")
         XCTAssertEqual(roundTripped.codexAPI.nickname, "OpenAI Personal")
 
         let legacy = try JSONDecoder().decode(AppConfig.self, from: Data(#"""
@@ -302,7 +346,7 @@ final class AppConfigTests: XCTestCase {
           "showMenuBarIcon": true
         }
         """#.utf8))
-        XCTAssertEqual(legacy.ccapi.nickname, "")
+        XCTAssertEqual(legacy.claudeAPI.nickname, "")
         XCTAssertEqual(legacy.codexAPI.nickname, "")
     }
 
@@ -333,7 +377,7 @@ final class AppConfigTests: XCTestCase {
         }
         """#.utf8)
 
-        XCTAssertThrowsError(try JSONDecoder().decode(AppConfig.self, from: data))
+        XCTAssertThrowsError(try LegacyAppConfigDecoder.decode(data).config)
     }
 
     func testOAuthCommandProfileDefaultsMissingConnectionModeToProxy() throws {
@@ -351,11 +395,12 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(profile.connectionMode, .proxy)
     }
 
-    func testDefaultAccountPrivacyHidesProviderDetails() {
-        let config = AppConfig.default
+    func testOAuthCommandProfileDefaultsToHiddenAccountDetails() {
+        let claude = AppConfig.OAuthCommandProfile(id: "claude", provider: .claude, authProfileID: "claude.json")
+        let codex = AppConfig.OAuthCommandProfile(id: "codex", provider: .codex, authProfileID: "codex.json")
 
-        XCTAssertTrue(config.accountPrivacy.claudeHidden)
-        XCTAssertTrue(config.accountPrivacy.codexHidden)
+        XCTAssertTrue(claude.accountDetailHidden)
+        XCTAssertTrue(codex.accountDetailHidden)
     }
 
     func testDecodedConfigDefaultsMissingAccountPrivacyToHidden() throws {
@@ -376,10 +421,10 @@ final class AppConfigTests: XCTestCase {
         }
         """#.utf8)
 
-        let config = try JSONDecoder().decode(AppConfig.self, from: data)
+        let defaults = try LegacyAppConfigDecoder.decode(data).legacyOAuthDefaults
 
-        XCTAssertTrue(config.accountPrivacy.claudeHidden)
-        XCTAssertTrue(config.accountPrivacy.codexHidden)
+        XCTAssertTrue(defaults?.claude?.accountDetailHidden == true)
+        XCTAssertTrue(defaults?.codex?.accountDetailHidden == true)
     }
 
     func testDecodedConfigDefaultsMissingCodexPrivacyFieldToHidden() throws {
@@ -401,10 +446,10 @@ final class AppConfigTests: XCTestCase {
         }
         """#.utf8)
 
-        let config = try JSONDecoder().decode(AppConfig.self, from: data)
+        let defaults = try LegacyAppConfigDecoder.decode(data).legacyOAuthDefaults
 
-        XCTAssertFalse(config.accountPrivacy.claudeHidden)
-        XCTAssertTrue(config.accountPrivacy.codexHidden)
+        XCTAssertFalse(defaults?.claude?.accountDetailHidden ?? true)
+        XCTAssertTrue(defaults?.codex?.accountDetailHidden == true)
     }
 
     func testDecodedConfigDefaultsMissingClaudePrivacyFieldToHidden() throws {
@@ -426,10 +471,10 @@ final class AppConfigTests: XCTestCase {
         }
         """#.utf8)
 
-        let config = try JSONDecoder().decode(AppConfig.self, from: data)
+        let defaults = try LegacyAppConfigDecoder.decode(data).legacyOAuthDefaults
 
-        XCTAssertTrue(config.accountPrivacy.claudeHidden)
-        XCTAssertFalse(config.accountPrivacy.codexHidden)
+        XCTAssertTrue(defaults?.claude?.accountDetailHidden == true)
+        XCTAssertFalse(defaults?.codex?.accountDetailHidden ?? true)
     }
 
     func testDecodedConfigPreservesAccountPrivacy() throws {
@@ -451,10 +496,10 @@ final class AppConfigTests: XCTestCase {
         }
         """#.utf8)
 
-        let config = try JSONDecoder().decode(AppConfig.self, from: data)
+        let defaults = try LegacyAppConfigDecoder.decode(data).legacyOAuthDefaults
 
-        XCTAssertFalse(config.accountPrivacy.claudeHidden)
-        XCTAssertTrue(config.accountPrivacy.codexHidden)
+        XCTAssertFalse(defaults?.claude?.accountDetailHidden ?? true)
+        XCTAssertTrue(defaults?.codex?.accountDetailHidden == true)
     }
 
     func testDecodedConfigCannotEnableUnavailableFeatures() throws {
@@ -477,7 +522,7 @@ final class AppConfigTests: XCTestCase {
         }
         """#.utf8)
 
-        let config = try JSONDecoder().decode(AppConfig.self, from: data)
+        let config = try LegacyAppConfigDecoder.decode(data).config
 
         XCTAssertFalse(config.showNotifications)
         XCTAssertFalse(config.roundRobinEnabled)
@@ -519,7 +564,7 @@ final class AppConfigTests: XCTestCase {
         }
         """#.utf8)
 
-        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+        let decoded = try LegacyAppConfigDecoder.decode(data).config
         let encoded = try JSONEncoder().encode(decoded)
         let roundTripped = try JSONDecoder().decode(AppConfig.self, from: encoded)
 
@@ -561,7 +606,7 @@ final class AppConfigTests: XCTestCase {
         }
         """#.utf8)
 
-        let config = try JSONDecoder().decode(AppConfig.self, from: data)
+        let config = try LegacyAppConfigDecoder.decode(data).config
 
         XCTAssertEqual(config.roundRobinProfiles, [])
     }
@@ -593,7 +638,7 @@ final class AppConfigTests: XCTestCase {
         }
         """#.utf8)
 
-        let config = try JSONDecoder().decode(AppConfig.self, from: data)
+        let config = try LegacyAppConfigDecoder.decode(data).config
 
         XCTAssertEqual(config.roundRobinProfiles.first?.nickname, "")
         XCTAssertEqual(config.roundRobinProfiles.first?.accountDetailHidden, true)
@@ -648,7 +693,7 @@ final class AppConfigTests: XCTestCase {
         }
         """#.utf8)
 
-        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+        let decoded = try LegacyAppConfigDecoder.decode(data).config
         let encoded = try JSONEncoder().encode(decoded)
         let roundTripped = try JSONDecoder().decode(AppConfig.self, from: encoded)
 
@@ -687,11 +732,11 @@ final class AppConfigTests: XCTestCase {
         }
         """#.utf8)
 
-        let config = try JSONDecoder().decode(AppConfig.self, from: data)
+        let result = try LegacyAppConfigDecoder.decode(data)
 
-        XCTAssertEqual(config.oauthCommandProfiles, [])
-        XCTAssertEqual(config.commands.cc, "cc")
-        XCTAssertEqual(config.commands.ccodex, "ccodex")
+        XCTAssertEqual(result.config.oauthCommandProfiles, [])
+        XCTAssertEqual(result.legacyOAuthDefaults?.claude?.commandName, "cc")
+        XCTAssertEqual(result.legacyOAuthDefaults?.codex?.commandName, "ccodex")
     }
 
     func testDefaultRootDirectoryUsesDevelopmentSubdirectoryInDebugBuilds() {

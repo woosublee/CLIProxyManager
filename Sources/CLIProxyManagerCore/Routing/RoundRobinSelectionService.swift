@@ -86,7 +86,7 @@ public struct RoundRobinSelectionService: Sendable {
             )
             models = (resolved.opus, resolved.sonnet, resolved.haiku)
         case .codex:
-            let codex = profile.codex ?? config.ccodex
+            let codex = profile.codex ?? .default
             models = (
                 OAuthModelDefaults.prefixedModel(codex.opus.modelIdentifier, prefix: selected.modelPrefix),
                 OAuthModelDefaults.prefixedModel(codex.sonnet.modelIdentifier, prefix: selected.modelPrefix),
@@ -100,7 +100,7 @@ public struct RoundRobinSelectionService: Sendable {
             shellAssignment(name: "CLIPROXY_ROUND_ROBIN_PROFILE", value: selected.authProfileID)
         ]
         if profile.provider == .codex,
-           let autoCompactWindow = CodexContextWindowExport.autoCompactWindow(for: profile.codex ?? config.ccodex) {
+           let autoCompactWindow = CodexContextWindowExport.autoCompactWindow(for: profile.codex ?? .default) {
             assignments.append(shellAssignment(name: "CLAUDE_CODE_AUTO_COMPACT_WINDOW", value: String(autoCompactWindow)))
         }
         return assignments.joined(separator: "\n")

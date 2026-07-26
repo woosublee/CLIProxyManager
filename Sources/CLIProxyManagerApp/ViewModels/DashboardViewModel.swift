@@ -7,7 +7,14 @@ import AppKit
 
 protocol AppConfigStoring: Sendable {
     func load() throws -> AppConfig
+    func loadDocument() throws -> AppConfigLoadResult
     func save(_ config: AppConfig) throws
+}
+
+extension AppConfigStoring {
+    func loadDocument() throws -> AppConfigLoadResult {
+        .canonical(try load())
+    }
 }
 
 extension AppConfigStore: AppConfigStoring {}
@@ -157,6 +164,14 @@ final class DashboardViewModel: ObservableObject {
         let message: String
 
         var errorDescription: String? { message }
+    }
+
+    private struct UsageOverlayAccountVisibilitySaveError: LocalizedError {
+        let underlyingError: Error
+
+        var errorDescription: String? {
+            "Usage HUD account visibility could not be saved: \(underlyingError.localizedDescription)"
+        }
     }
 
     @Published var cards: [ProfileCard]
@@ -354,17 +369,66 @@ final class DashboardViewModel: ObservableObject {
         self.subscriptionUsageSleep = subscriptionUsageSleep
         self.serverStatusRetryDelayNanoseconds = serverStatusRetryDelayNanoseconds
         self.settingsMessageAutoClearDelayNanoseconds = settingsMessageAutoClearDelayNanoseconds
-        var persistedConfig = Self.availableConfig(config ?? ((try? configStore.load()) ?? .default))
-        let migrationResult = Self.applyPreparedCodexCredentialMigrations(
-            to: persistedConfig,
-            authProfileStore: authProfileStore,
-            configStore: configStore,
-            subscriptionUsageSnapshotCache: subscriptionUsageSnapshotCache
-        )
-        persistedConfig = migrationResult.config
+        let loadedDocument: AppConfigLoadResult
+        let configLoadErrorMessage: String?
+        if let config {
+            loadedDocument = .canonical(config)
+            configLoadErrorMessage = nil
+        } else {
+            do {
+                loadedDocument = try configStore.loadDocument()
+                configLoadErrorMessage = nil
+            } catch {
+                loadedDocument = .canonical(.default)
+                configLoadErrorMessage = "Config could not be loaded: \(error.localizedDescription)"
+            }
+        }
+
+        var persistedConfig = Self.availableConfig(loadedDocument.config)
+        let credentialMigrationResult: CodexCredentialMigrationResult
+        if configLoadErrorMessage == nil {
+            credentialMigrationResult = Self.applyPreparedCodexCredentialMigrations(
+                to: persistedConfig,
+                authProfileStore: authProfileStore,
+                configStore: configStore,
+                subscriptionUsageSnapshotCache: subscriptionUsageSnapshotCache
+            )
+        } else {
+            credentialMigrationResult = CodexCredentialMigrationResult(
+                config: persistedConfig,
+                profiles: Result { try authProfileStore.profiles() }
+            )
+        }
+        persistedConfig = credentialMigrationResult.config
         var initialConfig = persistedConfig
-        self.authProfiles = migrationResult.profiles
-        initialConfig = Self.reconciledOAuthCommandProfiles(in: initialConfig, authProfiles: self.authProfiles)
+        var migrationSaveErrorMessage: String?
+        var shouldApplyInitialShellInstall = configLoadErrorMessage == nil
+        switch credentialMigrationResult.profiles {
+        case .success(let profiles):
+            self.authProfiles = profiles
+            if configLoadErrorMessage == nil {
+                let reconciliation = AppConfigMigration.reconcile(
+                    loadResult: AppConfigLoadResult(
+                        config: persistedConfig,
+                        legacyOAuthDefaults: loadedDocument.legacyOAuthDefaults,
+                        requiresCanonicalRewrite: loadedDocument.requiresCanonicalRewrite
+                    ),
+                    authProfiles: profiles
+                )
+                initialConfig = reconciliation.config
+                if reconciliation.shouldPersist {
+                    do {
+                        try configStore.save(initialConfig)
+                        persistedConfig = initialConfig
+                    } catch {
+                        migrationSaveErrorMessage = "Config migration failed: \(error.localizedDescription)"
+                    }
+                }
+            }
+        case .failure:
+            self.authProfiles = []
+            shouldApplyInitialShellInstall = false
+        }
         self.lastPersistedConfig = persistedConfig
         self.config = initialConfig
         cards = ProfileCard.makeDefaultCards(config: initialConfig)
@@ -376,11 +440,18 @@ final class DashboardViewModel: ObservableObject {
         restoreClaudeModelOptions()
         restoreSubscriptionUsageSnapshots()
         reconcileAuthProfilePrefixes()
-        refreshProfiles()
+        rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
         rebuildOptionRows()
         appAppearanceService.apply(showDockIcon: initialConfig.showDockIcon)
         appAppearanceService.apply(appearance: initialConfig.appearance)
-        applyInitialShellInstall()
+        if let configLoadErrorMessage {
+            settingsMessage = configLoadErrorMessage
+        } else if let migrationSaveErrorMessage {
+            settingsMessage = migrationSaveErrorMessage
+        }
+        if shouldApplyInitialShellInstall {
+            applyInitialShellInstall()
+        }
     }
 
     func saveAppearance(_ mode: AppearanceMode) throws {
@@ -510,12 +581,9 @@ final class DashboardViewModel: ObservableObject {
         // commands/nicknames the user typed; only reset the *preferences* the design Reset
         // button targets: appearance, behavior, server config, log level.
         var updatedConfig = AppConfig.default
-        updatedConfig.commands = config.commands
-        updatedConfig.ccapi = config.ccapi
-        updatedConfig.ccodex = config.ccodex
+        updatedConfig.oauthCommandProfiles = config.oauthCommandProfiles
+        updatedConfig.claudeAPI = config.claudeAPI
         updatedConfig.codexAPI = config.codexAPI
-        updatedConfig.nicknames = config.nicknames
-        updatedConfig.includeDangerouslySkipPermissions = config.includeDangerouslySkipPermissions
         let shouldDeleteManagementKey = config.isUsageEnabled || subscriptionUsageKeyStore.isConfigured()
         let shouldStopAPIUsageCollector = config.isUsageEnabled || hasStartedAPIUsageCollector
         do {
@@ -1233,7 +1301,12 @@ final class DashboardViewModel: ObservableObject {
 
     func refreshProfiles() {
         applyCodexCredentialMigrationsIfNeeded()
-        authProfiles = (try? authProfileStore.profiles()) ?? []
+        do {
+            authProfiles = try authProfileStore.profiles()
+        } catch {
+            rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
+            return
+        }
         reconcileConfigWithAuthProfiles()
         let enabledProfileIDs = Set(authProfiles.filter(isSubscriptionUsageEnabled(for:)).map(\.id))
         subscriptionUsageStates = subscriptionUsageStates.filter { enabledProfileIDs.contains($0.key) }
@@ -1255,6 +1328,27 @@ final class DashboardViewModel: ObservableObject {
     func canMoveAccountDown(_ id: ProviderRowState.ID) -> Bool {
         guard let index = providerRows.firstIndex(where: { $0.id == id }) else { return false }
         return index < providerRows.index(before: providerRows.endIndex)
+    }
+
+    func setAccountVisibleInUsageOverlay(
+        _ id: ProviderRowState.ID,
+        isVisible: Bool
+    ) throws {
+        guard let row = providerRows.first(where: { $0.id == id }) else { return }
+        guard row.showsInUsageOverlay != isVisible else { return }
+
+        var updatedConfig = config
+        if isVisible {
+            updatedConfig.usageOverlay.hiddenAccountIDs.removeAll { $0 == id.rawValue }
+        } else if !updatedConfig.usageOverlay.hiddenAccountIDs.contains(id.rawValue) {
+            updatedConfig.usageOverlay.hiddenAccountIDs.append(id.rawValue)
+        }
+
+        do {
+            try savePrivacyOnlyConfig(updatedConfig)
+        } catch {
+            throw UsageOverlayAccountVisibilitySaveError(underlyingError: error)
+        }
     }
 
     func moveAccountUp(_ id: ProviderRowState.ID) {
@@ -1417,14 +1511,16 @@ final class DashboardViewModel: ObservableObject {
         let selectedProfile = candidates.first(where: { !beforeIDs.contains($0.id) }) ?? candidates.first
         guard let selectedProfile else { return providerID(for: providerType) }
 
-        var updatedConfig = Self.reconciledOAuthCommandProfiles(in: config, authProfiles: authProfiles)
+        var updatedConfig = AppConfigMigration.reconcile(
+            loadResult: .canonical(config),
+            authProfiles: authProfiles
+        ).config
         if let index = updatedConfig.oauthCommandProfiles.firstIndex(where: { $0.authProfileID == selectedProfile.id }) {
             updatedConfig.oauthCommandProfiles[index].isEnabled = true
         }
         enableAuthProfile(selectedProfile)
-        let finalConfig = Self.mirroredLegacyFields(in: updatedConfig)
-        let completedID = finalConfig.oauthCommandProfiles.first(where: { $0.authProfileID == selectedProfile.id })?.id ?? selectedProfile.type.rawValue
-        try? saveConfig(finalConfig)
+        let completedID = updatedConfig.oauthCommandProfiles.first(where: { $0.authProfileID == selectedProfile.id })?.id ?? selectedProfile.type.rawValue
+        try? saveConfig(updatedConfig)
         return ProviderRowState.ID(rawValue: completedID)
     }
 
@@ -1497,13 +1593,11 @@ final class DashboardViewModel: ObservableObject {
 
         do {
             let deleted = try removeAuthProfile(for: provider)
+            try resetProviderSettings(provider)
             refreshProfiles()
-            if !deleted {
-                settingsMessage = "\(providerName) auth file was not found."
-            } else {
-                try resetProviderSettings(provider)
-                settingsMessage = "\(providerName) account was removed."
-            }
+            settingsMessage = deleted
+                ? "\(providerName) account was removed."
+                : "\(providerName) auth file was not found."
         } catch {
             refreshProfiles()
             settingsMessage = "\(providerName) account removal failed: \(error.localizedDescription)"
@@ -1574,19 +1668,7 @@ final class DashboardViewModel: ObservableObject {
             return
         }
 
-        var accountPrivacy = config.accountPrivacy
-        switch oauthProviderType(for: provider) {
-        case .claude:
-            accountPrivacy.claudeHidden.toggle()
-        case .codex:
-            accountPrivacy.codexHidden.toggle()
-        }
-
-        do {
-            try saveAccountPrivacy(accountPrivacy)
-        } catch {
-            settingsMessage = "Account privacy update failed: \(error.localizedDescription)"
-        }
+        settingsMessage = "Account privacy update failed: command profile was not found."
     }
 
     func commandNameAvailability(provider: ProviderRowState.ID, functionName: String) async -> CommandNameAvailability {
@@ -1597,16 +1679,11 @@ final class DashboardViewModel: ObservableObject {
             if let index = updatedConfig.oauthCommandProfiles.firstIndex(where: { $0.id == provider.rawValue }) {
                 updatedConfig.oauthCommandProfiles[index].commandName = normalizedName
             } else if provider == .claudeAPI {
-                updatedConfig.commands.ccapi = normalizedName
+                updatedConfig.claudeAPI.commandName = normalizedName
             } else if provider == .codexAPI {
-                updatedConfig.commands.ccodexapi = normalizedName
+                updatedConfig.codexAPI.commandName = normalizedName
             } else {
-                switch oauthProviderType(for: provider) {
-                case .claude:
-                    updatedConfig.commands.cc = normalizedName
-                case .codex:
-                    updatedConfig.commands.ccodex = normalizedName
-                }
+                return .unavailable("Command profile was not found.")
             }
             let activeNames = activeFunctionNames(in: updatedConfig)
             try ShellCommandNameValidator.validate(activeNames)
@@ -1686,18 +1763,15 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func saveClaudeFunctionName(_ functionName: String) throws {
-        if let claudeProfile = config.oauthCommandProfiles.first(where: { $0.provider == AuthProfileType.claude }) {
-            try saveClaudeOAuthSettings(
-                provider: ProviderRowState.ID(rawValue: claudeProfile.id),
-                functionName: functionName,
-                nickname: claudeProfile.nickname,
-                dangerousPermissionsEnabled: claudeProfile.dangerousPermissionsEnabled
-            )
-        } else {
-            var commands = config.commands
-            commands.cc = normalizeCommandName(functionName)
-            try saveCommands(commands)
+        guard let claudeProfile = config.oauthCommandProfiles.first(where: { $0.provider == AuthProfileType.claude }) else {
+            throw CLIProxyManagerCommandError.prerequisite("Claude command profile was not found.")
         }
+        try saveClaudeOAuthSettings(
+            provider: ProviderRowState.ID(rawValue: claudeProfile.id),
+            functionName: functionName,
+            nickname: claudeProfile.nickname,
+            dangerousPermissionsEnabled: claudeProfile.dangerousPermissionsEnabled
+        )
     }
 
     func saveClaudeOAuthSettings(functionName: String, nickname: String, dangerousPermissionsEnabled: Bool) throws {
@@ -1723,20 +1797,17 @@ final class DashboardViewModel: ObservableObject {
     ) throws {
         var updatedConfig = config
         let normalizedFunctionName = normalizeCommandName(functionName)
-        if let index = updatedConfig.oauthCommandProfiles.firstIndex(where: { $0.id == provider.rawValue }) {
-            updatedConfig.oauthCommandProfiles[index].commandName = normalizedFunctionName
-            updatedConfig.oauthCommandProfiles[index].nickname = nickname
-            updatedConfig.oauthCommandProfiles[index].dangerousPermissionsEnabled = dangerousPermissionsEnabled
-            if let connectionMode {
-                updatedConfig.oauthCommandProfiles[index].connectionMode = connectionMode
-            }
-            if let claudeRouting {
-                updatedConfig.oauthCommandProfiles[index].claude = claudeRouting
-            }
-        } else {
-            updatedConfig.commands.cc = normalizedFunctionName
-            updatedConfig.nicknames.cc = nickname
-            updatedConfig.includeDangerouslySkipPermissions = dangerousPermissionsEnabled
+        guard let index = updatedConfig.oauthCommandProfiles.firstIndex(where: { $0.id == provider.rawValue }) else {
+            throw CLIProxyManagerCommandError.prerequisite("Claude command profile was not found.")
+        }
+        updatedConfig.oauthCommandProfiles[index].commandName = normalizedFunctionName
+        updatedConfig.oauthCommandProfiles[index].nickname = nickname
+        updatedConfig.oauthCommandProfiles[index].dangerousPermissionsEnabled = dangerousPermissionsEnabled
+        if let connectionMode {
+            updatedConfig.oauthCommandProfiles[index].connectionMode = connectionMode
+        }
+        if let claudeRouting {
+            updatedConfig.oauthCommandProfiles[index].claude = claudeRouting
         }
         try saveConfig(
             updatedConfig,
@@ -1765,16 +1836,16 @@ final class DashboardViewModel: ObservableObject {
     ) throws {
         let saveSettings = {
             var updatedConfig = self.config
-            updatedConfig.commands.ccapi = self.normalizeCommandName(functionName)
-            updatedConfig.ccapi = AppConfig.ClaudeAPI(
-                claude: claudeRouting ?? updatedConfig.ccapi.claude,
+            updatedConfig.claudeAPI = AppConfig.ClaudeAPI(
+                commandName: self.normalizeCommandName(functionName),
+                claude: claudeRouting ?? updatedConfig.claudeAPI.claude,
                 nickname: nickname.trimmingCharacters(in: .whitespacesAndNewlines),
                 dangerousPermissionsEnabled: dangerousPermissionsEnabled
             )
             try self.saveConfig(
                 updatedConfig,
                 validateShellFunctions: true,
-                shellProfileValidationNames: [updatedConfig.commands.ccapi]
+                shellProfileValidationNames: [updatedConfig.claudeAPI.commandName]
             )
         }
         if let key {
@@ -1801,8 +1872,8 @@ final class DashboardViewModel: ObservableObject {
     ) throws {
         let saveSettings = {
             var updatedConfig = self.config
-            updatedConfig.commands.ccodexapi = self.normalizeCommandName(functionName)
             updatedConfig.codexAPI = AppConfig.CodexAPI(
+                commandName: self.normalizeCommandName(functionName),
                 codex: CodexAPIModelOptions.normalized(codex),
                 nickname: nickname.trimmingCharacters(in: .whitespacesAndNewlines),
                 dangerousPermissionsEnabled: dangerousPermissionsEnabled
@@ -1810,7 +1881,7 @@ final class DashboardViewModel: ObservableObject {
             try self.saveConfig(
                 updatedConfig,
                 validateShellFunctions: true,
-                shellProfileValidationNames: [updatedConfig.commands.ccodexapi]
+                shellProfileValidationNames: [updatedConfig.codexAPI.commandName]
             )
         }
         if let key {
@@ -1958,10 +2029,11 @@ final class DashboardViewModel: ObservableObject {
         do {
             let credentialChanged = try withAPIKeyTransaction(key: key, replacement: nil) {
                 var updatedConfig = config
+                updatedConfig.usageOverlay.hiddenAccountIDs.removeAll { $0 == provider.rawValue }
                 if provider == .codexAPI {
-                    updatedConfig.commands.ccodexapi = ""
+                    updatedConfig.codexAPI.commandName = ""
                 } else {
-                    updatedConfig.commands.ccapi = ""
+                    updatedConfig.claudeAPI.commandName = ""
                 }
                 try saveConfig(updatedConfig, validateShellFunctions: true)
             }
@@ -1975,14 +2047,15 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func saveCodexSettings(functionName: String, codex: AppConfig.Codex) throws {
-        let commandProfile = config.oauthCommandProfiles.first(where: { $0.provider == AuthProfileType.codex })
-        let provider = commandProfile.map { ProviderRowState.ID(rawValue: $0.id) } ?? .codex
+        guard let commandProfile = config.oauthCommandProfiles.first(where: { $0.provider == AuthProfileType.codex }) else {
+            throw CLIProxyManagerCommandError.prerequisite("Codex command profile was not found.")
+        }
         try saveCodexSettings(
-            provider: provider,
+            provider: ProviderRowState.ID(rawValue: commandProfile.id),
             functionName: functionName,
-            nickname: commandProfile?.nickname ?? config.nicknames.ccodex,
+            nickname: commandProfile.nickname,
             codex: codex,
-            dangerousPermissionsEnabled: commandProfile?.dangerousPermissionsEnabled ?? config.includeDangerouslySkipPermissions
+            dangerousPermissionsEnabled: commandProfile.dangerousPermissionsEnabled
         )
     }
 
@@ -2001,17 +2074,13 @@ final class DashboardViewModel: ObservableObject {
     func saveCodexSettings(provider: ProviderRowState.ID, functionName: String, nickname: String, codex: AppConfig.Codex, dangerousPermissionsEnabled: Bool) throws {
         var updatedConfig = config
         let normalizedFunctionName = normalizeCommandName(functionName)
-        if let index = updatedConfig.oauthCommandProfiles.firstIndex(where: { $0.id == provider.rawValue }) {
-            updatedConfig.oauthCommandProfiles[index].commandName = normalizedFunctionName
-            updatedConfig.oauthCommandProfiles[index].nickname = nickname
-            updatedConfig.oauthCommandProfiles[index].codex = codex
-            updatedConfig.oauthCommandProfiles[index].dangerousPermissionsEnabled = dangerousPermissionsEnabled
-        } else {
-            updatedConfig.commands.ccodex = normalizedFunctionName
-            updatedConfig.nicknames.ccodex = nickname
-            updatedConfig.ccodex = codex
-            updatedConfig.includeDangerouslySkipPermissions = dangerousPermissionsEnabled
+        guard let index = updatedConfig.oauthCommandProfiles.firstIndex(where: { $0.id == provider.rawValue }) else {
+            throw CLIProxyManagerCommandError.prerequisite("Codex command profile was not found.")
         }
+        updatedConfig.oauthCommandProfiles[index].commandName = normalizedFunctionName
+        updatedConfig.oauthCommandProfiles[index].nickname = nickname
+        updatedConfig.oauthCommandProfiles[index].codex = codex
+        updatedConfig.oauthCommandProfiles[index].dangerousPermissionsEnabled = dangerousPermissionsEnabled
         try saveConfig(
             updatedConfig,
             validateShellFunctions: true,
@@ -2025,24 +2094,6 @@ final class DashboardViewModel: ObservableObject {
         updatedConfig.port = port
         try saveConfig(updatedConfig)
         scheduleAPIUsageCollectorUpdateIfStarted()
-    }
-
-    func saveCommands(_ commands: AppConfig.Commands) throws {
-        var updatedConfig = config
-        updatedConfig.commands = normalizedCommands(commands)
-        try saveConfig(updatedConfig, validateShellFunctions: true)
-    }
-
-    func saveModels(ccodex: AppConfig.Codex) throws {
-        var updatedConfig = config
-        updatedConfig.ccodex = ccodex
-        try saveConfig(updatedConfig)
-    }
-
-    func saveDangerousPermissionsEnabled(_ isEnabled: Bool) throws {
-        var updatedConfig = config
-        updatedConfig.includeDangerouslySkipPermissions = isEnabled
-        try saveConfig(updatedConfig)
     }
 
     func saveStartAtLogin(_ isEnabled: Bool) throws {
@@ -2327,15 +2378,6 @@ final class DashboardViewModel: ObservableObject {
         name.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func normalizedCommands(_ commands: AppConfig.Commands) -> AppConfig.Commands {
-        AppConfig.Commands(
-            cc: normalizeCommandName(commands.cc),
-            ccapi: normalizeCommandName(commands.ccapi),
-            ccodex: normalizeCommandName(commands.ccodex),
-            ccodexapi: normalizeCommandName(commands.ccodexapi)
-        )
-    }
-
     static func availableConfig(_ config: AppConfig) -> AppConfig {
         var config = config
         config.showNotifications = false
@@ -2344,195 +2386,12 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private static func persistedConfig(_ config: AppConfig) -> AppConfig {
-        var updatedConfig = availableConfig(config)
-        updatedConfig.oauthCommandProfiles = commandProfilesWithRecomputedModelPrefixes(updatedConfig.oauthCommandProfiles)
-        return mirroredLegacyFields(in: updatedConfig)
-    }
-
-    private static func reconciledOAuthCommandProfiles(in config: AppConfig, authProfiles: [AuthProfile]) -> AppConfig {
-        var updatedConfig = config
-        var commandProfiles = config.oauthCommandProfiles
-        let hasStoredProfiles = !commandProfiles.isEmpty
-        var usedIDs = Set(commandProfiles.map(\.id))
-        var seenAuthProfileIDs = Set(commandProfiles.map(\.authProfileID))
-        var firstProviderSeen: Set<AuthProfileType> = []
-
-        for authProfile in authProfiles {
-            let isFirstForProvider = !firstProviderSeen.contains(authProfile.type)
-            firstProviderSeen.insert(authProfile.type)
-            guard !seenAuthProfileIDs.contains(authProfile.id) else { continue }
-
-            let id = commandProfileID(
-                provider: authProfile.type,
-                authProfileID: authProfile.id,
-                preferLegacyID: isFirstForProvider && !hasStoredProfiles,
-                usedIDs: &usedIDs
-            )
-            let legacyCommandName: String
-            let legacyNickname: String
-            let legacyPrivacyHidden: Bool
-            let legacyCodex: AppConfig.Codex?
-            switch authProfile.type {
-            case .claude:
-                legacyCommandName = isFirstForProvider && !hasStoredProfiles ? config.commands.cc : ""
-                legacyNickname = isFirstForProvider && !hasStoredProfiles ? config.nicknames.cc : ""
-                legacyPrivacyHidden = isFirstForProvider && !hasStoredProfiles ? config.accountPrivacy.claudeHidden : true
-                legacyCodex = nil
-            case .codex:
-                legacyCommandName = isFirstForProvider && !hasStoredProfiles ? config.commands.ccodex : ""
-                legacyNickname = isFirstForProvider && !hasStoredProfiles ? config.nicknames.ccodex : ""
-                legacyPrivacyHidden = isFirstForProvider && !hasStoredProfiles ? config.accountPrivacy.codexHidden : true
-                legacyCodex = isFirstForProvider && !hasStoredProfiles ? config.ccodex : AppConfig.default.ccodex
-            }
-            commandProfiles.append(
-                AppConfig.OAuthCommandProfile(
-                    id: id,
-                    provider: authProfile.type,
-                    authProfileID: authProfile.id,
-                    commandName: legacyCommandName,
-                    nickname: legacyNickname,
-                    accountDetailHidden: legacyPrivacyHidden,
-                    dangerousPermissionsEnabled: isFirstForProvider && !hasStoredProfiles ? config.includeDangerouslySkipPermissions : false,
-                    codex: legacyCodex,
-                    modelPrefix: "",
-                    isEnabled: true
-                )
-            )
-            seenAuthProfileIDs.insert(authProfile.id)
-        }
-
-        updatedConfig.oauthCommandProfiles = commandProfilesWithRecomputedModelPrefixes(commandProfiles)
-        return mirroredLegacyFields(in: updatedConfig)
-    }
-
-    private static func mirroredLegacyFields(in config: AppConfig) -> AppConfig {
-        var updatedConfig = config
-        if let claudeProfile = config.oauthCommandProfiles.first(where: { $0.provider == AuthProfileType.claude }) {
-            updatedConfig.commands.cc = claudeProfile.commandName
-            updatedConfig.nicknames.cc = claudeProfile.nickname
-            updatedConfig.accountPrivacy.claudeHidden = claudeProfile.accountDetailHidden
-            updatedConfig.includeDangerouslySkipPermissions = claudeProfile.dangerousPermissionsEnabled
-        }
-        if let codexProfile = config.oauthCommandProfiles.first(where: { $0.provider == AuthProfileType.codex }) {
-            updatedConfig.commands.ccodex = codexProfile.commandName
-            updatedConfig.nicknames.ccodex = codexProfile.nickname
-            updatedConfig.accountPrivacy.codexHidden = codexProfile.accountDetailHidden
-            updatedConfig.ccodex = codexProfile.codex ?? AppConfig.default.ccodex
-            if updatedConfig.oauthCommandProfiles.first(where: { $0.provider == AuthProfileType.claude }) == nil {
-                updatedConfig.includeDangerouslySkipPermissions = codexProfile.dangerousPermissionsEnabled
-            }
-        }
-        return updatedConfig
-    }
-
-    private static func commandProfileID(
-        provider: AuthProfileType,
-        authProfileID: String,
-        preferLegacyID: Bool,
-        usedIDs: inout Set<String>
-    ) -> String {
-        let legacyID = provider.rawValue
-        if preferLegacyID, !usedIDs.contains(legacyID) {
-            usedIDs.insert(legacyID)
-            return legacyID
-        }
-
-        let baseID = "\(provider.rawValue)-\(slug(for: authProfileID))"
-        var candidate = baseID
-        var suffix = 2
-        while usedIDs.contains(candidate) {
-            candidate = "\(baseID)-\(suffix)"
-            suffix += 1
-        }
-        usedIDs.insert(candidate)
-        return candidate
-    }
-
-    private static func commandProfilesWithRecomputedModelPrefixes(
-        _ commandProfiles: [AppConfig.OAuthCommandProfile]
-    ) -> [AppConfig.OAuthCommandProfile] {
-        var usedPrefixes: Set<String> = []
-        return commandProfiles.map { commandProfile in
-            var updatedProfile = commandProfile
-            updatedProfile.modelPrefix = uniqueModelPrefix(
-                provider: commandProfile.provider,
-                nickname: commandProfile.nickname,
-                authProfileID: commandProfile.authProfileID,
-                usedPrefixes: &usedPrefixes
-            )
-            return updatedProfile
-        }
-    }
-
-    private static func uniqueModelPrefix(
-        provider: AuthProfileType,
-        nickname: String,
-        authProfileID: String,
-        usedPrefixes: inout Set<String>
-    ) -> String {
-        let basePrefix = modelPrefixBase(provider: provider, nickname: nickname, authProfileID: authProfileID)
-        var candidate = basePrefix
-        var suffix = 2
-        while usedPrefixes.contains(candidate) {
-            candidate = "\(basePrefix)-\(suffix)"
-            suffix += 1
-        }
-        usedPrefixes.insert(candidate)
-        return candidate
-    }
-
-    private static func modelPrefixBase(provider: AuthProfileType, nickname: String, authProfileID: String) -> String {
-        let suffix = nonEmptySlug(for: nickname) ?? shortAuthProfileSlug(provider: provider, authProfileID: authProfileID)
-        return "\(provider.rawValue)-\(suffix)"
-    }
-
-    private static func shortAuthProfileSlug(provider: AuthProfileType, authProfileID: String) -> String {
-        let fileName = URL(fileURLWithPath: authProfileID).deletingPathExtension().lastPathComponent
-        let fullSlug = slug(for: fileName)
-        let providerPrefix = "\(provider.rawValue)-"
-        let suffixSource: String
-        if fullSlug == provider.rawValue {
-            suffixSource = "account"
-        } else if fullSlug.hasPrefix(providerPrefix) {
-            suffixSource = String(fullSlug.dropFirst(providerPrefix.count))
-        } else {
-            suffixSource = fullSlug
-        }
-
-        let firstSegment = suffixSource.split(separator: "-", maxSplits: 1).first.map(String.init) ?? ""
-        return firstSegment.isEmpty ? "account" : firstSegment
-    }
-
-    private static func nonEmptySlug(for value: String) -> String? {
-        let slug = rawSlug(for: value)
-        return slug.isEmpty ? nil : slug
-    }
-
-    private static func slug(for value: String) -> String {
-        let slug = rawSlug(for: value)
-        return slug.isEmpty ? "account" : slug
-    }
-
-    private static func rawSlug(for value: String) -> String {
-        let lowercasedValue = value.lowercased()
-        var result = ""
-        var previousWasSeparator = false
-        for scalar in lowercasedValue.unicodeScalars {
-            let isAllowed = (97...122).contains(Int(scalar.value)) || (48...57).contains(Int(scalar.value))
-            if isAllowed {
-                result.unicodeScalars.append(scalar)
-                previousWasSeparator = false
-            } else if !previousWasSeparator {
-                result.append("-")
-                previousWasSeparator = true
-            }
-        }
-        return result.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        AppConfigMigration.recomputingModelPrefixes(in: availableConfig(config))
     }
 
     private struct CodexCredentialMigrationResult {
         let config: AppConfig
-        let profiles: [AuthProfile]
+        let profiles: Result<[AuthProfile], Error>
     }
 
     private static func applyPreparedCodexCredentialMigrations(
@@ -2541,11 +2400,16 @@ final class DashboardViewModel: ObservableObject {
         configStore: any AppConfigStoring,
         subscriptionUsageSnapshotCache: any SubscriptionUsageSnapshotCaching
     ) -> CodexCredentialMigrationResult {
-        guard let migrations = try? authProfileStore.prepareCodexCredentialMigrations(),
-              !migrations.isEmpty else {
+        let migrations: [AuthProfileMigration]
+        do {
+            migrations = try authProfileStore.prepareCodexCredentialMigrations()
+        } catch {
+            return CodexCredentialMigrationResult(config: config, profiles: .failure(error))
+        }
+        guard !migrations.isEmpty else {
             return CodexCredentialMigrationResult(
                 config: config,
-                profiles: (try? authProfileStore.profiles()) ?? []
+                profiles: Result { try authProfileStore.profiles() }
             )
         }
 
@@ -2562,7 +2426,7 @@ final class DashboardViewModel: ObservableObject {
             try authProfileStore.finalizeCodexCredentialMigrations(migrations)
             return CodexCredentialMigrationResult(
                 config: migratedConfig,
-                profiles: (try? authProfileStore.profiles()) ?? []
+                profiles: Result { try authProfileStore.profiles() }
             )
         } catch {
             try? configStore.save(config)
@@ -2570,7 +2434,7 @@ final class DashboardViewModel: ObservableObject {
             authProfileStore.rollbackCodexCredentialMigrations(migrations)
             return CodexCredentialMigrationResult(
                 config: config,
-                profiles: (try? authProfileStore.profiles()) ?? []
+                profiles: Result { try authProfileStore.profiles() }
             )
         }
     }
@@ -2582,14 +2446,15 @@ final class DashboardViewModel: ObservableObject {
             configStore: configStore,
             subscriptionUsageSnapshotCache: subscriptionUsageSnapshotCache
         )
+        guard case .success(let profiles) = result.profiles else { return }
         guard result.config != config else {
-            authProfiles = result.profiles
+            authProfiles = profiles
             return
         }
         let mapping = Self.authProfileIDMapping(from: config, to: result.config)
         config = result.config
         lastPersistedConfig = result.config
-        authProfiles = result.profiles
+        authProfiles = profiles
         subscriptionUsageStates = Self.remappingSubscriptionUsageStates(
             subscriptionUsageStates,
             using: mapping
@@ -2709,11 +2574,20 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func reconcileConfigWithAuthProfiles() {
-        let updatedConfig = Self.reconciledOAuthCommandProfiles(in: config, authProfiles: authProfiles)
-        if updatedConfig != config {
-            config = updatedConfig
-            cards = ProfileCard.makeDefaultCards(config: updatedConfig)
+        let result = AppConfigMigration.reconcile(
+            loadResult: .canonical(config),
+            authProfiles: authProfiles
+        )
+        if result.config != config {
+            config = result.config
+            cards = ProfileCard.makeDefaultCards(config: result.config)
             rebuildOptionRows()
+            do {
+                try configStore.save(result.config)
+                lastPersistedConfig = result.config
+            } catch {
+                settingsMessage = "Config migration failed: \(error.localizedDescription)"
+            }
         }
         reconcileAuthProfilePrefixes()
     }
@@ -2772,45 +2646,19 @@ final class DashboardViewModel: ObservableObject {
 
     private func resetProviderSettings(_ provider: ProviderRowState.ID) throws {
         var updatedConfig = config
-        if let index = updatedConfig.oauthCommandProfiles.firstIndex(where: { $0.id == provider.rawValue }) {
-            updatedConfig.oauthCommandProfiles.remove(at: index)
-            resetLegacyFields(for: oauthProviderType(for: provider), in: &updatedConfig)
-            try saveConfig(updatedConfig, validateShellFunctions: true)
-            return
-        }
-
-        resetLegacyFields(for: oauthProviderType(for: provider), in: &updatedConfig)
+        updatedConfig.usageOverlay.hiddenAccountIDs.removeAll { $0 == provider.rawValue }
+        updatedConfig.oauthCommandProfiles.removeAll { $0.id == provider.rawValue }
         try saveConfig(updatedConfig, validateShellFunctions: true)
     }
 
-    private func resetLegacyFields(for providerType: AuthProfileType, in config: inout AppConfig) {
-        switch providerType {
-        case .claude:
-            config.commands.cc = AppConfig.default.commands.cc
-            config.nicknames.cc = ""
-            config.accountPrivacy.claudeHidden = true
-        case .codex:
-            config.commands.ccodex = AppConfig.default.commands.ccodex
-            config.nicknames.ccodex = ""
-            config.ccodex = AppConfig.default.ccodex
-            config.accountPrivacy.codexHidden = true
-        }
-        config.includeDangerouslySkipPermissions = false
-    }
-
     private func codexFastConfigurationInput(config: AppConfig) -> CodexFastConfigurationInput {
-        let oauth: [CodexFastConfigurationInput.Configuration]
-        if config.oauthCommandProfiles.isEmpty {
-            oauth = [.init(config.ccodex)]
-        } else {
-            oauth = config.oauthCommandProfiles.compactMap { profile in
-                guard profile.provider == .codex, profile.isEnabled else { return nil }
-                return .init(profile.codex ?? config.ccodex)
-            }
+        let oauth: [CodexFastConfigurationInput.Configuration] = config.oauthCommandProfiles.compactMap { profile in
+            guard profile.provider == .codex, profile.isEnabled else { return nil }
+            return .init(profile.codex ?? .default)
         }
         let roundRobin: [CodexFastConfigurationInput.Configuration] = config.roundRobinProfiles.compactMap { profile in
             guard profile.provider == .codex, profile.isEnabled else { return nil }
-            return .init(profile.codex ?? config.ccodex)
+            return .init(profile.codex ?? .default)
         }
         return CodexFastConfigurationInput(
             oauth: oauth,
@@ -2821,7 +2669,6 @@ final class DashboardViewModel: ObservableObject {
 
     private func codexFastConfiguration(from input: CodexFastConfigurationInput) throws -> CodexFastConfiguration {
         var snapshotConfig = AppConfig.default
-        snapshotConfig.ccodex = input.oauth.first?.codex ?? AppConfig.default.ccodex
         snapshotConfig.oauthCommandProfiles = input.oauth.enumerated().map { index, configuration in
             .init(
                 id: "fast-snapshot-oauth-\(index)",
@@ -2914,12 +2761,6 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
-    private func saveAccountPrivacy(_ accountPrivacy: AppConfig.AccountPrivacy) throws {
-        var updatedConfig = config
-        updatedConfig.accountPrivacy = accountPrivacy
-        try savePrivacyOnlyConfig(updatedConfig)
-    }
-
     private func savePrivacyOnlyConfig(_ updatedConfig: AppConfig) throws {
         let availableConfig = Self.persistedConfig(updatedConfig)
         let oldConfig = config
@@ -2945,12 +2786,13 @@ final class DashboardViewModel: ObservableObject {
         }
         rebuildOptionRows()
         rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
+        let configToSave = config
 
         var prefixRollbacks: [AuthProfilePrefixRollback] = []
         do {
             prefixRollbacks = try syncAuthProfilePrefixesForSave()
-            try configStore.save(availableConfig)
-            lastPersistedConfig = availableConfig
+            try configStore.save(configToSave)
+            lastPersistedConfig = configToSave
         } catch {
             rollbackAuthProfilePrefixes(prefixRollbacks)
             config = oldConfig
@@ -2992,8 +2834,8 @@ final class DashboardViewModel: ObservableObject {
         return AutomaticShellInstallService.EnabledFunctions(
             claudeOAuth: enabledProfiles.contains { $0.provider == .claude } || enabledRoundRobinProfiles.contains { $0.provider == .claude },
             codex: enabledProfiles.contains { $0.provider == .codex } || enabledRoundRobinProfiles.contains { $0.provider == .codex },
-            claudeAPI: !config.commands.ccapi.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-            codexAPI: !config.commands.ccodexapi.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            claudeAPI: !config.claudeAPI.commandName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            codexAPI: !config.codexAPI.commandName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         )
     }
 
@@ -3004,8 +2846,8 @@ final class DashboardViewModel: ObservableObject {
             .filter(\.isEnabled)
             .map { normalizeCommandName($0.commandName) }
         let apiNames = [
-            isAPIKeyConfigured(.claudeAPIKey) ? normalizeCommandName(config.commands.ccapi) : "",
-            isAPIKeyConfigured(.codexAPIKey) ? normalizeCommandName(config.commands.ccodexapi) : ""
+            isAPIKeyConfigured(.claudeAPIKey) ? normalizeCommandName(config.claudeAPI.commandName) : "",
+            isAPIKeyConfigured(.codexAPIKey) ? normalizeCommandName(config.codexAPI.commandName) : ""
         ]
         return (oauthNames + roundRobinNames + apiNames).filter { !$0.isEmpty }
     }
@@ -3037,12 +2879,12 @@ final class DashboardViewModel: ObservableObject {
         let authProfilesByID = Dictionary(uniqueKeysWithValues: authProfiles.map { ($0.id, $0) })
         let commandProfilesByAuthID = commandProfilesByAuthID(in: config)
         let usableCount = profile.includedAuthProfileIDs.reduce(into: 0) { count, authProfileID in
-            let commandProfile = commandProfilesByAuthID[authProfileID]
-            guard let authProfile = authProfilesByID[authProfileID],
+            guard let commandProfile = commandProfilesByAuthID[authProfileID],
+                  let authProfile = authProfilesByID[authProfileID],
                   authProfile.type == profile.provider,
                   !authProfile.disabled,
-                  commandProfile?.isEnabled != false,
-                  (profile.provider != .claude || commandProfile?.connectionMode != .direct),
+                  commandProfile.isEnabled,
+                  (profile.provider != .claude || commandProfile.connectionMode != .direct),
                   let prefix = routingPrefix(authProfile: authProfile, commandProfile: commandProfile),
                   !prefix.isEmpty else {
                 return
@@ -3056,7 +2898,7 @@ final class DashboardViewModel: ObservableObject {
         let defaultID = providerType == .codex ? "codex-default" : "claude-default"
         if var existing = config.roundRobinProfiles.first(where: { $0.id == defaultID }) {
             if providerType == .codex, existing.codex == nil {
-                existing.codex = config.ccodex
+                existing.codex = AppConfig.Codex.default
             }
             return existing
         }
@@ -3066,7 +2908,7 @@ final class DashboardViewModel: ObservableObject {
             isEnabled: false,
             commandName: "",
             includedAuthProfileIDs: roundRobinAccountOptions(for: providerType).filter { $0.isEnabled && $0.hasPrefix }.map(\.id),
-            codex: providerType == .codex ? config.ccodex : nil
+            codex: providerType == .codex ? AppConfig.Codex.default : nil
         )
     }
 
@@ -3167,92 +3009,79 @@ final class DashboardViewModel: ObservableObject {
         config.isUsageEnabled ? .loading : .disabled
     }
 
+    private func showsInUsageOverlay(_ id: ProviderRowState.ID) -> Bool {
+        !config.usageOverlay.hiddenAccountIDs.contains(id.rawValue)
+    }
+
     private func rebuildProviderRows(claudeStatus: DiagnosticStatus?, codexStatus: DiagnosticStatus?) {
         let authProfilesByID = Dictionary(uniqueKeysWithValues: authProfiles.map { ($0.id, $0) })
-        var rows: [ProviderRowState]
-
-        if config.oauthCommandProfiles.isEmpty {
-            var usedIDs: Set<String> = []
-            var firstProviderSeen: Set<AuthProfileType> = []
-            rows = authProfiles.map { authProfile in
-                let isDisabled = authProfile.disabled
-                let enabledProfile = isDisabled ? nil : authProfile
-                let diagnosticStatus = authProfile.type == .codex ? codexStatus : claudeStatus
-                let fallback = authProfile.type == .codex
-                    ? diagnosticStatus?.message ?? "Connect the bundled CLIProxyAPI Codex OAuth profile."
-                    : diagnosticStatus?.message ?? "Connect the bundled CLIProxyAPI Claude OAuth profile."
-                let isFirstForProvider = !firstProviderSeen.contains(authProfile.type)
-                firstProviderSeen.insert(authProfile.type)
-                let rowID = Self.commandProfileID(provider: authProfile.type, authProfileID: authProfile.id, preferLegacyID: isFirstForProvider, usedIDs: &usedIDs)
-                return ProviderRowState(
-                    id: ProviderRowState.ID(rawValue: rowID), providerType: authProfile.type,
-                    authProfileID: authProfile.id, commandProfileID: rowID,
-                    name: authProfile.type == .codex ? "Codex OAuth" : "Claude OAuth",
-                    nickname: authProfile.type == .codex ? config.nicknames.ccodex : config.nicknames.cc,
-                    functionName: authProfile.type == .codex ? config.commands.ccodex : config.commands.cc,
-                    connectionTitle: isDisabled ? "Disabled" : "Connected",
-                    connectionDetail: profileDetail(profile: enabledProfile ?? authProfile, fallback: fallback),
-                    isConnected: enabledProfile != nil, isDisabled: isDisabled,
-                    isErrored: isProviderErrored(providerType: authProfile.type, enabledProfile: enabledProfile, diagnosticStatus: diagnosticStatus),
-                    accountDetailHidden: authProfile.type == .codex ? config.accountPrivacy.codexHidden : config.accountPrivacy.claudeHidden,
-                    usageState: .subscription(subscriptionUsageStates[authProfile.id] ?? defaultSubscriptionUsageState)
-                )
-            }
-        } else {
-            rows = config.oauthCommandProfiles.compactMap { commandProfile in
-                guard let authProfile = authProfilesByID[commandProfile.authProfileID] else { return nil }
-                let isDisabled = authProfile.disabled || !commandProfile.isEnabled
-                let enabledProfile = isDisabled ? nil : authProfile
-                let diagnosticStatus = commandProfile.provider == .codex ? codexStatus : claudeStatus
-                let fallback = commandProfile.provider == .codex
-                    ? diagnosticStatus?.message ?? "Connect the bundled CLIProxyAPI Codex OAuth profile."
-                    : diagnosticStatus?.message ?? "Connect the bundled CLIProxyAPI Claude OAuth profile."
-                return ProviderRowState(
-                    id: ProviderRowState.ID(rawValue: commandProfile.id), providerType: commandProfile.provider,
-                    authProfileID: commandProfile.authProfileID, commandProfileID: commandProfile.id,
-                    name: commandProfile.provider == .codex ? "Codex OAuth" : "Claude OAuth",
-                    nickname: commandProfile.nickname, functionName: commandProfile.commandName,
-                    connectionTitle: isDisabled ? "Disabled" : "Connected",
-                    connectionDetail: profileDetail(profile: enabledProfile ?? authProfile, fallback: fallback),
-                    isConnected: enabledProfile != nil, isDisabled: isDisabled,
-                    isErrored: isProviderErrored(providerType: commandProfile.provider, enabledProfile: enabledProfile, diagnosticStatus: diagnosticStatus),
-                    accountDetailHidden: commandProfile.accountDetailHidden,
-                    usageState: .subscription(subscriptionUsageStates[authProfile.id] ?? defaultSubscriptionUsageState)
-                )
-            }
+        var rows: [ProviderRowState] = config.oauthCommandProfiles.compactMap { commandProfile in
+            guard let authProfile = authProfilesByID[commandProfile.authProfileID] else { return nil }
+            let isDisabled = authProfile.disabled || !commandProfile.isEnabled
+            let enabledProfile = isDisabled ? nil : authProfile
+            let diagnosticStatus = commandProfile.provider == .codex ? codexStatus : claudeStatus
+            let fallback = commandProfile.provider == .codex
+                ? diagnosticStatus?.message ?? "Connect the bundled CLIProxyAPI Codex OAuth profile."
+                : diagnosticStatus?.message ?? "Connect the bundled CLIProxyAPI Claude OAuth profile."
+            return ProviderRowState(
+                id: ProviderRowState.ID(rawValue: commandProfile.id), providerType: commandProfile.provider,
+                authProfileID: commandProfile.authProfileID, commandProfileID: commandProfile.id,
+                name: commandProfile.provider == .codex ? "Codex OAuth" : "Claude OAuth",
+                nickname: commandProfile.nickname, functionName: commandProfile.commandName,
+                connectionTitle: isDisabled ? "Disabled" : "Connected",
+                connectionDetail: profileDetail(profile: enabledProfile ?? authProfile, fallback: fallback),
+                isConnected: enabledProfile != nil, isDisabled: isDisabled,
+                isErrored: isProviderErrored(providerType: commandProfile.provider, enabledProfile: enabledProfile, diagnosticStatus: diagnosticStatus),
+                accountDetailHidden: commandProfile.accountDetailHidden,
+                usageState: .subscription(subscriptionUsageStates[authProfile.id] ?? defaultSubscriptionUsageState),
+                showsInUsageOverlay: showsInUsageOverlay(ProviderRowState.ID(rawValue: commandProfile.id))
+            )
         }
 
         if isAPIKeyConfigured(.claudeAPIKey) {
             rows.append(ProviderRowState(
-                id: .claudeAPI, providerType: .claude, name: "Claude API Key", nickname: config.ccapi.nickname,
-                functionName: config.commands.ccapi, connectionTitle: "Configured",
+                id: .claudeAPI, providerType: .claude, name: "Claude API Key", nickname: config.claudeAPI.nickname,
+                functionName: config.claudeAPI.commandName, connectionTitle: "Configured",
                 connectionDetail: "CLIProxyAPI",
                 isConnected: true, accountDetailHidden: true,
                 usageState: .apiCost(apiCostUsageStates[ProviderRowState.ID.claudeAPI.rawValue] ?? defaultAPICostUsageState),
-                showsUsage: true
+                showsUsage: true,
+                showsInUsageOverlay: showsInUsageOverlay(.claudeAPI)
             ))
         }
         if isAPIKeyConfigured(.codexAPIKey) {
             rows.append(ProviderRowState(
                 id: .codexAPI, providerType: .codex, name: "OpenAI API Key", nickname: config.codexAPI.nickname,
-                functionName: config.commands.ccodexapi, connectionTitle: "Configured",
+                functionName: config.codexAPI.commandName, connectionTitle: "Configured",
                 connectionDetail: "CLIProxyAPI", isConnected: true,
                 accountDetailHidden: true,
                 usageState: .apiCost(apiCostUsageStates[ProviderRowState.ID.codexAPI.rawValue] ?? defaultAPICostUsageState),
-                showsUsage: true
+                showsUsage: true,
+                showsInUsageOverlay: showsInUsageOverlay(.codexAPI)
             ))
         }
         let orderedRows = AccountOrdering.orderedRows(rows, storedIDs: config.accountOrder)
         providerRows = orderedRows
-        config.accountOrder = orderedRows.map(\.id.rawValue)
+        config.accountOrder = orderedRows.map { $0.id.rawValue }
     }
 
     private func rebuildOptionRows() {
+        let functionNames = (
+            config.oauthCommandProfiles.map(\.commandName)
+                + config.roundRobinProfiles.map(\.commandName)
+                + [config.claudeAPI.commandName, config.codexAPI.commandName]
+        )
+        .map(normalizeCommandName)
+        .filter { !$0.isEmpty }
+        let dangerousPermissionsEnabled = config.oauthCommandProfiles.contains { $0.dangerousPermissionsEnabled }
+            || config.roundRobinProfiles.contains { $0.dangerousPermissionsEnabled }
+            || config.claudeAPI.dangerousPermissionsEnabled
+            || config.codexAPI.dangerousPermissionsEnabled
         optionRows = [
             DashboardOptionRow(id: "port", title: "Port", value: "\(config.port)", detail: "App-managed CLIProxyAPI server"),
-            DashboardOptionRow(id: "functions", title: "Shell Functions", value: "\(config.commands.cc) / \(config.commands.ccapi) / \(config.commands.ccodex)", detail: "Terminal commands"),
+            DashboardOptionRow(id: "functions", title: "Shell Functions", value: functionNames.joined(separator: " / "), detail: "Terminal commands"),
             DashboardOptionRow(id: "models", title: "Models", value: "Claude + Codex mappings", detail: "Model, reasoning, context window"),
-            DashboardOptionRow(id: "permissions", title: "Permissions", value: config.includeDangerouslySkipPermissions ? "Dangerous skip enabled" : "Safe mode", detail: "Claude Code permission behavior"),
+            DashboardOptionRow(id: "permissions", title: "Permissions", value: dangerousPermissionsEnabled ? "Dangerous skip enabled" : "Safe mode", detail: "Claude Code permission behavior"),
             DashboardOptionRow(id: "install", title: "Shell Install", value: shellInstaller.isInstalled() ? "Installed" : "Not installed", detail: "Managed .zshrc source block")
         ]
     }

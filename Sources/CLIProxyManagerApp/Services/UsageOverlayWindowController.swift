@@ -101,6 +101,8 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     private let placementPersistence: UsageOverlayPlacementPersistence
     private let deferredScreenResizeScheduler: (@escaping @MainActor () -> Void) -> Void
     private let modeTransitionResizeScheduler: (@escaping @MainActor () -> Void) -> Void
+    private let accountConcealScheduler: (@escaping @MainActor () -> Void) -> Void
+    private let accountRevealScheduler: (@escaping @MainActor () -> Void) -> Void
     private let fittingSizeProvider: (() -> CGSize)?
     private let frameAnimator: (NSPanel, CGRect, @escaping @MainActor () -> Void) -> Void
     private let frameAnimationInterrupter: (NSPanel) -> Void
@@ -123,10 +125,12 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     private var failedPersistenceOverride: FailedPersistenceOverride?
     private var persistenceTransaction: PersistenceTransaction?
     private var resizeCoordinator = UsageOverlayResizeCoordinator()
+    private var accountTransitionCoordinator: UsageOverlayAccountTransitionCoordinator
     private var resizeScheduleGeneration = 0
     private var isWaitingForModeTransitionResize = false
     private var screenGeometryGeneration = 0
     private var userMoveInterruptedTransition = false
+    private var userMoveInterruptedAccountGeneration: Int?
     private var isUserMoveInProgress = false
     private var isApplyingControllerFrame = false
     private var isUsingTemporaryScreenFallback = false
@@ -145,6 +149,12 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     var isContentHiddenForModeTransition: Bool {
         presentationState.isContentHiddenForModeTransition
     }
+    var presentedAccountPresentation: UsageOverlayAccountPresentation {
+        presentationState.presentedAccountPresentation
+    }
+    var accountTransitionPhase: UsageOverlayAccountTransitionPhase {
+        presentationState.accountTransitionPhase
+    }
     var compactAccountMaximumHeight: CGFloat { presentationState.compactAccountMaximumHeight }
     var window: NSWindow { panel }
 
@@ -152,6 +162,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         panel: NSPanel? = nil,
         viewModel: DashboardViewModel? = nil,
         initialDisplayMode: AppConfig.UsageOverlay.DisplayMode? = nil,
+        initialAccountPresentation: UsageOverlayAccountPresentation? = nil,
         persistDisplayMode: ((AppConfig.UsageOverlay.DisplayMode) -> Bool)? = nil,
         refreshStatusOnShow: (() -> Void)? = nil,
         usageOverlayPublisher: AnyPublisher<AppConfig.UsageOverlay, Never>? = nil,
@@ -164,6 +175,8 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         placementPersistence: UsageOverlayPlacementPersistence = .disabled,
         deferredScreenResizeScheduler: ((@escaping @MainActor () -> Void) -> Void)? = nil,
         modeTransitionResizeScheduler: ((@escaping @MainActor () -> Void) -> Void)? = nil,
+        accountConcealScheduler: ((@escaping @MainActor () -> Void) -> Void)? = nil,
+        accountRevealScheduler: ((@escaping @MainActor () -> Void) -> Void)? = nil,
         fittingSizeProvider: (() -> CGSize)? = nil,
         frameAnimator: ((NSPanel, CGRect, @escaping @MainActor () -> Void) -> Void)? = nil,
         frameAnimationInterrupter: ((NSPanel) -> Void)? = nil,
@@ -173,7 +186,19 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     ) {
         let suppliedPanelFrame = panel?.frame
         let mode = initialDisplayMode ?? viewModel?.config.usageOverlay.displayMode ?? .expanded
-        self.presentationState = UsageOverlayPresentationState(displayMode: mode)
+        let accountPresentation = initialAccountPresentation
+            ?? viewModel.map { Self.accountPresentation(for: $0) }
+            ?? UsageOverlayAccountPresentation(
+                providers: [],
+                emptyMessage: "No connected accounts"
+            )
+        self.presentationState = UsageOverlayPresentationState(
+            displayMode: mode,
+            accountPresentation: accountPresentation
+        )
+        self.accountTransitionCoordinator = UsageOverlayAccountTransitionCoordinator(
+            initialPresentation: accountPresentation
+        )
         self.shouldReduceMotion = shouldReduceMotion
         self.visibleFrameProvider = visibleFrameProvider ?? { nil }
         self.screenVisibleFrameProvider = screenVisibleFrameProvider ?? { nil }
@@ -187,6 +212,16 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         }
         self.modeTransitionResizeScheduler = modeTransitionResizeScheduler ?? { action in
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { @MainActor in
+                action()
+            }
+        }
+        self.accountConcealScheduler = accountConcealScheduler ?? { action in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) { @MainActor in
+                action()
+            }
+        }
+        self.accountRevealScheduler = accountRevealScheduler ?? { action in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) { @MainActor in
                 action()
             }
         }
@@ -256,6 +291,17 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         }
     }
 
+    private static func accountPresentation(
+        for viewModel: DashboardViewModel
+    ) -> UsageOverlayAccountPresentation {
+        UsageOverlayAccountPresentation(
+            serverStatus: viewModel.serverStatus,
+            serverControlState: viewModel.serverControlState,
+            providerRows: viewModel.providerRows,
+            port: viewModel.config.port
+        )
+    }
+
     static func isFrameUsable(_ frame: CGRect, within screenFrames: [CGRect]) -> Bool {
         screenFrames.contains { screenFrame in
             let visibleArea = frame.intersection(screenFrame)
@@ -265,6 +311,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     }
 
     func toggleDisplayMode() {
+        settleAccountTransitionImmediately(interruptFrameAnimation: true)
         let original = displayMode
         let target = original.opposite
         let transitionAnchor = resizeCoordinator.authoritativeAnchor
@@ -322,13 +369,19 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     }
 
     func updateContentSize(_ size: CGSize, animated: Bool = false) {
-        updateContentSize(size, animated: animated, transitionGeneration: nil)
+        updateContentSize(
+            size,
+            animated: animated,
+            transitionGeneration: nil,
+            completion: nil
+        )
     }
 
     private func updateContentSize(
         _ size: CGSize,
         animated: Bool,
-        transitionGeneration: Int?
+        transitionGeneration: Int?,
+        completion: (@MainActor () -> Void)? = nil
     ) {
         let anchorFrame = frameAnchoredAtAuthoritativeTransitionAnchor()
         guard let visibleFrame = currentVisibleFrame() else {
@@ -336,9 +389,8 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
                 fallbackFrame(targetContentHeight: size.height, currentFrame: anchorFrame),
                 display: true
             )
-            resizeCoordinator.transitionCompletedWithoutAnimation(generation: transitionGeneration)
-            presentationState.presentedDisplayMode = displayMode
-            presentationState.isContentHiddenForModeTransition = false
+            completeModeResizeWithoutAnimation(generation: transitionGeneration)
+            completion?()
             return
         }
         let target = UsageOverlayFrameLayout.targetFrame(
@@ -351,9 +403,8 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
 
         guard shouldAnimate else {
             applyControllerFrame(target, display: true)
-            resizeCoordinator.transitionCompletedWithoutAnimation(generation: transitionGeneration)
-            presentationState.presentedDisplayMode = displayMode
-            presentationState.isContentHiddenForModeTransition = false
+            completeModeResizeWithoutAnimation(generation: transitionGeneration)
+            completion?()
             return
         }
 
@@ -363,16 +414,27 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             guard let self else { return }
             self.isApplyingControllerFrame = false
             self.resizeCoordinator.animationCompleted(generation: transitionGeneration)
-            if !self.resizeCoordinator.hasActiveTransition {
-                self.presentationState.presentedDisplayMode = self.displayMode
-                self.presentationState.isContentHiddenForModeTransition = false
-            }
+            self.completeModeRevealIfNeeded(generation: transitionGeneration)
+            completion?()
         }
+    }
+
+    private func completeModeResizeWithoutAnimation(generation: Int?) {
+        resizeCoordinator.transitionCompletedWithoutAnimation(generation: generation)
+        completeModeRevealIfNeeded(generation: generation)
+    }
+
+    private func completeModeRevealIfNeeded(generation: Int?) {
+        guard generation != nil, !resizeCoordinator.hasActiveTransition else { return }
+        presentationState.presentedDisplayMode = displayMode
+        presentationState.isContentHiddenForModeTransition = false
     }
 
     func hideForCurrentSession() {
         isSuppressedForCurrentSession = true
         userMoveInterruptedTransition = false
+        userMoveInterruptedAccountGeneration = nil
+        settleAccountTransitionImmediately(interruptFrameAnimation: true)
         interruptActiveTransition()
         panel.orderOut(nil)
         isVisible = false
@@ -387,6 +449,9 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             return
         }
         isUserMoveInProgress = true
+        if let generation = prepareAccountTransitionForHiddenSettlement() {
+            userMoveInterruptedAccountGeneration = generation
+        }
         guard resizeCoordinator.hasActiveTransition else { return }
         interruptActiveTransition()
         userMoveInterruptedTransition = true
@@ -400,6 +465,10 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         guard isUserMoveInProgress else { return }
         isUserMoveInProgress = false
         saveCurrentPlacement()
+        if let generation = userMoveInterruptedAccountGeneration {
+            userMoveInterruptedAccountGeneration = nil
+            beginAccountResize(generation: generation, animated: false)
+        }
         if userMoveInterruptedTransition {
             userMoveInterruptedTransition = false
             resizeToFittingContent(animated: false)
@@ -407,7 +476,158 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     }
 
     func requestContentResize(animated: Bool = false) {
+        if displayMode == .compact, accountTransitionPhase == .swapping {
+            beginAccountResize(
+                generation: accountTransitionCoordinator.generation,
+                animated: true
+            )
+            return
+        }
+        if retargetActiveAccountResize() { return }
         resizeToFittingContent(animated: animated)
+    }
+
+    private func retargetActiveAccountResize() -> Bool {
+        guard let generation = accountTransitionCoordinator.retargetResize() else {
+            return false
+        }
+        frameAnimationInterrupter(panel)
+        isApplyingControllerFrame = false
+        presentationState.accountTransitionPhase = .resizing
+        panel.contentView?.layoutSubtreeIfNeeded()
+        let fittingSize = fittingSizeProvider?()
+            ?? transitionFittingSize()
+            ?? panel.contentView?.fittingSize
+            ?? panel.frame.size
+        updateContentSize(
+            fittingSize,
+            animated: true,
+            transitionGeneration: nil
+        ) { [weak self] in
+            self?.completeAccountResize(generation: generation)
+        }
+        return true
+    }
+
+    func updateAccountPresentation(_ presentation: UsageOverlayAccountPresentation) {
+        let wasResizing = accountTransitionPhase == .resizing
+        let action = accountTransitionCoordinator.receive(
+            presentation,
+            presentedProviderIDs: presentedAccountPresentation.orderedProviderIDs,
+            allowsAnimation: panel.isVisible
+                && !shouldReduceMotion()
+                && !presentationState.isContentHiddenForModeTransition
+        )
+        if wasResizing, case .retargetHidden = action {
+            frameAnimationInterrupter(panel)
+            isApplyingControllerFrame = false
+        }
+        applyAccountTransitionAction(action)
+    }
+
+    private func applyAccountTransitionAction(
+        _ action: UsageOverlayAccountTransitionCoordinator.Action
+    ) {
+        switch action {
+        case .none:
+            return
+        case .applyImmediately(let presentation):
+            presentationState.presentedAccountPresentation = presentation
+            presentationState.accountTransitionPhase = accountTransitionCoordinator.phase
+            if panel.isVisible {
+                if shouldReduceMotion() {
+                    resizeToFittingContentImmediately(animated: false)
+                } else {
+                    resizeToFittingContent(animated: false)
+                }
+            }
+        case .beginConceal(let generation):
+            presentationState.accountTransitionPhase = .concealing
+            accountConcealScheduler { @MainActor [weak self] in
+                self?.completeAccountConceal(generation: generation)
+            }
+        case .beginReveal(let generation):
+            beginAccountReveal(generation: generation)
+        case .retargetHidden(let generation, let presentation):
+            presentationState.accountTransitionPhase = .swapping
+            presentationState.presentedAccountPresentation = presentation
+            scheduleAccountResizeWhenReady(generation: generation)
+        }
+    }
+
+    private func completeAccountConceal(generation: Int) {
+        guard let presentation = accountTransitionCoordinator.completeConceal(
+            generation: generation
+        ) else { return }
+        presentationState.accountTransitionPhase = .swapping
+        presentationState.presentedAccountPresentation = presentation
+        scheduleAccountResizeWhenReady(generation: generation)
+    }
+
+    private func scheduleAccountResizeWhenReady(generation: Int) {
+        guard displayMode == .expanded else { return }
+        scheduleAccountResize(generation: generation)
+    }
+
+    private func scheduleAccountResize(generation: Int) {
+        DispatchQueue.main.async { @MainActor [weak self] in
+            self?.beginAccountResize(generation: generation)
+        }
+    }
+
+    private func beginAccountResize(generation: Int, animated: Bool = true) {
+        guard accountTransitionCoordinator.beginResize(generation: generation) else { return }
+        presentationState.accountTransitionPhase = .resizing
+        panel.contentView?.layoutSubtreeIfNeeded()
+        let fittingSize = fittingSizeProvider?()
+            ?? transitionFittingSize()
+            ?? panel.contentView?.fittingSize
+            ?? panel.frame.size
+        updateContentSize(
+            fittingSize,
+            animated: animated,
+            transitionGeneration: nil
+        ) { [weak self] in
+            self?.completeAccountResize(generation: generation)
+        }
+    }
+
+    private func completeAccountResize(generation: Int) {
+        guard accountTransitionCoordinator.completeResize(generation: generation) else { return }
+        beginAccountReveal(generation: generation)
+    }
+
+    private func beginAccountReveal(generation: Int) {
+        presentationState.accountTransitionPhase = .revealing
+        accountRevealScheduler { @MainActor [weak self] in
+            guard let self,
+                  self.accountTransitionCoordinator.completeReveal(generation: generation) else {
+                return
+            }
+            self.presentationState.accountTransitionPhase = .visible
+        }
+    }
+
+    private func prepareAccountTransitionForHiddenSettlement() -> Int? {
+        guard accountTransitionPhase != .visible else { return nil }
+        if accountTransitionPhase == .resizing {
+            frameAnimationInterrupter(panel)
+            isApplyingControllerFrame = false
+        }
+        let settlement = accountTransitionCoordinator.prepareHiddenSettlement()
+        presentationState.presentedAccountPresentation = settlement.presentation
+        presentationState.accountTransitionPhase = .swapping
+        return settlement.generation
+    }
+
+    private func settleAccountTransitionImmediately(interruptFrameAnimation: Bool) {
+        if interruptFrameAnimation, accountTransitionPhase == .resizing {
+            frameAnimationInterrupter(panel)
+            isApplyingControllerFrame = false
+        }
+        presentationState.presentedAccountPresentation =
+            accountTransitionCoordinator.absorbLatestPresentation()
+        presentationState.accountTransitionPhase = .visible
     }
 
     func showForCurrentSession(using preferences: AppConfig.UsageOverlay) {
@@ -454,6 +674,8 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             resizeToFittingContent(animated: false)
         } else if !preferences.isVisible {
             userMoveInterruptedTransition = false
+            userMoveInterruptedAccountGeneration = nil
+            settleAccountTransitionImmediately(interruptFrameAnimation: true)
             interruptActiveTransition()
             panel.orderOut(nil)
             isVisible = false
@@ -472,7 +694,11 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     func handleScreenGeometryChange() {
         guard !isUserMoveInProgress else { return }
         userMoveInterruptedTransition = false
+        userMoveInterruptedAccountGeneration = nil
+        let accountSettlementGeneration = prepareAccountTransitionForHiddenSettlement()
         interruptActiveTransition()
+        presentationState.presentedDisplayMode = displayMode
+        presentationState.isContentHiddenForModeTransition = false
         updatePanelConstraints(for: displayMode)
         screenGeometryGeneration += 1
         let generation = screenGeometryGeneration
@@ -480,6 +706,13 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             guard let self, generation == self.screenGeometryGeneration else { return }
             if self.savedPlacement != nil || self.isUsingTemporaryScreenFallback {
                 self.restoreSavedPlacement(allowMigration: false)
+            }
+            if let accountSettlementGeneration {
+                self.beginAccountResize(
+                    generation: accountSettlementGeneration,
+                    animated: false
+                )
+                return
             }
             self.panel.contentView?.layoutSubtreeIfNeeded()
             let fittingSize = self.fittingSizeProvider?()
@@ -516,7 +749,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
                 viewModel: viewModel,
                 presentationState: presentationState,
                 onContentSizeInvalidated: { [weak self] in
-                    self?.resizeToFittingContent(animated: false)
+                    self?.requestContentResize(animated: false)
                 }
             ),
             viewModel: viewModel,
@@ -528,10 +761,10 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         surfaceView.autoresizingMask = [.width, .height]
         panel.contentView = surfaceView
         contentObservation = viewModel.objectWillChange
-            .sink { [weak self] in
-                DispatchQueue.main.async {
-                    guard let self, self.panel.isVisible else { return }
-                    self.resizeToFittingContent(animated: false)
+            .sink { [weak self, weak viewModel] in
+                DispatchQueue.main.async { @MainActor in
+                    guard let self, let viewModel else { return }
+                    self.updateAccountPresentation(Self.accountPresentation(for: viewModel))
                 }
             }
     }
@@ -698,7 +931,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     }
 
     private func resizeToFittingContentImmediately(animated: Bool) {
-        guard resizeCoordinator.requestResize(animated: animated) else { return }
+        _ = resizeCoordinator.requestResize(animated: animated)
         resizeScheduleGeneration += 1
         performScheduledResize()
     }

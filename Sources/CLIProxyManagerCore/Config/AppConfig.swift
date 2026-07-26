@@ -14,38 +14,15 @@ public enum LogLevel: String, Codable, CaseIterable, Sendable {
 }
 
 public struct AppConfig: Codable, Equatable, Sendable {
+    public static let currentSchemaVersion = 2
+
     public enum ConnectionMode: String, Codable, CaseIterable, Sendable {
         case direct
         case proxy
     }
 
-    public struct Commands: Codable, Equatable, Sendable {
-        public var cc: String
-        public var ccapi: String
-        public var ccodex: String
-        public var ccodexapi: String
-
-        public init(cc: String, ccapi: String, ccodex: String, ccodexapi: String = "") {
-            self.cc = cc
-            self.ccapi = ccapi
-            self.ccodex = ccodex
-            self.ccodexapi = ccodexapi
-        }
-
-        private enum CodingKeys: String, CodingKey {
-            case cc, ccapi, ccodex, ccodexapi
-        }
-
-        public init(from decoder: Decoder) throws {
-            let container = try decoder.container(keyedBy: CodingKeys.self)
-            self.cc = try container.decodeIfPresent(String.self, forKey: .cc) ?? ""
-            self.ccapi = try container.decodeIfPresent(String.self, forKey: .ccapi) ?? ""
-            self.ccodex = try container.decodeIfPresent(String.self, forKey: .ccodex) ?? ""
-            self.ccodexapi = try container.decodeIfPresent(String.self, forKey: .ccodexapi) ?? ""
-        }
-    }
-
     public struct ClaudeAPI: Codable, Equatable, Sendable {
+        public var commandName: String
         public var claude: ClaudeRouting
         public var nickname: String
         public var dangerousPermissionsEnabled: Bool
@@ -53,21 +30,24 @@ public struct AppConfig: Codable, Equatable, Sendable {
         public var connectionMode: ConnectionMode { .proxy }
 
         public init(
+            commandName: String = "",
             claude: ClaudeRouting = .automatic,
             nickname: String = "",
             dangerousPermissionsEnabled: Bool = false
         ) {
+            self.commandName = commandName
             self.claude = claude
             self.nickname = nickname
             self.dangerousPermissionsEnabled = dangerousPermissionsEnabled
         }
 
         private enum CodingKeys: String, CodingKey {
-            case connectionMode, claude, nickname, dangerousPermissionsEnabled
+            case commandName, connectionMode, claude, nickname, dangerousPermissionsEnabled
         }
 
         public init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.commandName = try container.decodeIfPresent(String.self, forKey: .commandName) ?? ""
             _ = try container.decodeIfPresent(ConnectionMode.self, forKey: .connectionMode)
             self.claude = try container.decodeIfPresent(ClaudeRouting.self, forKey: .claude) ?? .automatic
             self.nickname = try container.decodeIfPresent(String.self, forKey: .nickname) ?? ""
@@ -76,6 +56,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
 
         public func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(commandName, forKey: .commandName)
             try container.encode(claude, forKey: .claude)
             try container.encode(nickname, forKey: .nickname)
             try container.encode(dangerousPermissionsEnabled, forKey: .dangerousPermissionsEnabled)
@@ -133,6 +114,12 @@ public struct AppConfig: Codable, Equatable, Sendable {
     }
 
     public struct Codex: Codable, Equatable, Sendable {
+        public static let `default` = Codex(
+            opus: CodexRole(model: "gpt-5.6-terra", reasoning: .xhigh),
+            sonnet: CodexRole(model: "gpt-5.6-terra", reasoning: .medium),
+            haiku: CodexRole(model: "gpt-5.6-terra", reasoning: .low)
+        )
+
         public var opus: CodexRole
         public var sonnet: CodexRole
         public var haiku: CodexRole
@@ -145,23 +132,31 @@ public struct AppConfig: Codable, Equatable, Sendable {
     }
 
     public struct CodexAPI: Codable, Equatable, Sendable {
+        public var commandName: String
         public var codex: Codex
         public var nickname: String
         public var dangerousPermissionsEnabled: Bool
 
-        public init(codex: Codex, nickname: String = "", dangerousPermissionsEnabled: Bool = false) {
+        public init(
+            commandName: String = "",
+            codex: Codex = .default,
+            nickname: String = "",
+            dangerousPermissionsEnabled: Bool = false
+        ) {
+            self.commandName = commandName
             self.codex = codex
             self.nickname = nickname
             self.dangerousPermissionsEnabled = dangerousPermissionsEnabled
         }
 
         private enum CodingKeys: String, CodingKey {
-            case codex, nickname, dangerousPermissionsEnabled
+            case commandName, codex, nickname, dangerousPermissionsEnabled
         }
 
         public init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
-            self.codex = try container.decode(Codex.self, forKey: .codex)
+            self.commandName = try container.decodeIfPresent(String.self, forKey: .commandName) ?? ""
+            self.codex = try container.decodeIfPresent(Codex.self, forKey: .codex) ?? .default
             self.nickname = try container.decodeIfPresent(String.self, forKey: .nickname) ?? ""
             self.dangerousPermissionsEnabled = try container.decodeIfPresent(Bool.self, forKey: .dangerousPermissionsEnabled) ?? false
         }
@@ -294,16 +289,6 @@ public struct AppConfig: Codable, Equatable, Sendable {
         }
     }
 
-    public struct Nicknames: Codable, Equatable, Sendable {
-        public var cc: String
-        public var ccodex: String
-
-        public init(cc: String = "", ccodex: String = "") {
-            self.cc = cc
-            self.ccodex = ccodex
-        }
-    }
-
     public struct SubscriptionUsage: Codable, Equatable, Sendable {
         public var showInMenuBar: Bool
 
@@ -341,21 +326,24 @@ public struct AppConfig: Codable, Equatable, Sendable {
         public var alwaysOnTop: Bool
         public var backgroundOpacity: Double
         public var displayMode: DisplayMode
+        public var hiddenAccountIDs: [String]
 
         public init(
             isVisible: Bool = false,
             alwaysOnTop: Bool = false,
             backgroundOpacity: Double = 0.9,
-            displayMode: DisplayMode = .expanded
+            displayMode: DisplayMode = .expanded,
+            hiddenAccountIDs: [String] = []
         ) {
             self.isVisible = isVisible
             self.alwaysOnTop = alwaysOnTop
             self.backgroundOpacity = min(max(backgroundOpacity, 0.2), 1)
             self.displayMode = displayMode
+            self.hiddenAccountIDs = Self.uniqued(hiddenAccountIDs)
         }
 
         private enum CodingKeys: String, CodingKey {
-            case isVisible, alwaysOnTop, backgroundOpacity, displayMode
+            case isVisible, alwaysOnTop, backgroundOpacity, displayMode, hiddenAccountIDs
         }
 
         public init(from decoder: Decoder) throws {
@@ -367,42 +355,26 @@ public struct AppConfig: Codable, Equatable, Sendable {
                 1
             )
             self.displayMode = try container.decodeIfPresent(DisplayMode.self, forKey: .displayMode) ?? .expanded
+            self.hiddenAccountIDs = Self.uniqued(
+                try container.decodeIfPresent([String].self, forKey: .hiddenAccountIDs) ?? []
+            )
+        }
+
+        private static func uniqued(_ values: [String]) -> [String] {
+            var seen: Set<String> = []
+            return values.filter { seen.insert($0).inserted }
         }
     }
 
-    public struct AccountPrivacy: Codable, Equatable, Sendable {
-        public var claudeHidden: Bool
-        public var codexHidden: Bool
-
-        public init(claudeHidden: Bool = true, codexHidden: Bool = true) {
-            self.claudeHidden = claudeHidden
-            self.codexHidden = codexHidden
-        }
-
-        private enum CodingKeys: String, CodingKey {
-            case claudeHidden, codexHidden
-        }
-
-        public init(from decoder: Decoder) throws {
-            let c = try decoder.container(keyedBy: CodingKeys.self)
-            self.claudeHidden = try c.decodeIfPresent(Bool.self, forKey: .claudeHidden) ?? true
-            self.codexHidden = try c.decodeIfPresent(Bool.self, forKey: .codexHidden) ?? true
-        }
-    }
-
+    public var schemaVersion: Int
     public var port: Int
-    public var commands: Commands
-    public var ccapi: ClaudeAPI
-    public var ccodex: Codex
+    public var claudeAPI: ClaudeAPI
     public var codexAPI: CodexAPI
-    public var includeDangerouslySkipPermissions: Bool
     public var startAtLogin: Bool
     public var showDockIcon: Bool
     public var showMenuBarIcon: Bool
     public var showNotifications: Bool
     public var appearance: AppearanceMode
-    public var nicknames: Nicknames
-    public var accountPrivacy: AccountPrivacy
     public var subscriptionUsage: SubscriptionUsage
     public var usageOverlay: UsageOverlay
 
@@ -421,19 +393,15 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var logLevel: LogLevel
 
     public init(
+        schemaVersion: Int = AppConfig.currentSchemaVersion,
         port: Int,
-        commands: Commands,
-        ccapi: ClaudeAPI,
-        ccodex: Codex,
-        codexAPI: CodexAPI? = nil,
-        includeDangerouslySkipPermissions: Bool,
+        claudeAPI: ClaudeAPI = ClaudeAPI(),
+        codexAPI: CodexAPI = CodexAPI(),
         startAtLogin: Bool,
         showDockIcon: Bool,
         showMenuBarIcon: Bool,
         showNotifications: Bool = false,
         appearance: AppearanceMode = .system,
-        nicknames: Nicknames = Nicknames(),
-        accountPrivacy: AccountPrivacy = AccountPrivacy(),
         subscriptionUsage: SubscriptionUsage = SubscriptionUsage(),
         usageOverlay: UsageOverlay = UsageOverlay(),
         oauthCommandProfiles: [OAuthCommandProfile] = [],
@@ -444,19 +412,15 @@ public struct AppConfig: Codable, Equatable, Sendable {
         roundRobinEnabled: Bool = false,
         logLevel: LogLevel = .info
     ) {
+        self.schemaVersion = schemaVersion
         self.port = port
-        self.commands = commands
-        self.ccapi = ccapi
-        self.ccodex = ccodex
-        self.codexAPI = codexAPI ?? CodexAPI(codex: ccodex)
-        self.includeDangerouslySkipPermissions = includeDangerouslySkipPermissions
+        self.claudeAPI = claudeAPI
+        self.codexAPI = codexAPI
         self.startAtLogin = startAtLogin
         self.showDockIcon = showDockIcon
         self.showMenuBarIcon = showMenuBarIcon
         self.showNotifications = showNotifications
         self.appearance = appearance
-        self.nicknames = nicknames
-        self.accountPrivacy = accountPrivacy
         self.subscriptionUsage = subscriptionUsage
         self.usageOverlay = usageOverlay
         self.oauthCommandProfiles = oauthCommandProfiles
@@ -469,59 +433,70 @@ public struct AppConfig: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case port, commands, ccapi, ccodex, codexAPI
-        case includeDangerouslySkipPermissions
-        case startAtLogin, showDockIcon, showMenuBarIcon
+        case schemaVersion
+        case port
+        case claudeAPI
+        case codexAPI
+        case startAtLogin
+        case showDockIcon
+        case showMenuBarIcon
         case showNotifications
         case appearance
-        case nicknames
-        case accountPrivacy
         case subscriptionUsage
         case usageOverlay
         case oauthCommandProfiles
         case roundRobinProfiles
         case accountOrder
-        case bindAddress, autostartServer, roundRobinEnabled
+        case bindAddress
+        case autostartServer
+        case roundRobinEnabled
         case logLevel
-    }
-
-    private enum CodexAPIProbeKeys: String, CodingKey {
-        case codex
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.port = try c.decode(Int.self, forKey: .port)
-        self.commands = try c.decode(Commands.self, forKey: .commands)
-        self.ccapi = try c.decode(ClaudeAPI.self, forKey: .ccapi)
-        self.ccodex = try c.decode(Codex.self, forKey: .ccodex)
-        if c.contains(.codexAPI) {
-            let probe = try c.nestedContainer(keyedBy: CodexAPIProbeKeys.self, forKey: .codexAPI)
-            if probe.contains(.codex) {
-                self.codexAPI = try c.decode(CodexAPI.self, forKey: .codexAPI)
-            } else {
-                self.codexAPI = CodexAPI(codex: try c.decode(Codex.self, forKey: .codexAPI))
-            }
-        } else {
-            self.codexAPI = CodexAPI(codex: self.ccodex)
-        }
-        self.includeDangerouslySkipPermissions = try c.decode(Bool.self, forKey: .includeDangerouslySkipPermissions)
-        self.startAtLogin = try c.decode(Bool.self, forKey: .startAtLogin)
-        self.showDockIcon = try c.decode(Bool.self, forKey: .showDockIcon)
-        self.showMenuBarIcon = try c.decode(Bool.self, forKey: .showMenuBarIcon)
-        self.showNotifications = false
-        self.appearance = try c.decodeIfPresent(AppearanceMode.self, forKey: .appearance) ?? .system
-        self.nicknames = try c.decodeIfPresent(Nicknames.self, forKey: .nicknames) ?? Nicknames()
-        self.accountPrivacy = try c.decodeIfPresent(AccountPrivacy.self, forKey: .accountPrivacy) ?? AccountPrivacy()
-        self.subscriptionUsage = try c.decodeIfPresent(SubscriptionUsage.self, forKey: .subscriptionUsage) ?? SubscriptionUsage()
-        self.usageOverlay = try c.decodeIfPresent(UsageOverlay.self, forKey: .usageOverlay) ?? UsageOverlay()
-        self.oauthCommandProfiles = try c.decodeIfPresent([OAuthCommandProfile].self, forKey: .oauthCommandProfiles) ?? []
-        self.roundRobinProfiles = try c.decodeIfPresent([RoundRobinProfile].self, forKey: .roundRobinProfiles) ?? []
-        self.accountOrder = try c.decodeIfPresent([String].self, forKey: .accountOrder) ?? []
-        self.bindAddress = try c.decodeIfPresent(String.self, forKey: .bindAddress) ?? "127.0.0.1"
-        self.autostartServer = try c.decodeIfPresent(Bool.self, forKey: .autostartServer) ?? false
-        self.roundRobinEnabled = false
-        self.logLevel = try c.decodeIfPresent(LogLevel.self, forKey: .logLevel) ?? .info
+        self = AppConfig(
+            schemaVersion: try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? AppConfig.currentSchemaVersion,
+            port: try c.decode(Int.self, forKey: .port),
+            claudeAPI: try c.decodeIfPresent(ClaudeAPI.self, forKey: .claudeAPI) ?? ClaudeAPI(),
+            codexAPI: try c.decodeIfPresent(CodexAPI.self, forKey: .codexAPI) ?? CodexAPI(),
+            startAtLogin: try c.decodeIfPresent(Bool.self, forKey: .startAtLogin) ?? false,
+            showDockIcon: try c.decodeIfPresent(Bool.self, forKey: .showDockIcon) ?? true,
+            showMenuBarIcon: try c.decodeIfPresent(Bool.self, forKey: .showMenuBarIcon) ?? true,
+            showNotifications: false,
+            appearance: try c.decodeIfPresent(AppearanceMode.self, forKey: .appearance) ?? .system,
+            subscriptionUsage: try c.decodeIfPresent(SubscriptionUsage.self, forKey: .subscriptionUsage) ?? SubscriptionUsage(),
+            usageOverlay: try c.decodeIfPresent(UsageOverlay.self, forKey: .usageOverlay) ?? UsageOverlay(),
+            oauthCommandProfiles: try c.decodeIfPresent([OAuthCommandProfile].self, forKey: .oauthCommandProfiles) ?? [],
+            roundRobinProfiles: try c.decodeIfPresent([RoundRobinProfile].self, forKey: .roundRobinProfiles) ?? [],
+            accountOrder: try c.decodeIfPresent([String].self, forKey: .accountOrder) ?? [],
+            bindAddress: try c.decodeIfPresent(String.self, forKey: .bindAddress) ?? "127.0.0.1",
+            autostartServer: try c.decodeIfPresent(Bool.self, forKey: .autostartServer) ?? false,
+            roundRobinEnabled: false,
+            logLevel: try c.decodeIfPresent(LogLevel.self, forKey: .logLevel) ?? .info
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(AppConfig.currentSchemaVersion, forKey: .schemaVersion)
+        try c.encode(port, forKey: .port)
+        try c.encode(claudeAPI, forKey: .claudeAPI)
+        try c.encode(codexAPI, forKey: .codexAPI)
+        try c.encode(startAtLogin, forKey: .startAtLogin)
+        try c.encode(showDockIcon, forKey: .showDockIcon)
+        try c.encode(showMenuBarIcon, forKey: .showMenuBarIcon)
+        try c.encode(showNotifications, forKey: .showNotifications)
+        try c.encode(appearance, forKey: .appearance)
+        try c.encode(subscriptionUsage, forKey: .subscriptionUsage)
+        try c.encode(usageOverlay, forKey: .usageOverlay)
+        try c.encode(oauthCommandProfiles, forKey: .oauthCommandProfiles)
+        try c.encode(roundRobinProfiles, forKey: .roundRobinProfiles)
+        try c.encode(accountOrder, forKey: .accountOrder)
+        try c.encode(bindAddress, forKey: .bindAddress)
+        try c.encode(autostartServer, forKey: .autostartServer)
+        try c.encode(roundRobinEnabled, forKey: .roundRobinEnabled)
+        try c.encode(logLevel, forKey: .logLevel)
     }
 
     #if DEBUG
@@ -532,14 +507,6 @@ public struct AppConfig: Codable, Equatable, Sendable {
 
     public static let `default` = AppConfig(
         port: defaultPort,
-        commands: Commands(cc: "", ccapi: "", ccodex: ""),
-        ccapi: ClaudeAPI(),
-        ccodex: Codex(
-            opus: CodexRole(model: "gpt-5.6-terra", reasoning: .xhigh),
-            sonnet: CodexRole(model: "gpt-5.6-terra", reasoning: .medium),
-            haiku: CodexRole(model: "gpt-5.6-terra", reasoning: .low)
-        ),
-        includeDangerouslySkipPermissions: false,
         startAtLogin: false,
         showDockIcon: true,
         showMenuBarIcon: true,

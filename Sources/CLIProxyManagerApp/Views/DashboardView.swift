@@ -92,6 +92,14 @@ struct DashboardView: View {
                                     }
                                 },
                                 settings: { openProviderSettings(account.id, isInitialSetup: false) },
+                                toggleUsageOverlayVisibility: {
+                                    viewModel.saveSetting {
+                                        try viewModel.setAccountVisibleInUsageOverlay(
+                                            account.id,
+                                            isVisible: !account.showsInUsageOverlay
+                                        )
+                                    }
+                                },
                                 toggleAccountDetailVisibility: { viewModel.toggleAccountDetailVisibility(account.id) },
                                 setEnabled: { enabled in viewModel.setProviderEnabled(account.id, enabled: enabled) },
                                 moveUp: { viewModel.moveAccountUp(account.id) },
@@ -624,7 +632,7 @@ private struct ServerHeroView: View {
 
 // MARK: - Account card
 
-private struct ProviderAccountCardView: View {
+struct ProviderAccountCardView: View {
     let account: DashboardAccountSnapshot
     let canReorder: Bool
     let isDropTarget: Bool
@@ -632,6 +640,7 @@ private struct ProviderAccountCardView: View {
     let dragStarted: () -> Void
     let connect: () -> Void
     let settings: () -> Void
+    let toggleUsageOverlayVisibility: () -> Void
     let toggleAccountDetailVisibility: () -> Void
     let setEnabled: (Bool) -> Void
     let moveUp: () -> Void
@@ -654,17 +663,17 @@ private struct ProviderAccountCardView: View {
                     Text(account.title)
                         .font(.system(size: 13, weight: .semibold))
                         .lineLimit(1)
-                    SlugPill(slug: account.commandName)
+
                     Spacer(minLength: 0)
+
+                    trailingControls
+                        .layoutPriority(1)
                 }
 
                 accountDetailRow
                     .padding(.top, 2)
             }
-
-            Spacer(minLength: 4)
-
-            actions
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -697,6 +706,14 @@ private struct ProviderAccountCardView: View {
             Button("Remove", role: .destructive) { remove() }
         } message: {
             Text("The auth profile will be deleted from CLIProxyAPI. You can reconnect at any time via Add provider.")
+        }
+    }
+
+    private var trailingControls: some View {
+        HStack(spacing: 4) {
+            SlugPill(slug: account.commandName)
+
+            actions
         }
     }
 
@@ -758,10 +775,29 @@ private struct ProviderAccountCardView: View {
         }
     }
 
+    private var usageOverlayButton: some View {
+        let presentation = account.usageOverlayButtonPresentation
+        return Button(action: toggleUsageOverlayVisibility) {
+            Image(systemName: presentation.symbolName)
+                .font(.system(size: 12, weight: .medium))
+                .frame(width: 26, height: 26)
+                .foregroundStyle(
+                    presentation.isHighlighted
+                        ? BrandPalette.accent
+                        : Color.primary.opacity(hovering ? 0.65 : 0.38)
+                )
+        }
+        .buttonStyle(.plain)
+        .help(presentation.accessibilityLabel)
+        .accessibilityLabel(presentation.accessibilityLabel)
+    }
+
     @ViewBuilder
     private var actions: some View {
         if account.status == .connected {
             HStack(spacing: 4) {
+                usageOverlayButton
+
                 Button(action: settings) {
                     Image(systemName: "gearshape")
                         .font(.system(size: 13, weight: .medium))
@@ -802,6 +838,8 @@ private struct ProviderAccountCardView: View {
             }
         } else if account.status == .disabled {
             HStack(spacing: 4) {
+                usageOverlayButton
+
                 Button(action: settings) {
                     Image(systemName: "gearshape")
                         .font(.system(size: 13, weight: .medium))
@@ -840,6 +878,8 @@ private struct ProviderAccountCardView: View {
             }
         } else {
             HStack(spacing: 4) {
+                usageOverlayButton
+
                 Button(action: connect) {
                     Text("Connect")
                         .font(.system(size: 11.5, weight: .semibold))

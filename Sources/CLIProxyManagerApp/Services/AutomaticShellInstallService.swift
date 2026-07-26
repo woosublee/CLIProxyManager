@@ -83,10 +83,10 @@ struct AutomaticShellInstallService: Sendable {
         let includeClaudeOAuth = shouldIncludeOAuth(provider: .claude, config: config, enabled: enabledFunctions.claudeOAuth)
         let includeCodex = shouldIncludeOAuth(provider: .codex, config: config, enabled: enabledFunctions.codex)
         let includeClaudeAPI = try enabledFunctions.claudeAPI
-            && !config.commands.ccapi.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !config.claudeAPI.commandName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && hasAPIKey(.claudeAPIKey)
         let includeCodexAPI = try enabledFunctions.codexAPI
-            && !config.commands.ccodexapi.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !config.codexAPI.commandName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && hasAPIKey(.codexAPIKey)
         let script = try ShellFunctionRenderer(
             config: config,
@@ -99,24 +99,13 @@ struct AutomaticShellInstallService: Sendable {
             )
         ).render()
         var functionNames = oauthFunctionNames(config: config, includeClaudeOAuth: includeClaudeOAuth, includeCodex: includeCodex)
-        if includeClaudeAPI { functionNames.append(config.commands.ccapi) }
-        if includeCodexAPI { functionNames.append(config.commands.ccodexapi) }
+        if includeClaudeAPI { functionNames.append(config.claudeAPI.commandName) }
+        if includeCodexAPI { functionNames.append(config.codexAPI.commandName) }
         try installer.install(functionScript: script, functionNames: functionNames)
     }
 
     private func shouldIncludeOAuth(provider: AuthProfileType, config: AppConfig, enabled: Bool) -> Bool {
         guard enabled else { return false }
-        if config.oauthCommandProfiles.isEmpty {
-            let hasLegacyCommand: Bool
-            switch provider {
-            case .claude:
-                hasLegacyCommand = !config.commands.cc.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            case .codex:
-                hasLegacyCommand = !config.commands.ccodex.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            }
-            if hasLegacyCommand { return true }
-        }
-
         let hasFixedCommand = config.oauthCommandProfiles.contains { commandProfile in
             commandProfile.provider == provider
                 && commandProfile.isEnabled
@@ -131,19 +120,10 @@ struct AutomaticShellInstallService: Sendable {
     }
 
     private func oauthFunctionNames(config: AppConfig, includeClaudeOAuth: Bool, includeCodex: Bool) -> [String] {
-        var names: [String]
-        if config.oauthCommandProfiles.isEmpty {
-            names = []
-            let claudeCommandName = config.commands.cc.trimmingCharacters(in: .whitespacesAndNewlines)
-            let codexCommandName = config.commands.ccodex.trimmingCharacters(in: .whitespacesAndNewlines)
-            if includeClaudeOAuth, !claudeCommandName.isEmpty { names.append(claudeCommandName) }
-            if includeCodex, !codexCommandName.isEmpty { names.append(codexCommandName) }
-        } else {
-            names = config.oauthCommandProfiles.compactMap { commandProfile in
-                let included = commandProfile.provider == .claude ? includeClaudeOAuth : includeCodex
-                let commandName = commandProfile.commandName.trimmingCharacters(in: .whitespacesAndNewlines)
-                return included && commandProfile.isEnabled && !commandName.isEmpty ? commandName : nil
-            }
+        var names = config.oauthCommandProfiles.compactMap { commandProfile in
+            let included = commandProfile.provider == .claude ? includeClaudeOAuth : includeCodex
+            let commandName = commandProfile.commandName.trimmingCharacters(in: .whitespacesAndNewlines)
+            return included && commandProfile.isEnabled && !commandName.isEmpty ? commandName : nil
         }
         names.append(contentsOf: config.roundRobinProfiles.compactMap { profile in
             let included = profile.provider == .claude ? includeClaudeOAuth : includeCodex

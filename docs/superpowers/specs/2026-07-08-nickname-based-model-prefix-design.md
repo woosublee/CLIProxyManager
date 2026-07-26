@@ -6,8 +6,8 @@ Date: 2026-07-08
 
 Multi-account OAuth routing currently injects the auth profile `modelPrefix` into Claude Code model environment variables as `<prefix>/<model>`. CLIProxyAPI uses this prefix to choose the matching auth JSON. The prefix is generated from the auth file name, so Claude Code displays verbose model names such as:
 
-- `codex-codex-dntjqdlekd-gmail-com-pro-json/gpt-5.5(xhigh)[1m]`
-- `codex-codex-18c2ca10-woosub-classting-com-team-json/gpt-5.5(xhigh)[1m]`
+- `codex-codex-personal456-pro-json/gpt-5.5(xhigh)[1m]`
+- `codex-codex-work123-team-json/gpt-5.5(xhigh)[1m]`
 
 The routing works, but the visible model label is too noisy. Users already set an account nickname in the app, so the prefix should use that nickname when available.
 
@@ -38,8 +38,8 @@ The prefix includes provider identity to keep Claude and Codex namespaces obviou
 
 - Claude nickname `Work` → `claude-work`
 - Codex nickname `Team` → `codex-team`
-- Codex nickname `Classting Team` → `codex-classting-team`
-- Blank nickname with auth profile `codex-18c2ca10-woosub-classting-com-team.json` → `codex-18c2ca10`
+- Codex nickname `Work Team` → `codex-work-team`
+- Blank nickname with auth profile `codex-work123-team.json` → `codex-work123`
 
 Slug rules:
 
@@ -70,7 +70,7 @@ Collision handling:
 Before:
 
 ```text
-[codex-codex-18c2ca10-woosub-classting-com-team-json/gpt-5.5(xhigh)[1m]]
+[codex-codex-work123-team-json/gpt-5.5(xhigh)[1m]]
 ```
 
 After nickname `team`:
@@ -82,7 +82,7 @@ After nickname `team`:
 After blank nickname:
 
 ```text
-[codex-18c2ca10/gpt-5.5(xhigh)[1m]]
+[codex-work123/gpt-5.5(xhigh)[1m]]
 ```
 
 ## Edge cases
