@@ -657,6 +657,7 @@ struct ProviderAccountCardView: View {
                 .frame(maxHeight: .infinity, alignment: .center)
 
             ProviderAvatar(providerID: account.id, providerType: account.providerType)
+                .frame(maxHeight: .infinity, alignment: .center)
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
