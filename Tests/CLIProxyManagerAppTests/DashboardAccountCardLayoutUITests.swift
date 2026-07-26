@@ -15,6 +15,20 @@ final class DashboardAccountCardLayoutUITests: XCTestCase {
         )
     }
 
+    func testDashboardUsesSingleTwoPointGapBetweenAccountNameAndDetail() throws {
+        let cardBody = try providerAccountCardBody()
+        let detailPlacement = try sourceSection(
+            in: cardBody,
+            after: "accountDetailRow",
+            before: "\n            }\n            .frame(maxWidth:"
+        )
+
+        XCTAssertTrue(
+            cardBody.contains("VStack(alignment: .leading, spacing: 2) {")
+        )
+        XCTAssertFalse(detailPlacement.contains(".padding(.top"))
+    }
+
     private func providerAccountCardBody() throws -> String {
         let providerCard = try sourceSection(
             in: dashboardSource(),
