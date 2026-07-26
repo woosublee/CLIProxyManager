@@ -657,8 +657,9 @@ struct ProviderAccountCardView: View {
                 .frame(maxHeight: .infinity, alignment: .center)
 
             ProviderAvatar(providerID: account.id, providerType: account.providerType)
+                .frame(maxHeight: .infinity, alignment: .center)
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(account.title)
                         .font(.system(size: 13, weight: .semibold))
@@ -671,7 +672,6 @@ struct ProviderAccountCardView: View {
                 }
 
                 accountDetailRow
-                    .padding(.top, 2)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
