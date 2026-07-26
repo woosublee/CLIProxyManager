@@ -1861,9 +1861,27 @@ final class ProviderSettingsViewModelTests: XCTestCase {
     func testDormantAPICommandDoesNotBlockOAuthCommandValidationWhenKeyIsMissing() async {
         var config = AppConfig.default
         config.claudeAPI.commandName = "shared"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "claude",
+                provider: .claude,
+                authProfileID: "claude.json",
+                commandName: ""
+            )
+        ]
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(
+                    fileName: "claude.json",
+                    type: .claude,
+                    email: "user@example.com",
+                    accountID: nil,
+                    expired: nil,
+                    disabled: false
+                )
+            ]),
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
