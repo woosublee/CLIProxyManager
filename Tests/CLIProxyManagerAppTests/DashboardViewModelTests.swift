@@ -7,17 +7,31 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     func testRefreshUpdatesClaudeAndCodexCardsByCommandAndExcludesClaudeAPICard() async {
         let config = AppConfig(
             port: 9444,
-            commands: AppConfig.Commands(cc: "claude-local", ccapi: "api-local", ccodex: "codex-local"),
-            ccapi: AppConfig.ClaudeAPI(),
-            ccodex: AppConfig.Codex(
-                opus: AppConfig.CodexRole(model: "test-opus", reasoning: .auto),
-                sonnet: AppConfig.CodexRole(model: "test-sonnet", reasoning: .auto),
-                haiku: AppConfig.CodexRole(model: "test-haiku", reasoning: .auto)
-            ),
-            includeDangerouslySkipPermissions: false,
+            claudeAPI: AppConfig.ClaudeAPI(commandName: "api-local"),
             startAtLogin: false,
             showDockIcon: true,
-            showMenuBarIcon: true
+            showMenuBarIcon: true,
+            oauthCommandProfiles: [
+                AppConfig.OAuthCommandProfile(
+                    id: "claude",
+                    provider: .claude,
+                    authProfileID: "claude.json",
+                    commandName: "claude-local",
+                    modelPrefix: "claude-account"
+                ),
+                AppConfig.OAuthCommandProfile(
+                    id: "codex",
+                    provider: .codex,
+                    authProfileID: "codex.json",
+                    commandName: "codex-local",
+                    codex: AppConfig.Codex(
+                        opus: AppConfig.CodexRole(model: "test-opus", reasoning: .auto),
+                        sonnet: AppConfig.CodexRole(model: "test-sonnet", reasoning: .auto),
+                        haiku: AppConfig.CodexRole(model: "test-haiku", reasoning: .auto)
+                    ),
+                    modelPrefix: "codex-account"
+                )
+            ]
         )
         let serverStatus = DiagnosticStatus(
             severity: .ready,
@@ -33,7 +47,10 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             config: config,
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
-            authProfileStore: StubAuthProfileStore(profiles: []),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false),
+                AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
+            ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
             proxyService: StubProxyServiceStarter(),
@@ -262,8 +279,16 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testProviderRowsIgnoreCustomConfigUntilAuthExists() {
         var config = AppConfig.default
-        config.commands.ccodex = "ccmcodex"
-        config.includeDangerouslySkipPermissions = true
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccmcodex",
+                dangerousPermissionsEnabled: true,
+                codex: .default
+            )
+        ]
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
@@ -280,7 +305,16 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testProviderRowsUseConfiguredCommandOnlyForSavedAuthSettings() {
         var config = AppConfig.default
-        config.commands.ccodex = "ccmcodex"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccmcodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
@@ -379,7 +413,11 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     }
 
     func testSetAccountVisibleInUsageOverlaySkipsUnknownAndUnchangedAccounts() throws {
-        let store = StubConfigStore(config: .default)
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "claude", provider: .claude, authProfileID: "claude.json", modelPrefix: "claude-account")
+        ]
+        let store = StubConfigStore(config: config)
         let viewModel = DashboardViewModel(
             configStore: store,
             shellInstaller: StubShellInstaller(),
@@ -493,7 +531,10 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testProviderRowsReflectConfiguredAccountPrivacy() {
         var config = AppConfig.default
-        config.accountPrivacy = AppConfig.AccountPrivacy(claudeHidden: false, codexHidden: true)
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "claude", provider: .claude, authProfileID: "claude.json", accountDetailHidden: false, modelPrefix: "claude-account"),
+            AppConfig.OAuthCommandProfile(id: "codex", provider: .codex, authProfileID: "codex.json", accountDetailHidden: true, codex: .default, modelPrefix: "codex-account")
+        ]
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
@@ -513,7 +554,10 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testToggleClaudeAccountDetailVisibilityPersistsOnlyClaudePrivacy() {
         var config = AppConfig.default
-        config.accountPrivacy = AppConfig.AccountPrivacy(claudeHidden: true, codexHidden: false)
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "claude", provider: .claude, authProfileID: "claude.json", accountDetailHidden: true, modelPrefix: "claude-account"),
+            AppConfig.OAuthCommandProfile(id: "codex", provider: .codex, authProfileID: "codex.json", accountDetailHidden: false, codex: .default, modelPrefix: "codex-account")
+        ]
         let store = StubConfigStore(config: config)
         let viewModel = DashboardViewModel(
             configStore: store,
@@ -530,15 +574,20 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         viewModel.toggleAccountDetailVisibility(.claude)
 
-        XCTAssertEqual(store.savedConfigs.last?.accountPrivacy, AppConfig.AccountPrivacy(claudeHidden: false, codexHidden: false))
-        XCTAssertEqual(viewModel.config.accountPrivacy, AppConfig.AccountPrivacy(claudeHidden: false, codexHidden: false))
+        XCTAssertEqual(store.savedConfigs.last?.oauthCommandProfiles.first { $0.id == "claude" }?.accountDetailHidden, false)
+        XCTAssertEqual(store.savedConfigs.last?.oauthCommandProfiles.first { $0.id == "codex" }?.accountDetailHidden, false)
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.first { $0.id == "claude" }?.accountDetailHidden, false)
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.first { $0.id == "codex" }?.accountDetailHidden, false)
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.accountDetailHidden, false)
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.accountDetailHidden, false)
     }
 
     func testToggleCodexAccountDetailVisibilityPersistsOnlyCodexPrivacy() {
         var config = AppConfig.default
-        config.accountPrivacy = AppConfig.AccountPrivacy(claudeHidden: false, codexHidden: true)
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "claude", provider: .claude, authProfileID: "claude.json", accountDetailHidden: false, modelPrefix: "claude-account"),
+            AppConfig.OAuthCommandProfile(id: "codex", provider: .codex, authProfileID: "codex.json", accountDetailHidden: true, codex: .default, modelPrefix: "codex-account")
+        ]
         let store = StubConfigStore(config: config)
         let viewModel = DashboardViewModel(
             configStore: store,
@@ -555,8 +604,10 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         viewModel.toggleAccountDetailVisibility(.codex)
 
-        XCTAssertEqual(store.savedConfigs.last?.accountPrivacy, AppConfig.AccountPrivacy(claudeHidden: false, codexHidden: false))
-        XCTAssertEqual(viewModel.config.accountPrivacy, AppConfig.AccountPrivacy(claudeHidden: false, codexHidden: false))
+        XCTAssertEqual(store.savedConfigs.last?.oauthCommandProfiles.first { $0.id == "claude" }?.accountDetailHidden, false)
+        XCTAssertEqual(store.savedConfigs.last?.oauthCommandProfiles.first { $0.id == "codex" }?.accountDetailHidden, false)
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.first { $0.id == "claude" }?.accountDetailHidden, false)
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.first { $0.id == "codex" }?.accountDetailHidden, false)
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .claude }?.accountDetailHidden, false)
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.accountDetailHidden, false)
     }
@@ -631,7 +682,9 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testToggleAccountDetailVisibilityShowsSettingsMessageWhenSaveFails() {
         var config = AppConfig.default
-        config.accountPrivacy = AppConfig.AccountPrivacy(claudeHidden: true, codexHidden: true)
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "claude", provider: .claude, authProfileID: "claude.json", accountDetailHidden: true, modelPrefix: "claude-account")
+        ]
         let store = StubConfigStore(
             config: config,
             saveError: NSError(domain: "AccountPrivacy", code: 1, userInfo: [NSLocalizedDescriptionKey: "Save failed"])
@@ -651,7 +704,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         viewModel.toggleAccountDetailVisibility(.claude)
 
         XCTAssertEqual(store.savedConfigs, [])
-        XCTAssertEqual(viewModel.config.accountPrivacy, AppConfig.AccountPrivacy(claudeHidden: true, codexHidden: true))
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.first?.accountDetailHidden, true)
         XCTAssertEqual(viewModel.settingsMessage, "Account privacy update failed: Save failed")
     }
 
@@ -746,6 +799,103 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertTrue(viewModel.completedOAuthLoginIsInitialSetup)
         XCTAssertEqual(store.savedConfigs.last?.oauthCommandProfiles.map(\.authProfileID), ["codex.json"])
         XCTAssertEqual(store.config.oauthCommandProfiles.map(\.authProfileID), ["codex.json"])
+    }
+
+    func testStartupPrunesStaleCommandProfileAndReinstallsShellWithoutIt() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            .init(
+                id: "stale-codex",
+                provider: .codex,
+                authProfileID: "missing.json",
+                commandName: "stale-command",
+                codex: .default,
+                modelPrefix: "codex-stale"
+            )
+        ]
+        let store = StubConfigStore(config: config)
+        let shellInstaller = StubShellInstaller()
+
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: store,
+            shellInstaller: shellInstaller,
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
+        )
+
+        XCTAssertTrue(viewModel.config.oauthCommandProfiles.isEmpty)
+        XCTAssertTrue(store.savedConfigs.last?.oauthCommandProfiles.isEmpty == true)
+        XCTAssertFalse(shellInstaller.installedFunctionNames.contains("stale-command"))
+        XCTAssertFalse(shellInstaller.installedScript?.contains("stale-command") == true)
+    }
+
+    func testAuthProfileLoadFailureDoesNotPrunePersistOrRewriteShellFunctions() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            .init(
+                id: "kept-codex",
+                provider: .codex,
+                authProfileID: "kept.json",
+                commandName: "kept-command",
+                codex: .default
+            )
+        ]
+        let store = StubConfigStore(config: config)
+        let shellInstaller = StubShellInstaller()
+        let authStore = ThrowingAuthProfileStore(error: CocoaError(.fileReadNoSuchFile))
+
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: store,
+            shellInstaller: shellInstaller,
+            authProfileStore: authStore,
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
+        )
+
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.map(\.id), ["kept-codex"])
+        XCTAssertTrue(store.savedConfigs.isEmpty)
+        XCTAssertEqual(shellInstaller.installCount, 0)
+    }
+
+    func testMigrationSaveFailureKeepsInMemoryCanonicalConfigAndReportsError() {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            .init(
+                id: "stale-codex",
+                provider: .codex,
+                authProfileID: "missing.json",
+                commandName: "stale-command",
+                codex: .default
+            )
+        ]
+        let store = StubConfigStore(
+            config: config,
+            saveError: CocoaError(.fileWriteUnknown)
+        )
+        let shellInstaller = StubShellInstaller()
+
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: store,
+            shellInstaller: shellInstaller,
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
+        )
+
+        XCTAssertTrue(viewModel.config.oauthCommandProfiles.isEmpty)
+        XCTAssertEqual(store.config.oauthCommandProfiles.map(\.id), ["stale-codex"])
+        XCTAssertTrue(viewModel.settingsMessage?.hasPrefix("Config migration failed:") == true)
+        XCTAssertFalse(shellInstaller.installedFunctionNames.contains("stale-command"))
     }
 
     func testInitialCodexCredentialMigrationPreservesSettingsRoundRobinAndUsageCache() throws {
@@ -1208,9 +1358,12 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     }
 
     func testRemoveInitialProviderDeletesAuthWithoutShowingRemovalMessage() {
-        let authStore = StubAuthProfileStore(profiles: [
-            AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
-        ])
+        let authStore = StubAuthProfileStore(
+            profiles: [
+                AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
+            ],
+            supportsIDDelete: true
+        )
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: .default),
             shellInstaller: StubShellInstaller(),
@@ -1223,7 +1376,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         viewModel.removeInitialProvider(.claude)
 
-        XCTAssertEqual(authStore.deleteInvocations, [.claude])
+        XCTAssertEqual(authStore.deletedIDs, ["claude.json"])
+        XCTAssertEqual(authStore.deleteInvocations, [])
         XCTAssertNil(viewModel.settingsMessage)
     }
 
@@ -1260,7 +1414,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         viewModel.removeProvider(ProviderRowState.ID(rawValue: "claude-work"))
 
         XCTAssertEqual(authStore.deleteInvocations, [])
-        XCTAssertEqual(viewModel.providerRows.map(\.authProfileID), ["claude-work.json", "claude-personal.json"])
+        XCTAssertEqual(Set(viewModel.providerRows.map(\.authProfileID)), Set(["claude-work.json", "claude-personal.json"]))
         XCTAssertEqual(viewModel.settingsMessage, "Claude OAuth auth file was not found.")
     }
 
@@ -1295,8 +1449,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         XCTAssertEqual(authStore.deletedIDs, ["codex-work.json"])
         XCTAssertEqual(authStore.deleteInvocations, [])
-        XCTAssertEqual(store.savedConfigs.last?.commands.cc, AppConfig.default.commands.cc)
-        XCTAssertEqual(store.savedConfigs.last?.commands.ccodex, AppConfig.default.commands.ccodex)
+        XCTAssertEqual(store.savedConfigs.last?.oauthCommandProfiles, [])
         XCTAssertEqual(viewModel.settingsMessage, "Codex OAuth account was removed.")
     }
 
@@ -1333,7 +1486,10 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testRemoveProviderResetsOnlyRemovedClaudeAccountPrivacy() {
         var config = AppConfig.default
-        config.accountPrivacy = AppConfig.AccountPrivacy(claudeHidden: false, codexHidden: false)
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "claude", provider: .claude, authProfileID: "claude.json", accountDetailHidden: false, modelPrefix: "claude-account"),
+            AppConfig.OAuthCommandProfile(id: "codex", provider: .codex, authProfileID: "codex.json", accountDetailHidden: false, codex: .default, modelPrefix: "codex-account")
+        ]
         let store = StubConfigStore(config: config)
         let authStore = StubAuthProfileStore(profiles: [
             AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false),
@@ -1351,13 +1507,18 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         viewModel.removeProvider(.claude)
 
-        XCTAssertEqual(store.savedConfigs.last?.accountPrivacy, AppConfig.AccountPrivacy(claudeHidden: true, codexHidden: false))
-        XCTAssertEqual(viewModel.config.accountPrivacy, AppConfig.AccountPrivacy(claudeHidden: true, codexHidden: false))
+        XCTAssertEqual(store.savedConfigs.last?.oauthCommandProfiles.first { $0.provider == .claude }?.accountDetailHidden, true)
+        XCTAssertEqual(store.savedConfigs.last?.oauthCommandProfiles.first { $0.provider == .codex }?.accountDetailHidden, false)
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.first { $0.provider == .claude }?.accountDetailHidden, true)
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.first { $0.provider == .codex }?.accountDetailHidden, false)
     }
 
     func testRemoveProviderResetsOnlyRemovedCodexAccountPrivacy() {
         var config = AppConfig.default
-        config.accountPrivacy = AppConfig.AccountPrivacy(claudeHidden: false, codexHidden: false)
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "claude", provider: .claude, authProfileID: "claude.json", accountDetailHidden: false, modelPrefix: "claude-account"),
+            AppConfig.OAuthCommandProfile(id: "codex", provider: .codex, authProfileID: "codex.json", accountDetailHidden: false, codex: .default, modelPrefix: "codex-account")
+        ]
         let store = StubConfigStore(config: config)
         let authStore = StubAuthProfileStore(profiles: [
             AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false),
@@ -1375,8 +1536,10 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         viewModel.removeProvider(.codex)
 
-        XCTAssertEqual(store.savedConfigs.last?.accountPrivacy, AppConfig.AccountPrivacy(claudeHidden: false, codexHidden: true))
-        XCTAssertEqual(viewModel.config.accountPrivacy, AppConfig.AccountPrivacy(claudeHidden: false, codexHidden: true))
+        XCTAssertEqual(store.savedConfigs.last?.oauthCommandProfiles.first { $0.provider == .claude }?.accountDetailHidden, false)
+        XCTAssertEqual(store.savedConfigs.last?.oauthCommandProfiles.first { $0.provider == .codex }?.accountDetailHidden, true)
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.first { $0.provider == .claude }?.accountDetailHidden, false)
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.first { $0.provider == .codex }?.accountDetailHidden, true)
     }
 
     func testExpiredProviderRowIsErrored() {
@@ -1661,8 +1824,10 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testInstallShellFunctionsRendersAndInstallsCurrentConfig() throws {
         var config = AppConfig.default
-        config.commands.cc = "cc"
-        config.commands.ccodex = "customcodex"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "claude", provider: .claude, authProfileID: "claude.json", commandName: "cc", modelPrefix: "claude-account"),
+            AppConfig.OAuthCommandProfile(id: "codex", provider: .codex, authProfileID: "codex.json", commandName: "customcodex", codex: .default, modelPrefix: "codex-account")
+        ]
         let store = StubConfigStore(config: config)
         let installer = StubShellInstaller()
         let automaticInstaller = AutomaticShellInstallService(
@@ -1691,7 +1856,9 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testInstallShellFunctionsInstallsActiveProvidersOnly() throws {
         var config = AppConfig.default
-        config.commands.cc = "cc"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "claude", provider: .claude, authProfileID: "claude.json", commandName: "cc", modelPrefix: "claude-account")
+        ]
         let installer = StubShellInstaller()
         let automaticInstaller = AutomaticShellInstallService(
             installer: installer,
@@ -1745,7 +1912,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testAPIKeyChangeDuringServerStartQueuesRestartAfterStartCompletes() async throws {
         var config = AppConfig.default
-        config.commands.ccapi = "ccapi"
+        config.claudeAPI.commandName = "ccapi"
         let proxyService = StubProxyServiceStarter(startDelayNanoseconds: 50_000_000)
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: config),
@@ -1773,13 +1940,22 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testSavingCodexFastModeRestartsReadyProxy() async throws {
         var config = AppConfig.default
-        config.commands.ccodex = "ccodex"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
         let proxyService = StubProxyServiceStarter()
         let viewModel = DashboardViewModel(
             config: config,
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
-            authProfileStore: StubAuthProfileStore(profiles: []),
+            authProfileStore: codexAuthProfileStore(),
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
@@ -1787,7 +1963,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             serverStatusRetryDelayNanoseconds: 0
         )
         await viewModel.refresh()
-        var codex = config.ccodex
+        var codex = config.oauthCommandProfiles[0].codex!
         codex.opus.fastModeEnabled = true
 
         try viewModel.saveCodexSettings(functionName: "ccodex", codex: codex)
@@ -1798,7 +1974,16 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testPendingUpdateReadinessFailureDoesNotReportSuccess() async throws {
         var config = AppConfig.default
-        config.commands.ccodex = "ccodex"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
         let proxyService = StubProxyServiceStarter()
         let viewModel = DashboardViewModel(
             config: config,
@@ -1837,13 +2022,22 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testPendingUpdateWaitsForConfigurationRestartThenPerformsRequiredRestartBeforeSuccess() async throws {
         var config = AppConfig.default
-        config.commands.ccodex = "ccodex"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
         let proxyService = StubProxyServiceStarter(suspendedRestartCount: 2)
         let viewModel = DashboardViewModel(
             config: config,
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
-            authProfileStore: StubAuthProfileStore(profiles: []),
+            authProfileStore: codexAuthProfileStore(),
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
@@ -1852,7 +2046,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             settingsMessageAutoClearDelayNanoseconds: 60_000_000_000
         )
         viewModel.serverControlState = .running
-        var codex = config.ccodex
+        var codex = config.oauthCommandProfiles[0].codex!
         codex.opus.fastModeEnabled = true
         try viewModel.saveCodexSettings(functionName: "ccodex", codex: codex)
         let reachedFirstRestart = await proxyService.reachesRestartCount(1)
@@ -1889,13 +2083,22 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testManualStopQueuedDuringConfigurationRestartRunsAfterRestart() async throws {
         var config = AppConfig.default
-        config.commands.ccodex = "ccodex"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
         let proxyService = StubProxyServiceStarter(suspendedRestartCount: 1)
         let viewModel = DashboardViewModel(
             config: config,
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
-            authProfileStore: StubAuthProfileStore(profiles: []),
+            authProfileStore: codexAuthProfileStore(),
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
@@ -1903,7 +2106,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             serverStatusRetryDelayNanoseconds: 0
         )
         viewModel.serverControlState = .running
-        var codex = config.ccodex
+        var codex = config.oauthCommandProfiles[0].codex!
         codex.opus.fastModeEnabled = true
 
         try viewModel.saveCodexSettings(functionName: "ccodex", codex: codex)
@@ -1923,13 +2126,22 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testManualRestartQueuedDuringConfigurationRestartRunsAfterRestart() async throws {
         var config = AppConfig.default
-        config.commands.ccodex = "ccodex"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
         let proxyService = StubProxyServiceStarter(suspendedRestartCount: 1)
         let viewModel = DashboardViewModel(
             config: config,
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
-            authProfileStore: StubAuthProfileStore(profiles: []),
+            authProfileStore: codexAuthProfileStore(),
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
@@ -1937,7 +2149,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             serverStatusRetryDelayNanoseconds: 0
         )
         viewModel.serverControlState = .running
-        var codex = config.ccodex
+        var codex = config.oauthCommandProfiles[0].codex!
         codex.opus.fastModeEnabled = true
 
         try viewModel.saveCodexSettings(functionName: "ccodex", codex: codex)
@@ -1956,18 +2168,27 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testStoppedProxyDoesNotRestartAfterFastModeSave() throws {
         var config = AppConfig.default
-        config.commands.ccodex = "ccodex"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
         let proxyService = StubProxyServiceStarter()
         let viewModel = DashboardViewModel(
             config: config,
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
-            authProfileStore: StubAuthProfileStore(profiles: []),
+            authProfileStore: codexAuthProfileStore(),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: proxyService,
             claudeConnector: connectedClaudeConnector()
         )
-        var codex = config.ccodex
+        var codex = config.oauthCommandProfiles[0].codex!
         codex.opus.fastModeEnabled = true
 
         try viewModel.saveCodexSettings(functionName: "ccodex", codex: codex)
@@ -1977,19 +2198,28 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testSavingReasoningWithoutChangingFastSnapshotDoesNotRestartProxy() async throws {
         var config = AppConfig.default
-        config.commands.ccodex = "ccodex"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
         let proxyService = StubProxyServiceStarter()
         let viewModel = DashboardViewModel(
             config: config,
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
-            authProfileStore: StubAuthProfileStore(profiles: []),
+            authProfileStore: codexAuthProfileStore(),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: proxyService,
             claudeConnector: connectedClaudeConnector()
         )
         viewModel.serverControlState = .running
-        var codex = config.ccodex
+        var codex = config.oauthCommandProfiles[0].codex!
         codex.opus.reasoning = .high
 
         try viewModel.saveCodexSettings(functionName: "ccodex", codex: codex)
@@ -2000,14 +2230,23 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testFastAndAPIKeyChangesBeforeRestartTaskRunsCoalesceIntoOneRestart() async throws {
         var config = AppConfig.default
-        config.commands.ccodex = "ccodex"
-        config.commands.ccodexapi = "ccodexapi"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
+        config.codexAPI.commandName = "ccodexapi"
         let proxyService = StubProxyServiceStarter()
         let viewModel = DashboardViewModel(
             config: config,
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
-            authProfileStore: StubAuthProfileStore(profiles: []),
+            authProfileStore: codexAuthProfileStore(),
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
@@ -2016,7 +2255,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             serverStatusRetryDelayNanoseconds: 0
         )
         viewModel.serverControlState = .running
-        var codex = config.ccodex
+        var codex = config.oauthCommandProfiles[0].codex!
         codex.opus.fastModeEnabled = true
 
         try viewModel.saveCodexSettings(functionName: "ccodex", codex: codex)
@@ -2034,14 +2273,23 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testFastAndAPIKeyChangesDuringStartCoalesceIntoOneRestart() async throws {
         var config = AppConfig.default
-        config.commands.ccodex = "ccodex"
-        config.commands.ccodexapi = "ccodexapi"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
+        config.codexAPI.commandName = "ccodexapi"
         let proxyService = StubProxyServiceStarter(startDelayNanoseconds: 50_000_000)
         let viewModel = DashboardViewModel(
             config: config,
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
-            authProfileStore: StubAuthProfileStore(profiles: []),
+            authProfileStore: codexAuthProfileStore(),
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
@@ -2052,7 +2300,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         let startTask = Task { await viewModel.startServer() }
         try await Task.sleep(nanoseconds: 10_000_000)
-        var codex = config.ccodex
+        var codex = config.oauthCommandProfiles[0].codex!
         codex.opus.fastModeEnabled = true
         try viewModel.saveCodexSettings(functionName: "ccodex", codex: codex)
         try viewModel.saveCodexAPISettings(
@@ -2068,7 +2316,16 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testFastChangeDuringRestartDrainsNextGeneration() async throws {
         var config = AppConfig.default
-        config.commands.ccodex = "ccodex"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
         let proxyService = StubProxyServiceStarter(
             suspendedRestartCount: 1,
             startDelayNanoseconds: 50_000_000
@@ -2077,7 +2334,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             config: config,
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
-            authProfileStore: StubAuthProfileStore(profiles: []),
+            authProfileStore: codexAuthProfileStore(),
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
@@ -2095,7 +2352,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         )
         let reachedFirstRestart = await proxyService.reachesRestartCount(1)
         XCTAssertTrue(reachedFirstRestart)
-        var codex = config.ccodex
+        var codex = config.oauthCommandProfiles[0].codex!
         codex.opus.fastModeEnabled = true
         try viewModel.saveCodexSettings(functionName: "ccodex", codex: codex)
         proxyService.releaseRestart(1)
@@ -2109,7 +2366,16 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testFastChangeDuringFailingAPIKeyRestartShowsFastFailureAndClearsPending() async throws {
         var config = AppConfig.default
-        config.commands.ccodex = "ccodex"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
         let proxyService = StubProxyServiceStarter(
             restartErrors: [
                 NSError(domain: "APIKey", code: 1, userInfo: [NSLocalizedDescriptionKey: "API key restart failed"]),
@@ -2122,7 +2388,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             config: config,
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
-            authProfileStore: StubAuthProfileStore(profiles: []),
+            authProfileStore: codexAuthProfileStore(),
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
@@ -2141,7 +2407,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         )
         let reachedFirstRestart = await proxyService.reachesRestartCount(1)
         XCTAssertTrue(reachedFirstRestart)
-        var codex = config.ccodex
+        var codex = config.oauthCommandProfiles[0].codex!
         codex.opus.fastModeEnabled = true
         try viewModel.saveCodexSettings(functionName: "ccodex", codex: codex)
         proxyService.releaseRestart(1)
@@ -2156,12 +2422,21 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         )
         XCTAssertEqual(viewModel.serverStatus.severity, .error)
         XCTAssertEqual(viewModel.serverStatus.title, "Failed to restart CLIProxyAPI")
-        XCTAssertEqual(viewModel.cards.first { $0.command == config.commands.ccodex }?.status.severity, .error)
+        XCTAssertEqual(viewModel.cards.first { $0.command == config.oauthCommandProfiles.first?.commandName }?.status.severity, .error)
     }
 
     func testLaterSuccessfulFastGenerationClearsOwnedFailureMessage() async throws {
         var config = AppConfig.default
-        config.commands.ccodex = "ccodex"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
         let proxyService = StubProxyServiceStarter(
             restartErrors: [
                 NSError(domain: "FastMode", code: 1, userInfo: [NSLocalizedDescriptionKey: "First restart failed"]),
@@ -2173,7 +2448,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             config: config,
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
-            authProfileStore: StubAuthProfileStore(profiles: []),
+            authProfileStore: codexAuthProfileStore(),
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
@@ -2182,7 +2457,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             settingsMessageAutoClearDelayNanoseconds: 60_000_000_000
         )
         viewModel.serverControlState = .running
-        var firstGeneration = config.ccodex
+        var firstGeneration = config.oauthCommandProfiles[0].codex!
         firstGeneration.opus.fastModeEnabled = true
         try viewModel.saveCodexSettings(functionName: "ccodex", codex: firstGeneration)
         let reachedFirstRestart = await proxyService.reachesRestartCount(1)
@@ -2207,7 +2482,16 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testFastRestartReadinessFailureShowsSettingsMessage() async throws {
         var config = AppConfig.default
-        config.commands.ccodex = "ccodex"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
         let proxyService = StubProxyServiceStarter()
         let healthClient = ProxyHealthClient(
             httpClient: StubHTTPClient(result: .failure(URLError(.cannotConnectToHost))),
@@ -2217,7 +2501,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             config: config,
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
-            authProfileStore: StubAuthProfileStore(profiles: []),
+            authProfileStore: codexAuthProfileStore(),
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: healthClient,
             proxyService: proxyService,
@@ -2226,7 +2510,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             settingsMessageAutoClearDelayNanoseconds: 60_000_000_000
         )
         viewModel.serverControlState = .running
-        var codex = config.ccodex
+        var codex = config.oauthCommandProfiles[0].codex!
         codex.opus.fastModeEnabled = true
 
         try viewModel.saveCodexSettings(functionName: "ccodex", codex: codex)
@@ -2241,7 +2525,16 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testFastRestartFailureKeepsSavedConfigAndShowsSettingsMessage() async throws {
         var config = AppConfig.default
-        config.commands.ccodex = "ccodex"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
         let store = StubConfigStore(config: config)
         let proxyService = StubProxyServiceStarter(
             restartError: NSError(domain: "FastMode", code: 1, userInfo: [NSLocalizedDescriptionKey: "Restart failed"])
@@ -2250,21 +2543,21 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             config: config,
             configStore: store,
             shellInstaller: StubShellInstaller(),
-            authProfileStore: StubAuthProfileStore(profiles: []),
+            authProfileStore: codexAuthProfileStore(),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: proxyService,
             claudeConnector: connectedClaudeConnector(),
             settingsMessageAutoClearDelayNanoseconds: 60_000_000_000
         )
         viewModel.serverControlState = .running
-        var codex = config.ccodex
+        var codex = config.oauthCommandProfiles[0].codex!
         codex.opus.fastModeEnabled = true
 
         try viewModel.saveCodexSettings(functionName: "ccodex", codex: codex)
         await waitForRestart(proxyService)
         for _ in 0..<20 where viewModel.settingsMessage == nil { await Task.yield() }
 
-        XCTAssertTrue(store.savedConfigs.last?.ccodex.opus.fastModeEnabled == true)
+        XCTAssertTrue(store.savedConfigs.last?.oauthCommandProfiles.first { $0.provider == .codex }?.codex?.opus.fastModeEnabled == true)
         XCTAssertEqual(
             viewModel.settingsMessage,
             "Fast mode settings were saved, but CLIProxyAPI could not restart: Restart failed"
@@ -2273,7 +2566,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testSavingCodexAPISettingsWithoutKeyOrFastChangeDoesNotRestart() async throws {
         var config = AppConfig.default
-        config.commands.ccodexapi = "ccodexapi"
+        config.codexAPI.commandName = "ccodexapi"
         let proxyService = StubProxyServiceStarter()
         let secretStore = InMemorySecretStore(values: [.codexAPIKey: "existing-key"])
         let viewModel = DashboardViewModel(
@@ -2303,7 +2596,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testAPIKeyReadFailurePreventsSecretConfigAndRestartMutation() async throws {
         var config = AppConfig.default
-        config.commands.ccapi = "ccapi"
+        config.claudeAPI.commandName = "ccapi"
         let configStore = StubConfigStore(config: config)
         let secretStore = RecordingSecretStore(
             getError: SecretStoreError.readFailed(SecretKey.claudeAPIKey.rawValue)
@@ -2336,13 +2629,13 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertTrue(secretStore.setValues.isEmpty)
         XCTAssertTrue(secretStore.deleteKeys.isEmpty)
         XCTAssertTrue(configStore.savedConfigs.isEmpty)
-        XCTAssertEqual(viewModel.config.commands.ccapi, "ccapi")
+        XCTAssertEqual(viewModel.config.claudeAPI.commandName, "ccapi")
         XCTAssertEqual(proxyService.restartPorts, [])
     }
 
     func testSavingClaudeAPISettingsWithoutKeyDoesNotRestart() async throws {
         var config = AppConfig.default
-        config.commands.ccapi = "ccapi"
+        config.claudeAPI.commandName = "ccapi"
         let proxyService = StubProxyServiceStarter()
         let secretStore = InMemorySecretStore(values: [.claudeAPIKey: "existing-key"])
         let viewModel = DashboardViewModel(
@@ -2370,8 +2663,17 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testReasoningOnlySaveRejectsExistingManagedAliasCollision() async throws {
         var config = AppConfig.default
-        config.commands.ccodex = "ccodex"
-        config.ccodex.opus = .init(
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
+        config.oauthCommandProfiles[0].codex!.opus = .init(
             model: "gpt-5.6-sol-fast",
             reasoning: .high,
             fastModeEnabled: true
@@ -2382,13 +2684,13 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             config: config,
             configStore: store,
             shellInstaller: StubShellInstaller(),
-            authProfileStore: StubAuthProfileStore(profiles: []),
+            authProfileStore: codexAuthProfileStore(),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: proxyService,
             claudeConnector: connectedClaudeConnector()
         )
         viewModel.serverControlState = .running
-        var updated = config.ccodex
+        var updated = config.oauthCommandProfiles[0].codex!
         updated.opus.reasoning = .max
 
         XCTAssertThrowsError(try viewModel.saveCodexSettings(functionName: "ccodex", codex: updated)) { error in
@@ -2402,8 +2704,17 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testFastAliasRecoverySaveSucceedsAndRequestsRestart() async throws {
         var config = AppConfig.default
-        config.commands.ccodex = "ccodex"
-        config.ccodex.opus = .init(
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
+        config.oauthCommandProfiles[0].codex!.opus = .init(
             model: "gpt-5.6-sol-fast",
             reasoning: .high,
             fastModeEnabled: true
@@ -2414,7 +2725,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             config: config,
             configStore: store,
             shellInstaller: StubShellInstaller(),
-            authProfileStore: StubAuthProfileStore(profiles: []),
+            authProfileStore: codexAuthProfileStore(),
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
@@ -2422,30 +2733,39 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             serverStatusRetryDelayNanoseconds: 0
         )
         viewModel.serverControlState = .running
-        var repaired = config.ccodex
+        var repaired = config.oauthCommandProfiles[0].codex!
         repaired.opus.model = "gpt-5.6-sol"
 
         XCTAssertNoThrow(try viewModel.saveCodexSettings(functionName: "ccodex", codex: repaired))
         await waitForRestart(proxyService)
 
-        XCTAssertEqual(store.savedConfigs.last?.ccodex.opus.model, "gpt-5.6-sol")
+        XCTAssertEqual(store.savedConfigs.last?.oauthCommandProfiles.first { $0.provider == .codex }?.codex?.opus.model, "gpt-5.6-sol")
         XCTAssertEqual(proxyService.restartPorts, [config.port])
     }
 
     func testNewFastAliasCollisionThrows() throws {
         var config = AppConfig.default
-        config.commands.ccodex = "ccodex"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
         let store = StubConfigStore(config: config)
         let viewModel = DashboardViewModel(
             config: config,
             configStore: store,
             shellInstaller: StubShellInstaller(),
-            authProfileStore: StubAuthProfileStore(profiles: []),
+            authProfileStore: codexAuthProfileStore(),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
             claudeConnector: connectedClaudeConnector()
         )
-        var invalid = config.ccodex
+        var invalid = config.oauthCommandProfiles[0].codex!
         invalid.opus = .init(
             model: "gpt-5.6-sol-fast",
             reasoning: .high,
@@ -2460,7 +2780,17 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testUnrelatedSaveRejectsExistingManagedAliasCollision() throws {
         var config = AppConfig.default
-        config.ccodex.opus = .init(
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
+        config.oauthCommandProfiles[0].codex!.opus = .init(
             model: "gpt-5.6-sol-fast",
             reasoning: .high,
             fastModeEnabled: true
@@ -2470,7 +2800,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             config: config,
             configStore: store,
             shellInstaller: StubShellInstaller(),
-            authProfileStore: StubAuthProfileStore(profiles: []),
+            authProfileStore: codexAuthProfileStore(),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
             claudeConnector: connectedClaudeConnector()
@@ -2600,7 +2930,16 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testFastAndAPIKeyChangesDuringModelServerStartCoalesceIntoOneRestart() async throws {
         var config = AppConfig.default
-        config.commands.ccodex = "ccodex"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
         let proxyService = StubProxyServiceStarter(startDelayNanoseconds: 50_000_000)
         let modelClient = StubProxyModelClient(models: ["gpt-5.6-sol"])
         let viewModel = DashboardViewModel(
@@ -2608,7 +2947,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
             modelClient: modelClient,
-            authProfileStore: StubAuthProfileStore(profiles: []),
+            authProfileStore: codexAuthProfileStore(),
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
@@ -2619,7 +2958,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         let modelTask = Task { await viewModel.refreshCodexModels() }
         for _ in 0..<100 where !viewModel.isServerActionInProgress { await Task.yield() }
-        var codex = config.ccodex
+        var codex = config.oauthCommandProfiles[0].codex!
         codex.opus.fastModeEnabled = true
         try viewModel.saveCodexSettings(functionName: "ccodex", codex: codex)
         try viewModel.saveClaudeAPISettings(
@@ -2635,7 +2974,16 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testModelServerStartFailureClearsPendingConfigurationRestart() async throws {
         var config = AppConfig.default
-        config.commands.ccodex = "ccodex"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
         let proxyService = StubProxyServiceStarter(
             error: NSError(domain: "ModelStart", code: 1, userInfo: [NSLocalizedDescriptionKey: "Start failed"]),
             startDelayNanoseconds: 50_000_000
@@ -2645,7 +2993,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
             modelClient: StubProxyModelClient(models: ["gpt-5.6-sol"]),
-            authProfileStore: StubAuthProfileStore(profiles: []),
+            authProfileStore: codexAuthProfileStore(),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: proxyService,
             claudeConnector: connectedClaudeConnector(),
@@ -2654,7 +3002,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         let modelTask = Task { await viewModel.refreshCodexModels() }
         for _ in 0..<100 where !viewModel.isServerActionInProgress { await Task.yield() }
-        var codex = config.ccodex
+        var codex = config.oauthCommandProfiles[0].codex!
         codex.opus.fastModeEnabled = true
         try viewModel.saveCodexSettings(functionName: "ccodex", codex: codex)
         await modelTask.value
@@ -2674,7 +3022,16 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testRefreshCodexModelsWaitsForConfigurationRestartThenLoadsModels() async throws {
         var config = AppConfig.default
-        config.commands.ccodex = "ccodex"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
         let proxyService = StubProxyServiceStarter(suspendedRestartCount: 1)
         let modelClient = StubProxyModelClient(models: ["gpt-5.6-sol"])
         let viewModel = DashboardViewModel(
@@ -2682,7 +3039,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
             modelClient: modelClient,
-            authProfileStore: StubAuthProfileStore(profiles: []),
+            authProfileStore: codexAuthProfileStore(),
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
@@ -2690,7 +3047,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             serverStatusRetryDelayNanoseconds: 0
         )
         viewModel.serverControlState = .running
-        var codex = config.ccodex
+        var codex = config.oauthCommandProfiles[0].codex!
         codex.opus.fastModeEnabled = true
         try viewModel.saveCodexSettings(functionName: "ccodex", codex: codex)
         let reachedFirstRestart = await proxyService.reachesRestartCount(1)
@@ -2932,7 +3289,9 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
             modelClient: modelClient,
-            authProfileStore: StubAuthProfileStore(profiles: []),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "claude-work.json", type: .claude, email: "work@example.com", accountID: nil, expired: nil, disabled: false, prefix: "claude-work")
+            ]),
             proxyService: StubProxyServiceStarter(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
@@ -3267,13 +3626,22 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
     func testStartServerUsesInjectedProxyServiceAndRefreshesStatus() async {
         var config = AppConfig.default
-        config.commands.ccodex = "ccodex"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
         let proxyService = StubProxyServiceStarter()
         let viewModel = DashboardViewModel(
             config: config,
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
-            authProfileStore: StubAuthProfileStore(profiles: []),
+            authProfileStore: codexAuthProfileStore(),
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
             proxyService: proxyService,
@@ -3288,12 +3656,21 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         XCTAssertEqual(proxyService.ports, [config.port])
         XCTAssertEqual(viewModel.serverStatus.severity, .ready)
-        XCTAssertEqual(viewModel.cards.first { $0.command == config.commands.ccodex }?.status.severity, .ready)
+        XCTAssertEqual(viewModel.cards.first { $0.command == config.oauthCommandProfiles.first?.commandName }?.status.severity, .ready)
     }
 
     func testStartServerRetriesStatusUntilServerBecomesReady() async {
         var config = AppConfig.default
-        config.commands.ccodex = "ccodex"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
         let proxyService = StubProxyServiceStarter()
         let httpClient = SequencedHTTPClient(results: [
             .failure(URLError(.cannotConnectToHost)),
@@ -3303,7 +3680,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             config: config,
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
-            authProfileStore: StubAuthProfileStore(profiles: []),
+            authProfileStore: codexAuthProfileStore(),
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: httpClient),
             proxyService: proxyService,
@@ -3320,18 +3697,27 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(proxyService.ports, [config.port])
         XCTAssertEqual(httpClient.requestCount, 2)
         XCTAssertEqual(viewModel.serverStatus.severity, DiagnosticSeverity.ready)
-        XCTAssertEqual(viewModel.cards.first { $0.command == config.commands.ccodex }?.status.severity, DiagnosticSeverity.ready)
+        XCTAssertEqual(viewModel.cards.first { $0.command == config.oauthCommandProfiles.first?.commandName }?.status.severity, DiagnosticSeverity.ready)
     }
 
     func testStopServerUsesInjectedProxyServiceAndRefreshesStatus() async {
         var config = AppConfig.default
-        config.commands.ccodex = "ccodex"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
         let proxyService = StubProxyServiceStarter()
         let viewModel = DashboardViewModel(
             config: config,
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
-            authProfileStore: StubAuthProfileStore(profiles: []),
+            authProfileStore: codexAuthProfileStore(),
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
             proxyService: proxyService,
@@ -3346,18 +3732,27 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         XCTAssertEqual(proxyService.stopCount, 1)
         XCTAssertEqual(viewModel.serverStatus.severity, .ready)
-        XCTAssertEqual(viewModel.cards.first { $0.command == config.commands.ccodex }?.status.severity, .ready)
+        XCTAssertEqual(viewModel.cards.first { $0.command == config.oauthCommandProfiles.first?.commandName }?.status.severity, .ready)
     }
 
     func testRestartServerUsesInjectedProxyServiceAndRefreshesStatus() async {
         var config = AppConfig.default
-        config.commands.ccodex = "ccodex"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
         let proxyService = StubProxyServiceStarter()
         let viewModel = DashboardViewModel(
             config: config,
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
-            authProfileStore: StubAuthProfileStore(profiles: []),
+            authProfileStore: codexAuthProfileStore(),
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
             proxyService: proxyService,
@@ -3372,12 +3767,21 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         XCTAssertEqual(proxyService.restartPorts, [config.port])
         XCTAssertEqual(viewModel.serverStatus.severity, .ready)
-        XCTAssertEqual(viewModel.cards.first { $0.command == config.commands.ccodex }?.status.severity, .ready)
+        XCTAssertEqual(viewModel.cards.first { $0.command == config.oauthCommandProfiles.first?.commandName }?.status.severity, .ready)
     }
 
     func testRestartServerRetriesStatusUntilServerBecomesReady() async {
         var config = AppConfig.default
-        config.commands.ccodex = "ccodex"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
         let proxyService = StubProxyServiceStarter()
         let httpClient = SequencedHTTPClient(results: [
             .failure(URLError(.cannotConnectToHost)),
@@ -3387,7 +3791,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             config: config,
             configStore: StubConfigStore(config: config),
             shellInstaller: StubShellInstaller(),
-            authProfileStore: StubAuthProfileStore(profiles: []),
+            authProfileStore: codexAuthProfileStore(),
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: httpClient),
             proxyService: proxyService,
@@ -3404,12 +3808,21 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(proxyService.restartPorts, [config.port])
         XCTAssertEqual(httpClient.requestCount, 2)
         XCTAssertEqual(viewModel.serverStatus.severity, DiagnosticSeverity.ready)
-        XCTAssertEqual(viewModel.cards.first { $0.command == config.commands.ccodex }?.status.severity, DiagnosticSeverity.ready)
+        XCTAssertEqual(viewModel.cards.first { $0.command == config.oauthCommandProfiles.first?.commandName }?.status.severity, DiagnosticSeverity.ready)
     }
 
     func testStartServerFailureUpdatesServerAndCodexCardStatus() async {
         var config = AppConfig.default
-        config.commands.ccodex = "ccodex"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
         let proxyService = StubProxyServiceStarter(error: ProxyServiceError.missingBinary("test"))
         let viewModel = DashboardViewModel(
             config: config,
@@ -3434,7 +3847,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(snapshot.statusLabel, "Error")
         XCTAssertEqual(snapshot.indicatorState, .error)
         XCTAssertEqual(snapshot.erroredCount, 1)
-        XCTAssertEqual(viewModel.cards.first { $0.command == config.commands.ccodex }?.status.severity, .error)
+        XCTAssertEqual(viewModel.cards.first { $0.command == config.oauthCommandProfiles.first?.commandName }?.status.severity, .error)
         XCTAssertFalse(viewModel.isServerActionInProgress)
     }
 
@@ -5266,6 +5679,20 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTFail("Expected settings message: \(expected)")
     }
 
+    private func codexAuthProfileStore() -> StubAuthProfileStore {
+        StubAuthProfileStore(profiles: [
+            AuthProfile(
+                fileName: "codex.json",
+                type: .codex,
+                email: "codex@example.com",
+                accountID: nil,
+                expired: nil,
+                disabled: false,
+                prefix: "codex-account"
+            )
+        ])
+    }
+
     private func connectedClaudeConnector() -> ClaudeConnector {
         ClaudeConnector(runner: StubProcessRunner(results: Array(repeating: [
             ProcessResult(exitCode: 0, stdout: "/usr/local/bin/claude\n", stderr: ""),
@@ -5522,6 +5949,8 @@ final class DashboardAccountOrderingTests: XCTestCase {
             authProfileID: authProfileID,
             commandName: "cmd\(id)",
             nickname: id,
+            codex: provider == .codex ? AppConfig.Codex.default : nil,
+            modelPrefix: "\(provider.rawValue)-\(id)",
             isEnabled: true
         )
     }
@@ -6020,6 +6449,14 @@ private final class MigratingAuthProfileStore: AuthProfileManaging, @unchecked S
 
     func setDisabled(_ disabled: Bool, for type: AuthProfileType) throws -> Int { 0 }
     func delete(for type: AuthProfileType) throws -> Int { 0 }
+}
+
+private struct ThrowingAuthProfileStore: AuthProfileManaging {
+    let error: Error
+
+    func profiles() throws -> [AuthProfile] { throw error }
+    func setDisabled(_: Bool, for _: AuthProfileType) throws -> Int { throw error }
+    func delete(for _: AuthProfileType) throws -> Int { throw error }
 }
 
 private final class StubAuthProfileStore: AuthProfileManaging, @unchecked Sendable {

@@ -19,19 +19,14 @@ public struct CodexFastConfiguration: Equatable, Sendable {
     public init(config: AppConfig, includeAPIKeyModels: Bool = true) throws {
         try Self.validateNoManagedAliasCollisions(in: config)
 
-        let oauthCodexConfigs: [AppConfig.Codex]
-        if config.oauthCommandProfiles.isEmpty {
-            oauthCodexConfigs = [config.ccodex]
-        } else {
-            oauthCodexConfigs = config.oauthCommandProfiles.compactMap { profile in
-                guard profile.provider == .codex, profile.isEnabled else { return nil }
-                return profile.codex ?? config.ccodex
-            }
+        let oauthCodexConfigs: [AppConfig.Codex] = config.oauthCommandProfiles.compactMap { profile in
+            guard profile.provider == .codex, profile.isEnabled else { return nil }
+            return profile.codex ?? .default
         }
 
         let roundRobinCodexConfigs: [AppConfig.Codex] = config.roundRobinProfiles.compactMap { profile in
             guard profile.provider == .codex, profile.isEnabled else { return nil }
-            return profile.codex ?? config.ccodex
+            return profile.codex ?? .default
         }
 
         oauthCanonicalModels = Self.fastModels(in: oauthCodexConfigs + roundRobinCodexConfigs)
@@ -42,7 +37,7 @@ public struct CodexFastConfiguration: Equatable, Sendable {
     }
 
     private static func validateNoManagedAliasCollisions(in config: AppConfig) throws {
-        let allCodexConfigs = [config.ccodex, config.codexAPI.codex]
+        let allCodexConfigs = [config.codexAPI.codex]
             + config.oauthCommandProfiles.compactMap { $0.provider == .codex ? $0.codex : nil }
             + config.roundRobinProfiles.compactMap { $0.provider == .codex ? $0.codex : nil }
 

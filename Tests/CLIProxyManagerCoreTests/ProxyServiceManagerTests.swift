@@ -77,7 +77,16 @@ final class ProxyServiceManagerTests: XCTestCase {
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         try createBinary(at: paths.clipProxyBinary)
         var config = AppConfig.default
-        config.ccodex.opus = .init(model: "gpt-5.6-sol", reasoning: .xhigh, fastModeEnabled: true)
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                codex: AppConfig.Codex.default,
+                modelPrefix: "codex-account"
+            )
+        ]
+        config.oauthCommandProfiles[0].codex!.opus = .init(model: "gpt-5.6-sol", reasoning: .xhigh, fastModeEnabled: true)
         config.codexAPI.codex.sonnet = .init(model: "gpt-5.5", reasoning: .medium, fastModeEnabled: true)
         let configuredAppConfig = config
         let manager = ProxyServiceManager(

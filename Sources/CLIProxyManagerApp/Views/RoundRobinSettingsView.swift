@@ -232,7 +232,7 @@ private struct CodexRoundRobinRoleFields: View {
     }
 
     private var codex: AppConfig.Codex {
-        profile.codex ?? AppConfig.default.ccodex
+        profile.codex ?? .default
     }
 
     private func update(_ keyPath: WritableKeyPath<AppConfig.Codex, AppConfig.CodexRole>, to value: AppConfig.CodexRole) {

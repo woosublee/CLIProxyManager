@@ -75,60 +75,6 @@ struct PortSettingsSheet: View {
     }
 }
 
-struct ShellFunctionsSettingsSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @State private var cc: String
-    @State private var ccapi: String
-    @State private var ccodex: String
-    @State private var errorMessage: String?
-    let save: (AppConfig.Commands) throws -> Void
-
-    init(commands: AppConfig.Commands, save: @escaping (AppConfig.Commands) throws -> Void) {
-        _cc = State(initialValue: commands.cc)
-        _ccapi = State(initialValue: commands.ccapi)
-        _ccodex = State(initialValue: commands.ccodex)
-        self.save = save
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Shell Functions")
-                .font(.title2.bold())
-            TextField("Claude subscription", text: $cc)
-                .textFieldStyle(.roundedBorder)
-            TextField("Claude API", text: $ccapi)
-                .textFieldStyle(.roundedBorder)
-            TextField("Codex proxy", text: $ccodex)
-                .textFieldStyle(.roundedBorder)
-            Text("Use only names that are safe for zsh functions. Installation stops if a name conflicts with an existing alias.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-            footer {
-                try save(AppConfig.Commands(cc: cc, ccapi: ccapi, ccodex: ccodex))
-            }
-        }
-        .padding(24)
-        .frame(width: 460)
-        .settingsErrorAlert(message: $errorMessage)
-    }
-
-    private func footer(saveAction: @escaping () throws -> Void) -> some View {
-        HStack {
-            Spacer()
-            Button("Cancel") { dismiss() }
-            Button("Save") {
-                do {
-                    try saveAction()
-                    dismiss()
-                } catch {
-                    errorMessage = error.localizedDescription
-                }
-            }
-            .keyboardShortcut(.defaultAction)
-        }
-    }
-}
-
 struct ModelsSettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var opus: AppConfig.CodexRole
@@ -140,14 +86,14 @@ struct ModelsSettingsSheet: View {
     let save: (AppConfig.Codex) throws -> Void
 
     init(
-        config: AppConfig,
+        codex: AppConfig.Codex,
         availableModels: [CodexModelOption],
         refreshModels: @escaping () -> Void,
         save: @escaping (AppConfig.Codex) throws -> Void
     ) {
-        _opus = State(initialValue: config.ccodex.opus)
-        _sonnet = State(initialValue: config.ccodex.sonnet)
-        _haiku = State(initialValue: config.ccodex.haiku)
+        _opus = State(initialValue: codex.opus)
+        _sonnet = State(initialValue: codex.sonnet)
+        _haiku = State(initialValue: codex.haiku)
         self.availableModels = availableModels
         self.refreshModels = refreshModels
         self.save = save

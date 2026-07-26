@@ -668,11 +668,14 @@ final class CLIProxyManagerCommandTests: XCTestCase {
         let configStore = AppConfigStore(paths: paths)
         var config = AppConfig.default
         config.port = 18_888
-        config.ccapi = .init(claude: .init(
-            opus: .model("claude-opus-4-7"),
-            sonnet: .automatic,
-            haiku: .automatic
-        ))
+        config.claudeAPI = .init(
+            commandName: "claude_api",
+            claude: .init(
+                opus: .model("claude-opus-4-7"),
+                sonnet: .automatic,
+                haiku: .automatic
+            )
+        )
         try configStore.save(config)
         let models = StubClaudeModelListing(optionsByPrefix: [
             "cpm-claude-api": [
@@ -760,10 +763,16 @@ final class CLIProxyManagerCommandTests: XCTestCase {
             claudeModelClient: models
         )
 
-        try await command.run(arguments: ["routing", "claude-models", "--legacy"])
-
-        XCTAssertEqual(models.requests.map(\.prefix), ["claude-work"])
-        XCTAssertTrue(output.stdout.joined().contains("claude-work/claude-opus-4-8"))
+        await XCTAssertThrowsErrorAsync(
+            try await command.run(arguments: ["routing", "claude-models", "--legacy"])
+        ) { error in
+            XCTAssertEqual(
+                error as? CLIProxyManagerCommandError,
+                .prerequisite("Claude command profile `--legacy` was not found.")
+            )
+        }
+        XCTAssertTrue(models.requests.isEmpty)
+        XCTAssertTrue(output.stdout.isEmpty)
     }
 
     func testLegacyClaudeRoutingRequiresExactlyOneEnabledPrefixedClaudeProfile() async throws {
@@ -790,10 +799,16 @@ final class CLIProxyManagerCommandTests: XCTestCase {
             claudeModelClient: models
         )
 
-        try await command.run(arguments: ["routing", "claude-models", "--legacy"])
-
-        XCTAssertEqual(models.requests.map { "\($0.port):\($0.prefix)" }, ["18318:claude-work"])
-        XCTAssertTrue(output.stdout.joined().contains("claude-work/claude-opus-4-8"))
+        await XCTAssertThrowsErrorAsync(
+            try await command.run(arguments: ["routing", "claude-models", "--legacy"])
+        ) { error in
+            XCTAssertEqual(
+                error as? CLIProxyManagerCommandError,
+                .prerequisite("Claude command profile `--legacy` was not found.")
+            )
+        }
+        XCTAssertTrue(models.requests.isEmpty)
+        XCTAssertTrue(output.stdout.isEmpty)
     }
 
     func testLegacyClaudeRoutingRejectsMultipleProfilesWithoutQueryingModels() async throws {
@@ -817,7 +832,7 @@ final class CLIProxyManagerCommandTests: XCTestCase {
         await XCTAssertThrowsErrorAsync(try await command.run(arguments: ["routing", "claude-models", "--legacy"])) { error in
             XCTAssertEqual(
                 error as? CLIProxyManagerCommandError,
-                .prerequisite("Multiple Claude OAuth accounts are enabled. Save an account-specific command in the app, then retry.")
+                .prerequisite("Claude command profile `--legacy` was not found.")
             )
         }
         XCTAssertTrue(models.requests.isEmpty)

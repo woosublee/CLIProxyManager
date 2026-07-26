@@ -9,12 +9,19 @@ public struct AppConfigStore: @unchecked Sendable {
         self.fileManager = fileManager
     }
 
-    public func load() throws -> AppConfig {
+    public func loadDocument() throws -> AppConfigLoadResult {
         guard fileManager.fileExists(atPath: paths.configFile.path) else {
-            return .default
+            return .canonical(.default)
         }
         let data = try Data(contentsOf: paths.configFile)
-        return try JSONDecoder().decode(AppConfig.self, from: data)
+        if try LegacyAppConfigDecoder.isLegacyDocument(data) {
+            return try LegacyAppConfigDecoder.decode(data)
+        }
+        return .canonical(try JSONDecoder().decode(AppConfig.self, from: data))
+    }
+
+    public func load() throws -> AppConfig {
+        try loadDocument().config
     }
 
     public func save(_ config: AppConfig) throws {

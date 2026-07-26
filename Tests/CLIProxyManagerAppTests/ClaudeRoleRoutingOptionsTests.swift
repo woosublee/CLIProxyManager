@@ -26,7 +26,7 @@ final class ClaudeRoleRoutingOptionsTests: XCTestCase {
     }
 
     func testDisplayNameRemovesRoutingAndClaudePrefixes() {
-        XCTAssertEqual(ClaudeRoleRoutingOptions.displayName(for: "woosub-work/claude-opus-4-8"), "Opus 4.8")
+        XCTAssertEqual(ClaudeRoleRoutingOptions.displayName(for: "team-work/claude-opus-4-8"), "Opus 4.8")
         XCTAssertEqual(ClaudeRoleRoutingOptions.displayName(for: "claude-sonnet-5"), "Sonnet 5")
         XCTAssertEqual(ClaudeRoleRoutingOptions.displayName(for: "claude-haiku-4-5"), "Haiku 4.5")
     }

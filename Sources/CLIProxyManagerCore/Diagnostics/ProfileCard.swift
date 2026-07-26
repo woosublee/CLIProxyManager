@@ -27,17 +27,24 @@ public struct ProfileCard: Equatable, Identifiable, Sendable {
             message: "Status has not been checked yet."
         )
 
+        let claudeCommand = config.oauthCommandProfiles
+            .first(where: { $0.provider == .claude })?
+            .commandName ?? ""
+        let codexCommand = config.oauthCommandProfiles
+            .first(where: { $0.provider == .codex })?
+            .commandName ?? ""
+
         return [
             ProfileCard(
                 id: Self.claudeID,
-                command: config.commands.cc,
+                command: claudeCommand,
                 title: "Claude Subscription",
                 subtitle: "Uses the official Claude Code login",
                 status: pendingStatus
             ),
             ProfileCard(
                 id: Self.codexID,
-                command: config.commands.ccodex,
+                command: codexCommand,
                 title: "OpenAI/Codex",
                 subtitle: "Routed through CLIProxyAPI",
                 status: pendingStatus

@@ -21,20 +21,23 @@ final class DashboardViewModelTests: XCTestCase {
     }
 
     func testDefaultProfileCardsUseConfiguredCommandsAndLabels() {
-        let config = AppConfig(
-            port: 9444,
-            commands: AppConfig.Commands(cc: "claude-local", ccapi: "api-local", ccodex: "codex-local"),
-            ccapi: AppConfig.ClaudeAPI(),
-            ccodex: AppConfig.Codex(
-                opus: AppConfig.CodexRole(model: "test-opus", reasoning: .auto),
-                sonnet: AppConfig.CodexRole(model: "test-sonnet", reasoning: .auto),
-                haiku: AppConfig.CodexRole(model: "test-haiku", reasoning: .auto)
+        var config = AppConfig.default
+        config.port = 9444
+        config.oauthCommandProfiles = [
+            .init(
+                id: "claude-local",
+                provider: .claude,
+                authProfileID: "claude-local.json",
+                commandName: "claude-local"
             ),
-            includeDangerouslySkipPermissions: false,
-            startAtLogin: false,
-            showDockIcon: true,
-            showMenuBarIcon: true
-        )
+            .init(
+                id: "codex-local",
+                provider: .codex,
+                authProfileID: "codex-local.json",
+                commandName: "codex-local",
+                codex: .default
+            )
+        ]
 
         let cards = ProfileCard.makeDefaultCards(config: config)
 
@@ -62,8 +65,7 @@ final class DashboardViewModelTests: XCTestCase {
 
     func testDefaultProfileCardsExcludeClaudeAPIEvenWhenConfigured() {
         var config = AppConfig.default
-        config.commands.ccapi = "manualapi"
-        config.ccapi = AppConfig.ClaudeAPI()
+        config.claudeAPI.commandName = "manualapi"
 
         let cards = ProfileCard.makeDefaultCards(config: config)
 
