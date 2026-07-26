@@ -575,8 +575,8 @@ from pathlib import Path
 ko = [line for line in Path("README.md").read_text().splitlines() if line.startswith("## ")]
 en = [line for line in Path("README.en.md").read_text().splitlines() if line.startswith("## ")]
 assert len(ko) == len(en) == 11, (ko, en)
-assert ko[5] == "## 계정과 라우팅"
-assert en[5] == "## Accounts and routing"
+assert ko[4] == "## 계정과 라우팅"
+assert en[4] == "## Accounts and routing"
 assert ko[-3:] == ["## 문제 해결", "## 보안", "## 라이선스"]
 assert en[-3:] == ["## Troubleshooting", "## Security", "## License"]
 print("README section order matches")
