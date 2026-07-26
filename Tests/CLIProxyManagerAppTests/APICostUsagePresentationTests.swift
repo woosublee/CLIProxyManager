@@ -235,6 +235,46 @@ final class APICostUsagePresentationTests: XCTestCase {
         XCTAssertEqual(compact.indicator, .warning(message: message))
     }
 
+    func testExpectedInitialAndPricingAssumptionsDoNotShowWarningIndicator() {
+        let issues: [APICostIssue] = [
+            .trackingStartedMidPeriod,
+            .cacheWriteTTLAssumedDefault,
+            .inferenceGeoAssumedGlobal,
+            .fastModeAssumedStandard
+        ]
+        let snapshot = makeCostSnapshot(dayIssues: issues, monthIssues: issues)
+
+        let presentation = apiCostUsagePresentation(snapshot: snapshot, issues: issues)
+        let compact = compactUsagePresentation(for: .apiCost(.partial(snapshot, issues)))
+
+        XCTAssertNil(presentation.warningMessage)
+        XCTAssertNil(compact.indicator)
+        XCTAssertNil(providerUsageWarningMessage(for: .apiCost(.partial(snapshot, issues))))
+        for issue in issues {
+            XCTAssertTrue(presentation.rows[0].tooltip.contains(apiCostIssueMessage(issue)))
+            XCTAssertTrue(presentation.rows[1].tooltip.contains(apiCostIssueMessage(issue)))
+        }
+    }
+
+    func testActualProblemShowsAccountWarningWithoutIncludingInformationalAssumptions() {
+        let issues: [APICostIssue] = [
+            .collectionGap,
+            .cacheWriteTTLAssumedDefault,
+            .inferenceGeoAssumedGlobal
+        ]
+        let snapshot = makeCostSnapshot(dayIssues: issues, monthIssues: issues)
+
+        let presentation = apiCostUsagePresentation(snapshot: snapshot, issues: issues)
+        let message = providerUsageWarningMessage(for: .apiCost(.partial(snapshot, issues)))
+
+        XCTAssertEqual(message, presentation.warningMessage)
+        XCTAssertTrue(message?.contains(apiCostIssueMessage(.collectionGap)) == true)
+        XCTAssertFalse(message?.contains(apiCostIssueMessage(.cacheWriteTTLAssumedDefault)) == true)
+        XCTAssertFalse(message?.contains(apiCostIssueMessage(.inferenceGeoAssumedGlobal)) == true)
+        XCTAssertTrue(presentation.rows[0].tooltip.contains(apiCostIssueMessage(.cacheWriteTTLAssumedDefault)))
+        XCTAssertTrue(presentation.rows[0].tooltip.contains(apiCostIssueMessage(.inferenceGeoAssumedGlobal)))
+    }
+
     func testIssueMessagesUseUserFacingCopyForEveryIssue() {
         XCTAssertEqual(
             APICostIssue.allCases.map(apiCostIssueMessage),

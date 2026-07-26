@@ -126,11 +126,12 @@ func apiCostUsagePresentation(
     snapshot: APICostSnapshot,
     issues: [APICostIssue]
 ) -> APICostUsagePresentation {
-    APICostUsagePresentation(
+    let warningIssues = apiCostWarningIndicatorIssues(issues)
+    return APICostUsagePresentation(
         rows: apiCostRows(snapshot: snapshot),
-        warningMessage: issues.isEmpty
+        warningMessage: warningIssues.isEmpty
             ? nil
-            : apiCostWarningMessage(snapshot: snapshot, issues: issues)
+            : apiCostWarningMessage(snapshot: snapshot, issues: warningIssues)
     )
 }
 
@@ -219,6 +220,20 @@ func compactTokenCount(_ value: Int64) -> String {
 
 func orderedAPICostIssues(_ issues: [APICostIssue]) -> [APICostIssue] {
     APICostIssue.allCases.filter { issues.contains($0) }
+}
+
+func apiCostWarningIndicatorIssues(_ issues: [APICostIssue]) -> [APICostIssue] {
+    orderedAPICostIssues(issues).filter { issue in
+        switch issue {
+        case .trackingStartedMidPeriod,
+             .cacheWriteTTLAssumedDefault,
+             .inferenceGeoAssumedGlobal,
+             .fastModeAssumedStandard:
+            false
+        default:
+            true
+        }
+    }
 }
 
 private func apiCostUpdatedAt(_ date: Date, timeZoneID: String) -> String {

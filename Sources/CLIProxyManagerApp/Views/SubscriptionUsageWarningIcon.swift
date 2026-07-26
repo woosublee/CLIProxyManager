@@ -39,6 +39,26 @@ enum SubscriptionUsageWarningPresentation {
     }
 }
 
+func providerUsageWarningMessage(
+    for state: ProviderUsageState,
+    now: Date = .now
+) -> String? {
+    switch state {
+    case let .subscription(.stale(snapshot, issue)):
+        SubscriptionUsageWarningPresentation.message(
+            issue: issue,
+            lastUpdatedAt: snapshot.fetchedAt,
+            now: now
+        )
+    case let .apiCost(.partial(snapshot, issues)):
+        apiCostUsagePresentation(snapshot: snapshot, issues: issues).warningMessage
+    case let .apiCost(.unavailable(issue)):
+        apiCostIssueMessage(issue)
+    case .subscription, .apiCost:
+        nil
+    }
+}
+
 struct SubscriptionUsageWarningRowPresentation: Equatable, Identifiable {
     let window: UsageWindow
     let warning: SubscriptionUsageIssue?

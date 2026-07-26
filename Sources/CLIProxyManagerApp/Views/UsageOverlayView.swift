@@ -295,6 +295,13 @@ private struct ExpandedUsageOverlayAccountView: View {
                 ProviderAvatar(providerID: provider.id, size: 20)
                 Text(provider.usageOverlayDisplayName)
                     .font(.system(size: 12.5, weight: .semibold))
+                if let warningMessage = providerUsageWarningMessage(for: provider.usageState) {
+                    UsageWarningIcon(message: warningMessage)
+                        .frame(
+                            width: UsageWarningLayout.iconFrameSize.width,
+                            height: UsageWarningLayout.iconFrameSize.height
+                        )
+                }
                 Spacer()
                 Text(verbatim: "$ \(provider.functionName)")
                     .font(.system(size: 10, design: .monospaced))
@@ -335,42 +342,37 @@ private struct ExpandedUsageOverlayAccountView: View {
     ) -> some View {
         let presentation = apiCostUsagePresentation(snapshot: snapshot, issues: issues)
         return VStack(alignment: .leading, spacing: 6) {
-            ForEach(Array(presentation.rows.enumerated()), id: \.element.id) { index, row in
-                UsageWarningAlignedRow(
-                    message: index == 0 ? presentation.warningMessage : nil,
-                    reservesWarningSpace: presentation.warningMessage != nil
-                ) {
-                    Group {
-                        switch row.decoration {
-                        case .textOnly:
-                            HStack(spacing: 8) {
-                                Text(row.label)
-                                    .font(.system(size: 10.5, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                    .frame(width: 28, alignment: .leading)
-                                Text(row.detail)
-                                    .font(.system(size: 10.5, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(row.textLayout.lineLimit)
-                                    .minimumScaleFactor(row.textLayout.minimumScaleFactor)
-                                    .allowsTightening(true)
-                                    .layoutPriority(1)
-                                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-                                Text(row.cost)
-                                    .font(.system(size: 10.5, design: .monospaced))
-                                    .lineLimit(row.textLayout.lineLimit)
-                                    .minimumScaleFactor(row.textLayout.minimumScaleFactor)
-                                    .allowsTightening(true)
-                                    .layoutPriority(1)
-                                    .frame(minWidth: 58, alignment: .trailing)
-                            }
+            ForEach(presentation.rows) { row in
+                Group {
+                    switch row.decoration {
+                    case .textOnly:
+                        HStack(spacing: 8) {
+                            Text(row.label)
+                                .font(.system(size: 10.5, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .frame(width: 28, alignment: .leading)
+                            Text(row.detail)
+                                .font(.system(size: 10.5, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(row.textLayout.lineLimit)
+                                .minimumScaleFactor(row.textLayout.minimumScaleFactor)
+                                .allowsTightening(true)
+                                .layoutPriority(1)
+                                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                            Text(row.cost)
+                                .font(.system(size: 10.5, design: .monospaced))
+                                .lineLimit(row.textLayout.lineLimit)
+                                .minimumScaleFactor(row.textLayout.minimumScaleFactor)
+                                .allowsTightening(true)
+                                .layoutPriority(1)
+                                .frame(minWidth: 58, alignment: .trailing)
                         }
                     }
-                    .help(row.tooltip)
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(row.accessibilityLabel)
                 }
+                .help(row.tooltip)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(row.accessibilityLabel)
             }
         }
     }
@@ -378,30 +380,16 @@ private struct ExpandedUsageOverlayAccountView: View {
     @ViewBuilder
     private func snapshotUsage(
         _ snapshot: SubscriptionUsageSnapshot,
-        warning: SubscriptionUsageIssue?
+        warning _: SubscriptionUsageIssue?
     ) -> some View {
-        let warningMessage = warning.map {
-            SubscriptionUsageWarningPresentation.message(
-                issue: $0,
-                lastUpdatedAt: snapshot.fetchedAt
-            )
-        }
         if snapshot.windows.isEmpty {
-            UsageWarningAlignedRow(
-                message: warningMessage,
-                reservesWarningSpace: warningMessage != nil
-            ) {
-                Text("Usage details unavailable")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
-            }
+            Text("Usage details unavailable")
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
         } else {
             VStack(alignment: .leading, spacing: 6) {
-                ForEach(subscriptionUsageWarningRows(snapshot: snapshot, warning: warning)) { row in
-                    ExpandedUsageOverlayProgressRow(
-                        row: row,
-                        lastUpdatedAt: snapshot.fetchedAt
-                    )
+                ForEach(subscriptionUsageWarningRows(snapshot: snapshot, warning: nil)) { row in
+                    ExpandedUsageOverlayProgressRow(row: row)
                 }
             }
         }
@@ -410,34 +398,22 @@ private struct ExpandedUsageOverlayAccountView: View {
 
 private struct ExpandedUsageOverlayProgressRow: View {
     let row: SubscriptionUsageWarningRowPresentation
-    let lastUpdatedAt: Date
 
     var body: some View {
         let window = row.window
         let percent = min(max(window.usedPercent, 0), 100)
-        let warningMessage = row.warning.map {
-            SubscriptionUsageWarningPresentation.message(
-                issue: $0,
-                lastUpdatedAt: lastUpdatedAt
-            )
-        }
         VStack(alignment: .leading, spacing: 2) {
-            UsageWarningAlignedRow(
-                message: warningMessage,
-                reservesWarningSpace: row.reservesWarningSpace
-            ) {
-                HStack(spacing: 8) {
-                    Text(subscriptionUsageDisplayLabel(for: window))
-                        .font(.system(size: 10.5, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 28, alignment: .leading)
-                    ProgressView(value: percent, total: 100)
-                        .tint(subscriptionUsageProgressTone(for: percent).color)
-                        .accessibilityLabel(subscriptionUsageAccessibilityLabel(for: window))
-                    Text("\(Int(percent.rounded()))%")
-                        .font(.system(size: 10.5, design: .monospaced))
-                        .frame(width: 34, alignment: .trailing)
-                }
+            HStack(spacing: 8) {
+                Text(subscriptionUsageDisplayLabel(for: window))
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28, alignment: .leading)
+                ProgressView(value: percent, total: 100)
+                    .tint(subscriptionUsageProgressTone(for: percent).color)
+                    .accessibilityLabel(subscriptionUsageAccessibilityLabel(for: window))
+                Text("\(Int(percent.rounded()))%")
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .frame(width: 34, alignment: .trailing)
             }
             if let resetAt = window.resetAt {
                 Text("Next reset: \(resetAt.formatted(date: .abbreviated, time: .shortened))")
