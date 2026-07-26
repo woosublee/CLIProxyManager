@@ -864,6 +864,42 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(shellInstaller.installCount, 0)
     }
 
+    func testConfigLoadFailureDoesNotPersistOrRewriteShellFunctions() {
+        let store = StubConfigStore(
+            config: .default,
+            loadError: NSError(
+                domain: "ConfigLoad",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Read failed"]
+            )
+        )
+        let shellInstaller = StubShellInstaller()
+
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: shellInstaller,
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(
+                    fileName: "claude.json",
+                    type: .claude,
+                    email: "account@example.com",
+                    accountID: nil,
+                    expired: nil,
+                    disabled: false
+                )
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
+        )
+
+        XCTAssertTrue(viewModel.config.oauthCommandProfiles.isEmpty)
+        XCTAssertTrue(store.savedConfigs.isEmpty)
+        XCTAssertEqual(shellInstaller.installCount, 0)
+        XCTAssertEqual(viewModel.settingsMessage, "Config could not be loaded: Read failed")
+    }
+
     func testMigrationSaveFailureKeepsInMemoryCanonicalConfigAndReportsError() {
         var config = AppConfig.default
         config.oauthCommandProfiles = [
@@ -5874,6 +5910,28 @@ final class DashboardAccountOrderingTests: XCTestCase {
         XCTAssertEqual(store.savedConfigs.last?.usageOverlay.hiddenAccountIDs, ["c"])
     }
 
+    func testPrivacyOnlySavePersistsAccountOrderAfterProviderRowsChange() throws {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            commandProfile(id: "a", authProfileID: "a.json", provider: .claude)
+        ]
+        config.accountOrder = ["a"]
+        let store = StubConfigStore(config: config)
+        let secrets = InMemorySecretStore()
+        let viewModel = makeViewModel(
+            config: config,
+            profiles: [profile("a.json", type: .claude)],
+            configStore: store,
+            secretStore: secrets
+        )
+        try secrets.set("new-key", for: .claudeAPIKey)
+
+        viewModel.toggleAccountDetailVisibility("a")
+
+        XCTAssertEqual(viewModel.config.accountOrder, ["a", "claude-api"])
+        XCTAssertEqual(store.savedConfigs.last?.accountOrder, ["a", "claude-api"])
+    }
+
     func testAPIKeyReRegistrationAppendsAfterSurvivingAccounts() throws {
         var config = AppConfig.default
         config.oauthCommandProfiles = [
@@ -6217,17 +6275,26 @@ private final class DashboardUpdateBinaryStore: CLIProxyAPIUpdateBinaryStoring, 
 
 private final class StubConfigStore: AppConfigStoring, @unchecked Sendable {
     private let lock = NSLock()
+    private let loadError: Error?
     private let saveError: Error?
     private(set) var savedConfigs: [AppConfig] = []
     var config: AppConfig
 
-    init(config: AppConfig = .default, saveError: Error? = nil) {
+    init(
+        config: AppConfig = .default,
+        loadError: Error? = nil,
+        saveError: Error? = nil
+    ) {
         self.config = config
+        self.loadError = loadError
         self.saveError = saveError
     }
 
     func load() throws -> AppConfig {
-        config
+        if let loadError {
+            throw loadError
+        }
+        return config
     }
 
     func save(_ config: AppConfig) throws {

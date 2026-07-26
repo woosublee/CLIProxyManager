@@ -275,7 +275,12 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(config.claudeAPI.connectionMode, .proxy)
         XCTAssertEqual(config.claudeAPI.claude, .automatic)
         XCTAssertFalse(config.claudeAPI.dangerousPermissionsEnabled)
-        XCTAssertEqual(config.codexAPI.codex, result.legacyOAuthDefaults?.codex?.codex)
+        XCTAssertEqual(config.codexAPI.codex.opus.model, "gpt-5.5")
+        XCTAssertEqual(config.codexAPI.codex.opus.reasoning, .xhigh)
+        XCTAssertEqual(config.codexAPI.codex.sonnet.model, "gpt-5.5")
+        XCTAssertEqual(config.codexAPI.codex.sonnet.reasoning, .medium)
+        XCTAssertEqual(config.codexAPI.codex.haiku.model, "gpt-5.5")
+        XCTAssertEqual(config.codexAPI.codex.haiku.reasoning, .low)
         XCTAssertFalse(config.codexAPI.dangerousPermissionsEnabled)
     }
 
@@ -302,7 +307,9 @@ final class AppConfigTests: XCTestCase {
         """#.utf8)
 
         let config = try LegacyAppConfigDecoder.decode(data).config
-        let encodedString = String(decoding: try JSONEncoder().encode(config), as: UTF8.self)
+        let encodedString = try XCTUnwrap(
+            String(data: JSONEncoder().encode(config), encoding: .utf8)
+        )
 
         XCTAssertTrue(config.claudeAPI.dangerousPermissionsEnabled)
         XCTAssertFalse(encodedString.contains("claude-sonnet-4-6"))

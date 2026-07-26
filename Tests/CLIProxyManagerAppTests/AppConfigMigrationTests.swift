@@ -152,4 +152,50 @@ final class AppConfigMigrationTests: XCTestCase {
         XCTAssertEqual(result.config.oauthCommandProfiles[0].modelPrefix, "claude-work")
         XCTAssertTrue(result.shouldPersist)
     }
+
+    func testReconcileDisambiguatesNewProfilesAndPreservesDisabledState() {
+        let authProfiles = [
+            AuthProfile(
+                fileName: "claude-work.json",
+                type: .claude,
+                email: "first@example.com",
+                accountID: nil,
+                expired: nil,
+                disabled: false
+            ),
+            AuthProfile(
+                fileName: "claude_work.json",
+                type: .claude,
+                email: "second@example.com",
+                accountID: nil,
+                expired: nil,
+                disabled: true
+            ),
+            AuthProfile(
+                fileName: "claude.work.json",
+                type: .claude,
+                email: "third@example.com",
+                accountID: nil,
+                expired: nil,
+                disabled: false
+            )
+        ]
+
+        let result = AppConfigMigration.reconcile(
+            loadResult: .canonical(.default),
+            authProfiles: authProfiles
+        )
+
+        XCTAssertEqual(result.config.oauthCommandProfiles.map(\.id), [
+            "claude",
+            "claude-claude-work-json",
+            "claude-claude-work-json-2"
+        ])
+        XCTAssertEqual(result.config.oauthCommandProfiles.map(\.modelPrefix), [
+            "claude-work",
+            "claude-work-2",
+            "claude-work-3"
+        ])
+        XCTAssertEqual(result.config.oauthCommandProfiles.map(\.isEnabled), [true, false, true])
+    }
 }

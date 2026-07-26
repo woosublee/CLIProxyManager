@@ -112,7 +112,7 @@ final class CodexFastModeTests: XCTestCase {
         )
     }
 
-    func testEnabledOAuthProfileWithoutCodexRoutingUsesCodeDefault() throws {
+    func testEnabledOAuthProfileWithoutCodexRoutingContributesNoCanonicalModels() throws {
         var config = AppConfig.default
         config.oauthCommandProfiles = [
             .init(id: "codex-work", provider: .codex, authProfileID: "codex.json", commandName: "ccwork", modelPrefix: "codex-work")

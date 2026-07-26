@@ -330,7 +330,7 @@ Run:
 swift test
 ```
 
-Expected: baseline 1041 tests에 새 테스트 2개가 추가되어 1043 tests, 0 failures.
+Expected: 전체 Swift test suite가 0 failures로 통과한다.
 
 - [ ] **Step 3: development app bundle과 codesign 검증**
 

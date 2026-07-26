@@ -735,7 +735,7 @@ final class CLIProxyManagerCommandTests: XCTestCase {
         }
     }
 
-    func testLegacyClaudeRoutingAllowsAccountSpecificCodexProfiles() async throws {
+    func testLegacyClaudeModelsTargetFailsWithAccountSpecificCodexProfiles() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox)
         let configStore = AppConfigStore(paths: paths)
@@ -775,7 +775,7 @@ final class CLIProxyManagerCommandTests: XCTestCase {
         XCTAssertTrue(output.stdout.isEmpty)
     }
 
-    func testLegacyClaudeRoutingRequiresExactlyOneEnabledPrefixedClaudeProfile() async throws {
+    func testLegacyClaudeModelsTargetFailsEvenWithSingleEnabledPrefixedClaudeProfile() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox)
         let configStore = AppConfigStore(paths: paths)
@@ -811,7 +811,7 @@ final class CLIProxyManagerCommandTests: XCTestCase {
         XCTAssertTrue(output.stdout.isEmpty)
     }
 
-    func testLegacyClaudeRoutingRejectsMultipleProfilesWithoutQueryingModels() async throws {
+    func testLegacyClaudeModelsTargetFailsWithoutQueryingModelsRegardlessOfProfileCount() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox)
         try AppConfigStore(paths: paths).save(.default)

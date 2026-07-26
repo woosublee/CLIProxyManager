@@ -317,37 +317,60 @@ final class DashboardViewModel: ObservableObject {
         self.subscriptionUsageSleep = subscriptionUsageSleep
         self.serverStatusRetryDelayNanoseconds = serverStatusRetryDelayNanoseconds
         self.settingsMessageAutoClearDelayNanoseconds = settingsMessageAutoClearDelayNanoseconds
-        let loadedDocument = config.map(AppConfigLoadResult.canonical)
-            ?? ((try? configStore.loadDocument()) ?? .canonical(.default))
+        let loadedDocument: AppConfigLoadResult
+        let configLoadErrorMessage: String?
+        if let config {
+            loadedDocument = .canonical(config)
+            configLoadErrorMessage = nil
+        } else {
+            do {
+                loadedDocument = try configStore.loadDocument()
+                configLoadErrorMessage = nil
+            } catch {
+                loadedDocument = .canonical(.default)
+                configLoadErrorMessage = "Config could not be loaded: \(error.localizedDescription)"
+            }
+        }
+
         var persistedConfig = Self.availableConfig(loadedDocument.config)
-        let credentialMigrationResult = Self.applyPreparedCodexCredentialMigrations(
-            to: persistedConfig,
-            authProfileStore: authProfileStore,
-            configStore: configStore,
-            subscriptionUsageSnapshotCache: subscriptionUsageSnapshotCache
-        )
+        let credentialMigrationResult: CodexCredentialMigrationResult
+        if configLoadErrorMessage == nil {
+            credentialMigrationResult = Self.applyPreparedCodexCredentialMigrations(
+                to: persistedConfig,
+                authProfileStore: authProfileStore,
+                configStore: configStore,
+                subscriptionUsageSnapshotCache: subscriptionUsageSnapshotCache
+            )
+        } else {
+            credentialMigrationResult = CodexCredentialMigrationResult(
+                config: persistedConfig,
+                profiles: Result { try authProfileStore.profiles() }
+            )
+        }
         persistedConfig = credentialMigrationResult.config
         var initialConfig = persistedConfig
         var migrationSaveErrorMessage: String?
-        var shouldApplyInitialShellInstall = true
+        var shouldApplyInitialShellInstall = configLoadErrorMessage == nil
         switch credentialMigrationResult.profiles {
         case .success(let profiles):
             self.authProfiles = profiles
-            let reconciliation = AppConfigMigration.reconcile(
-                loadResult: AppConfigLoadResult(
-                    config: persistedConfig,
-                    legacyOAuthDefaults: loadedDocument.legacyOAuthDefaults,
-                    requiresCanonicalRewrite: loadedDocument.requiresCanonicalRewrite
-                ),
-                authProfiles: profiles
-            )
-            initialConfig = reconciliation.config
-            if reconciliation.shouldPersist {
-                do {
-                    try configStore.save(initialConfig)
-                    persistedConfig = initialConfig
-                } catch {
-                    migrationSaveErrorMessage = "Config migration failed: \(error.localizedDescription)"
+            if configLoadErrorMessage == nil {
+                let reconciliation = AppConfigMigration.reconcile(
+                    loadResult: AppConfigLoadResult(
+                        config: persistedConfig,
+                        legacyOAuthDefaults: loadedDocument.legacyOAuthDefaults,
+                        requiresCanonicalRewrite: loadedDocument.requiresCanonicalRewrite
+                    ),
+                    authProfiles: profiles
+                )
+                initialConfig = reconciliation.config
+                if reconciliation.shouldPersist {
+                    do {
+                        try configStore.save(initialConfig)
+                        persistedConfig = initialConfig
+                    } catch {
+                        migrationSaveErrorMessage = "Config migration failed: \(error.localizedDescription)"
+                    }
                 }
             }
         case .failure:
@@ -369,7 +392,9 @@ final class DashboardViewModel: ObservableObject {
         rebuildOptionRows()
         appAppearanceService.apply(showDockIcon: initialConfig.showDockIcon)
         appAppearanceService.apply(appearance: initialConfig.appearance)
-        if let migrationSaveErrorMessage {
+        if let configLoadErrorMessage {
+            settingsMessage = configLoadErrorMessage
+        } else if let migrationSaveErrorMessage {
             settingsMessage = migrationSaveErrorMessage
         }
         if shouldApplyInitialShellInstall {
@@ -2393,12 +2418,13 @@ final class DashboardViewModel: ObservableObject {
         }
         rebuildOptionRows()
         rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
+        let configToSave = config
 
         var prefixRollbacks: [AuthProfilePrefixRollback] = []
         do {
             prefixRollbacks = try syncAuthProfilePrefixesForSave()
-            try configStore.save(availableConfig)
-            lastPersistedConfig = availableConfig
+            try configStore.save(configToSave)
+            lastPersistedConfig = configToSave
         } catch {
             rollbackAuthProfilePrefixes(prefixRollbacks)
             config = oldConfig

@@ -126,7 +126,6 @@ final class AppConfigStoreTests: XCTestCase {
     func testLegacyDocumentLoadsCanonicalProviderSettingsAndOAuthDefaults() throws {
         let sandbox = try makeSandbox()
         let store = AppConfigStore(paths: ManagedPaths(rootDirectory: sandbox))
-        try FileManager.default.createDirectory(at: sandbox, withIntermediateDirectories: true)
         let legacyJSON = #"""
         {
           "port": 18317,

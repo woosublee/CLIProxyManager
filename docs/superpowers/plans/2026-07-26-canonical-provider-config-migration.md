@@ -766,9 +766,23 @@ extension AppConfigStoring {
 `DashboardViewModel` initialization은 `config` argument가 없을 때 `loadDocument()`를 사용하고, explicit `config`가 있으면 `.canonical(config)`를 사용한다.
 
 ```swift
-let loadResult = config.map(AppConfigLoadResult.canonical)
-    ?? ((try? configStore.loadDocument()) ?? .canonical(.default))
+let loadedDocument: AppConfigLoadResult
+let configLoadErrorMessage: String?
+if let config {
+    loadedDocument = .canonical(config)
+    configLoadErrorMessage = nil
+} else {
+    do {
+        loadedDocument = try configStore.loadDocument()
+        configLoadErrorMessage = nil
+    } catch {
+        loadedDocument = .canonical(.default)
+        configLoadErrorMessage = "Config could not be loaded: \(error.localizedDescription)"
+    }
+}
 ```
+
+`configLoadErrorMessage`가 있으면 credential migration, reconciliation 저장, 초기 shell function 재설치를 모두 건너뛰어 기존 config file을 보존한다.
 
 `CodexCredentialMigrationResult.profiles`를 `[AuthProfile]`에서 `Result<[AuthProfile], Error>`로 변경해 `try? ... ?? []`이 load failure를 빈 목록으로 위장하지 않게 한다.
 
