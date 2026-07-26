@@ -104,7 +104,7 @@ private struct CompactUsageAccountView: View {
     let provider: MenuBarConnectedProvider
 
     var body: some View {
-        let presentation = compactUsagePresentation(for: provider.subscriptionUsageState)
+        let presentation = compactUsagePresentation(for: provider.usageState)
         VStack(spacing: 7) {
             VStack(spacing: 4) {
                 ProviderAvatar(providerID: provider.id, size: 26)
@@ -112,10 +112,10 @@ private struct CompactUsageAccountView: View {
                         if let indicator = presentation.headerIndicator {
                             CompactUsageIndicatorView(indicator: indicator)
                                 .frame(
-                                    width: SubscriptionUsageWarningLayout.iconFrameSize.width,
-                                    height: SubscriptionUsageWarningLayout.iconFrameSize.height
+                                    width: UsageWarningLayout.iconFrameSize.width,
+                                    height: UsageWarningLayout.iconFrameSize.height
                                 )
-                                .offset(x: SubscriptionUsageWarningLayout.compactAvatarTrailingOffset)
+                                .offset(x: UsageWarningLayout.compactAvatarTrailingOffset)
                         }
                     }
                 Text(provider.usageOverlayDisplayName)
@@ -134,9 +134,15 @@ private struct CompactUsageAccountView: View {
                         HStack(spacing: 4) {
                             Text(row.label)
                                 .foregroundStyle(.secondary)
+                                .lineLimit(1)
                             Spacer(minLength: 2)
                             Text(row.value)
                                 .foregroundStyle(.primary)
+                                .lineLimit(row.textLayout.lineLimit)
+                                .minimumScaleFactor(row.textLayout.minimumScaleFactor)
+                                .allowsTightening(true)
+                                .layoutPriority(1)
+                                .help(row.tooltip ?? "")
                         }
                         .font(.system(size: 10, weight: .semibold, design: .monospaced))
                         .accessibilityElement(children: .ignore)

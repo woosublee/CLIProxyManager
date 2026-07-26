@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct CLIProxyManagerApp: App {
     @Environment(\.openWindow) private var openWindow
+    @NSApplicationDelegateAdaptor(ApplicationTerminationDelegate.self) private var applicationDelegate
     @StateObject private var viewModel: DashboardViewModel
     @StateObject private var quitCoordinator: QuitCoordinator
     @StateObject private var updaterService: UpdaterService
@@ -21,14 +22,26 @@ struct CLIProxyManagerApp: App {
                 placementPersistence: .userDefaults()
             )
         )
-        Task {
-            await viewModel.startApplication()
+        viewModel.beginApplicationLaunch {
             cliProxyAPIUpdateService.reloadStoredStatus()
         }
-        _quitCoordinator = StateObject(wrappedValue: QuitCoordinator(shouldStopServerBeforeQuit: {
-            viewModel.serverControlState.shouldStopServerBeforeQuit
-        }))
+        let quitCoordinator = QuitCoordinator(
+            shouldStopServerBeforeQuit: {
+                viewModel.serverControlState.shouldStopServerBeforeQuit
+            },
+            beginTermination: {
+                viewModel.beginTermination()
+            },
+            beforeTerminate: {
+                try await viewModel.prepareForTermination()
+            },
+            cancelTerminationPreparation: {
+                viewModel.cancelTerminationPreparation()
+            }
+        )
+        _quitCoordinator = StateObject(wrappedValue: quitCoordinator)
         _updaterService = StateObject(wrappedValue: UpdaterService())
+        applicationDelegate.quitCoordinator = quitCoordinator
     }
 
     private var appWindowController: AppWindowController {

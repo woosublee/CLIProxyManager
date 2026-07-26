@@ -177,6 +177,23 @@ final class CompactUsagePresentationTests: XCTestCase {
         )
     }
 
+    func testProviderUsageDispatcherPreservesSubscriptionPresentation() {
+        let snapshot = SubscriptionUsageSnapshot(
+            profileID: "codex.json",
+            provider: .codex,
+            windows: [.init(id: "primary", label: "Primary", usedPercent: 16, resetAt: nil)],
+            fetchedAt: Date(timeIntervalSince1970: 60)
+        )
+
+        let presentation = compactUsagePresentation(for: .subscription(.available(snapshot)))
+
+        XCTAssertEqual(
+            presentation.rows,
+            [CompactUsageRowPresentation(id: "primary", label: "5h", value: "16%", accessibilityLabel: "5h, 16 percent used")]
+        )
+        XCTAssertNil(presentation.indicator)
+    }
+
     func testDuplicateDisplayLabelsPreserveDistinctWindowIDs() {
         let snapshot = SubscriptionUsageSnapshot(
             profileID: "codex.json",

@@ -43,7 +43,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         let apiRows = viewModel.providerRows.filter { $0.id == .claudeAPI || $0.id == .codexAPI }
         XCTAssertEqual(apiRows.map { $0.id.rawValue }, ["claude-api", "codex-api"])
         XCTAssertEqual(apiRows.map { $0.name }, ["Claude API Key", "OpenAI API Key"])
-        XCTAssertEqual(apiRows.map { $0.subscriptionUsageState }, [.disabled, .disabled])
+        XCTAssertEqual(apiRows.map(\.usageState), [.apiCost(.disabled), .apiCost(.disabled)])
     }
 
     func testConfiguredAPIKeyRowsExposePersistedNicknames() {

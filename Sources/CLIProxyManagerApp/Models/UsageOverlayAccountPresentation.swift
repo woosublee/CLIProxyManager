@@ -24,7 +24,7 @@ struct UsageOverlayAccountPresentation: Equatable {
             serverControlState: serverControlState,
             providers: selectedRows,
             port: port,
-            showsSubscriptionUsage: true
+            showsUsage: true
         ).connectedProviders
         self.providers = connectedProviders
 

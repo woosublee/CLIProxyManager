@@ -44,8 +44,8 @@ struct ProviderRowState: Identifiable, Equatable {
     let isDisabled: Bool
     let isErrored: Bool
     let accountDetailHidden: Bool
-    let subscriptionUsageState: AccountSubscriptionUsageState
-    let showsSubscriptionUsage: Bool
+    let usageState: ProviderUsageState
+    let showsUsage: Bool
     let showsInUsageOverlay: Bool
 
     init(
@@ -62,8 +62,8 @@ struct ProviderRowState: Identifiable, Equatable {
         isDisabled: Bool = false,
         isErrored: Bool = false,
         accountDetailHidden: Bool = true,
-        subscriptionUsageState: AccountSubscriptionUsageState = .disabled,
-        showsSubscriptionUsage: Bool = true,
+        usageState: ProviderUsageState = .subscription(.disabled),
+        showsUsage: Bool = true,
         showsInUsageOverlay: Bool = true
     ) {
         self.id = id
@@ -79,8 +79,8 @@ struct ProviderRowState: Identifiable, Equatable {
         self.isDisabled = isDisabled
         self.isErrored = isErrored
         self.accountDetailHidden = accountDetailHidden
-        self.subscriptionUsageState = subscriptionUsageState
-        self.showsSubscriptionUsage = showsSubscriptionUsage
+        self.usageState = usageState
+        self.showsUsage = showsUsage
         self.showsInUsageOverlay = showsInUsageOverlay
     }
 

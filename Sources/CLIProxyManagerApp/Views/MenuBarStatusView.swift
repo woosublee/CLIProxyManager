@@ -11,8 +11,8 @@ struct MenuBarStatusView: View {
     let quit: () -> Void
     @State private var refreshAgeReferenceDate = Date()
 
-    private var subscriptionUsageRefreshAgeLabel: String? {
-        guard let refreshedAt = viewModel.lastSuccessfulSubscriptionUsageRefreshAt else { return nil }
+    private var usageRefreshAgeLabel: String? {
+        guard let refreshedAt = viewModel.lastSuccessfulUsageRefreshAt else { return nil }
         let elapsed = max(0, refreshAgeReferenceDate.timeIntervalSince(refreshedAt))
         let minutes = Int(elapsed / 60)
         if minutes == 0 { return "now" }
@@ -26,7 +26,7 @@ struct MenuBarStatusView: View {
             serverControlState: viewModel.serverControlState,
             providers: viewModel.providerRows,
             port: viewModel.config.port,
-            showsSubscriptionUsage: viewModel.config.subscriptionUsage.showInMenuBar
+            showsUsage: viewModel.config.subscriptionUsage.showInMenuBar
         )
     }
 
@@ -42,11 +42,11 @@ struct MenuBarStatusView: View {
             MenuItemRow(
                 icon: "arrow.clockwise",
                 label: "Reload usage",
-                trailing: subscriptionUsageRefreshAgeLabel,
-                disabled: !viewModel.canReloadSubscriptionUsage || viewModel.isSubscriptionUsageReloadActionInProgress
+                trailing: usageRefreshAgeLabel,
+                disabled: !viewModel.canReloadUsage || viewModel.isUsageReloadActionInProgress
             ) {
                 Task {
-                    await viewModel.reloadSubscriptionUsage()
+                    await viewModel.reloadUsage()
                 }
             }
 
@@ -183,6 +183,13 @@ private struct MenuBarAccountRow: View {
                 HStack(spacing: 5) {
                     Text(provider.menuBarDisplayName)
                         .font(.system(size: 12.5, weight: .semibold))
+                    if let warningMessage = providerUsageWarningMessage(for: provider.usageState) {
+                        UsageWarningIcon(message: warningMessage)
+                            .frame(
+                                width: UsageWarningLayout.iconFrameSize.width,
+                                height: UsageWarningLayout.iconFrameSize.height
+                            )
+                    }
                     Text(verbatim: "$ \(provider.functionName)")
                         .font(.system(size: 10.5, design: .monospaced))
                         .foregroundStyle(.tertiary)
@@ -198,7 +205,7 @@ private struct MenuBarAccountRow: View {
                         .layoutPriority(1)
                 }
 
-                subscriptionUsage
+                usage
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             StatusLED(state: .running, size: 8, pulse: false)
@@ -208,13 +215,13 @@ private struct MenuBarAccountRow: View {
     }
 
     @ViewBuilder
-    private var subscriptionUsage: some View {
-        if !provider.showsSubscriptionUsage {
+    private var usage: some View {
+        if !provider.showsUsage {
             EmptyView()
-        } else if case .unavailable(.proxyUnavailable) = provider.subscriptionUsageState {
+        } else if case .subscription(.unavailable(.proxyUnavailable)) = provider.usageState {
             EmptyView()
         } else {
-            switch subscriptionUsageDisplayState(for: provider.subscriptionUsageState) {
+            switch providerUsageDisplayState(for: provider.usageState) {
             case .hidden:
                 EmptyView()
             case .loading(let message):
@@ -222,66 +229,93 @@ private struct MenuBarAccountRow: View {
                     .font(.system(size: 10.5))
                     .foregroundStyle(.tertiary)
             case .unavailable(let message):
-                Text(message)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            case .snapshot(let snapshot, let warning):
+                unavailableUsage(message)
+            case .subscription(let snapshot, let warning):
                 snapshotUsage(snapshot, warning: warning)
+            case .apiCost(let snapshot, let issues):
+                apiCostUsage(snapshot, issues: issues)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func unavailableUsage(_ message: String) -> some View {
+        if case .apiCost = provider.usageState {
+            Text("—")
+                .font(.system(size: 10.5, design: .monospaced))
+                .foregroundStyle(.secondary)
+        } else {
+            Text(message)
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
         }
     }
 
     @ViewBuilder
     private func snapshotUsage(
         _ snapshot: SubscriptionUsageSnapshot,
-        warning: SubscriptionUsageIssue?
+        warning _: SubscriptionUsageIssue?
     ) -> some View {
         if snapshot.windows.isEmpty {
-            SubscriptionUsageWarningAlignedRow(
-                warning: warning,
-                reservesWarningSpace: warning != nil,
-                lastUpdatedAt: snapshot.fetchedAt
-            ) {
-                Text("Usage details unavailable")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.tertiary)
-            }
+            Text("Usage details unavailable")
+                .font(.system(size: 10.5))
+                .foregroundStyle(.tertiary)
         } else {
             VStack(alignment: .leading, spacing: 4) {
-                ForEach(subscriptionUsageWarningRows(snapshot: snapshot, warning: warning)) { row in
-                    usageWindow(row, lastUpdatedAt: snapshot.fetchedAt)
+                ForEach(subscriptionUsageWarningRows(snapshot: snapshot, warning: nil)) { row in
+                    usageWindow(row)
                 }
             }
         }
     }
 
+    private func apiCostUsage(
+        _ snapshot: APICostSnapshot,
+        issues: [APICostIssue]
+    ) -> some View {
+        let presentation = apiCostUsagePresentation(snapshot: snapshot, issues: issues)
+        return VStack(alignment: .leading, spacing: 4) {
+            ForEach(presentation.rows) { row in
+                HStack(spacing: 7) {
+                    Text(row.label)
+                        .frame(width: 28, alignment: .leading)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 8)
+                    Text(row.cost)
+                        .lineLimit(row.textLayout.lineLimit)
+                        .minimumScaleFactor(row.textLayout.minimumScaleFactor)
+                        .allowsTightening(true)
+                        .layoutPriority(1)
+                        .frame(minWidth: 56, maxWidth: .infinity, alignment: .trailing)
+                }
+                .font(.system(size: 10.5, design: .monospaced))
+                .help(row.tooltip)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(row.accessibilityLabel)
+            }
+        }
+    }
+
     private func usageWindow(
-        _ row: SubscriptionUsageWarningRowPresentation,
-        lastUpdatedAt: Date
+        _ row: SubscriptionUsageWarningRowPresentation
     ) -> some View {
         let window = row.window
         let percent = min(max(window.usedPercent, 0), 100)
         return VStack(alignment: .leading, spacing: 2) {
-            SubscriptionUsageWarningAlignedRow(
-                warning: row.warning,
-                reservesWarningSpace: row.reservesWarningSpace,
-                lastUpdatedAt: lastUpdatedAt
-            ) {
-                HStack(spacing: 7) {
-                    Text(subscriptionUsageDisplayLabel(for: window))
-                        .frame(width: 24, alignment: .leading)
-                        .foregroundStyle(.secondary)
-                    ProgressView(value: percent, total: 100)
-                        .tint(subscriptionUsageProgressTone(for: percent).color)
-                        .accessibilityLabel(subscriptionUsageAccessibilityLabel(for: window))
-                        .frame(minWidth: 72, maxWidth: .infinity)
-                        .layoutPriority(1)
-                    Text("\(Int(percent.rounded()))%")
-                        .frame(width: 34, alignment: .trailing)
-                }
-                .font(.system(size: 10.5, design: .monospaced))
+            HStack(spacing: 7) {
+                Text(subscriptionUsageDisplayLabel(for: window))
+                    .frame(width: 24, alignment: .leading)
+                    .foregroundStyle(.secondary)
+                ProgressView(value: percent, total: 100)
+                    .tint(subscriptionUsageProgressTone(for: percent).color)
+                    .accessibilityLabel(subscriptionUsageAccessibilityLabel(for: window))
+                    .frame(minWidth: 72, maxWidth: .infinity)
+                    .layoutPriority(1)
+                Text("\(Int(percent.rounded()))%")
+                    .frame(width: 34, alignment: .trailing)
             }
+            .font(.system(size: 10.5, design: .monospaced))
 
             if let resetAt = window.resetAt {
                 Text("Next reset: \(resetAt.formatted(date: .abbreviated, time: .shortened))")

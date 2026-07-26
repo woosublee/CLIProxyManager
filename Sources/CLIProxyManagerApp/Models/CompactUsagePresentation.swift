@@ -6,6 +6,24 @@ struct CompactUsageRowPresentation: Equatable, Identifiable {
     let label: String
     let value: String
     let accessibilityLabel: String
+    let tooltip: String?
+    let textLayout: UsageTextLayout
+
+    init(
+        id: String,
+        label: String,
+        value: String,
+        accessibilityLabel: String,
+        tooltip: String? = nil,
+        textLayout: UsageTextLayout = .adaptiveSingleLine(minimumScaleFactor: 0.6)
+    ) {
+        self.id = id
+        self.label = label
+        self.value = value
+        self.accessibilityLabel = accessibilityLabel
+        self.tooltip = tooltip
+        self.textLayout = textLayout
+    }
 }
 
 enum CompactUsageIndicator: Equatable {
@@ -60,6 +78,19 @@ struct CompactUsagePresentation: Equatable {
 }
 
 func compactUsagePresentation(
+    for state: ProviderUsageState,
+    now: Date = .now
+) -> CompactUsagePresentation {
+    switch state {
+    case let .subscription(subscriptionState):
+        compactUsagePresentation(for: subscriptionState, now: now)
+    case let .apiCost(apiCostState):
+        compactAPICostPresentation(for: apiCostState)
+    }
+}
+
+// Temporary compatibility overload while Task 12 migrates compact view call sites.
+func compactUsagePresentation(
     for state: AccountSubscriptionUsageState,
     now: Date = .now
 ) -> CompactUsagePresentation {
@@ -89,6 +120,56 @@ func compactUsagePresentation(
             indicator: compactUnavailableIndicator(for: issue)
         )
     }
+}
+
+private func compactAPICostPresentation(
+    for state: APICostUsageState
+) -> CompactUsagePresentation {
+    switch state {
+    case .disabled:
+        return .placeholder(
+            "—",
+            indicator: .disabled(message: "API cost tracking is disabled.")
+        )
+    case .loading:
+        return .placeholder(
+            "—",
+            indicator: .loading(message: "Calculating API cost…")
+        )
+    case let .available(snapshot):
+        return compactAPICostSnapshotPresentation(snapshot, issues: [])
+    case let .partial(snapshot, issues):
+        return compactAPICostSnapshotPresentation(snapshot, issues: issues)
+    case let .unavailable(issue):
+        return .placeholder(
+            "—",
+            indicator: .unavailable(message: apiCostIssueMessage(issue))
+        )
+    }
+}
+
+private func compactAPICostSnapshotPresentation(
+    _ snapshot: APICostSnapshot,
+    issues: [APICostIssue]
+) -> CompactUsagePresentation {
+    let apiPresentation = apiCostUsagePresentation(snapshot: snapshot, issues: issues)
+    let rows = apiPresentation.rows.map { row in
+        CompactUsageRowPresentation(
+            id: row.id,
+            label: row.label,
+            value: row.cost,
+            accessibilityLabel: row.accessibilityLabel,
+            tooltip: row.tooltip,
+            textLayout: row.textLayout
+        )
+    }
+    return CompactUsagePresentation(
+        rows: rows,
+        placeholder: nil,
+        indicator: apiPresentation.warningMessage.map {
+            .warning(message: $0)
+        }
+    )
 }
 
 private func compactUnavailableIndicator(for issue: SubscriptionUsageIssue) -> CompactUsageIndicator {

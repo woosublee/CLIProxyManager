@@ -243,7 +243,7 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
     private let launchctl: any LaunchctlManaging
     private let fileManager: FileManager
     private let managementKeyProvider: @Sendable () -> String?
-    private let subscriptionUsageEnabledProvider: @Sendable () -> Bool
+    private let usageEnabledProvider: @Sendable () -> Bool
     private let claudeAPIKeyProvider: @Sendable () -> String?
     private let codexAPIKeyProvider: @Sendable () -> String?
     private let appConfigProvider: @Sendable () throws -> AppConfig
@@ -257,7 +257,7 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         launcher: any ProcessLaunching = ProcessLauncher(),
         fileManager: FileManager = .default,
         managementKeyProvider: (@Sendable () -> String?)? = nil,
-        subscriptionUsageEnabledProvider: (@Sendable () -> Bool)? = nil,
+        usageEnabledProvider: (@Sendable () -> Bool)? = nil,
         claudeAPIKeyProvider: (@Sendable () -> String?)? = nil,
         codexAPIKeyProvider: (@Sendable () -> String?)? = nil,
         appConfigProvider: (@Sendable () throws -> AppConfig)? = nil
@@ -270,8 +270,8 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
             launchctl: LaunchctlRunner(),
             fileManager: fileManager,
             managementKeyProvider: managementKeyProvider ?? { try? SubscriptionUsageManagementKeyFileStore(paths: paths).managementKey() },
-            subscriptionUsageEnabledProvider: subscriptionUsageEnabledProvider ?? {
-                (try? AppConfigStore(paths: paths).load().isSubscriptionUsageEnabled) ?? false
+            usageEnabledProvider: usageEnabledProvider ?? {
+                (try? AppConfigStore(paths: paths).load().isUsageEnabled) ?? false
             },
             claudeAPIKeyProvider: claudeAPIKeyProvider ?? { try? FileSecretStore(paths: paths).get(.claudeAPIKey) },
             codexAPIKeyProvider: codexAPIKeyProvider ?? { try? FileSecretStore(paths: paths).get(.codexAPIKey) },
@@ -287,7 +287,7 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         launchctl: any LaunchctlManaging,
         fileManager: FileManager = .default,
         managementKeyProvider: (@Sendable () -> String?)? = nil,
-        subscriptionUsageEnabledProvider: (@Sendable () -> Bool)? = nil,
+        usageEnabledProvider: (@Sendable () -> Bool)? = nil,
         claudeAPIKeyProvider: (@Sendable () -> String?)? = nil,
         codexAPIKeyProvider: (@Sendable () -> String?)? = nil,
         appConfigProvider: (@Sendable () throws -> AppConfig)? = nil
@@ -300,8 +300,8 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         self.launchctl = launchctl
         self.fileManager = fileManager
         self.managementKeyProvider = managementKeyProvider ?? { try? SubscriptionUsageManagementKeyFileStore(paths: paths).managementKey() }
-        self.subscriptionUsageEnabledProvider = subscriptionUsageEnabledProvider ?? {
-            (try? AppConfigStore(paths: paths).load().isSubscriptionUsageEnabled) ?? false
+        self.usageEnabledProvider = usageEnabledProvider ?? {
+            (try? AppConfigStore(paths: paths).load().isUsageEnabled) ?? false
         }
         self.claudeAPIKeyProvider = claudeAPIKeyProvider ?? { try? FileSecretStore(paths: paths).get(.claudeAPIKey) }
         self.codexAPIKeyProvider = codexAPIKeyProvider ?? { try? FileSecretStore(paths: paths).get(.codexAPIKey) }
@@ -521,14 +521,17 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
 
     private func config(for port: Int) throws -> String {
         let appConfig = try appConfigProvider()
+        let usageEnabled = usageEnabledProvider()
+        let claudeAPIKey = nonEmpty(claudeAPIKeyProvider())
         let codexAPIKey = nonEmpty(codexAPIKeyProvider())
+        let hasManagedAPIKey = claudeAPIKey != nil || codexAPIKey != nil
         let fastConfiguration = try CodexFastConfiguration(
             config: appConfig,
             includeAPIKeyModels: codexAPIKey != nil
         )
 
         let managementConfiguration: String
-        if subscriptionUsageEnabledProvider(),
+        if usageEnabled,
            let key = managementKeyProvider()?.trimmingCharacters(in: .whitespacesAndNewlines),
            !key.isEmpty {
             managementConfiguration = """
@@ -539,8 +542,20 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
             managementConfiguration = ""
         }
 
+        let usageQueueConfiguration = usageEnabled && hasManagedAPIKey
+            ? """
+              usage-statistics-enabled: true
+              redis-usage-queue-retention-seconds: 3600
+              """
+            : ""
+
+        let managementAndUsageQueueConfiguration = [
+            managementConfiguration,
+            usageQueueConfiguration
+        ].filter { !$0.isEmpty }.joined(separator: "\n")
+
         let claudeAPIConfiguration: String
-        if let key = nonEmpty(claudeAPIKeyProvider()) {
+        if let key = claudeAPIKey {
             claudeAPIConfiguration = """
             claude-api-key:
               - api-key: \(yamlDoubleQuoted(key))
@@ -581,12 +596,12 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
             api-keys:
               - sk-dummy
             """
-            guard !managementConfiguration.isEmpty || !claudeAPIConfiguration.isEmpty || !codexAPIConfiguration.isEmpty else {
+            guard !managementAndUsageQueueConfiguration.isEmpty || !claudeAPIConfiguration.isEmpty || !codexAPIConfiguration.isEmpty else {
                 return baseConfiguration + "\n\n"
             }
             return """
             \(baseConfiguration)
-            \(managementConfiguration)
+            \(managementAndUsageQueueConfiguration)
             \(claudeAPIConfiguration)
             \(codexAPIConfiguration)
             """
@@ -604,6 +619,7 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         ]
         sections.append(contentsOf: [
             managementConfiguration,
+            usageQueueConfiguration,
             claudeAPIConfiguration,
             codexAPIConfiguration,
             oauthFastConfiguration,

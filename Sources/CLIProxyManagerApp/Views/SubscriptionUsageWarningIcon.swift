@@ -39,6 +39,26 @@ enum SubscriptionUsageWarningPresentation {
     }
 }
 
+func providerUsageWarningMessage(
+    for state: ProviderUsageState,
+    now: Date = .now
+) -> String? {
+    switch state {
+    case let .subscription(.stale(snapshot, issue)):
+        SubscriptionUsageWarningPresentation.message(
+            issue: issue,
+            lastUpdatedAt: snapshot.fetchedAt,
+            now: now
+        )
+    case let .apiCost(.partial(snapshot, issues)):
+        apiCostUsagePresentation(snapshot: snapshot, issues: issues).warningMessage
+    case let .apiCost(.unavailable(issue)):
+        apiCostIssueMessage(issue)
+    case .subscription, .apiCost:
+        nil
+    }
+}
+
 struct SubscriptionUsageWarningRowPresentation: Equatable, Identifiable {
     let window: UsageWindow
     let warning: SubscriptionUsageIssue?
@@ -60,34 +80,31 @@ func subscriptionUsageWarningRows(
     }
 }
 
-enum SubscriptionUsageWarningLayout {
+enum UsageWarningLayout {
     static let iconFrameSize = CGSize(width: 12, height: 12)
     static let inlineSpacing: CGFloat = 6
     static let compactAvatarTrailingOffset: CGFloat = 10
 }
 
-struct SubscriptionUsageWarningAlignedRow<Content: View>: View {
-    let warning: SubscriptionUsageIssue?
+struct UsageWarningAlignedRow<Content: View>: View {
+    let message: String?
     let reservesWarningSpace: Bool
-    let lastUpdatedAt: Date
     let content: Content
 
     init(
-        warning: SubscriptionUsageIssue?,
+        message: String?,
         reservesWarningSpace: Bool,
-        lastUpdatedAt: Date,
         @ViewBuilder content: () -> Content
     ) {
-        self.warning = warning
+        self.message = message
         self.reservesWarningSpace = reservesWarningSpace
-        self.lastUpdatedAt = lastUpdatedAt
         self.content = content()
     }
 
     @ViewBuilder
     var body: some View {
         if reservesWarningSpace {
-            HStack(spacing: SubscriptionUsageWarningLayout.inlineSpacing) {
+            HStack(spacing: UsageWarningLayout.inlineSpacing) {
                 content
                 warningSlot
             }
@@ -98,35 +115,27 @@ struct SubscriptionUsageWarningAlignedRow<Content: View>: View {
 
     @ViewBuilder
     private var warningSlot: some View {
-        if let warning {
-            SubscriptionUsageWarningIcon(
-                issue: warning,
-                lastUpdatedAt: lastUpdatedAt
-            )
-            .frame(
-                width: SubscriptionUsageWarningLayout.iconFrameSize.width,
-                height: SubscriptionUsageWarningLayout.iconFrameSize.height
-            )
+        if let message {
+            UsageWarningIcon(message: message)
+                .frame(
+                    width: UsageWarningLayout.iconFrameSize.width,
+                    height: UsageWarningLayout.iconFrameSize.height
+                )
         } else {
             Color.clear
                 .frame(
-                    width: SubscriptionUsageWarningLayout.iconFrameSize.width,
-                    height: SubscriptionUsageWarningLayout.iconFrameSize.height
+                    width: UsageWarningLayout.iconFrameSize.width,
+                    height: UsageWarningLayout.iconFrameSize.height
                 )
                 .accessibilityHidden(true)
         }
     }
 }
 
-struct SubscriptionUsageWarningIcon: View {
-    let issue: SubscriptionUsageIssue
-    let lastUpdatedAt: Date
+struct UsageWarningIcon: View {
+    let message: String
 
     var body: some View {
-        let message = SubscriptionUsageWarningPresentation.message(
-            issue: issue,
-            lastUpdatedAt: lastUpdatedAt
-        )
         Image(systemName: "exclamationmark.triangle.fill")
             .font(.system(size: 10, weight: .semibold))
             .foregroundStyle(BrandPalette.statusWarning)

@@ -24,13 +24,10 @@ final class SettingsNavigationTests: XCTestCase {
         )
     }
 
-    func testUsageSettingsCopyExplainsAutomaticSharedBackend() {
-        XCTAssertEqual(UsageSettingsCopy.menuBarLabel, "Show subscription usage")
-        XCTAssertEqual(UsageSettingsCopy.hudLabel, "Show usage HUD")
-        XCTAssertEqual(
-            UsageSettingsCopy.footer,
-            "Usage data is fetched whenever the menu bar display or Usage HUD is enabled. CLIProxyManager manages the local management key automatically."
-        )
+    func testUsageSettingsCopyCoversSubscriptionAndEstimatedCost() {
+        XCTAssertEqual(UsageSettingsCopy.menuBarLabel, "Show usage")
+        XCTAssertTrue(UsageSettingsCopy.menuBarDescription.contains("estimated API cost"))
+        XCTAssertTrue(UsageSettingsCopy.footer.contains("requests observed through CLIProxyAPI"))
     }
 
     func testOAuthCompletionTransitionsAddProviderSheetToInitialProviderSettings() {

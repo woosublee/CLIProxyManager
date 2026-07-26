@@ -7,8 +7,8 @@ struct MenuBarConnectedProvider: Equatable, Identifiable {
     let functionName: String
     let connectionDetail: String
     let accountDetailHidden: Bool
-    let subscriptionUsageState: AccountSubscriptionUsageState
-    let showsSubscriptionUsage: Bool
+    let usageState: ProviderUsageState
+    let showsUsage: Bool
 
     var menuBarDisplayName: String {
         displayName
@@ -46,7 +46,7 @@ struct MenuBarStatusSnapshot: Equatable {
         serverControlState: ServerControlState = .stopped,
         providers: [ProviderRowState],
         port: Int = 18_317,
-        showsSubscriptionUsage: Bool = true
+        showsUsage: Bool = true
     ) {
         let displayState = Self.displayState(serverStatus: serverStatus, serverControlState: serverControlState)
         serverTitle = serverStatus.title
@@ -67,8 +67,8 @@ struct MenuBarStatusSnapshot: Equatable {
                     functionName: provider.functionName,
                     connectionDetail: provider.connectionDetail,
                     accountDetailHidden: provider.accountDetailHidden,
-                    subscriptionUsageState: provider.subscriptionUsageState,
-                    showsSubscriptionUsage: provider.showsSubscriptionUsage && showsSubscriptionUsage
+                    usageState: provider.usageState,
+                    showsUsage: provider.showsUsage && showsUsage
                 )
             }
         erroredCount = providers.filter(\.isErrored).count

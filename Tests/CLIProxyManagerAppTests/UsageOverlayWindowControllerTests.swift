@@ -1838,8 +1838,8 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
                     functionName: "provider-\(index)",
                     connectionDetail: "account-\(index)@example.com",
                     accountDetailHidden: true,
-                    subscriptionUsageState: .disabled,
-                    showsSubscriptionUsage: true
+                    usageState: .subscription(.disabled),
+                    showsUsage: true
                 )
             },
             emptyMessage: ids.isEmpty ? "No connected accounts" : nil

@@ -378,9 +378,11 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var subscriptionUsage: SubscriptionUsage
     public var usageOverlay: UsageOverlay
 
-    public var isSubscriptionUsageEnabled: Bool {
+    public var isUsageEnabled: Bool {
         subscriptionUsage.showInMenuBar || usageOverlay.isVisible
     }
+
+    public var isSubscriptionUsageEnabled: Bool { isUsageEnabled }
 
     public var oauthCommandProfiles: [OAuthCommandProfile]
     public var roundRobinProfiles: [RoundRobinProfile]

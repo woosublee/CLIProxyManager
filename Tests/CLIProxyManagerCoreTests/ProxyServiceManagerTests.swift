@@ -72,6 +72,93 @@ final class ProxyServiceManagerTests: XCTestCase {
         ])
     }
 
+    func testStartEnablesUsageQueueOnlyWhenUsageAndAPIKeyAreBothPresent() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let manager = ProxyServiceManager(
+            paths: paths,
+            launcher: FakeProcessLauncher(),
+            managementKeyProvider: { "management-key" },
+            usageEnabledProvider: { true },
+            claudeAPIKeyProvider: { "claude-key" },
+            codexAPIKeyProvider: { nil }
+        )
+
+        try await manager.start(port: 8317)
+
+        let yaml = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
+        XCTAssertTrue(yaml.contains("usage-statistics-enabled: true"))
+        XCTAssertTrue(yaml.contains("redis-usage-queue-retention-seconds: 3600"))
+        XCTAssertTrue(yaml.contains("remote-management:"))
+    }
+
+    func testStartUsesOneUsageEnabledSnapshotForManagementAndQueue() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let callCounter = ProviderCallCounter()
+        let manager = ProxyServiceManager(
+            paths: paths,
+            launcher: FakeProcessLauncher(),
+            managementKeyProvider: { "management-key" },
+            usageEnabledProvider: {
+                callCounter.increment()
+                return callCounter.value == 1
+            },
+            claudeAPIKeyProvider: { "claude-key" },
+            codexAPIKeyProvider: { nil }
+        )
+
+        try await manager.start(port: 8317)
+
+        let yaml = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
+        XCTAssertEqual(callCounter.value, 1)
+        XCTAssertTrue(yaml.contains("remote-management:"))
+        XCTAssertTrue(yaml.contains("usage-statistics-enabled: true"))
+    }
+
+    func testStartOmitsUsageQueueWhenUsageIsDisabledEvenWithAPIKey() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let manager = ProxyServiceManager(
+            paths: paths,
+            launcher: FakeProcessLauncher(),
+            managementKeyProvider: { "management-key" },
+            usageEnabledProvider: { false },
+            claudeAPIKeyProvider: { "claude-key" },
+            codexAPIKeyProvider: { nil }
+        )
+
+        try await manager.start(port: 8317)
+
+        let yaml = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
+        XCTAssertFalse(yaml.contains("usage-statistics-enabled:"))
+        XCTAssertFalse(yaml.contains("redis-usage-queue-retention-seconds:"))
+    }
+
+    func testStartOmitsUsageQueueWhenOnlyOAuthUsageIsEnabled() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let manager = ProxyServiceManager(
+            paths: paths,
+            launcher: FakeProcessLauncher(),
+            managementKeyProvider: { "management-key" },
+            usageEnabledProvider: { true },
+            claudeAPIKeyProvider: { nil },
+            codexAPIKeyProvider: { nil }
+        )
+
+        try await manager.start(port: 8317)
+
+        let yaml = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
+        XCTAssertFalse(yaml.contains("usage-statistics-enabled:"))
+        XCTAssertFalse(yaml.contains("redis-usage-queue-retention-seconds:"))
+        XCTAssertTrue(yaml.contains("remote-management:"))
+    }
+
     func testStartWritesOAuthAndAPIKeyFastAliasesWithPriorityPayload() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
@@ -257,7 +344,7 @@ final class ProxyServiceManagerTests: XCTestCase {
             paths: paths,
             launcher: FakeProcessLauncher(),
             managementKeyProvider: { "management-key" },
-            subscriptionUsageEnabledProvider: { true }
+            usageEnabledProvider: { true }
         )
 
         try await manager.start(port: 8317)
@@ -278,7 +365,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         let manager = ProxyServiceManager(
             paths: paths,
             launcher: FakeProcessLauncher(),
-            subscriptionUsageEnabledProvider: { true }
+            usageEnabledProvider: { true }
         )
 
         try await manager.start(port: 8317)
@@ -317,7 +404,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         let manager = ProxyServiceManager(
             paths: paths,
             launcher: FakeProcessLauncher(),
-            subscriptionUsageEnabledProvider: { true }
+            usageEnabledProvider: { true }
         )
 
         try await manager.start(port: 8317)
@@ -335,7 +422,7 @@ final class ProxyServiceManagerTests: XCTestCase {
             paths: paths,
             launcher: FakeProcessLauncher(),
             managementKeyProvider: { "stored-management-key" },
-            subscriptionUsageEnabledProvider: { false }
+            usageEnabledProvider: { false }
         )
 
         try await manager.start(port: 8317)
@@ -355,7 +442,7 @@ final class ProxyServiceManagerTests: XCTestCase {
             paths: paths,
             launcher: FakeProcessLauncher(),
             managementKeyProvider: { " \n " },
-            subscriptionUsageEnabledProvider: { true }
+            usageEnabledProvider: { true }
         )
 
         try await manager.start(port: 8317)

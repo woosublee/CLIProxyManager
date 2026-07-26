@@ -126,11 +126,31 @@ final class UsageOverlayPresentationStateTests: XCTestCase {
         XCTAssertEqual(state.compactAccountMaximumHeight, 420)
     }
 
+    func testExpandedContentUsesAPIUsageForConfiguredAPIKeyProvider() {
+        let presentation = expandedUsageContentPresentation(
+            showsUsage: true,
+            usageState: .apiCost(.available(makeCostSnapshot()))
+        )
+
+        XCTAssertEqual(presentation, .usage)
+    }
+
+    func testExpandedAPIRenderContractUsesTextOnlyAdaptiveRows() {
+        let row = apiCostRows(
+            snapshot: makeCostSnapshot(dayTokens: 84_000, dayRequests: 14)
+        ).first!
+
+        XCTAssertEqual(row.detail, "84K TOK · 14 REQ")
+        XCTAssertEqual(row.cost, "$0.42")
+        XCTAssertEqual(row.decoration, .textOnly)
+        XCTAssertEqual(row.textLayout, .adaptiveSingleLine(minimumScaleFactor: 0.6))
+    }
+
     func testExpandedContentUsesHeaderOnlyForProvidersWithoutUsageCapability() {
         XCTAssertEqual(
             expandedUsageContentPresentation(
-                showsSubscriptionUsage: false,
-                subscriptionUsageState: .disabled
+                showsUsage: false,
+                usageState: .subscription(.disabled)
             ),
             .headerOnly
         )
@@ -139,8 +159,8 @@ final class UsageOverlayPresentationStateTests: XCTestCase {
     func testExpandedContentShowsDisabledMessageForCapableOAuthProvider() {
         XCTAssertEqual(
             expandedUsageContentPresentation(
-                showsSubscriptionUsage: true,
-                subscriptionUsageState: .disabled
+                showsUsage: true,
+                usageState: .subscription(.disabled)
             ),
             .message("Subscription usage is disabled")
         )
@@ -243,6 +263,46 @@ final class UsageOverlayPresentationStateTests: XCTestCase {
         XCTAssertEqual(state.height, 360)
     }
 
+    private func makeCostSnapshot(
+        dayTokens: Int64 = 84_000,
+        dayRequests: Int64 = 14
+    ) -> APICostSnapshot {
+        let start = Date(timeIntervalSince1970: 100)
+        let end = Date(timeIntervalSince1970: 200)
+        let day = APICostPeriodSnapshot(
+            period: .day,
+            estimatedUSD: Decimal(string: "0.42")!,
+            totalTokens: dayTokens,
+            requestCount: dayRequests,
+            failedRequestCount: 0,
+            pricedRequestCount: dayRequests,
+            unpricedRequestCount: 0,
+            intervalStart: start,
+            intervalEnd: end,
+            issues: []
+        )
+        let month = APICostPeriodSnapshot(
+            period: .month,
+            estimatedUSD: Decimal(string: "8.73")!,
+            totalTokens: 1_800_000,
+            requestCount: 218,
+            failedRequestCount: 0,
+            pricedRequestCount: 218,
+            unpricedRequestCount: 0,
+            intervalStart: start,
+            intervalEnd: end,
+            issues: []
+        )
+        return APICostSnapshot(
+            profileID: "claude-api",
+            provider: .claude,
+            day: day,
+            month: month,
+            reportingTimeZoneID: "UTC",
+            updatedAt: end
+        )
+    }
+
     func testCompactProviderChangePublishesOnlyFinalMeasuredHeight() async {
         let model = CompactUsageMeasurementHarnessModel(
             providers: [compactProvider(id: .claude, index: 0)],
@@ -286,8 +346,8 @@ final class UsageOverlayPresentationStateTests: XCTestCase {
                     functionName: "cc-work",
                     connectionDetail: "work@example.com",
                     accountDetailHidden: true,
-                    subscriptionUsageState: .disabled,
-                    showsSubscriptionUsage: true
+                    usageState: .subscription(.disabled),
+                    showsUsage: true
                 )
             ],
             emptyMessage: Array(repeating: "No accounts selected", count: 16).joined(separator: "\n")
@@ -330,8 +390,8 @@ final class UsageOverlayPresentationStateTests: XCTestCase {
             functionName: "provider-\(index)",
             connectionDetail: "account-\(index)@example.com",
             accountDetailHidden: true,
-            subscriptionUsageState: .disabled,
-            showsSubscriptionUsage: true
+            usageState: .subscription(.disabled),
+            showsUsage: true
         )
     }
 
@@ -347,8 +407,8 @@ final class UsageOverlayPresentationStateTests: XCTestCase {
                     functionName: "provider-\(index)",
                     connectionDetail: "account-\(index)@example.com",
                     accountDetailHidden: true,
-                    subscriptionUsageState: .disabled,
-                    showsSubscriptionUsage: true
+                    usageState: .subscription(.disabled),
+                    showsUsage: true
                 )
             },
             emptyMessage: ids.isEmpty ? "No connected accounts" : nil

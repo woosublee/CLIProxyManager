@@ -25,8 +25,8 @@ final class UsageOverlayAccountPresentationTests: XCTestCase {
                 connectionTitle: "Configured",
                 connectionDetail: "CLIProxyAPI",
                 isConnected: true,
-                subscriptionUsageState: .disabled,
-                showsSubscriptionUsage: false,
+                usageState: .apiCost(.disabled),
+                showsUsage: true,
                 showsInUsageOverlay: true
             )
         ])

@@ -3,6 +3,14 @@ import CLIProxyManagerCore
 @testable import CLIProxyManagerApp
 
 final class SubscriptionUsageWarningIconTests: XCTestCase {
+    func testUsageWarningIconAcceptsAPIMessageWithoutSubscriptionIssue() {
+        let message = "Estimated API cost is partial. Time zone: Asia/Seoul."
+        let icon = UsageWarningIcon(message: message)
+
+        XCTAssertEqual(icon.message, message)
+        XCTAssertEqual(UsageWarningLayout.iconFrameSize, CGSize(width: 12, height: 12))
+    }
+
     func testStaleStateKeepsSnapshotAndAddsWarningPresentation() {
         let snapshot = SubscriptionUsageSnapshot(
             profileID: "codex.json",
@@ -32,6 +40,23 @@ final class SubscriptionUsageWarningIconTests: XCTestCase {
         )
 
         XCTAssertEqual(message, "Credential needs attention. Showing usage last updated 12 minutes ago.")
+    }
+
+    func testProviderWarningMessageUsesSubscriptionStaleStateAtAccountLevel() {
+        let snapshot = SubscriptionUsageSnapshot(
+            profileID: "codex.json",
+            provider: .codex,
+            windows: [.init(id: "primary", label: "Primary", usedPercent: 15, resetAt: nil)],
+            fetchedAt: Date(timeIntervalSince1970: 60)
+        )
+
+        let message = providerUsageWarningMessage(
+            for: .subscription(.stale(snapshot, .credentialExpired)),
+            now: Date(timeIntervalSince1970: 780)
+        )
+
+        XCTAssertEqual(message, "Credential needs attention. Showing usage last updated 12 minutes ago.")
+        XCTAssertNil(providerUsageWarningMessage(for: .subscription(.available(snapshot))))
     }
 
     func testWarningRowsShowIconOnlyOnFirstRowAndReserveEqualTrailingSpace() {

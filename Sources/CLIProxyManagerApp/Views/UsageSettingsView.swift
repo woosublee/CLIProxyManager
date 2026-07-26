@@ -2,11 +2,11 @@ import CLIProxyManagerCore
 import SwiftUI
 
 enum UsageSettingsCopy {
-    static let menuBarLabel = "Show subscription usage"
-    static let menuBarDescription = "Show Claude and Codex account usage beneath connected accounts in the menu bar."
+    static let menuBarLabel = "Show usage"
+    static let menuBarDescription = "Show subscription usage or estimated API cost beneath connected accounts in the menu bar."
     static let hudLabel = "Show usage HUD"
-    static let hudDescription = "Keep subscription usage visible in a separate window."
-    static let footer = "Usage data is fetched whenever the menu bar display or Usage HUD is enabled. CLIProxyManager manages the local management key automatically."
+    static let hudDescription = "Keep subscription usage and estimated API cost visible in a separate window."
+    static let footer = "Usage data is collected while either usage display is enabled. API cost estimates include only requests observed through CLIProxyAPI. CLIProxyManager manages the local management key automatically."
 }
 
 struct UsageSettingsView: View {

@@ -146,10 +146,10 @@ struct UsageOverlayView: View {
     }
 
     private var refreshStatus: String {
-        if viewModel.isSubscriptionUsageReloadActionInProgress {
+        if viewModel.isUsageReloadActionInProgress {
             return "REFRESHING"
         }
-        guard let refreshedAt = viewModel.lastSuccessfulSubscriptionUsageRefreshAt else {
+        guard let refreshedAt = viewModel.lastSuccessfulUsageRefreshAt else {
             return "NOT YET REFRESHED"
         }
         let minutes = max(0, Int(refreshStatusReferenceDate.timeIntervalSince(refreshedAt) / 60))
@@ -179,11 +179,11 @@ struct UsageOverlayChrome: View {
         HStack(spacing: 2) {
             chromeButton(
                 symbol: "arrow.clockwise",
-                accessibilityLabel: "Reload subscription usage",
+                accessibilityLabel: "Reload usage",
                 action: onRefresh
             )
-            .disabled(!viewModel.canReloadSubscriptionUsage || viewModel.isSubscriptionUsageReloadActionInProgress)
-            .opacity(viewModel.canReloadSubscriptionUsage ? 1 : 0.45)
+            .disabled(!viewModel.canReloadUsage || viewModel.isUsageReloadActionInProgress)
+            .opacity(viewModel.canReloadUsage ? 1 : 0.45)
             chromeButton(
                 symbol: displayMode.toggleSymbolName,
                 accessibilityLabel: displayMode.toggleAccessibilityLabel,
@@ -225,7 +225,7 @@ private struct ExpandedUsageOverlayContent: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Subscription Usage")
+                    Text("Usage")
                         .font(.system(size: 15, weight: .semibold))
                     Text(refreshStatus)
                         .font(.system(size: 10.5, design: .monospaced))
@@ -259,20 +259,29 @@ enum ExpandedUsageContentPresentation: Equatable {
 }
 
 func expandedUsageContentPresentation(
-    showsSubscriptionUsage: Bool,
-    subscriptionUsageState: AccountSubscriptionUsageState
+    showsUsage: Bool,
+    usageState: ProviderUsageState
 ) -> ExpandedUsageContentPresentation {
-    guard showsSubscriptionUsage else { return .headerOnly }
-    if case .unavailable(.proxyUnavailable) = subscriptionUsageState {
+    guard showsUsage else { return .headerOnly }
+    switch usageState {
+    case .subscription(.unavailable(.proxyUnavailable)),
+         .apiCost(.unavailable(.proxyUnavailable)):
         return .message("Start the server to check usage")
+    default:
+        break
     }
 
-    switch subscriptionUsageDisplayState(for: subscriptionUsageState) {
+    switch providerUsageDisplayState(for: usageState) {
     case .hidden:
-        return .message("Subscription usage is disabled")
+        switch usageState {
+        case .subscription:
+            return .message("Subscription usage is disabled")
+        case .apiCost:
+            return .message("API cost tracking is disabled")
+        }
     case .loading(let message), .unavailable(let message):
         return .message(message)
-    case .snapshot:
+    case .subscription, .apiCost:
         return .usage
     }
 }
@@ -286,6 +295,13 @@ private struct ExpandedUsageOverlayAccountView: View {
                 ProviderAvatar(providerID: provider.id, size: 20)
                 Text(provider.usageOverlayDisplayName)
                     .font(.system(size: 12.5, weight: .semibold))
+                if let warningMessage = providerUsageWarningMessage(for: provider.usageState) {
+                    UsageWarningIcon(message: warningMessage)
+                        .frame(
+                            width: UsageWarningLayout.iconFrameSize.width,
+                            height: UsageWarningLayout.iconFrameSize.height
+                        )
+                }
                 Spacer()
                 Text(verbatim: "$ \(provider.functionName)")
                     .font(.system(size: 10, design: .monospaced))
@@ -298,8 +314,8 @@ private struct ExpandedUsageOverlayAccountView: View {
     @ViewBuilder
     private var usageContent: some View {
         switch expandedUsageContentPresentation(
-            showsSubscriptionUsage: provider.showsSubscriptionUsage,
-            subscriptionUsageState: provider.subscriptionUsageState
+            showsUsage: provider.showsUsage,
+            usageState: provider.usageState
         ) {
         case .headerOnly:
             EmptyView()
@@ -309,10 +325,54 @@ private struct ExpandedUsageOverlayAccountView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
         case .usage:
-            if case let .snapshot(snapshot, warning) = subscriptionUsageDisplayState(
-                for: provider.subscriptionUsageState
-            ) {
+            switch providerUsageDisplayState(for: provider.usageState) {
+            case let .subscription(snapshot, warning):
                 snapshotUsage(snapshot, warning: warning)
+            case let .apiCost(snapshot, issues):
+                apiCostUsage(snapshot, issues: issues)
+            case .hidden, .loading, .unavailable:
+                EmptyView()
+            }
+        }
+    }
+
+    private func apiCostUsage(
+        _ snapshot: APICostSnapshot,
+        issues: [APICostIssue]
+    ) -> some View {
+        let presentation = apiCostUsagePresentation(snapshot: snapshot, issues: issues)
+        return VStack(alignment: .leading, spacing: 6) {
+            ForEach(presentation.rows) { row in
+                Group {
+                    switch row.decoration {
+                    case .textOnly:
+                        HStack(spacing: 8) {
+                            Text(row.label)
+                                .font(.system(size: 10.5, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .frame(width: 28, alignment: .leading)
+                            Text(row.detail)
+                                .font(.system(size: 10.5, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(row.textLayout.lineLimit)
+                                .minimumScaleFactor(row.textLayout.minimumScaleFactor)
+                                .allowsTightening(true)
+                                .layoutPriority(1)
+                                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                            Text(row.cost)
+                                .font(.system(size: 10.5, design: .monospaced))
+                                .lineLimit(row.textLayout.lineLimit)
+                                .minimumScaleFactor(row.textLayout.minimumScaleFactor)
+                                .allowsTightening(true)
+                                .layoutPriority(1)
+                                .frame(minWidth: 58, alignment: .trailing)
+                        }
+                    }
+                }
+                .help(row.tooltip)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(row.accessibilityLabel)
             }
         }
     }
@@ -320,25 +380,16 @@ private struct ExpandedUsageOverlayAccountView: View {
     @ViewBuilder
     private func snapshotUsage(
         _ snapshot: SubscriptionUsageSnapshot,
-        warning: SubscriptionUsageIssue?
+        warning _: SubscriptionUsageIssue?
     ) -> some View {
         if snapshot.windows.isEmpty {
-            SubscriptionUsageWarningAlignedRow(
-                warning: warning,
-                reservesWarningSpace: warning != nil,
-                lastUpdatedAt: snapshot.fetchedAt
-            ) {
-                Text("Usage details unavailable")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
-            }
+            Text("Usage details unavailable")
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
         } else {
             VStack(alignment: .leading, spacing: 6) {
-                ForEach(subscriptionUsageWarningRows(snapshot: snapshot, warning: warning)) { row in
-                    ExpandedUsageOverlayProgressRow(
-                        row: row,
-                        lastUpdatedAt: snapshot.fetchedAt
-                    )
+                ForEach(subscriptionUsageWarningRows(snapshot: snapshot, warning: nil)) { row in
+                    ExpandedUsageOverlayProgressRow(row: row)
                 }
             }
         }
@@ -347,29 +398,22 @@ private struct ExpandedUsageOverlayAccountView: View {
 
 private struct ExpandedUsageOverlayProgressRow: View {
     let row: SubscriptionUsageWarningRowPresentation
-    let lastUpdatedAt: Date
 
     var body: some View {
         let window = row.window
         let percent = min(max(window.usedPercent, 0), 100)
         VStack(alignment: .leading, spacing: 2) {
-            SubscriptionUsageWarningAlignedRow(
-                warning: row.warning,
-                reservesWarningSpace: row.reservesWarningSpace,
-                lastUpdatedAt: lastUpdatedAt
-            ) {
-                HStack(spacing: 8) {
-                    Text(subscriptionUsageDisplayLabel(for: window))
-                        .font(.system(size: 10.5, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 28, alignment: .leading)
-                    ProgressView(value: percent, total: 100)
-                        .tint(subscriptionUsageProgressTone(for: percent).color)
-                        .accessibilityLabel(subscriptionUsageAccessibilityLabel(for: window))
-                    Text("\(Int(percent.rounded()))%")
-                        .font(.system(size: 10.5, design: .monospaced))
-                        .frame(width: 34, alignment: .trailing)
-                }
+            HStack(spacing: 8) {
+                Text(subscriptionUsageDisplayLabel(for: window))
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28, alignment: .leading)
+                ProgressView(value: percent, total: 100)
+                    .tint(subscriptionUsageProgressTone(for: percent).color)
+                    .accessibilityLabel(subscriptionUsageAccessibilityLabel(for: window))
+                Text("\(Int(percent.rounded()))%")
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .frame(width: 34, alignment: .trailing)
             }
             if let resetAt = window.resetAt {
                 Text("Next reset: \(resetAt.formatted(date: .abbreviated, time: .shortened))")
