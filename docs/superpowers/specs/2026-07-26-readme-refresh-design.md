@@ -21,8 +21,8 @@
 
 - 모든 설정 필드와 내부 구현을 나열하는 전체 사용 설명서를 만들지 않는다.
 - release history나 commit별 변경 사항을 README에 추가하지 않는다.
-- 기존 메인 대시보드 이미지를 교체하거나 편집하지 않는다.
-- 사용자 제공 Usage HUD 이미지를 crop, rescale 또는 보정하지 않는다.
+- 사용자 제공 메인 대시보드와 Usage HUD 이미지를 crop, rescale 또는 보정하지 않는다.
+- 세 이미지 외에 추가 screenshot을 README 상단에 배치하지 않는다.
 - 앱 코드, 설정 schema, release workflow를 변경하지 않는다.
 
 ## 이미지 구성
@@ -35,19 +35,20 @@
 
 ### 첫 번째 이미지
 
-- 기존 `docs/assets/readme-main-window.png` 유지
-- 다중 OAuth 계정과 command를 보여 주는 메인 대시보드
+- 사용자 제공 `/Users/woosublee/Downloads/1.png`
+- 기존 `docs/assets/readme-main-window.png`를 해당 원본으로 교체
+- 다섯 account와 최신 account action·정렬을 보여 주는 메인 대시보드
 
 ### 두 번째 이미지
 
-- 사용자 제공 `스크린샷 2026-07-26 오후 8.55.22.png`
+- 사용자 제공 `/Users/woosublee/Downloads/2.png`
 - `docs/assets/readme-usage-hud.png`를 해당 원본으로 교체
 - expanded HUD에서 OAuth 구독 사용률과 Claude/OpenAI API Key의 Day/Mon token·request·예상 비용을 함께 보여 줌
 
 ### 세 번째 이미지
 
-- 사용자 제공 `스크린샷 2026-07-26 오후 8.55.34.png`
-- `docs/assets/readme-usage-hud-compact.png`로 추가
+- 사용자 제공 `/Users/woosublee/Downloads/3.png`
+- `docs/assets/readme-usage-hud-compact.png`를 해당 원본으로 교체
 - compact HUD에서 같은 계정 집합의 사용률·예상 비용을 세로로 보여 줌
 
 원본 PNG의 pixel dimensions를 유지한다. README에서는 첫 번째와 두 번째 이미지를 동일한 일반 폭으로, 세 번째 이미지를 실제 비율에 맞는 좁은 폭으로 표시한다. 국문과 영문은 같은 파일과 순서를 사용하고 alt text만 각 언어로 작성한다.
@@ -149,8 +150,8 @@ cpm quota key delete
 
 ## 검증
 
-1. 새 이미지가 PNG이며 dimensions가 expanded `692×1014`, compact `308×1274`인지 확인한다.
-2. 기존 메인 이미지는 변경되지 않았는지 확인한다.
+1. 세 이미지가 PNG이며 dimensions가 main `852×1596`, expanded `692×1014`, compact `308×1274`인지 확인한다.
+2. 세 repository asset의 SHA-256이 사용자 제공 `1.png`, `2.png`, `3.png`와 각각 일치하는지 확인한다.
 3. 국·영문 README의 `<img>` 순서와 파일 경로가 일치하는지 검사한다.
 4. 국·영문에 계정·라우팅, 혼합 Usage HUD, CLI, 업데이트 기능이 모두 있는지 확인한다.
 5. README에 등장하는 `cpm` 명령이 실제 CLI usage와 일치하는지 대조한다.

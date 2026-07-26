@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 사용자 제공 expanded·compact Usage HUD 이미지를 README의 두 번째·세 번째 이미지로 배치하고, 국·영문 README를 CLIProxyManager v0.1.27의 주요 사용자 기능에 맞게 최신화한다.
+**Goal:** 사용자 제공 메인 대시보드·expanded Usage HUD·compact Usage HUD 이미지를 README의 첫 번째·두 번째·세 번째 이미지로 교체하고, 국·영문 README를 CLIProxyManager v0.1.27의 주요 사용자 기능에 맞게 최신화한다.
 
 **Architecture:** 기존 README의 설치·시작·Usage HUD·CLI·업데이트·보안 흐름은 유지한다. PNG 원본은 수정 없이 repository asset으로 복사하고, 국·영문 문서는 같은 이미지 순서·섹션 순서·명령 범위를 공유하면서 각 언어에 자연스럽게 작성한다.
 
@@ -10,8 +10,8 @@
 
 ## Global Constraints
 
-- 기존 `docs/assets/readme-main-window.png`의 binary content를 변경하지 않는다.
-- 사용자 제공 expanded·compact PNG를 crop, rescale, recompress 또는 보정하지 않는다.
+- 사용자 제공 메인 대시보드·expanded HUD·compact HUD PNG를 crop, rescale, recompress 또는 보정하지 않는다.
+- 기존 기본 이미지는 유지하지 않고 사용자 제공 세 PNG로 모두 교체한다.
 - 상단 이미지 순서는 메인 대시보드, expanded Usage HUD, compact Usage HUD다.
 - 국문과 영문은 동일한 이미지 파일, 섹션 순서, 기능 범위, shell command, link를 사용한다.
 - `OAuth`, `API Key`, `Usage HUD`, `Fast mode`, `round-robin`, `CLIProxyAPI`, `cpm` 제품 용어를 유지한다.
@@ -26,8 +26,8 @@
 
 ## File Structure
 
-- Preserve: `docs/assets/readme-main-window.png`
-  - 기존 메인 대시보드 이미지다. 해시가 변경되지 않아야 한다.
+- Replace: `docs/assets/readme-main-window.png`
+  - 다섯 account와 최신 action·정렬을 보여 주는 사용자 제공 메인 대시보드 원본을 저장한다.
 - Replace: `docs/assets/readme-usage-hud.png`
   - mixed OAuth subscription/API Key usage가 보이는 expanded HUD 원본을 저장한다.
 - Create: `docs/assets/readme-usage-hud-compact.png`
@@ -39,60 +39,62 @@
 
 ---
 
-### Task 1: Expanded·compact Usage HUD 이미지 자산 추가
+### Task 1: 최종 README 이미지 세 장 교체
 
 **Files:**
-- Preserve: `docs/assets/readme-main-window.png`
+- Replace: `docs/assets/readme-main-window.png`
 - Replace: `docs/assets/readme-usage-hud.png`
-- Create: `docs/assets/readme-usage-hud-compact.png`
-- Source only: `/Users/woosublee/Downloads/스크린샷 2026-07-26 오후 8.55.22.png`
-- Source only: `/Users/woosublee/Downloads/스크린샷 2026-07-26 오후 8.55.34.png`
+- Replace: `docs/assets/readme-usage-hud-compact.png`
+- Source only: `/Users/woosublee/Downloads/1.png`
+- Source only: `/Users/woosublee/Downloads/2.png`
+- Source only: `/Users/woosublee/Downloads/3.png`
 
 **Interfaces:**
-- Consumes: 사용자 제공 PNG 원본 두 개
-- Produces: README가 참조할 `readme-usage-hud.png`와 `readme-usage-hud-compact.png`
+- Consumes: 사용자 제공 PNG 원본 세 개
+- Produces: README가 순서대로 참조할 `readme-main-window.png`, `readme-usage-hud.png`, `readme-usage-hud-compact.png`
+- Main SHA-256: `12834df5e7a46c3a972c60a2129567086fe8b39e40a85b7f5841e4dd02fec97b`
 - Expanded SHA-256: `949fd2701cf6169d254628e5942b8445ce521ed39092baa056d9842bd290ef06`
 - Compact SHA-256: `6eaf4cdeaa3b35e48d663b5dda4cad17f21f26764b5419702ba11249511abc94`
-- Preserved main SHA-256: `05c18d7d0028e8a331320416455eee5f79a54d857b1c7cbf1b5691fda22ad290`
 
-- [ ] **Step 1: 새 이미지 계약이 현재 자산에서 실패하는지 확인**
-
-Run:
-
-```bash
-test "$(shasum -a 256 docs/assets/readme-usage-hud.png | cut -d' ' -f1)" = \
-  "949fd2701cf6169d254628e5942b8445ce521ed39092baa056d9842bd290ef06"
-test -f docs/assets/readme-usage-hud-compact.png
-```
-
-Expected: FAIL. 기존 expanded HUD의 SHA-256은 `6c6f99ea5dad0080a51f30ccf1f2c62ff110083226705965dbfa2e5ba528cdeb`이고 compact asset은 아직 없다.
-
-- [ ] **Step 2: 사용자 제공 PNG를 repository asset으로 복사**
-
-Run:
-
-```bash
-cp '/Users/woosublee/Downloads/스크린샷 2026-07-26 오후 8.55.22.png' \
-  docs/assets/readme-usage-hud.png
-cp '/Users/woosublee/Downloads/스크린샷 2026-07-26 오후 8.55.34.png' \
-  docs/assets/readme-usage-hud-compact.png
-```
-
-파일 변환 명령은 실행하지 않는다.
-
-- [ ] **Step 3: 이미지 해시·형식·dimensions와 기존 main asset 보존 확인**
+- [ ] **Step 1: 최종 메인 이미지 계약이 현재 자산에서 실패하는지 확인**
 
 Run:
 
 ```bash
 test "$(shasum -a 256 docs/assets/readme-main-window.png | cut -d' ' -f1)" = \
-  "05c18d7d0028e8a331320416455eee5f79a54d857b1c7cbf1b5691fda22ad290"
+  "12834df5e7a46c3a972c60a2129567086fe8b39e40a85b7f5841e4dd02fec97b"
+```
+
+Expected: FAIL. 기존 기본 메인 이미지 SHA-256은 `05c18d7d0028e8a331320416455eee5f79a54d857b1c7cbf1b5691fda22ad290`이다.
+
+- [ ] **Step 2: 사용자 제공 PNG 세 장을 repository asset으로 복사**
+
+Run:
+
+```bash
+cp /Users/woosublee/Downloads/1.png docs/assets/readme-main-window.png
+cp /Users/woosublee/Downloads/2.png docs/assets/readme-usage-hud.png
+cp /Users/woosublee/Downloads/3.png docs/assets/readme-usage-hud-compact.png
+```
+
+파일 변환 명령은 실행하지 않는다.
+
+- [ ] **Step 3: 세 이미지의 해시·형식·dimensions 확인**
+
+Run:
+
+```bash
+test "$(shasum -a 256 docs/assets/readme-main-window.png | cut -d' ' -f1)" = \
+  "12834df5e7a46c3a972c60a2129567086fe8b39e40a85b7f5841e4dd02fec97b"
 test "$(shasum -a 256 docs/assets/readme-usage-hud.png | cut -d' ' -f1)" = \
   "949fd2701cf6169d254628e5942b8445ce521ed39092baa056d9842bd290ef06"
 test "$(shasum -a 256 docs/assets/readme-usage-hud-compact.png | cut -d' ' -f1)" = \
   "6eaf4cdeaa3b35e48d663b5dda4cad17f21f26764b5419702ba11249511abc94"
-file docs/assets/readme-usage-hud.png docs/assets/readme-usage-hud-compact.png | grep -F 'PNG image data'
+file docs/assets/readme-main-window.png \
+  docs/assets/readme-usage-hud.png \
+  docs/assets/readme-usage-hud-compact.png | grep -F 'PNG image data'
 sips -g pixelWidth -g pixelHeight \
+  docs/assets/readme-main-window.png \
   docs/assets/readme-usage-hud.png \
   docs/assets/readme-usage-hud-compact.png
 ```
@@ -100,6 +102,7 @@ sips -g pixelWidth -g pixelHeight \
 Expected:
 
 ```text
+readme-main-window.png: pixelWidth 852, pixelHeight 1596
 readme-usage-hud.png: pixelWidth 692, pixelHeight 1014
 readme-usage-hud-compact.png: pixelWidth 308, pixelHeight 1274
 ```
@@ -112,11 +115,9 @@ readme-usage-hud-compact.png: pixelWidth 308, pixelHeight 1274
 git add docs/assets/readme-main-window.png \
   docs/assets/readme-usage-hud.png \
   docs/assets/readme-usage-hud-compact.png
-git commit -m "docs: refresh Usage HUD screenshots" \
+git commit -m "docs: refresh README screenshots" \
   -m "Co-Authored-By: Claude <noreply@anthropic.com>"
 ```
-
-`readme-main-window.png`는 `git add` 대상에 포함해도 content가 동일하므로 commit diff에는 나타나지 않아야 한다.
 
 ---
 
@@ -644,7 +645,7 @@ print("README fences and relative links are valid")
 PY
 
 test "$(shasum -a 256 docs/assets/readme-main-window.png | cut -d' ' -f1)" = \
-  "05c18d7d0028e8a331320416455eee5f79a54d857b1c7cbf1b5691fda22ad290"
+  "12834df5e7a46c3a972c60a2129567086fe8b39e40a85b7f5841e4dd02fec97b"
 test "$(shasum -a 256 docs/assets/readme-usage-hud.png | cut -d' ' -f1)" = \
   "949fd2701cf6169d254628e5942b8445ce521ed39092baa056d9842bd290ef06"
 test "$(shasum -a 256 docs/assets/readme-usage-hud-compact.png | cut -d' ' -f1)" = \
