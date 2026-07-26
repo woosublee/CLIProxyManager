@@ -15,7 +15,7 @@
 - Do not hide or transform model names inside Claude Code separately from the actual environment model value; the actual value must remain routable as `<prefix>/<model>`.
 - Prefer the app-level account nickname for the prefix.
 - When nickname is blank, use a deterministic short fallback derived from the auth profile ID.
-- Prefix includes provider identity: examples include `claude-work`, `codex-team`, `codex-classting-team`, `codex-18c2ca10`.
+- Prefix includes provider identity: examples include `claude-work`, `codex-team`, `codex-work-team`, `codex-work123`.
 - Slug rules: lowercase; ASCII letters and digits are kept; any other run of characters becomes one `-`; leading/trailing `-` is trimmed; no `/` is allowed in the prefix.
 - Empty nickname slug falls back to the auth-profile fallback.
 - Prefixes are unique across all command profiles; duplicates receive `-2`, `-3`, etc.
@@ -73,16 +73,16 @@ func testReconciliationUsesNicknameBasedModelPrefixesWithDuplicateSuffixes() {
         AppConfig.OAuthCommandProfile(
             id: "codex-team",
             provider: .codex,
-            authProfileID: "codex-18c2ca10-woosub-classting-com-team.json",
+            authProfileID: "codex-work123-team.json",
             nickname: "Team",
-            modelPrefix: "codex-codex-18c2ca10-woosub-classting-com-team-json"
+            modelPrefix: "codex-codex-work123-team-json"
         ),
         AppConfig.OAuthCommandProfile(
             id: "codex-team-secondary",
             provider: .codex,
-            authProfileID: "codex-dntjqdlekd-gmail-com-pro.json",
+            authProfileID: "codex-personal456-pro.json",
             nickname: "Team",
-            modelPrefix: "codex-codex-dntjqdlekd-gmail-com-pro-json"
+            modelPrefix: "codex-codex-personal456-pro-json"
         )
     ]
 
@@ -91,8 +91,8 @@ func testReconciliationUsesNicknameBasedModelPrefixesWithDuplicateSuffixes() {
         shellInstaller: StubShellInstaller(),
         authProfileStore: StubAuthProfileStore(profiles: [
             AuthProfile(fileName: "claude-work.json", type: .claude, email: "work@example.com", accountID: nil, expired: nil, disabled: false, prefix: "claude-claude-work-json"),
-            AuthProfile(fileName: "codex-18c2ca10-woosub-classting-com-team.json", type: .codex, email: "team@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-codex-18c2ca10-woosub-classting-com-team-json"),
-            AuthProfile(fileName: "codex-dntjqdlekd-gmail-com-pro.json", type: .codex, email: "personal@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-codex-dntjqdlekd-gmail-com-pro-json")
+            AuthProfile(fileName: "codex-work123-team.json", type: .codex, email: "team@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-codex-work123-team-json"),
+            AuthProfile(fileName: "codex-personal456-pro.json", type: .codex, email: "personal@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-codex-personal456-pro-json")
         ]),
         proxyService: StubProxyService(),
         claudeConnector: connectedClaudeConnector()
@@ -111,9 +111,9 @@ func testBlankNicknameFallsBackToShortAuthProfileModelPrefix() {
         AppConfig.OAuthCommandProfile(
             id: "codex-team",
             provider: .codex,
-            authProfileID: "codex-18c2ca10-woosub-classting-com-team.json",
+            authProfileID: "codex-work123-team.json",
             nickname: "   ",
-            modelPrefix: "codex-codex-18c2ca10-woosub-classting-com-team-json"
+            modelPrefix: "codex-codex-work123-team-json"
         )
     ]
 
@@ -121,13 +121,13 @@ func testBlankNicknameFallsBackToShortAuthProfileModelPrefix() {
         configStore: StubConfigStore(config: config),
         shellInstaller: StubShellInstaller(),
         authProfileStore: StubAuthProfileStore(profiles: [
-            AuthProfile(fileName: "codex-18c2ca10-woosub-classting-com-team.json", type: .codex, email: "team@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-codex-18c2ca10-woosub-classting-com-team-json")
+            AuthProfile(fileName: "codex-work123-team.json", type: .codex, email: "team@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-codex-work123-team-json")
         ]),
         proxyService: StubProxyService(),
         claudeConnector: connectedClaudeConnector()
     )
 
-    XCTAssertEqual(viewModel.config.oauthCommandProfiles.map(\.modelPrefix), ["codex-18c2ca10"])
+    XCTAssertEqual(viewModel.config.oauthCommandProfiles.map(\.modelPrefix), ["codex-work123"])
 }
 ```
 
@@ -155,7 +155,7 @@ Run:
 swift test --filter ProviderSettingsViewModelTests/testBlankNicknameFallsBackToShortAuthProfileModelPrefix
 ```
 
-Expected before production changes: FAIL because `modelPrefix` remains the stored long value instead of `codex-18c2ca10`.
+Expected before production changes: FAIL because `modelPrefix` remains the stored long value instead of `codex-work123`.
 
 - [ ] **Step 4: Implement nickname/fallback prefix helpers**
 
@@ -436,7 +436,7 @@ func testSaveCodexSettingsFallsBackToShortAuthProfilePrefixWhenNicknameIsBlankAn
         AppConfig.OAuthCommandProfile(
             id: "codex-team",
             provider: .codex,
-            authProfileID: "codex-18c2ca10-woosub-classting-com-team.json",
+            authProfileID: "codex-work123-team.json",
             commandName: "ccteam",
             nickname: "Team",
             codex: testCodex(),
@@ -445,7 +445,7 @@ func testSaveCodexSettingsFallsBackToShortAuthProfilePrefixWhenNicknameIsBlankAn
     ]
     let store = StubConfigStore(config: config)
     let authStore = StubAuthProfileStore(profiles: [
-        AuthProfile(fileName: "codex-18c2ca10-woosub-classting-com-team.json", type: .codex, email: "team@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-team")
+        AuthProfile(fileName: "codex-work123-team.json", type: .codex, email: "team@example.com", accountID: nil, expired: nil, disabled: false, prefix: "codex-team")
     ])
     let viewModel = DashboardViewModel(
         configStore: store,
@@ -463,9 +463,9 @@ func testSaveCodexSettingsFallsBackToShortAuthProfilePrefixWhenNicknameIsBlankAn
         dangerousPermissionsEnabled: false
     )
 
-    XCTAssertEqual(store.savedConfigs.last?.oauthCommandProfiles.map(\.modelPrefix), ["codex-18c2ca10"])
-    XCTAssertEqual(viewModel.config.oauthCommandProfiles.map(\.modelPrefix), ["codex-18c2ca10"])
-    XCTAssertEqual(authStore.prefixUpdates, [PrefixUpdate(id: "codex-18c2ca10-woosub-classting-com-team.json", prefix: "codex-18c2ca10")])
+    XCTAssertEqual(store.savedConfigs.last?.oauthCommandProfiles.map(\.modelPrefix), ["codex-work123"])
+    XCTAssertEqual(viewModel.config.oauthCommandProfiles.map(\.modelPrefix), ["codex-work123"])
+    XCTAssertEqual(authStore.prefixUpdates, [PrefixUpdate(id: "codex-work123-team.json", prefix: "codex-work123")])
 }
 ```
 

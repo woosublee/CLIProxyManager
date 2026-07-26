@@ -10,14 +10,15 @@ final class AppConfigStoreTests: XCTestCase {
         #else
         XCTAssertEqual(config.port, 18_317)
         #endif
-        XCTAssertEqual(config.commands.cc, "")
-        XCTAssertEqual(config.commands.ccapi, "")
-        XCTAssertEqual(config.commands.ccodex, "")
-        XCTAssertEqual(config.ccapi.connectionMode, .proxy)
-        XCTAssertFalse(config.ccapi.dangerousPermissionsEnabled)
-        XCTAssertEqual(config.ccodex.opus, AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .xhigh))
-        XCTAssertEqual(config.ccodex.sonnet, AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .medium))
-        XCTAssertEqual(config.ccodex.haiku, AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .low))
+        XCTAssertEqual(config.schemaVersion, AppConfig.currentSchemaVersion)
+        XCTAssertEqual(config.claudeAPI.commandName, "")
+        XCTAssertEqual(config.claudeAPI.connectionMode, .proxy)
+        XCTAssertFalse(config.claudeAPI.dangerousPermissionsEnabled)
+        XCTAssertEqual(config.codexAPI.commandName, "")
+        XCTAssertEqual(config.codexAPI.codex, .default)
+        XCTAssertEqual(config.codexAPI.nickname, "")
+        XCTAssertFalse(config.codexAPI.dangerousPermissionsEnabled)
+        XCTAssertEqual(config.oauthCommandProfiles, [])
         XCTAssertEqual(config.roundRobinProfiles, [])
         XCTAssertFalse(config.subscriptionUsage.showInMenuBar)
         XCTAssertFalse(config.isSubscriptionUsageEnabled)
@@ -61,14 +62,18 @@ final class AppConfigStoreTests: XCTestCase {
         let store = AppConfigStore(paths: ManagedPaths(rootDirectory: sandbox))
         var config = AppConfig(
             port: 18_888,
-            commands: AppConfig.Commands(cc: "mine", ccapi: "mineapi", ccodex: "minecodex"),
-            ccapi: AppConfig.ClaudeAPI(dangerousPermissionsEnabled: true),
-            ccodex: AppConfig.Codex(
-                opus: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .xhigh),
-                sonnet: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .medium),
-                haiku: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .low)
+            claudeAPI: AppConfig.ClaudeAPI(
+                commandName: "claude-api-work",
+                dangerousPermissionsEnabled: true
             ),
-            includeDangerouslySkipPermissions: true,
+            codexAPI: AppConfig.CodexAPI(
+                commandName: "codex-api-work",
+                codex: AppConfig.Codex(
+                    opus: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .xhigh),
+                    sonnet: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .medium),
+                    haiku: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .low)
+                )
+            ),
             startAtLogin: true,
             showDockIcon: false,
             showMenuBarIcon: true
@@ -108,9 +113,98 @@ final class AppConfigStoreTests: XCTestCase {
         try store.save(config)
 
         let loaded = try store.load()
-        XCTAssertEqual(loaded, config)
+        XCTAssertEqual(loaded.schemaVersion, AppConfig.currentSchemaVersion)
+        XCTAssertEqual(loaded.port, config.port)
+        XCTAssertEqual(loaded.claudeAPI, config.claudeAPI)
+        XCTAssertEqual(loaded.codexAPI, config.codexAPI)
+        XCTAssertEqual(loaded.oauthCommandProfiles, config.oauthCommandProfiles)
+        XCTAssertEqual(loaded.accountOrder, config.accountOrder)
         XCTAssertTrue(loaded.subscriptionUsage.showInMenuBar)
         XCTAssertTrue(loaded.isSubscriptionUsageEnabled)
+    }
+
+    func testLegacyDocumentLoadsCanonicalProviderSettingsAndOAuthDefaults() throws {
+        let sandbox = try makeSandbox()
+        let store = AppConfigStore(paths: ManagedPaths(rootDirectory: sandbox))
+        let legacyJSON = #"""
+        {
+          "port": 18317,
+          "commands": {
+            "cc": "claude-work",
+            "ccapi": "claude-api-work",
+            "ccodex": "codex-work",
+            "ccodexapi": "codex-api-work"
+          },
+          "ccapi": {
+            "nickname": "Claude API",
+            "dangerousPermissionsEnabled": true,
+            "claude": {"opus":"automatic","sonnet":"automatic","haiku":"automatic"}
+          },
+          "ccodex": {
+            "opus":{"model":"gpt-5.6-terra","reasoning":"xhigh"},
+            "sonnet":{"model":"gpt-5.6-terra","reasoning":"medium"},
+            "haiku":{"model":"gpt-5.6-terra","reasoning":"low"}
+          },
+          "codexAPI": {
+            "nickname": "Codex API",
+            "codex": {
+              "opus":{"model":"gpt-5.6-terra","reasoning":"xhigh"},
+              "sonnet":{"model":"gpt-5.6-terra","reasoning":"medium"},
+              "haiku":{"model":"gpt-5.6-terra","reasoning":"low"}
+            }
+          },
+          "includeDangerouslySkipPermissions": true,
+          "nicknames": {"cc":"Claude Work","ccodex":"Codex Work"},
+          "accountPrivacy": {"claudeHidden":false,"codexHidden":true},
+          "startAtLogin": false,
+          "showDockIcon": true,
+          "showMenuBarIcon": true
+        }
+        """#
+        try Data(legacyJSON.utf8).write(to: store.paths.configFile)
+
+        let loaded = try store.loadDocument()
+
+        XCTAssertEqual(loaded.config.schemaVersion, AppConfig.currentSchemaVersion)
+        XCTAssertEqual(loaded.config.claudeAPI.commandName, "claude-api-work")
+        XCTAssertEqual(loaded.config.claudeAPI.nickname, "Claude API")
+        XCTAssertTrue(loaded.config.claudeAPI.dangerousPermissionsEnabled)
+        XCTAssertEqual(loaded.config.codexAPI.commandName, "codex-api-work")
+        XCTAssertEqual(loaded.config.codexAPI.nickname, "Codex API")
+        XCTAssertEqual(loaded.legacyOAuthDefaults?.claude?.commandName, "claude-work")
+        XCTAssertEqual(loaded.legacyOAuthDefaults?.claude?.nickname, "Claude Work")
+        XCTAssertEqual(loaded.legacyOAuthDefaults?.claude?.accountDetailHidden, false)
+        XCTAssertEqual(loaded.legacyOAuthDefaults?.codex?.commandName, "codex-work")
+        XCTAssertEqual(loaded.legacyOAuthDefaults?.codex?.nickname, "Codex Work")
+        XCTAssertEqual(loaded.legacyOAuthDefaults?.codex?.accountDetailHidden, true)
+        XCTAssertTrue(loaded.requiresCanonicalRewrite)
+    }
+
+    func testCanonicalSaveWritesOnlyVersion2ProviderKeys() throws {
+        let sandbox = try makeSandbox()
+        let store = AppConfigStore(paths: ManagedPaths(rootDirectory: sandbox))
+        var config = AppConfig.default
+        config.claudeAPI.commandName = "claude-api-work"
+        config.codexAPI.commandName = "codex-api-work"
+
+        try store.save(config)
+
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: store.paths.configFile)) as? [String: Any]
+        )
+        XCTAssertEqual(object["schemaVersion"] as? Int, 2)
+        XCTAssertNotNil(object["claudeAPI"])
+        XCTAssertNotNil(object["codexAPI"])
+        for legacyKey in [
+            "commands",
+            "ccapi",
+            "ccodex",
+            "nicknames",
+            "accountPrivacy",
+            "includeDangerouslySkipPermissions"
+        ] {
+            XCTAssertNil(object[legacyKey], "Unexpected legacy key: \(legacyKey)")
+        }
     }
 
     private func makeSandbox() throws -> URL {

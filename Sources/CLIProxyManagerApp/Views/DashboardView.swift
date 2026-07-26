@@ -632,7 +632,7 @@ private struct ServerHeroView: View {
 
 // MARK: - Account card
 
-private struct ProviderAccountCardView: View {
+struct ProviderAccountCardView: View {
     let account: DashboardAccountSnapshot
     let canReorder: Bool
     let isDropTarget: Bool
@@ -663,17 +663,17 @@ private struct ProviderAccountCardView: View {
                     Text(account.title)
                         .font(.system(size: 13, weight: .semibold))
                         .lineLimit(1)
-                    SlugPill(slug: account.commandName)
+
                     Spacer(minLength: 0)
+
+                    trailingControls
+                        .layoutPriority(1)
                 }
 
                 accountDetailRow
                     .padding(.top, 2)
             }
-
-            Spacer(minLength: 4)
-
-            actions
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -706,6 +706,14 @@ private struct ProviderAccountCardView: View {
             Button("Remove", role: .destructive) { remove() }
         } message: {
             Text("The auth profile will be deleted from CLIProxyAPI. You can reconnect at any time via Add provider.")
+        }
+    }
+
+    private var trailingControls: some View {
+        HStack(spacing: 4) {
+            SlugPill(slug: account.commandName)
+
+            actions
         }
     }
 

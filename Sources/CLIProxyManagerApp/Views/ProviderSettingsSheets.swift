@@ -477,8 +477,8 @@ func oauthSettingsRecommendedFunctionName(provider: ProviderRowState.ID) -> Stri
     oauthSettingsRecommendedFunctionName(providerType: provider.inferredProviderType)
 }
 
-func oauthSettingsRecommendedFunctionName(providerType: AuthProfileType) -> String {
-    providerType == .codex ? AppConfig.default.commands.ccodex : AppConfig.default.commands.cc
+func oauthSettingsRecommendedFunctionName(providerType _: AuthProfileType) -> String {
+    ""
 }
 
 func oauthSettingsInitialState(config: AppConfig, provider: ProviderRowState.ID, isInitialSetup: Bool) -> OAuthSettingsInitialState {
@@ -498,22 +498,20 @@ func oauthSettingsInitialState(config: AppConfig, providerType: AuthProfileType,
         return OAuthSettingsInitialState(functionName: "", nickname: "", dangerousPermissionsEnabled: false, claudeRouting: .automatic)
     }
 
-    switch providerType {
-    case .claude:
+    guard let commandProfile = config.oauthCommandProfiles.first(where: { $0.provider == providerType }) else {
         return OAuthSettingsInitialState(
-            functionName: config.commands.cc,
-            nickname: config.nicknames.cc,
-            dangerousPermissionsEnabled: config.includeDangerouslySkipPermissions,
-            claudeRouting: .automatic
-        )
-    case .codex:
-        return OAuthSettingsInitialState(
-            functionName: config.commands.ccodex,
-            nickname: config.nicknames.ccodex,
-            dangerousPermissionsEnabled: config.includeDangerouslySkipPermissions,
+            functionName: "",
+            nickname: "",
+            dangerousPermissionsEnabled: false,
             claudeRouting: .automatic
         )
     }
+    return OAuthSettingsInitialState(
+        functionName: commandProfile.commandName,
+        nickname: commandProfile.nickname,
+        dangerousPermissionsEnabled: commandProfile.dangerousPermissionsEnabled,
+        claudeRouting: commandProfile.effectiveClaudeRouting
+    )
 }
 
 func oauthSettingsDangerousPermissionDefault(config: AppConfig, isInitialSetup: Bool) -> Bool {
@@ -524,9 +522,9 @@ func oauthSettingsInitialCodex(config: AppConfig, provider: ProviderRowState.ID?
     if let provider,
        let commandProfile = config.oauthCommandProfiles.first(where: { $0.id == provider.rawValue }),
        let codex = commandProfile.codex {
-        return isInitialSetup ? AppConfig.default.ccodex : codex
+        return isInitialSetup ? .default : codex
     }
-    return isInitialSetup ? AppConfig.default.ccodex : config.ccodex
+    return .default
 }
 
 func oauthSettingsShouldBlockInitialDisplay(isInitialSetup: Bool, availability: CommandNameAvailability) -> Bool {
@@ -1012,11 +1010,11 @@ struct ClaudeAPIProviderSettingsSheet: View {
         save: @escaping (String, String, ClaudeRouting, Bool, String?) throws -> Void,
         remove: @escaping () -> Void
     ) {
-        _functionName = State(initialValue: config.commands.ccapi)
-        _nickname = State(initialValue: config.ccapi.nickname)
-        _claudeRouting = State(initialValue: config.ccapi.claude)
+        _functionName = State(initialValue: config.claudeAPI.commandName)
+        _nickname = State(initialValue: config.claudeAPI.nickname)
+        _claudeRouting = State(initialValue: config.claudeAPI.claude)
         _scopedModels = State(initialValue: initialModels)
-        _dangerousPermissionsEnabled = State(initialValue: config.ccapi.dangerousPermissionsEnabled)
+        _dangerousPermissionsEnabled = State(initialValue: config.claudeAPI.dangerousPermissionsEnabled)
         self.isConfigured = isConfigured
         self.refreshModels = refreshModels
         self.checkCommandName = checkCommandName
@@ -1157,6 +1155,10 @@ struct ClaudeAPIProviderSettingsSheet: View {
     }
 }
 
+func codexAPIInitialNickname(isConfigured: Bool, savedNickname: String) -> String {
+    isConfigured ? savedNickname : ""
+}
+
 struct CodexAPIProviderSettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var functionName: String
@@ -1195,8 +1197,11 @@ struct CodexAPIProviderSettingsSheet: View {
             codex: normalizedCodex,
             availableModels: availableModels
         )
-        _functionName = State(initialValue: config.commands.ccodexapi)
-        _nickname = State(initialValue: config.codexAPI.nickname)
+        _functionName = State(initialValue: config.codexAPI.commandName)
+        _nickname = State(initialValue: codexAPIInitialNickname(
+            isConfigured: isConfigured,
+            savedNickname: config.codexAPI.nickname
+        ))
         _opus = State(initialValue: normalizedCodex.opus)
         _sonnet = State(initialValue: normalizedCodex.sonnet)
         _haiku = State(initialValue: normalizedCodex.haiku)

@@ -9,6 +9,7 @@ final class AppAppearanceServiceTests: XCTestCase {
         _ = DashboardViewModel(
             configStore: StubConfigStore(config: .default),
             shellInstaller: StubShellInstaller(),
+            authProfileStore: EmptyAuthProfileStore(),
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector(),
             loginItemService: StubLoginItemService(),
@@ -38,6 +39,7 @@ final class AppAppearanceServiceTests: XCTestCase {
         let viewModel = DashboardViewModel(
             configStore: store,
             shellInstaller: StubShellInstaller(),
+            authProfileStore: EmptyAuthProfileStore(),
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector(),
             loginItemService: loginService,
@@ -56,6 +58,7 @@ final class AppAppearanceServiceTests: XCTestCase {
         let viewModel = DashboardViewModel(
             configStore: store,
             shellInstaller: StubShellInstaller(),
+            authProfileStore: EmptyAuthProfileStore(),
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector(),
             loginItemService: loginService,
@@ -74,6 +77,7 @@ final class AppAppearanceServiceTests: XCTestCase {
         let viewModel = DashboardViewModel(
             configStore: store,
             shellInstaller: StubShellInstaller(),
+            authProfileStore: EmptyAuthProfileStore(),
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector(),
             loginItemService: StubLoginItemService(),
@@ -91,6 +95,7 @@ final class AppAppearanceServiceTests: XCTestCase {
         let viewModel = DashboardViewModel(
             configStore: store,
             shellInstaller: StubShellInstaller(),
+            authProfileStore: EmptyAuthProfileStore(),
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector(),
             loginItemService: StubLoginItemService(),
@@ -107,6 +112,7 @@ final class AppAppearanceServiceTests: XCTestCase {
         let viewModel = DashboardViewModel(
             configStore: store,
             shellInstaller: StubShellInstaller(),
+            authProfileStore: EmptyAuthProfileStore(),
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector(),
             loginItemService: StubLoginItemService(),
@@ -126,6 +132,7 @@ final class AppAppearanceServiceTests: XCTestCase {
         let viewModel = DashboardViewModel(
             configStore: store,
             shellInstaller: StubShellInstaller(),
+            authProfileStore: EmptyAuthProfileStore(),
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector(),
             loginItemService: StubLoginItemService(),
@@ -150,6 +157,7 @@ final class AppAppearanceServiceTests: XCTestCase {
         let viewModel = DashboardViewModel(
             configStore: store,
             shellInstaller: StubShellInstaller(),
+            authProfileStore: EmptyAuthProfileStore(),
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector(),
             loginItemService: StubLoginItemService(),
@@ -191,6 +199,12 @@ private final class StubConfigStore: AppConfigStoring, @unchecked Sendable {
         lock.withLock { savedConfigs.append(config) }
         self.config = config
     }
+}
+
+private final class EmptyAuthProfileStore: AuthProfileManaging, @unchecked Sendable {
+    func profiles() throws -> [AuthProfile] { [] }
+    func setDisabled(_ disabled: Bool, for type: AuthProfileType) throws -> Int { 0 }
+    func delete(for type: AuthProfileType) throws -> Int { 0 }
 }
 
 private final class StubShellInstaller: ShellFunctionInstalling, @unchecked Sendable {

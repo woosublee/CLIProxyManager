@@ -97,23 +97,19 @@ public struct ShellFunctionRenderer: Sendable {
 
         """
 
-        if config.oauthCommandProfiles.isEmpty {
-            script += renderLegacyOAuthFunctions()
-        } else {
-            for commandProfile in oauthCommandProfilesToRender() {
-                script += renderOAuthFunction(commandProfile)
-            }
+        for commandProfile in oauthCommandProfilesToRender() {
+            script += renderOAuthFunction(commandProfile)
         }
 
         for roundRobinProfile in roundRobinProfilesToRender() {
             script += renderRoundRobinFunction(roundRobinProfile)
         }
 
-        if enabledFunctions.claudeAPI, hasCommandName(config.commands.ccapi) {
+        if enabledFunctions.claudeAPI, hasCommandName(config.claudeAPI.commandName) {
             script += renderClaudeAPIFunction()
         }
 
-        if enabledFunctions.codexAPI, hasCommandName(config.commands.ccodexapi) {
+        if enabledFunctions.codexAPI, hasCommandName(config.codexAPI.commandName) {
             script += renderCodexAPIFunction()
         }
 
@@ -121,10 +117,10 @@ public struct ShellFunctionRenderer: Sendable {
     }
 
     private func renderClaudeAPIFunction() -> String {
-        let claudeCommand = claudeCommand(skipPermissions: config.ccapi.dangerousPermissionsEnabled)
+        let claudeCommand = claudeCommand(skipPermissions: config.claudeAPI.dangerousPermissionsEnabled)
 
         return """
-        \(config.commands.ccapi)() {
+        \(config.claudeAPI.commandName)() {
           local routing_env
           if ! routing_env="$(\(shellSingleQuoted(helperCommand)) routing claude-models '--api')"; then
             return 1
@@ -148,7 +144,7 @@ public struct ShellFunctionRenderer: Sendable {
         let autoCompactWindow = CodexContextWindowExport.autoCompactWindow(for: codex)
         let autoCompactLine = autoCompactWindow.map { "  CLAUDE_CODE_AUTO_COMPACT_WINDOW='\($0)' \\\n" } ?? ""
         return """
-        \(config.commands.ccodexapi)() {
+        \(config.codexAPI.commandName)() {
           if ! curl -sf -H 'Authorization: Bearer sk-dummy' "http://127.0.0.1:\(config.port)/v1/models" | grep -q 'cpm-codex-api/'; then
             echo "CLIProxyAPI Manager is not running or the OpenAI API key is not configured. Start it with cpm start, then retry."
             return 1
@@ -175,45 +171,6 @@ public struct ShellFunctionRenderer: Sendable {
 
     private func claudeCommand(skipPermissions: Bool) -> String {
         skipPermissions ? "claude --dangerously-skip-permissions \"$@\"" : "claude \"$@\""
-    }
-
-    private func renderLegacyOAuthFunctions() -> String {
-        let claudeCommand = claudeCommand(skipPermissions: config.includeDangerouslySkipPermissions)
-        let port = config.port
-        let opusModel = config.ccodex.opus.modelIdentifier
-        let sonnetModel = config.ccodex.sonnet.modelIdentifier
-        let haikuModel = config.ccodex.haiku.modelIdentifier
-
-        var script = ""
-        if enabledFunctions.claudeOAuth, hasCommandName(config.commands.cc) {
-            script += renderClaudeProxyFunction(
-                commandName: config.commands.cc,
-                routingTarget: "--legacy",
-                dangerousPermissionsEnabled: config.includeDangerouslySkipPermissions
-            )
-        }
-
-        if enabledFunctions.codex, hasCommandName(config.commands.ccodex) {
-            let autoCompactWindow = CodexContextWindowExport.autoCompactWindow(for: config.ccodex)
-            let autoCompactLine = autoCompactWindow.map { "  CLAUDE_CODE_AUTO_COMPACT_WINDOW='\($0)' \\\n" } ?? ""
-            script += """
-            \(config.commands.ccodex)() {
-              if ! curl -sf -H 'Authorization: Bearer sk-dummy' "http://127.0.0.1:\(port)/v1/models" >/dev/null; then
-                echo "CLIProxyAPI Manager is not running or authentication settings are invalid. Open the app to check the status."
-                return 1
-              fi
-
-              ANTHROPIC_BASE_URL="http://127.0.0.1:\(port)" \\
-              ANTHROPIC_AUTH_TOKEN='sk-dummy' \\
-              ANTHROPIC_DEFAULT_OPUS_MODEL=\(shellSingleQuoted(opusModel)) \\
-              ANTHROPIC_DEFAULT_SONNET_MODEL=\(shellSingleQuoted(sonnetModel)) \\
-              ANTHROPIC_DEFAULT_HAIKU_MODEL=\(shellSingleQuoted(haikuModel)) \\
-            \(autoCompactLine)  \(claudeCommand)
-            }
-
-            """
-        }
-        return script
     }
 
     private func renderOAuthFunction(_ commandProfile: AppConfig.OAuthCommandProfile) -> String {
@@ -244,7 +201,7 @@ public struct ShellFunctionRenderer: Sendable {
 
         let errorMessage = "CLIProxyAPI Manager is not running or authentication settings are invalid. Start it with cpm start, then retry."
         let models = codexDefaultModels(for: commandProfile)
-        let autoCompactWindow = CodexContextWindowExport.autoCompactWindow(for: commandProfile.codex ?? config.ccodex)
+        let autoCompactWindow = CodexContextWindowExport.autoCompactWindow(for: commandProfile.codex ?? .default)
         let autoCompactLine = autoCompactWindow.map { "  CLAUDE_CODE_AUTO_COMPACT_WINDOW='\($0)' \\\n" } ?? ""
 
         return """
@@ -325,7 +282,7 @@ public struct ShellFunctionRenderer: Sendable {
     }
 
     private func codexDefaultModels(for commandProfile: AppConfig.OAuthCommandProfile) -> (opus: String, sonnet: String, haiku: String) {
-        let codex = commandProfile.codex ?? config.ccodex
+        let codex = commandProfile.codex ?? .default
         return (
             prefixedModel(codex.opus.modelIdentifier, prefix: commandProfile.modelPrefix),
             prefixedModel(codex.sonnet.modelIdentifier, prefix: commandProfile.modelPrefix),
@@ -338,17 +295,10 @@ public struct ShellFunctionRenderer: Sendable {
     }
 
     private func functionNamesToRender() -> [String] {
-        var names: [String]
-        if config.oauthCommandProfiles.isEmpty {
-            names = []
-            if enabledFunctions.claudeOAuth, hasCommandName(config.commands.cc) { names.append(config.commands.cc) }
-            if enabledFunctions.codex, hasCommandName(config.commands.ccodex) { names.append(config.commands.ccodex) }
-        } else {
-            names = oauthCommandProfilesToRender().map(\.commandName)
-        }
+        var names = oauthCommandProfilesToRender().map(\.commandName)
         names.append(contentsOf: roundRobinProfilesToRender().map(\.commandName))
-        if enabledFunctions.claudeAPI, hasCommandName(config.commands.ccapi) { names.append(config.commands.ccapi) }
-        if enabledFunctions.codexAPI, hasCommandName(config.commands.ccodexapi) { names.append(config.commands.ccodexapi) }
+        if enabledFunctions.claudeAPI, hasCommandName(config.claudeAPI.commandName) { names.append(config.claudeAPI.commandName) }
+        if enabledFunctions.codexAPI, hasCommandName(config.codexAPI.commandName) { names.append(config.codexAPI.commandName) }
         return names
     }
 

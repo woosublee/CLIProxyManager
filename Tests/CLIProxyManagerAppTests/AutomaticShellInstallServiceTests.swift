@@ -8,7 +8,9 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
         let installer = StubShellInstaller()
         let service = AutomaticShellInstallService.runtimeDefault(installer: installer)
         var config = AppConfig.default
-        config.commands.cc = "cc"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "claude", provider: .claude, authProfileID: "claude.json", commandName: "cc")
+        ]
 
         try service.apply(config: config)
 
@@ -169,7 +171,7 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
         )
         installer.reset()
 
-        try viewModel.saveCodexSettings(functionName: "ccodex", nickname: "", codex: AppConfig.default.ccodex, dangerousPermissionsEnabled: false)
+        try viewModel.saveCodexSettings(functionName: "ccodex", nickname: "", codex: AppConfig.Codex.default, dangerousPermissionsEnabled: false)
 
         XCTAssertEqual(installer.installedFunctionNames, ["ccodex"])
         XCTAssertFalse(installer.installedScript?.contains("cc() {") == true)
@@ -178,8 +180,10 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
 
     func testApplyRendersAndInstallsCurrentConfigWithoutClaudeAPIWhenSecretIsMissing() throws {
         var config = AppConfig.default
-        config.commands.cc = "cc"
-        config.commands.ccodex = "codexcustom"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "claude", provider: .claude, authProfileID: "claude.json", commandName: "cc"),
+            AppConfig.OAuthCommandProfile(id: "codex", provider: .codex, authProfileID: "codex.json", commandName: "codexcustom", codex: .default)
+        ]
         let installer = StubShellInstaller()
         let service = AutomaticShellInstallService(
             installer: installer,
@@ -228,9 +232,11 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
         )
 
         var config = AppConfig.default
-        config.commands.cc = "cc"
-        config.commands.ccapi = "ccapi"
-        config.commands.ccodex = "ccodex"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "claude", provider: .claude, authProfileID: "claude.json", commandName: "cc"),
+            AppConfig.OAuthCommandProfile(id: "codex", provider: .codex, authProfileID: "codex.json", commandName: "ccodex", codex: .default)
+        ]
+        config.claudeAPI.commandName = "ccapi"
 
         try service.apply(
             config: config,
@@ -250,8 +256,10 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
         )
 
         var config = AppConfig.default
-        config.commands.cc = "cc"
-        config.commands.ccodex = "ccodex"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "claude", provider: .claude, authProfileID: "claude.json", commandName: "cc"),
+            AppConfig.OAuthCommandProfile(id: "codex", provider: .codex, authProfileID: "codex.json", commandName: "ccodex", codex: .default)
+        ]
 
         try service.apply(
             config: config,
@@ -271,8 +279,10 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
         )
 
         var config = AppConfig.default
-        config.commands.cc = "cc"
-        config.commands.ccodex = "ccodex"
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(id: "claude", provider: .claude, authProfileID: "claude.json", commandName: "cc"),
+            AppConfig.OAuthCommandProfile(id: "codex", provider: .codex, authProfileID: "codex.json", commandName: "ccodex", codex: .default)
+        ]
 
         try service.apply(config: config)
 
@@ -288,7 +298,7 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
         )
 
         var config = AppConfig.default
-        config.commands.ccapi = "ccapi"
+        config.claudeAPI.commandName = "ccapi"
 
         XCTAssertThrowsError(try service.apply(
             config: config,

@@ -475,19 +475,6 @@ public struct CLIProxyManagerCommand: Sendable {
     }
 
     private func quotaTextAccounts(config: AppConfig, profiles: [AuthProfile]) -> [QuotaTextAccount] {
-        if config.oauthCommandProfiles.isEmpty {
-            return profiles.compactMap { profile in
-                guard !profile.disabled else { return nil }
-                let commandName = (profile.type == .claude ? config.commands.cc : config.commands.ccodex)
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !commandName.isEmpty else { return nil }
-                let nickname = (profile.type == .claude ? config.nicknames.cc : config.nicknames.ccodex)
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                let providerTitle = profile.type == .claude ? "Claude OAuth" : "Codex OAuth"
-                return QuotaTextAccount(profile: profile, title: nickname.isEmpty ? providerTitle : nickname, commandName: commandName)
-            }
-        }
-
         let profilesByID = Dictionary(uniqueKeysWithValues: profiles.map { ($0.id, $0) })
         return config.oauthCommandProfiles.compactMap { commandProfile in
             guard commandProfile.isEnabled,
@@ -702,24 +689,7 @@ public struct CLIProxyManagerCommand: Sendable {
 
         if target == "--api" {
             prefix = "cpm-claude-api"
-            routing = config.ccapi.claude
-        } else if target == "--legacy" {
-            guard !config.oauthCommandProfiles.contains(where: { $0.provider == .claude }) else {
-                throw CLIProxyManagerCommandError.prerequisite(
-                    "Legacy Claude routing is only available when account-specific command profiles have not been created."
-                )
-            }
-            let profiles = try authProfileStore.profiles().filter {
-                $0.type == .claude && !$0.disabled
-            }
-            guard profiles.count == 1, let profile = profiles.first else {
-                let message = profiles.isEmpty
-                    ? "No enabled Claude OAuth account is available. Connect Claude OAuth in the app, then retry."
-                    : "Multiple Claude OAuth accounts are enabled. Save an account-specific command in the app, then retry."
-                throw CLIProxyManagerCommandError.prerequisite(message)
-            }
-            prefix = profile.prefix?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            routing = .automatic
+            routing = config.claudeAPI.claude
         } else {
             guard let profile = config.oauthCommandProfiles.first(where: { $0.id == target }) else {
                 throw CLIProxyManagerCommandError.prerequisite("Claude command profile `\(target)` was not found.")

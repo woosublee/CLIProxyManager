@@ -1,0 +1,273 @@
+import Foundation
+
+public struct LegacyOAuthProviderDefaults: Equatable, Sendable {
+    public var commandName: String
+    public var nickname: String
+    public var accountDetailHidden: Bool
+    public var dangerousPermissionsEnabled: Bool
+    public var claude: ClaudeRouting?
+    public var codex: AppConfig.Codex?
+
+    public init(
+        commandName: String,
+        nickname: String,
+        accountDetailHidden: Bool,
+        dangerousPermissionsEnabled: Bool,
+        claude: ClaudeRouting?,
+        codex: AppConfig.Codex?
+    ) {
+        self.commandName = commandName
+        self.nickname = nickname
+        self.accountDetailHidden = accountDetailHidden
+        self.dangerousPermissionsEnabled = dangerousPermissionsEnabled
+        self.claude = claude
+        self.codex = codex
+    }
+}
+
+public struct LegacyOAuthDefaults: Equatable, Sendable {
+    public var claude: LegacyOAuthProviderDefaults?
+    public var codex: LegacyOAuthProviderDefaults?
+
+    public init(
+        claude: LegacyOAuthProviderDefaults?,
+        codex: LegacyOAuthProviderDefaults?
+    ) {
+        self.claude = claude
+        self.codex = codex
+    }
+}
+
+public struct AppConfigLoadResult: Equatable, Sendable {
+    public var config: AppConfig
+    public var legacyOAuthDefaults: LegacyOAuthDefaults?
+    public var requiresCanonicalRewrite: Bool
+
+    public init(
+        config: AppConfig,
+        legacyOAuthDefaults: LegacyOAuthDefaults?,
+        requiresCanonicalRewrite: Bool
+    ) {
+        self.config = config
+        self.legacyOAuthDefaults = legacyOAuthDefaults
+        self.requiresCanonicalRewrite = requiresCanonicalRewrite
+    }
+
+    public static func canonical(_ config: AppConfig) -> AppConfigLoadResult {
+        AppConfigLoadResult(
+            config: config,
+            legacyOAuthDefaults: nil,
+            requiresCanonicalRewrite: false
+        )
+    }
+}
+
+enum LegacyAppConfigDecoder {
+    static func isLegacyDocument(_ data: Data) throws -> Bool {
+        let object = try JSONSerialization.jsonObject(with: data)
+        guard let dictionary = object as? [String: Any] else { return true }
+        return (dictionary["schemaVersion"] as? Int ?? 1) < AppConfig.currentSchemaVersion
+    }
+
+    static func decode(_ data: Data) throws -> AppConfigLoadResult {
+        let legacy = try JSONDecoder().decode(LegacyDocument.self, from: data)
+        let claudeAPI = AppConfig.ClaudeAPI(
+            commandName: legacy.commands.claudeAPI,
+            claude: legacy.claudeAPI.claude,
+            nickname: legacy.claudeAPI.nickname,
+            dangerousPermissionsEnabled: legacy.claudeAPI.dangerousPermissionsEnabled
+        )
+        var codexAPI = legacy.codexAPI?.settings ?? AppConfig.CodexAPI(codex: legacy.codex)
+        codexAPI.commandName = legacy.commands.codexAPI
+
+        let config = AppConfig(
+            port: legacy.port,
+            claudeAPI: claudeAPI,
+            codexAPI: codexAPI,
+            startAtLogin: legacy.startAtLogin,
+            showDockIcon: legacy.showDockIcon,
+            showMenuBarIcon: legacy.showMenuBarIcon,
+            showNotifications: false,
+            appearance: legacy.appearance,
+            subscriptionUsage: legacy.subscriptionUsage,
+            usageOverlay: legacy.usageOverlay,
+            oauthCommandProfiles: legacy.oauthCommandProfiles,
+            roundRobinProfiles: legacy.roundRobinProfiles,
+            accountOrder: legacy.accountOrder,
+            bindAddress: legacy.bindAddress,
+            autostartServer: legacy.autostartServer,
+            roundRobinEnabled: false,
+            logLevel: legacy.logLevel
+        )
+        let oauthDefaults = LegacyOAuthDefaults(
+            claude: LegacyOAuthProviderDefaults(
+                commandName: legacy.commands.claudeOAuth,
+                nickname: legacy.nicknames.claude,
+                accountDetailHidden: legacy.accountPrivacy.claudeHidden,
+                dangerousPermissionsEnabled: legacy.dangerousPermissionsEnabled,
+                claude: legacy.claudeAPI.claude,
+                codex: nil
+            ),
+            codex: LegacyOAuthProviderDefaults(
+                commandName: legacy.commands.codexOAuth,
+                nickname: legacy.nicknames.codex,
+                accountDetailHidden: legacy.accountPrivacy.codexHidden,
+                dangerousPermissionsEnabled: legacy.dangerousPermissionsEnabled,
+                claude: nil,
+                codex: legacy.codex
+            )
+        )
+        return AppConfigLoadResult(
+            config: config,
+            legacyOAuthDefaults: oauthDefaults,
+            requiresCanonicalRewrite: true
+        )
+    }
+
+    private struct LegacyDocument: Decodable {
+        var port: Int
+        var commands: LegacyCommands
+        var claudeAPI: AppConfig.ClaudeAPI
+        var codex: AppConfig.Codex
+        var codexAPI: LegacyCodexAPI?
+        var dangerousPermissionsEnabled: Bool
+        var startAtLogin: Bool
+        var showDockIcon: Bool
+        var showMenuBarIcon: Bool
+        var appearance: AppearanceMode
+        var nicknames: LegacyNicknames
+        var accountPrivacy: LegacyAccountPrivacy
+        var subscriptionUsage: AppConfig.SubscriptionUsage
+        var usageOverlay: AppConfig.UsageOverlay
+        var oauthCommandProfiles: [AppConfig.OAuthCommandProfile]
+        var roundRobinProfiles: [AppConfig.RoundRobinProfile]
+        var accountOrder: [String]
+        var bindAddress: String
+        var autostartServer: Bool
+        var logLevel: LogLevel
+
+        private enum CodingKeys: String, CodingKey {
+            case port
+            case commands
+            case claudeAPI = "ccapi"
+            case codex = "ccodex"
+            case codexAPI
+            case dangerousPermissionsEnabled = "includeDangerouslySkipPermissions"
+            case startAtLogin
+            case showDockIcon
+            case showMenuBarIcon
+            case appearance
+            case nicknames
+            case accountPrivacy
+            case subscriptionUsage
+            case usageOverlay
+            case oauthCommandProfiles
+            case roundRobinProfiles
+            case accountOrder
+            case bindAddress
+            case autostartServer
+            case logLevel
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            port = try container.decodeIfPresent(Int.self, forKey: .port) ?? AppConfig.default.port
+            commands = try container.decodeIfPresent(LegacyCommands.self, forKey: .commands) ?? LegacyCommands()
+            claudeAPI = try container.decodeIfPresent(AppConfig.ClaudeAPI.self, forKey: .claudeAPI) ?? AppConfig.ClaudeAPI()
+            codex = try container.decodeIfPresent(AppConfig.Codex.self, forKey: .codex) ?? .default
+            codexAPI = try container.decodeIfPresent(LegacyCodexAPI.self, forKey: .codexAPI)
+            dangerousPermissionsEnabled = try container.decodeIfPresent(Bool.self, forKey: .dangerousPermissionsEnabled) ?? false
+            startAtLogin = try container.decodeIfPresent(Bool.self, forKey: .startAtLogin) ?? false
+            showDockIcon = try container.decodeIfPresent(Bool.self, forKey: .showDockIcon) ?? true
+            showMenuBarIcon = try container.decodeIfPresent(Bool.self, forKey: .showMenuBarIcon) ?? true
+            appearance = try container.decodeIfPresent(AppearanceMode.self, forKey: .appearance) ?? .system
+            nicknames = try container.decodeIfPresent(LegacyNicknames.self, forKey: .nicknames) ?? LegacyNicknames()
+            accountPrivacy = try container.decodeIfPresent(LegacyAccountPrivacy.self, forKey: .accountPrivacy) ?? LegacyAccountPrivacy()
+            subscriptionUsage = try container.decodeIfPresent(AppConfig.SubscriptionUsage.self, forKey: .subscriptionUsage) ?? AppConfig.SubscriptionUsage()
+            usageOverlay = try container.decodeIfPresent(AppConfig.UsageOverlay.self, forKey: .usageOverlay) ?? AppConfig.UsageOverlay()
+            oauthCommandProfiles = try container.decodeIfPresent([AppConfig.OAuthCommandProfile].self, forKey: .oauthCommandProfiles) ?? []
+            roundRobinProfiles = try container.decodeIfPresent([AppConfig.RoundRobinProfile].self, forKey: .roundRobinProfiles) ?? []
+            accountOrder = try container.decodeIfPresent([String].self, forKey: .accountOrder) ?? []
+            bindAddress = try container.decodeIfPresent(String.self, forKey: .bindAddress) ?? "127.0.0.1"
+            autostartServer = try container.decodeIfPresent(Bool.self, forKey: .autostartServer) ?? false
+            logLevel = try container.decodeIfPresent(LogLevel.self, forKey: .logLevel) ?? .info
+        }
+    }
+
+    private struct LegacyCommands: Decodable {
+        var claudeOAuth = ""
+        var claudeAPI = ""
+        var codexOAuth = ""
+        var codexAPI = ""
+
+        private enum CodingKeys: String, CodingKey {
+            case claudeOAuth = "cc"
+            case claudeAPI = "ccapi"
+            case codexOAuth = "ccodex"
+            case codexAPI = "ccodexapi"
+        }
+
+        init() {}
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            claudeOAuth = try container.decodeIfPresent(String.self, forKey: .claudeOAuth) ?? ""
+            claudeAPI = try container.decodeIfPresent(String.self, forKey: .claudeAPI) ?? ""
+            codexOAuth = try container.decodeIfPresent(String.self, forKey: .codexOAuth) ?? ""
+            codexAPI = try container.decodeIfPresent(String.self, forKey: .codexAPI) ?? ""
+        }
+    }
+
+    private struct LegacyNicknames: Decodable {
+        var claude = ""
+        var codex = ""
+
+        private enum CodingKeys: String, CodingKey {
+            case claude = "cc"
+            case codex = "ccodex"
+        }
+
+        init() {}
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            claude = try container.decodeIfPresent(String.self, forKey: .claude) ?? ""
+            codex = try container.decodeIfPresent(String.self, forKey: .codex) ?? ""
+        }
+    }
+
+    private struct LegacyAccountPrivacy: Decodable {
+        var claudeHidden = true
+        var codexHidden = true
+
+        private enum CodingKeys: String, CodingKey {
+            case claudeHidden
+            case codexHidden
+        }
+
+        init() {}
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            claudeHidden = try container.decodeIfPresent(Bool.self, forKey: .claudeHidden) ?? true
+            codexHidden = try container.decodeIfPresent(Bool.self, forKey: .codexHidden) ?? true
+        }
+    }
+
+    private struct LegacyCodexAPI: Decodable {
+        var settings: AppConfig.CodexAPI
+
+        private enum CodingKeys: String, CodingKey {
+            case codex
+        }
+
+        init(from decoder: Decoder) throws {
+            let probe = try decoder.container(keyedBy: CodingKeys.self)
+            if probe.contains(.codex) {
+                settings = try AppConfig.CodexAPI(from: decoder)
+            } else {
+                settings = AppConfig.CodexAPI(codex: try AppConfig.Codex(from: decoder))
+            }
+        }
+    }
+}

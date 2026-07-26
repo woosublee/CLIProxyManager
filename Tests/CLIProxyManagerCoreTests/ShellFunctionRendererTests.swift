@@ -4,9 +4,26 @@ import XCTest
 final class ShellFunctionRendererTests: XCTestCase {
     private func configuredCommands(_ config: AppConfig = .default) -> AppConfig {
         var config = config
-        config.commands.cc = "cc"
-        config.commands.ccodex = "ccodex"
-        config.commands.ccapi = "ccapi"
+        config.claudeAPI.commandName = "ccapi"
+        config.codexAPI.commandName = "ccodexapi"
+        config.oauthCommandProfiles = [
+            .init(
+                id: "claude",
+                provider: .claude,
+                authProfileID: "claude.json",
+                commandName: "cc",
+                claude: .automatic,
+                modelPrefix: "claude-account"
+            ),
+            .init(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
         return config
     }
 
@@ -35,6 +52,60 @@ final class ShellFunctionRendererTests: XCTestCase {
         XCTAssertFalse(script.contains("cc() {"))
         XCTAssertFalse(script.contains("ccodex() {"))
         XCTAssertFalse(script.contains("ccapi() {"))
+    }
+
+    func testRendererDoesNotCreateLegacyOAuthFunctionsWhenProfilesAreEmpty() throws {
+        let legacyJSON = #"""
+        {
+          "port": 18317,
+          "commands": {"cc":"legacy_claude","ccapi":"","ccodex":"legacy_codex"},
+          "ccapi": {},
+          "ccodex": {
+            "opus":{"model":"gpt-5.6-terra","reasoning":"xhigh"},
+            "sonnet":{"model":"gpt-5.6-terra","reasoning":"medium"},
+            "haiku":{"model":"gpt-5.6-terra","reasoning":"low"}
+          },
+          "includeDangerouslySkipPermissions": false,
+          "startAtLogin": false,
+          "showDockIcon": true,
+          "showMenuBarIcon": true
+        }
+        """#
+        let config = try LegacyAppConfigDecoder.decode(Data(legacyJSON.utf8)).config
+
+        let script = try ShellFunctionRenderer(
+            config: config,
+            helperCommand: "/usr/local/bin/cpm",
+            enabledFunctions: .init(
+                claudeOAuth: true,
+                codex: true,
+                claudeAPI: false,
+                codexAPI: false
+            )
+        ).render()
+
+        XCTAssertFalse(script.contains("legacy_claude() {"))
+        XCTAssertFalse(script.contains("legacy_codex() {"))
+    }
+
+    func testRendererUsesCanonicalAPICommandNames() throws {
+        var config = AppConfig.default
+        config.claudeAPI.commandName = "claude_api_work"
+        config.codexAPI.commandName = "codex_api_work"
+
+        let script = try ShellFunctionRenderer(
+            config: config,
+            helperCommand: "/usr/local/bin/cpm",
+            enabledFunctions: .init(
+                claudeOAuth: false,
+                codex: false,
+                claudeAPI: true,
+                codexAPI: true
+            )
+        ).render()
+
+        XCTAssertTrue(script.contains("claude_api_work() {"))
+        XCTAssertTrue(script.contains("codex_api_work() {"))
     }
 
     func testRenderCanCreateOnlyConnectedOAuthProviderFunctions() throws {
@@ -83,19 +154,19 @@ final class ShellFunctionRendererTests: XCTestCase {
             includeClaudeAPI: true
         ).render()
 
-        let function = renderedFunction(named: configuredCommands().commands.ccapi, in: script)
+        let function = renderedFunction(named: configuredCommands().claudeAPI.commandName, in: script)
         XCTAssertTrue(function.contains("routing claude-models '--api'"))
         XCTAssertFalse(function.contains("CLIProxy Manager is not running"))
     }
 
-    func testLegacyClaudeOAuthFunctionUsesExplicitLegacyResolver() throws {
+    func testClaudeOAuthFunctionUsesCanonicalProfileResolver() throws {
         let script = try ShellFunctionRenderer(
             config: configuredCommands(),
             helperCommand: "/usr/local/bin/cpm"
         ).render()
 
-        XCTAssertTrue(script.contains("routing claude-models '--legacy'"))
-        XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='claude-opus-4-7'"))
+        XCTAssertTrue(script.contains("routing claude-models 'claude'"))
+        XCTAssertFalse(script.contains("routing claude-models '--legacy'"))
     }
 
     func testClaudeOAuthProxyFunctionResolvesModelsAtInvocationTime() throws {
@@ -128,7 +199,7 @@ final class ShellFunctionRendererTests: XCTestCase {
     func testRenderUsesConfiguredModelsAndPort() throws {
         var config = configuredCommands()
         config.port = 8320
-        config.ccodex = AppConfig.Codex(
+        config.oauthCommandProfiles[1].codex = AppConfig.Codex(
             opus: AppConfig.CodexRole(model: "gpt-5.3-codex", reasoning: .xhigh),
             sonnet: AppConfig.CodexRole(model: "gpt-5.3-codex", reasoning: .medium),
             haiku: AppConfig.CodexRole(model: "gpt-5.3-codex", reasoning: .low)
@@ -141,15 +212,15 @@ final class ShellFunctionRendererTests: XCTestCase {
         ).render()
 
         XCTAssertTrue(script.contains("http://127.0.0.1:8320/v1/models"))
-        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='gpt-5.3-codex(xhigh)'"))
-        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL='gpt-5.3-codex(medium)'"))
-        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL='gpt-5.3-codex(low)'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='codex-account/gpt-5.3-codex(xhigh)'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL='codex-account/gpt-5.3-codex(medium)'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL='codex-account/gpt-5.3-codex(low)'"))
         XCTAssertFalse(script.contains("'/opt/cliproxy-manager/bin/cliproxy-manager' secret get claude-api-key"))
     }
 
     func testLegacyCodexCommandRendersRoleSpecificFastAlias() throws {
         var config = configuredCommands()
-        config.ccodex = .init(
+        config.oauthCommandProfiles[1].codex = .init(
             opus: .init(model: "gpt-5.6-sol", reasoning: .xhigh, fastModeEnabled: true),
             sonnet: .init(model: "gpt-5.6-sol", reasoning: .medium),
             haiku: .init(model: "gpt-5.5", reasoning: .auto, fastModeEnabled: true)
@@ -157,9 +228,9 @@ final class ShellFunctionRendererTests: XCTestCase {
 
         let script = try ShellFunctionRenderer(config: config, helperCommand: "/usr/local/bin/cpm").render()
 
-        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='gpt-5.6-sol-fast(xhigh)'"))
-        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL='gpt-5.6-sol(medium)'"))
-        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL='gpt-5.5-fast'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='codex-account/gpt-5.6-sol-fast(xhigh)'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL='codex-account/gpt-5.6-sol(medium)'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL='codex-account/gpt-5.5-fast'"))
         XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"))
         XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"))
         XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME"))
@@ -167,7 +238,7 @@ final class ShellFunctionRendererTests: XCTestCase {
 
     func testLegacyCodexCommandExportsAutoCompactWindowForExtendedContextRole() throws {
         var config = configuredCommands()
-        config.ccodex = .init(
+        config.oauthCommandProfiles[1].codex = .init(
             opus: .init(model: "gpt-5.6-sol", reasoning: .xhigh, detectedContextWindow: 372_000, fastModeEnabled: true),
             sonnet: .init(model: "gpt-5.6-sol", reasoning: .medium, detectedContextWindow: 372_000),
             haiku: .init(model: "gpt-5.5", reasoning: .low, detectedContextWindow: 200_000)
@@ -175,13 +246,13 @@ final class ShellFunctionRendererTests: XCTestCase {
 
         let script = try ShellFunctionRenderer(config: config, helperCommand: "/usr/local/bin/cpm").render()
 
-        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='gpt-5.6-sol-fast(xhigh)[1m]'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='codex-account/gpt-5.6-sol-fast(xhigh)[1m]'"))
         XCTAssertTrue(script.contains("CLAUDE_CODE_AUTO_COMPACT_WINDOW='372000'"))
     }
 
     func testLegacyCodexCommandOmitsAutoCompactWindowWhenNoRoleExtendsContext() throws {
         var config = configuredCommands()
-        config.ccodex = .init(
+        config.oauthCommandProfiles[1].codex = .init(
             opus: .init(model: "gpt-5.5", reasoning: .xhigh, detectedContextWindow: 200_000),
             sonnet: .init(model: "gpt-5.5", reasoning: .medium),
             haiku: .init(model: "gpt-5.5", reasoning: .low)
@@ -194,8 +265,9 @@ final class ShellFunctionRendererTests: XCTestCase {
 
     func testCodexAPICommandExportsAutoCompactWindow() throws {
         var config = configuredCommands()
-        config.commands.ccodexapi = "ccodexapi"
+        config.codexAPI.commandName = "ccodexapi"
         config.codexAPI = .init(
+            commandName: "ccodexapi",
             codex: .init(
                 opus: .init(model: "gpt-5.4", reasoning: .xhigh, detectedContextWindow: 1_050_000),
                 sonnet: .init(model: "gpt-5.5", reasoning: .medium, detectedContextWindow: 272_000),
@@ -209,7 +281,7 @@ final class ShellFunctionRendererTests: XCTestCase {
             enabledFunctions: .init(claudeOAuth: false, codex: false, claudeAPI: false, codexAPI: true)
         ).render()
 
-        let function = renderedFunction(named: config.commands.ccodexapi, in: script)
+        let function = renderedFunction(named: config.codexAPI.commandName, in: script)
         XCTAssertTrue(function.contains("CLAUDE_CODE_AUTO_COMPACT_WINDOW='272000'"))
     }
 
@@ -314,7 +386,7 @@ final class ShellFunctionRendererTests: XCTestCase {
         XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL='codex-team-2/gpt-team-mini(low)'"))
     }
 
-    func testLegacyFallbackRenderingRemainsActiveWhenNoOAuthCommandProfilesExist() throws {
+    func testCanonicalProfilesRenderWithoutLegacyResolver() throws {
         let script = try ShellFunctionRenderer(
             config: configuredCommands(),
             helperCommand: "/usr/local/bin/cliproxy-manager"
@@ -322,10 +394,9 @@ final class ShellFunctionRendererTests: XCTestCase {
 
         XCTAssertTrue(script.contains("cc() {"))
         XCTAssertTrue(script.contains("ccodex() {"))
-        XCTAssertFalse(script.contains("ccwork() {"))
-        XCTAssertTrue(script.contains("routing claude-models '--legacy'"))
-        XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='claude-opus-4-7'"))
-        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='gpt-5.6-terra(xhigh)'"))
+        XCTAssertTrue(script.contains("routing claude-models 'claude'"))
+        XCTAssertFalse(script.contains("routing claude-models '--legacy'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='codex-account/gpt-5.6-terra(xhigh)'"))
     }
 
     func testRenderIncludesEnabledRoundRobinFunction() throws {
@@ -342,7 +413,7 @@ final class ShellFunctionRendererTests: XCTestCase {
                 commandName: "ccodex",
                 includedAuthProfileIDs: ["codex-fast.json", "codex-deep.json"],
                 dangerousPermissionsEnabled: true,
-                codex: AppConfig.default.ccodex
+                codex: AppConfig.Codex.default
             )
         ]
 
@@ -385,7 +456,7 @@ final class ShellFunctionRendererTests: XCTestCase {
     func testRenderUsesConfiguredCodexRoleSettings() throws {
         var config = configuredCommands()
         config.port = 18_888
-        config.ccodex = AppConfig.Codex(
+        config.oauthCommandProfiles[1].codex = AppConfig.Codex(
             opus: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .xhigh),
             sonnet: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .medium),
             haiku: AppConfig.CodexRole(model: "gpt-5.5", reasoning: .auto)
@@ -396,9 +467,9 @@ final class ShellFunctionRendererTests: XCTestCase {
             helperCommand: "/usr/local/bin/cliproxy-manager"
         ).render()
 
-        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='gpt-5.5(xhigh)'"))
-        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL='gpt-5.5(medium)'"))
-        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL='gpt-5.5'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='codex-account/gpt-5.5(xhigh)'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL='codex-account/gpt-5.5(medium)'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL='codex-account/gpt-5.5'"))
         XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"))
         XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"))
         XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME"))
@@ -416,7 +487,7 @@ final class ShellFunctionRendererTests: XCTestCase {
 
     func testDangerousPermissionFlagIsOptIn() throws {
         var config = configuredCommands()
-        config.includeDangerouslySkipPermissions = true
+        config.oauthCommandProfiles[0].dangerousPermissionsEnabled = true
 
         let script = try ShellFunctionRenderer(
             config: config,
@@ -459,7 +530,7 @@ final class ShellFunctionRendererTests: XCTestCase {
 
     func testInvalidCommandNameThrows() {
         var config = configuredCommands()
-        config.commands.cc = "bad;rm"
+        config.oauthCommandProfiles[0].commandName = "bad;rm"
 
         XCTAssertThrowsError(try ShellFunctionRenderer(
             config: config,
@@ -471,7 +542,7 @@ final class ShellFunctionRendererTests: XCTestCase {
 
     func testInvalidDisabledClaudeAPICommandNameDoesNotBlockRendering() throws {
         var config = configuredCommands()
-        config.commands.ccapi = "bad;rm"
+        config.claudeAPI.commandName = "bad;rm"
 
         let script = try ShellFunctionRenderer(
             config: config,
@@ -510,7 +581,7 @@ final class ShellFunctionRendererTests: XCTestCase {
 
     func testClaudeAPICommandAlwaysUsesProxyRoutingEvenForLegacyDirectConfiguration() throws {
         var config = configuredCommands()
-        config.ccapi = .init(dangerousPermissionsEnabled: true)
+        config.claudeAPI.dangerousPermissionsEnabled = true
 
         let script = try ShellFunctionRenderer(
             config: config,
@@ -518,7 +589,7 @@ final class ShellFunctionRendererTests: XCTestCase {
             includeClaudeAPI: true
         ).render()
 
-        let function = renderedFunction(named: config.commands.ccapi, in: script)
+        let function = renderedFunction(named: config.claudeAPI.commandName, in: script)
         XCTAssertTrue(function.contains("routing claude-models '--api'"))
         XCTAssertTrue(function.contains("ANTHROPIC_BASE_URL=\"http://127.0.0.1:\(config.port)\""))
         XCTAssertTrue(function.contains("ANTHROPIC_AUTH_TOKEN='sk-dummy'"))
@@ -530,8 +601,8 @@ final class ShellFunctionRendererTests: XCTestCase {
 
     func testClaudeAPIProxyCommandUsesPrefixedRoleMappingsAndDoesNotUseGlobalSkipFlag() throws {
         var config = configuredCommands()
-        config.includeDangerouslySkipPermissions = true
-        config.ccapi = .init(dangerousPermissionsEnabled: false)
+        config.oauthCommandProfiles[0].dangerousPermissionsEnabled = true
+        config.claudeAPI.dangerousPermissionsEnabled = false
 
         let script = try ShellFunctionRenderer(
             config: config,
@@ -539,7 +610,7 @@ final class ShellFunctionRendererTests: XCTestCase {
             includeClaudeAPI: true
         ).render()
 
-        let function = renderedFunction(named: config.commands.ccapi, in: script)
+        let function = renderedFunction(named: config.claudeAPI.commandName, in: script)
         XCTAssertTrue(function.contains("routing claude-models '--api'"))
         XCTAssertTrue(function.contains("ANTHROPIC_DEFAULT_OPUS_MODEL=\"$ANTHROPIC_DEFAULT_OPUS_MODEL\""))
         XCTAssertFalse(function.contains("--dangerously-skip-permissions"))
@@ -574,7 +645,7 @@ final class ShellFunctionRendererTests: XCTestCase {
 
     func testCodexAPICommandPrefixesFastAliasBeforeReasoning() throws {
         var config = configuredCommands()
-        config.commands.ccodexapi = "ccodexapi"
+        config.codexAPI.commandName = "ccodexapi"
         config.codexAPI.codex = .init(
             opus: .init(
                 model: "gpt-5.6-terra",
@@ -607,9 +678,10 @@ final class ShellFunctionRendererTests: XCTestCase {
 
     func testCodexAPICommandUsesItsOwnRoutingAndSkipFlag() throws {
         var config = configuredCommands()
-        config.commands.ccodexapi = "ccodexapi"
-        config.includeDangerouslySkipPermissions = true
+        config.codexAPI.commandName = "ccodexapi"
+        config.oauthCommandProfiles[0].dangerousPermissionsEnabled = true
         config.codexAPI = .init(
+            commandName: "ccodexapi",
             codex: .init(
                 opus: .init(model: "gpt-5.6", reasoning: .xhigh),
                 sonnet: .init(model: "gpt-5.6", reasoning: .medium),
@@ -624,7 +696,7 @@ final class ShellFunctionRendererTests: XCTestCase {
             enabledFunctions: .init(claudeOAuth: false, codex: false, claudeAPI: false, codexAPI: true)
         ).render()
 
-        let function = renderedFunction(named: config.commands.ccodexapi, in: script)
+        let function = renderedFunction(named: config.codexAPI.commandName, in: script)
         XCTAssertTrue(function.contains("http://127.0.0.1:\(config.port)/v1/models"))
         XCTAssertTrue(function.contains("grep -q 'cpm-codex-api/'"))
         XCTAssertTrue(function.contains("OpenAI API key is not configured"))
@@ -635,7 +707,7 @@ final class ShellFunctionRendererTests: XCTestCase {
 
     func testInvalidDisabledProviderCommandNameDoesNotBlockRendering() throws {
         var config = configuredCommands()
-        config.commands.ccodex = "bad;rm"
+        config.oauthCommandProfiles[1].commandName = "bad;rm"
 
         let script = try ShellFunctionRenderer(
             config: config,
@@ -669,7 +741,7 @@ final class ShellFunctionRendererTests: XCTestCase {
             includeClaudeAPI: true
         ).render()
 
-        let function = renderedFunction(named: configuredCommands().commands.ccapi, in: script)
+        let function = renderedFunction(named: configuredCommands().claudeAPI.commandName, in: script)
         XCTAssertFalse(function.contains("secret get claude-api-key"))
         XCTAssertFalse(function.contains("local anthropic_api_key"))
         XCTAssertFalse(function.contains("ANTHROPIC_API_KEY="))
