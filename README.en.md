@@ -4,29 +4,30 @@
 
 <table>
   <tr>
-    <td><img src="docs/assets/readme-main-window.png" alt="CLIProxyManager multi-account dashboard" width="300"></td>
-    <td><img src="docs/assets/readme-usage-hud.png" alt="Subscription usage HUD showing Claude and Codex account limits" width="300"></td>
+    <td><img src="docs/assets/readme-main-window.png" alt="CLIProxyManager multi-account dashboard" width="260"></td>
+    <td><img src="docs/assets/readme-usage-hud.png" alt="Expanded Usage HUD combining OAuth subscription usage and API key estimated cost" width="260"></td>
+    <td><img src="docs/assets/readme-usage-hud-compact.png" alt="Compact Usage HUD showing per-account usage and estimated API cost" width="100"></td>
   </tr>
 </table>
 
-CLIProxyManager is a macOS menu bar app for managing multiple Claude and Codex OAuth accounts alongside a local CLIProxyAPI server. Give each account its own command and quickly choose which account runs Claude Code.
+CLIProxyManager is a macOS menu bar app for managing multiple Claude and Codex OAuth subscriptions, Claude and OpenAI API keys, and a local CLIProxyAPI server. Give each account its own command, configure model routing and round-robin selection, and monitor subscription usage and estimated API cost in one Usage HUD.
 
 ## Highlights
 
-- Connect and manage multiple Claude OAuth and Codex OAuth accounts.
-- Add Claude and OpenAI API keys with per-command nicknames, model mapping, and permission settings.
-- Run every API key command through the local CLIProxyAPI path, isolated from OAuth subscription logins.
-- Configure a command name, nickname, and model settings per account.
-- Configure Fast mode per Opus, Sonnet, and Haiku role on supported Codex models.
+- Add and manage Claude/Codex OAuth accounts and Claude/OpenAI API keys in one place.
+- Configure each account's command, nickname, enabled state, order, detail privacy, and Usage HUD visibility.
+- Choose Direct or CLIProxyAPI connections for Claude OAuth and configure per-account Claude model mappings.
+- Configure GPT model, reasoning, detected context window, and Fast mode per Opus, Sonnet, and Haiku role for Codex OAuth and OpenAI API keys.
+- Create round-robin commands that rotate selected OAuth accounts between new CLI sessions while keeping one account fixed inside each session.
 - Start, stop, inspect, and view logs for the local CLIProxyAPI server.
-- Check subscription usage in the menu bar or a separate HUD window.
-- Use the **cpm Command Line Tool** to manage the proxy, app, and usage from Terminal or SSH.
+- Monitor OAuth subscription usage and API key tokens, requests, and estimated cost in the menu bar, expanded HUD, or compact HUD.
+- Use the **cpm Command Line Tool** to manage the proxy, app, quota, and updates from Terminal or SSH.
 
 ## Requirements
 
 - macOS 15 or later.
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed.
-- A Claude or Codex/OpenAI OAuth account.
+- A Claude/Codex OAuth account or a Claude/OpenAI API key.
 - zsh if you want to use the generated terminal commands.
 
 ## Installation and macOS security warning
@@ -40,11 +41,8 @@ Only use release builds downloaded directly from GitHub Releases.
 
 ## Quick start
 
-1. In the app, select **Add Provider** and add a Claude or Codex OAuth subscription or API key.
-2. In each account's Settings, choose a command name, such as `claude-work` or `codex-personal`.
-
-   For Codex accounts and OpenAI API keys, each Claude role can select a GPT model, reasoning effort, context window, and Fast mode. Fast mode is available only on supported models and can be about 1.5× faster while consuming more usage or credits.
-
+1. In the app, select **Add Provider** and add a Claude/Codex OAuth subscription or a Claude/OpenAI API key.
+2. In each account's Settings, choose a nickname and command, such as `claude-work` or `codex-personal`.
 3. Open a new Terminal window, or run:
 
    ```zsh
@@ -58,53 +56,71 @@ Only use release builds downloaded directly from GitHub Releases.
    codex-personal
    ```
 
+## Accounts and routing
+
+- Reorder accounts from the main window with the drag handle or move commands. The same order is used in the menu bar and Usage HUD.
+- Disable and re-enable OAuth accounts, blur account details, or exclude individual accounts from the Usage HUD.
+- Claude OAuth can use a **Direct** or **CLIProxyAPI** connection. Direct follows Claude Code's current model policy, while CLIProxyAPI uses per-account model mappings.
+- Codex OAuth and OpenAI API keys can select a GPT model and reasoning effort for each Opus, Sonnet, and Haiku role. Supported models can enable Fast mode, and the detected context window is applied to Claude Code auto-compaction.
+- Create provider-specific round-robin commands under **Settings → General → Routing**. Select at least two accounts to rotate the account used for each new CLI session; the chosen account stays fixed for that session.
+
 ## Usage HUD
 
-Use **Settings → Usage** to configure subscription usage in the menu bar and the separate Usage HUD independently.
+Use **Settings → Usage** to configure menu bar usage and the separate Usage HUD independently.
 
-- Adjust window opacity and always-on-top behavior.
-- Show or hide the HUD from the menu bar.
-- Use the Usage HUD button on each account card in the main window to choose which accounts appear in the HUD. The selection applies to both full and compact views and is restored after relaunch.
-- See per-account usage and reset times for Claude and Codex.
-- Codex shows the actual period reported by the API: `5h` and `7d` for typical accounts, and `1mo` for Team plan monthly windows.
-- Use the compact/expand control in the HUD header to switch between the 300pt-wide full view and the 108pt-wide compact view.
-- Compact view shows the account avatar, name, and period usage percentages in a vertical layout. Loading, unavailable, disabled, and stale states show `—` with a status indicator, and the selected view is restored after relaunch.
+- Adjust window opacity and always-on-top behavior, and show or hide the HUD from the menu bar.
+- Use the Usage HUD button on each account card to choose which accounts appear. The selection is shared by expanded and compact views and restored after relaunch.
+- OAuth accounts show usage percentages and reset times for the `5h`, `7d`, or `1mo` periods reported by the provider API.
+- Claude and OpenAI API keys aggregate local CLIProxyAPI usage records into Day/Mon token counts, request counts, and estimated cost. The cost is an estimate based on collected usage and the app's price catalog, not a provider invoice.
+- Use the compact/expand control in the HUD header to switch between the 300pt-wide expanded view and the 108pt-wide compact view.
+- Compact view shows each account's avatar, name, and period percentages or Day/Mon estimated cost in a vertical layout. Loading, unavailable, disabled, and stale states show `—` with a status indicator.
+- The selected HUD mode and account list are restored after relaunch.
 
 ## Terminal and SSH
 
-The **cpm Command Line Tool** is the `cpm` command for controlling CLIProxyManager from Terminal and SSH. Install it from **Settings → General → Command Line** with **Install cpm Command Line Tool**. The Update button appears only when the app includes a newer version.
+The **cpm Command Line Tool** controls CLIProxyManager from Terminal and SSH. Install it from **Settings → General → Command Line** with **Install cpm Command Line Tool**. The Update button appears only when the app includes a newer version.
 
 ```zsh
 # Status and proxy control
-cpm status
+cpm status [--json]
 cpm start
 cpm stop
 cpm restart
+cpm logs --lines 100
 cpm logs -f
 
 # App control
 cpm app status
 cpm app start
 cpm app stop
+cpm app restart
 
-# Per-account subscription usage
+# OAuth subscription usage and the quota access key
 cpm quota
 cpm quota --json
+cpm quota key status --json
+printf '%s\n' "$MANAGEMENT_KEY" | cpm quota key set --stdin
+cpm quota key delete
+
+# App and CLIProxyAPI updates
+cpm update check [app | proxy | all]
+cpm update stage [app | proxy | all]
+cpm update apply [app | proxy | all] [--yes]
 ```
 
 ## Updates
 
-CLIProxyManager checks for app updates while it is running. Follow the in-app prompt when an update is available.
+CLIProxyManager checks for new app versions while it is running and installs them through the Sparkle update prompt.
 
-You can also update from Terminal:
+App updates and CLIProxyAPI binary updates are independent. At startup, the app compares the bundled CLIProxyAPI with the installed version and requests consent before applying an update that affects a running server.
+
+From Terminal, choose `app`, `proxy`, or `all` as the update target.
 
 ```zsh
-cpm update check
-cpm update stage
-cpm update apply
+cpm update check all
+cpm update stage all
+cpm update apply all --yes
 ```
-
-CLIProxyAPI binary updates are independent from app updates. Check them from the app or with `cpm update check proxy`.
 
 ## Troubleshooting
 
