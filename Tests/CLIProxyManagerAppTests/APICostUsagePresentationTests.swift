@@ -235,6 +235,23 @@ final class APICostUsagePresentationTests: XCTestCase {
         XCTAssertEqual(compact.indicator, .warning(message: message))
     }
 
+    func testWarningGroupsSharedAndSnapshotLevelIssuesUnderAccurateLabels() {
+        let snapshot = makeCostSnapshot(
+            dayIssues: [.collectionGap, .unknownModel],
+            monthIssues: [.collectionGap, .persistenceFailure]
+        )
+        let message = apiCostWarningMessage(
+            snapshot: snapshot,
+            issues: [.collectionGap, .unknownModel, .persistenceFailure, .transientCollectionFailure]
+        )
+
+        XCTAssertEqual(message.components(separatedBy: apiCostIssueMessage(.collectionGap)).count - 1, 1)
+        XCTAssertTrue(message.contains("Day and Month: \(apiCostIssueMessage(.collectionGap))"))
+        XCTAssertTrue(message.contains("Day: \(apiCostIssueMessage(.unknownModel))"))
+        XCTAssertTrue(message.contains("Month: \(apiCostIssueMessage(.persistenceFailure))"))
+        XCTAssertTrue(message.contains("General: \(apiCostIssueMessage(.transientCollectionFailure))"))
+    }
+
     func testExpectedInitialAndPricingAssumptionsDoNotShowWarningIndicator() {
         let issues: [APICostIssue] = [
             .trackingStartedMidPeriod,

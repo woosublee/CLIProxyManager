@@ -899,9 +899,10 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func cancelTerminationPreparation() {
+        guard isPreparingAPIUsageForTermination else { return }
         shouldRecoverAfterTerminationPreparation = true
-        if apiUsageTerminationPreparationSucceeded {
-            resetTerminationPreparationState()
+        if apiUsageTerminationPreparationTask == nil || apiUsageTerminationPreparationSucceeded {
+            recoverAfterCancelledTermination()
         }
     }
 
@@ -917,20 +918,55 @@ final class DashboardViewModel: ObservableObject {
             apiUsageReportTask = nil
             apiUsageTerminationPreparationSucceeded = true
             if shouldRecoverAfterTerminationPreparation {
-                resetTerminationPreparationState()
+                recoverAfterCancelledTermination()
             }
         } catch {
             if apiUsageTerminationPreparationID == id {
-                resetTerminationPreparationState()
+                if shouldRecoverAfterTerminationPreparation {
+                    recoverAfterCancelledTermination()
+                } else {
+                    clearTerminationPreparationTaskState()
+                }
             }
             throw error
         }
     }
 
-    private func resetTerminationPreparationState() {
+    private func recoverAfterCancelledTermination() {
+        resetTerminationPreparationState()
+        restartAPIUsageAfterCancelledTermination()
+    }
+
+    private func restartAPIUsageAfterCancelledTermination() {
+        guard config.isUsageEnabled else { return }
+        observeAPIUsageReportsIfNeeded()
+        let generation = invalidateAPIUsageLifecycle()
+        let configuration = apiUsageCollectorConfiguration
+        let collector = apiUsageCollector
+        hasStartedAPIUsageCollector = true
+        enqueueAPIUsageLifecycle(generation: generation) { [weak self] generation in
+            guard let self,
+                  self.isCurrentAPIUsageLifecycle(
+                    generation: generation,
+                    configuration: configuration
+                  ) else { return }
+            let report = await collector.start(configuration: configuration)
+            self.acceptAPIUsageReport(
+                report,
+                configuration: configuration,
+                generation: generation
+            )
+        }
+    }
+
+    private func clearTerminationPreparationTaskState() {
         apiUsageTerminationPreparationTask = nil
         apiUsageTerminationPreparationID = nil
         apiUsageTerminationPreparationSucceeded = false
+    }
+
+    private func resetTerminationPreparationState() {
+        clearTerminationPreparationTaskState()
         shouldRecoverAfterTerminationPreparation = false
         isPreparingAPIUsageForTermination = false
     }

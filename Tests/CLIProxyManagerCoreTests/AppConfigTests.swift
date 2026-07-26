@@ -884,10 +884,12 @@ final class AppConfigTests: XCTestCase {
 
         config.subscriptionUsage.showInMenuBar = true
         XCTAssertTrue(config.isUsageEnabled)
+        XCTAssertEqual(config.isSubscriptionUsageEnabled, config.isUsageEnabled)
 
         config.subscriptionUsage.showInMenuBar = false
         config.usageOverlay.isVisible = true
         XCTAssertTrue(config.isUsageEnabled)
+        XCTAssertEqual(config.isSubscriptionUsageEnabled, config.isUsageEnabled)
     }
 
     func testSubscriptionUsageEncodesOnlyNewMenuBarVisibilityField() throws {

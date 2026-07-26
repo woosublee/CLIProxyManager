@@ -6072,6 +6072,83 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(finalStopCount, 1)
     }
 
+    func testCancelledTerminationRestartsCollectorAfterSuccessfulPreparation() async throws {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let collector = APIUsageCollectorDouble()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            apiUsageCollector: collector,
+            secretStore: InMemorySecretStore(values: [.claudeAPIKey: "key"])
+        )
+        await viewModel.prepareUsage()
+
+        try await viewModel.prepareForTermination()
+        viewModel.cancelTerminationPreparation()
+        await collector.waitForStartCount(2)
+
+        let stopCount = await collector.stopCount()
+        let startCount = await collector.startCount()
+        XCTAssertEqual(stopCount, 1)
+        XCTAssertEqual(startCount, 2)
+    }
+
+    func testCancelledTerminationBeforePreparationRestartsCollector() async throws {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let collector = APIUsageCollectorDouble()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            apiUsageCollector: collector,
+            secretStore: InMemorySecretStore(values: [.claudeAPIKey: "key"])
+        )
+        await viewModel.prepareUsage()
+
+        viewModel.beginTermination()
+        viewModel.cancelTerminationPreparation()
+        await collector.waitForStartCount(2)
+
+        let stopCount = await collector.stopCount()
+        let startCount = await collector.startCount()
+        XCTAssertEqual(stopCount, 0)
+        XCTAssertEqual(startCount, 2)
+    }
+
+    func testCancelledTerminationRestartsCollectorAfterPreparationFailure() async throws {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let collector = APIUsageCollectorDouble(stopFailuresRemaining: 1)
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            apiUsageCollector: collector,
+            secretStore: InMemorySecretStore(values: [.claudeAPIKey: "key"])
+        )
+        await viewModel.prepareUsage()
+
+        do {
+            try await viewModel.prepareForTermination()
+            XCTFail("Expected termination preparation to fail")
+        } catch {
+            XCTAssertEqual(error as? APIUsageLedgerStoreError, .persistenceFailure)
+        }
+        viewModel.cancelTerminationPreparation()
+        await collector.waitForStartCount(2)
+
+        let stopCount = await collector.stopCount()
+        let startCount = await collector.startCount()
+        XCTAssertEqual(stopCount, 1)
+        XCTAssertEqual(startCount, 2)
+    }
+
     func testTerminationFlushFailureCanRetryInsteadOfCachingSuccess() async throws {
         var config = AppConfig.default
         config.subscriptionUsage.showInMenuBar = true

@@ -122,14 +122,12 @@ final class QuitCoordinator: ObservableObject {
 
     func cancelQuit() {
         isQuitConfirmationPresented = false
-        terminationState = .idle
     }
 
     func confirmQuit() async {
-        if case .idle = terminationState {
-            beginTermination()
-            terminationState = .preparingInternalRequest
-        }
+        guard case .idle = terminationState else { return }
+        beginTermination()
+        terminationState = .preparingInternalRequest
         await completeTermination(
             shouldStopServer: true,
             completion: .terminateInternally
@@ -152,6 +150,7 @@ final class QuitCoordinator: ObservableObject {
                 try await proxyService.stop()
             }
         } catch {
+            cancelTerminationPreparation()
             cancelTermination(
                 completion: completion,
                 message: "Failed to stop the CLIProxyAPI server. Quit was cancelled."
@@ -251,14 +250,14 @@ private actor TerminationPreparationRace {
 
 @MainActor
 final class ApplicationTerminationDelegate: NSObject, NSApplicationDelegate {
-    weak var quitCoordinator: QuitCoordinator?
+    var quitCoordinator: QuitCoordinator?
     var replyToApplicationShouldTerminate: @MainActor (NSApplication, Bool) -> Void = {
         application, shouldTerminate in
         application.reply(toApplicationShouldTerminate: shouldTerminate)
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let quitCoordinator else { return .terminateNow }
+        guard let quitCoordinator else { return .terminateCancel }
         return quitCoordinator.applicationShouldTerminate { [weak self] shouldTerminate in
             self?.replyToApplicationShouldTerminate(sender, shouldTerminate)
         }

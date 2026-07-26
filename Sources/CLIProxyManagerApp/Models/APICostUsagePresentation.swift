@@ -172,23 +172,28 @@ func apiCostWarningMessage(
     issues: [APICostIssue]
 ) -> String {
     let orderedIssues = orderedAPICostIssues(issues)
-    let dayIssues = orderedAPICostIssues(snapshot.day.issues).filter(orderedIssues.contains)
-    let monthIssues = orderedAPICostIssues(snapshot.month.issues).filter(orderedIssues.contains)
-    let periodIssues = Set(dayIssues + monthIssues)
-    let sharedIssues = orderedIssues.filter { !periodIssues.contains($0) }
+    let dayIssueSet = Set(snapshot.day.issues)
+    let monthIssueSet = Set(snapshot.month.issues)
+    let sharedIssues = orderedIssues.filter { dayIssueSet.contains($0) && monthIssueSet.contains($0) }
+    let dayIssues = orderedIssues.filter { dayIssueSet.contains($0) && !monthIssueSet.contains($0) }
+    let monthIssues = orderedIssues.filter { monthIssueSet.contains($0) && !dayIssueSet.contains($0) }
+    let generalIssues = orderedIssues.filter { !dayIssueSet.contains($0) && !monthIssueSet.contains($0) }
     var parts = [
         "Estimated API cost may be incomplete.",
         "Last successful update: \(apiCostUpdatedAt(snapshot.updatedAt, timeZoneID: snapshot.reportingTimeZoneID)).",
         "Reporting timezone: \(snapshot.reportingTimeZoneID)."
     ]
+    if !sharedIssues.isEmpty {
+        parts.append("Day and Month: \(sharedIssues.map(apiCostIssueMessage).joined(separator: " "))")
+    }
     if !dayIssues.isEmpty {
         parts.append("Day: \(dayIssues.map(apiCostIssueMessage).joined(separator: " "))")
     }
     if !monthIssues.isEmpty {
         parts.append("Month: \(monthIssues.map(apiCostIssueMessage).joined(separator: " "))")
     }
-    if !sharedIssues.isEmpty {
-        parts.append("Day and Month: \(sharedIssues.map(apiCostIssueMessage).joined(separator: " "))")
+    if !generalIssues.isEmpty {
+        parts.append("General: \(generalIssues.map(apiCostIssueMessage).joined(separator: " "))")
     }
     return parts.joined(separator: " ")
 }

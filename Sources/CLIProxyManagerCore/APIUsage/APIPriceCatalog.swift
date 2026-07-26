@@ -110,6 +110,7 @@ public struct APIPriceCatalog: Equatable, Sendable {
         return .priceEpochUnavailable
     }
 
+    // Increment `version` whenever an entry, effective date, or rate changes.
     // Sources:
     // https://platform.claude.com/docs/en/about-claude/pricing
     // https://openai.com/api/pricing/

@@ -3,6 +3,10 @@ import XCTest
 @testable import CLIProxyManagerCore
 
 final class APIPriceCatalogTests: XCTestCase {
+    func testCurrentCatalogVersionChangesWithBundledPriceData() {
+        XCTAssertEqual(APIPriceCatalog.current.version, 1)
+    }
+
     func testClaudeSonnetIntroductoryPriceEndsAtSeptemberBoundary() throws {
         let catalog = APIPriceCatalog.current
         let august = try XCTUnwrap(catalog.entry(

@@ -112,7 +112,12 @@ public actor APIUsageLedgerStore: APIUsageLedgerStoring {
 
         _ = try ensureUsageDirectory(createIfMissing: true, repairPermissions: true)
         if let data = try readSecureFile(at: paths.apiUsageMetadataFile) {
-            metadata = try decodeMetadata(data)
+            do {
+                metadata = try decodeMetadata(data)
+            } catch let error as APIUsageLedgerStoreError {
+                guard error == .invalidFile else { throw error }
+                try recoverCorruptedMetadata(at: at, reportingTimeZoneID: reportingTimeZoneID)
+            }
             return
         }
 
@@ -347,22 +352,54 @@ public actor APIUsageLedgerStore: APIUsageLedgerStoring {
         return decoded
     }
 
-    private func recoverCorruptedLedger(month: String, at: Date) throws -> APIUsageMonthlyLedger {
-        let source = paths.apiUsageMonthlyLedgerFile(month: month)
-        let backup = try withStoreLock {
+    private func recoverCorruptedMetadata(
+        at: Date,
+        reportingTimeZoneID: String
+    ) throws {
+        let source = paths.apiUsageMetadataFile
+        _ = try withStoreLock {
             _ = try validateExistingFile(at: source)
-            return try moveCorruptedLedgerExclusively(source: source, month: month, at: at)
+            let backup = try moveCorruptedFileExclusively(
+                source: source,
+                backupBaseName: "metadata",
+                at: at
+            )
+            try secureCorruptBackup(at: backup)
+            return backup
         }
 
-        let backupDescriptor = open(backup.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
-        guard backupDescriptor >= 0 else {
-            throw APIUsageLedgerStoreError.persistenceFailure
+        let storedTimeZoneID = TimeZone(identifier: reportingTimeZoneID) == nil
+            ? "UTC"
+            : reportingTimeZoneID
+        let bounds = APIUsagePeriodCalculator.bounds(at: at, timeZoneID: storedTimeZoneID)
+        var recoveredMetadata = APIUsageTrackingMetadata(
+            schemaVersion: APIUsageLedgerSchema.currentVersion,
+            reportingTimeZoneID: storedTimeZoneID,
+            trackingStartedAt: at
+        )
+        addPartialInterval(
+            start: bounds.monthStart,
+            end: max(bounds.monthStart, at),
+            reason: .corruptedLedger,
+            to: &recoveredMetadata
+        )
+        metadata = recoveredMetadata
+        dirtyMetadata = true
+        scheduleWrite()
+    }
+
+    private func recoverCorruptedLedger(month: String, at: Date) throws -> APIUsageMonthlyLedger {
+        let source = paths.apiUsageMonthlyLedgerFile(month: month)
+        _ = try withStoreLock {
+            _ = try validateExistingFile(at: source)
+            let backup = try moveCorruptedFileExclusively(
+                source: source,
+                backupBaseName: month,
+                at: at
+            )
+            try secureCorruptBackup(at: backup)
+            return backup
         }
-        defer { close(backupDescriptor) }
-        guard fchmod(backupDescriptor, S_IRUSR | S_IWUSR) == 0 else {
-            throw APIUsageLedgerStoreError.persistenceFailure
-        }
-        try validateFileDescriptor(backupDescriptor)
 
         let bounds = APIUsagePeriodCalculator.bounds(at: at, timeZoneID: metadata!.reportingTimeZoneID)
         var updatedMetadata = metadata!
@@ -382,16 +419,28 @@ public actor APIUsageLedgerStore: APIUsageLedgerStoring {
         return ledger
     }
 
-    private func moveCorruptedLedgerExclusively(
+    private func secureCorruptBackup(at backup: URL) throws {
+        let descriptor = open(backup.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+        guard descriptor >= 0 else {
+            throw APIUsageLedgerStoreError.persistenceFailure
+        }
+        defer { close(descriptor) }
+        guard fchmod(descriptor, S_IRUSR | S_IWUSR) == 0 else {
+            throw APIUsageLedgerStoreError.persistenceFailure
+        }
+        try validateFileDescriptor(descriptor)
+    }
+
+    private func moveCorruptedFileExclusively(
         source: URL,
-        month: String,
+        backupBaseName: String,
         at: Date
     ) throws -> URL {
         let unixTime = Int64(at.timeIntervalSince1970.rounded(.down))
         for suffix in 0 ..< 10_000 {
             let suffixText = suffix == 0 ? "" : "-\(suffix)"
             let candidate = paths.apiUsageDirectory
-                .appendingPathComponent("\(month).corrupt-\(unixTime)\(suffixText).json")
+                .appendingPathComponent("\(backupBaseName).corrupt-\(unixTime)\(suffixText).json")
             try beforeCorruptBackupMove(candidate)
 
             while true {

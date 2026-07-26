@@ -89,8 +89,9 @@ final class QuitCoordinatorTests: XCTestCase {
         }
 
         let firstReply = delegate.applicationShouldTerminate(NSApplication.shared)
-        let duplicateReply = delegate.applicationShouldTerminate(NSApplication.shared)
         await preparation.waitUntilStarted()
+        coordinator.cancelQuit()
+        let duplicateReply = delegate.applicationShouldTerminate(NSApplication.shared)
 
         XCTAssertEqual(firstReply, .terminateLater)
         XCTAssertEqual(duplicateReply, .terminateLater)
@@ -107,6 +108,15 @@ final class QuitCoordinatorTests: XCTestCase {
         XCTAssertEqual(replies, [true])
         XCTAssertEqual(preparation.callCount, 1)
         XCTAssertEqual(terminator.terminateCount, 0)
+    }
+
+    func testApplicationDelegateFailsClosedUntilQuitCoordinatorIsInstalled() {
+        let delegate = ApplicationTerminationDelegate()
+
+        XCTAssertEqual(
+            delegate.applicationShouldTerminate(NSApplication.shared),
+            .terminateCancel
+        )
     }
 
     func testApplicationTerminationTimesOutAndCancelsQuitWhenPreparationIgnoresCancellation() async {
@@ -300,19 +310,49 @@ final class QuitCoordinatorTests: XCTestCase {
         XCTAssertNil(coordinator.quitErrorMessage)
     }
 
-    func testConfirmQuitDoesNotTerminateWhenServerStopFails() async {
-        let proxyService = StubProxyService(stopError: NSError(domain: "test", code: 1))
+    func testConfirmQuitIgnoresDuplicateWhileTerminationIsInProgress() async {
+        let preparation = SuspendedTerminationPreparation()
+        let proxyService = StubProxyService()
         let terminator = StubAppTerminator()
         let coordinator = QuitCoordinator(
             proxyService: proxyService,
             appTerminator: terminator,
-            quitConfirmationPresenter: StubQuitConfirmationPresenter(shouldConfirm: true)
+            beforeTerminate: {
+                await preparation.run()
+            }
+        )
+
+        let first = Task { await coordinator.confirmQuit() }
+        await preparation.waitUntilStarted()
+        await coordinator.confirmQuit()
+
+        XCTAssertEqual(proxyService.stopCount, 1)
+        XCTAssertEqual(preparation.callCount, 1)
+        XCTAssertEqual(terminator.terminateCount, 0)
+
+        preparation.resume()
+        await first.value
+        XCTAssertEqual(terminator.terminateCount, 1)
+    }
+
+    func testConfirmQuitDoesNotTerminateWhenServerStopFails() async {
+        let proxyService = StubProxyService(stopError: NSError(domain: "test", code: 1))
+        let terminator = StubAppTerminator()
+        var cancellationCount = 0
+        let coordinator = QuitCoordinator(
+            proxyService: proxyService,
+            appTerminator: terminator,
+            quitConfirmationPresenter: StubQuitConfirmationPresenter(shouldConfirm: true),
+            cancelTerminationPreparation: {
+                cancellationCount += 1
+            }
         )
 
         await coordinator.confirmQuit()
 
         XCTAssertEqual(proxyService.stopCount, 1)
         XCTAssertEqual(terminator.terminateCount, 0)
+        XCTAssertEqual(cancellationCount, 1)
         XCTAssertEqual(coordinator.quitErrorMessage, "Failed to stop the CLIProxyAPI server. Quit was cancelled.")
     }
 }

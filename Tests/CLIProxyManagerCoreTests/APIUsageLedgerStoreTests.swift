@@ -288,6 +288,37 @@ final class APIUsageLedgerStoreTests: XCTestCase {
         XCTAssertTrue(metadata.partialIntervals.contains { $0.reason == .corruptedLedger })
     }
 
+    func testCorruptedMetadataIsMovedAndTrackingRecoversWithPartialPeriod() async throws {
+        let paths = try makePaths()
+        let initial = APIUsageLedgerStore(paths: paths, writeDelayNanoseconds: 0)
+        try await initial.prepareTracking(
+            at: iso("2026-07-25T01:00:00Z"),
+            reportingTimeZoneID: "UTC"
+        )
+        try await initial.flush()
+        try Data("not-json".utf8).write(to: paths.apiUsageMetadataFile)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: paths.apiUsageMetadataFile.path
+        )
+        let recoveredAt = iso("2026-07-25T04:00:00Z")
+        let restored = APIUsageLedgerStore(paths: paths, writeDelayNanoseconds: 0)
+
+        try await restored.prepareTracking(at: recoveredAt, reportingTimeZoneID: "UTC")
+        try await restored.flush()
+
+        let names = try FileManager.default.contentsOfDirectory(atPath: paths.apiUsageDirectory.path)
+        let backupName = try XCTUnwrap(names.first { $0.hasPrefix("metadata.corrupt-") })
+        XCTAssertEqual(fileMode(paths.apiUsageDirectory.appendingPathComponent(backupName)), 0o600)
+        let read = try await restored.readCurrentPeriods(at: recoveredAt)
+        XCTAssertEqual(read.metadata.trackingStartedAt, recoveredAt)
+        XCTAssertTrue(read.metadata.partialIntervals.contains { interval in
+            interval.reason == .corruptedLedger
+                && interval.start == iso("2026-07-01T00:00:00Z")
+                && interval.end == recoveredAt
+        })
+    }
+
     func testCorruptBackupExclusiveMoveDoesNotReplaceRacingDestination() async throws {
         let paths = try makePaths()
         let at = iso("2026-07-25T04:00:00Z")
@@ -382,7 +413,10 @@ final class APIUsageLedgerStoreTests: XCTestCase {
         let store = APIUsageLedgerStore(paths: paths, writeDelayNanoseconds: 0)
 
         do {
-            _ = try await store.readCurrentPeriods(at: iso("2026-07-25T04:00:00Z"))
+            try await store.prepareTracking(
+                at: iso("2026-07-25T04:00:00Z"),
+                reportingTimeZoneID: "UTC"
+            )
             XCTFail("Expected unsupported schema")
         } catch {
             XCTAssertEqual(error as? APIUsageLedgerStoreError, .unsupportedSchemaVersion(99))
