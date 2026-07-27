@@ -89,11 +89,15 @@ struct AutomaticShellInstallService: Sendable {
         let includeCodex = shouldIncludeOAuth(provider: .codex, config: config, enabled: enabledFunctions.codex)
         var includedAPIKeyProfileIDs: Set<String> = []
         for profile in config.apiKeyProfiles where enabledFunctions.apiKeyProfileIDs.contains(profile.id) {
-            guard !profile.commandName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                  try hasAPIKey(profile.secretReference) else {
+            guard !profile.commandName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 continue
             }
-            includedAPIKeyProfileIDs.insert(profile.id)
+            do {
+                guard try hasAPIKey(profile.secretReference) else { continue }
+                includedAPIKeyProfileIDs.insert(profile.id)
+            } catch {
+                continue
+            }
         }
         let script = try ShellFunctionRenderer(
             config: config,

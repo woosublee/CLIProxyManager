@@ -21,7 +21,7 @@ public enum CLIProxyManagerCommandError: Error, Equatable, CustomStringConvertib
               cpm update apply [app | proxy | all] [--yes]
               cpm secret get|set|delete <api-key-profile-id|claude-api-key|codex-api-key>
               cpm routing next <round-robin-profile-id>
-              cpm routing claude-models <command-profile-id|--api|--api-profile profile-id|--legacy>
+              cpm routing claude-models <command-profile-id|--api|--api-profile profile-id>
               cpm quota [--json]
               cpm quota key status [--json] | set --stdin | delete
             """

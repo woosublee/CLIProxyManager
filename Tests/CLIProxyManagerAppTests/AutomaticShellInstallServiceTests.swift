@@ -290,9 +290,10 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
         XCTAssertFalse(installer.installedScript?.contains("ccapi() {") == true)
     }
 
-    func testApplyPropagatesSecretReadFailure() {
+    func testApplySkipsAPIProfileWhenSecretReadFails() throws {
+        let installer = StubShellInstaller()
         let service = AutomaticShellInstallService(
-            installer: StubShellInstaller(),
+            installer: installer,
             secretStore: FailingSecretStore(error: SecretStoreError.readFailed(SecretKey.claudeAPIKey.rawValue)),
             helperCommand: "/usr/local/bin/cliproxy-manager"
         )
@@ -300,12 +301,13 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
         var config = AppConfig.default
         config.claudeAPI.commandName = "ccapi"
 
-        XCTAssertThrowsError(try service.apply(
+        try service.apply(
             config: config,
             enabledFunctions: AutomaticShellInstallService.EnabledFunctions(claudeOAuth: true, codex: true, claudeAPI: true)
-        )) { error in
-            XCTAssertEqual(error as? SecretStoreError, .readFailed(SecretKey.claudeAPIKey.rawValue))
-        }
+        )
+
+        XCTAssertTrue(installer.installedFunctionNames.isEmpty)
+        XCTAssertFalse(installer.installedScript?.contains("ccapi() {") == true)
     }
 }
 

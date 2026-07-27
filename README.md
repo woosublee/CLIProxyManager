@@ -145,7 +145,7 @@ source ~/.zshrc
 
 ## 보안
 
-앱은 OAuth 프로필과 설정을 `~/.cliproxy-manager` 아래에서 관리합니다. 각 API Key profile의 실제 key는 `~/.cliproxy-manager/api-keys/`의 별도 평문 파일에 저장되며 `config.json`과 generated shell function에는 포함되지 않습니다. 앱은 디렉터리에 `0700`, 각 key와 lock 파일에 `0600` 권한을 적용하지만 macOS 계정에 접근할 수 있는 사용자는 값을 읽을 수 있습니다. 이 디렉터리를 복사·공유하거나 저장소에 커밋하지 마세요.
+앱은 OAuth 프로필과 설정을 `~/.cliproxy-manager` 아래에서 관리합니다. 현재 릴리스는 각 API Key profile의 실제 key를 `~/.cliproxy-manager/api-keys/`의 별도 평문 파일에 저장하며, macOS Keychain으로 전환하는 설정은 제공하지 않습니다. Key는 `config.json`과 generated shell function에 포함되지 않습니다. 앱은 디렉터리에 `0700`, 각 key와 lock 파일에 `0600` 권한을 적용하지만 macOS 계정에 접근할 수 있는 사용자는 값을 읽을 수 있습니다. 이 디렉터리를 복사·공유하거나 저장소에 커밋하지 마세요.
 
 ## 라이선스
 

@@ -542,25 +542,43 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         let key: String
     }
 
-    private func appendLegacyCompatibilityProfilesIfNeeded(to config: inout AppConfig) {
+    private struct LegacyAPIKeys {
+        let claude: String?
+        let codex: String?
+    }
+
+    private func resolvedLegacyAPIKeys() -> LegacyAPIKeys {
+        LegacyAPIKeys(
+            claude: nonEmpty(legacyClaudeAPIKeyProvider?()),
+            codex: nonEmpty(legacyCodexAPIKeyProvider?())
+        )
+    }
+
+    private func appendLegacyCompatibilityProfilesIfNeeded(
+        to config: inout AppConfig,
+        legacyAPIKeys: LegacyAPIKeys
+    ) {
         if !config.apiKeyProfiles.contains(where: { $0.id == "claude-api" }),
-           nonEmpty(legacyClaudeAPIKeyProvider?()) != nil {
+           legacyAPIKeys.claude != nil {
             config.apiKeyProfiles.append(.legacy(provider: .claude))
         }
         if !config.apiKeyProfiles.contains(where: { $0.id == "codex-api" }),
-           nonEmpty(legacyCodexAPIKeyProvider?()) != nil {
+           legacyAPIKeys.codex != nil {
             config.apiKeyProfiles.append(.legacy(provider: .codex))
         }
     }
 
-    private func resolvedAPIKey(for profile: AppConfig.APIKeyProfile) throws -> String? {
+    private func resolvedAPIKey(
+        for profile: AppConfig.APIKeyProfile,
+        legacyAPIKeys: LegacyAPIKeys
+    ) throws -> String? {
         if profile.secretReference == .claudeAPIKey,
-           let legacyClaudeAPIKeyProvider {
-            return nonEmpty(legacyClaudeAPIKeyProvider())
+           legacyClaudeAPIKeyProvider != nil {
+            return legacyAPIKeys.claude
         }
         if profile.secretReference == .codexAPIKey,
-           let legacyCodexAPIKeyProvider {
-            return nonEmpty(legacyCodexAPIKeyProvider())
+           legacyCodexAPIKeyProvider != nil {
+            return legacyAPIKeys.codex
         }
         return nonEmpty(try apiKeyProvider(profile.secretReference))
     }
@@ -568,11 +586,12 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
     private func config(for port: Int) throws -> String {
         var appConfig = try appConfigProvider()
         let usageEnabled = usageEnabledProvider()
-        appendLegacyCompatibilityProfilesIfNeeded(to: &appConfig)
+        let legacyAPIKeys = resolvedLegacyAPIKeys()
+        appendLegacyCompatibilityProfilesIfNeeded(to: &appConfig, legacyAPIKeys: legacyAPIKeys)
         var resolvedAPIKeyProfiles: [ResolvedAPIKeyProfile] = []
         for profile in appConfig.apiKeyProfiles {
             do {
-                guard let key = try resolvedAPIKey(for: profile) else { continue }
+                guard let key = try resolvedAPIKey(for: profile, legacyAPIKeys: legacyAPIKeys) else { continue }
                 resolvedAPIKeyProfiles.append(.init(profile: profile, key: key))
             } catch is SecretStoreError {
                 continue
