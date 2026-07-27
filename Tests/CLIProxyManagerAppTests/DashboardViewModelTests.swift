@@ -900,6 +900,40 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.settingsMessage, "Config could not be loaded: Read failed")
     }
 
+    func testFutureSchemaLoadKeepsDashboardConfigReadOnlyAcrossSavesAndRefresh() {
+        let store = StubConfigStore(
+            config: .default,
+            loadError: AppConfigStoreError.unsupportedSchemaVersion(AppConfig.currentSchemaVersion + 1)
+        )
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(
+                    fileName: "claude.json",
+                    type: .claude,
+                    email: "account@example.com",
+                    accountID: nil,
+                    expired: nil,
+                    disabled: false
+                )
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
+        )
+        let message = "This config was created by a newer app version and is read-only here."
+
+        XCTAssertThrowsError(try viewModel.savePort(18_888)) { error in
+            XCTAssertEqual(error as? CLIProxyManagerCommandError, .prerequisite(message))
+        }
+        viewModel.refreshProfiles()
+
+        XCTAssertTrue(store.savedConfigs.isEmpty)
+        XCTAssertTrue(viewModel.config.oauthCommandProfiles.isEmpty)
+    }
+
     func testMigrationSaveFailureKeepsInMemoryCanonicalConfigAndReportsError() {
         var config = AppConfig.default
         config.oauthCommandProfiles = [
@@ -6853,6 +6887,28 @@ final class DashboardAccountOrderingTests: XCTestCase {
         XCTAssertEqual(viewModel.providerRows.first { $0.id == .claudeAPI }?.showsInUsageOverlay, true)
     }
 
+    func testRemovingMissingSecretAPIProfileStillRestartsProxy() async {
+        var config = AppConfig.default
+        config.apiKeyProfiles = [.legacy(provider: .claude)]
+        let store = StubConfigStore(config: config)
+        let proxyService = StubProxyServiceStarter()
+        let viewModel = makeViewModel(
+            config: config,
+            profiles: [],
+            configStore: store,
+            proxyService: proxyService
+        )
+        viewModel.serverControlState = .running
+
+        viewModel.removeAPIProvider(.claudeAPI)
+        let didRestart = await proxyService.reachesRestartCount(1)
+
+        XCTAssertTrue(didRestart)
+        XCTAssertTrue(viewModel.config.apiKeyProfiles.isEmpty)
+        XCTAssertEqual(store.savedConfigs.last?.apiKeyProfiles, [])
+        XCTAssertEqual(proxyService.restartPorts, [config.port])
+    }
+
     private func threeAccountConfig() -> AppConfig {
         var config = AppConfig.default
         config.oauthCommandProfiles = [
@@ -6904,7 +6960,8 @@ final class DashboardAccountOrderingTests: XCTestCase {
         profiles: [AuthProfile],
         configStore: StubConfigStore? = nil,
         authProfileStore: (any AuthProfileManaging)? = nil,
-        secretStore: any SecretStore = InMemorySecretStore()
+        secretStore: any SecretStore = InMemorySecretStore(),
+        proxyService: StubProxyServiceStarter = StubProxyServiceStarter()
     ) -> DashboardViewModel {
         DashboardViewModel(
             config: config,
@@ -6912,7 +6969,7 @@ final class DashboardAccountOrderingTests: XCTestCase {
             shellInstaller: StubShellInstaller(),
             authProfileStore: authProfileStore ?? StubAuthProfileStore(profiles: profiles),
             oauthLoginService: StubOAuthLoginService(),
-            proxyService: StubProxyServiceStarter(),
+            proxyService: proxyService,
             claudeConnector: connectedClaudeConnector(),
             secretStore: secretStore
         )

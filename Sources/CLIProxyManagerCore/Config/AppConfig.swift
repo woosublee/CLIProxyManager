@@ -14,7 +14,7 @@ public enum LogLevel: String, Codable, CaseIterable, Sendable {
 }
 
 public struct AppConfig: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = 2
+    public static let currentSchemaVersion = 3
 
     public enum ConnectionMode: String, Codable, CaseIterable, Sendable {
         case direct
@@ -159,6 +159,111 @@ public struct AppConfig: Codable, Equatable, Sendable {
             self.codex = try container.decodeIfPresent(Codex.self, forKey: .codex) ?? .default
             self.nickname = try container.decodeIfPresent(String.self, forKey: .nickname) ?? ""
             self.dangerousPermissionsEnabled = try container.decodeIfPresent(Bool.self, forKey: .dangerousPermissionsEnabled) ?? false
+        }
+    }
+
+    public struct APIKeyProfile: Codable, Equatable, Identifiable, Sendable {
+        public var id: String
+        public var provider: AuthProfileType
+        public var secretReference: SecretReference
+        public var commandName: String
+        public var nickname: String
+        public var dangerousPermissionsEnabled: Bool
+        public var claude: ClaudeRouting?
+        public var codex: Codex?
+
+        public init(
+            id: String,
+            provider: AuthProfileType,
+            secretReference: SecretReference,
+            commandName: String = "",
+            nickname: String = "",
+            dangerousPermissionsEnabled: Bool = false,
+            claude: ClaudeRouting? = nil,
+            codex: Codex? = nil
+        ) {
+            self.id = id
+            self.provider = provider
+            self.secretReference = secretReference
+            self.commandName = commandName
+            self.nickname = nickname
+            self.dangerousPermissionsEnabled = dangerousPermissionsEnabled
+            self.claude = provider == .claude ? (claude ?? .automatic) : nil
+            self.codex = provider == .codex ? (codex ?? .default) : nil
+        }
+
+        public var modelPrefix: String { "cpm-\(id)" }
+
+        public var hasValidIdentity: Bool {
+            Self.provider(forID: id) == provider
+                && Self.expectedSecretReference(id: id, provider: provider) == secretReference
+        }
+
+        public var effectiveClaudeRouting: ClaudeRouting {
+            provider == .claude ? (claude ?? .automatic) : .automatic
+        }
+
+        public var effectiveCodex: Codex {
+            provider == .codex ? (codex ?? .default) : .default
+        }
+
+        public static func provider(forID id: String) -> AuthProfileType? {
+            if id == "claude-api" { return .claude }
+            if id == "codex-api" { return .codex }
+            for provider in [AuthProfileType.claude, .codex] {
+                let prefix = "\(provider.rawValue)-api-"
+                guard id.hasPrefix(prefix) else { continue }
+                let suffix = String(id.dropFirst(prefix.count))
+                guard let uuid = UUID(uuidString: suffix),
+                      uuid.uuidString.lowercased() == suffix else {
+                    return nil
+                }
+                return provider
+            }
+            return nil
+        }
+
+        public static func expectedSecretReference(
+            id: String,
+            provider: AuthProfileType
+        ) -> SecretReference? {
+            guard self.provider(forID: id) == provider else { return nil }
+            if id == "claude-api" { return .claudeAPIKey }
+            if id == "codex-api" { return .codexAPIKey }
+            return SecretReference.apiKeyProfile(id)
+        }
+
+        public static func legacy(provider: AuthProfileType) -> APIKeyProfile {
+            switch provider {
+            case .claude:
+                APIKeyProfile(
+                    id: "claude-api",
+                    provider: .claude,
+                    secretReference: .claudeAPIKey,
+                    claude: .automatic
+                )
+            case .codex:
+                APIKeyProfile(
+                    id: "codex-api",
+                    provider: .codex,
+                    secretReference: .codexAPIKey,
+                    codex: .default
+                )
+            }
+        }
+
+        public static func new(
+            provider: AuthProfileType,
+            uuid: UUID = UUID()
+        ) -> APIKeyProfile {
+            let id = "\(provider.rawValue)-api-\(uuid.uuidString.lowercased())"
+            return APIKeyProfile(
+                id: id,
+                provider: provider,
+                secretReference: SecretReference.apiKeyProfile(id)!,
+                claude: provider == .claude ? .automatic : nil,
+                codex: provider == .codex ? .default : nil
+            )
         }
     }
 
@@ -368,8 +473,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
 
     public var schemaVersion: Int
     public var port: Int
-    public var claudeAPI: ClaudeAPI
-    public var codexAPI: CodexAPI
+    public var apiKeyProfiles: [APIKeyProfile]
     public var startAtLogin: Bool
     public var showDockIcon: Bool
     public var showMenuBarIcon: Bool
@@ -392,11 +496,58 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var roundRobinEnabled: Bool
     public var logLevel: LogLevel
 
+    public var claudeAPI: ClaudeAPI {
+        get {
+            guard let profile = apiKeyProfiles.first(where: { $0.id == "claude-api" && $0.provider == .claude }) else {
+                return ClaudeAPI()
+            }
+            return ClaudeAPI(
+                commandName: profile.commandName,
+                claude: profile.effectiveClaudeRouting,
+                nickname: profile.nickname,
+                dangerousPermissionsEnabled: profile.dangerousPermissionsEnabled
+            )
+        }
+        set {
+            upsertLegacyAPIKeyProfile(
+                provider: .claude,
+                commandName: newValue.commandName,
+                nickname: newValue.nickname,
+                dangerousPermissionsEnabled: newValue.dangerousPermissionsEnabled,
+                claude: newValue.claude,
+                codex: nil
+            )
+        }
+    }
+
+    public var codexAPI: CodexAPI {
+        get {
+            guard let profile = apiKeyProfiles.first(where: { $0.id == "codex-api" && $0.provider == .codex }) else {
+                return CodexAPI()
+            }
+            return CodexAPI(
+                commandName: profile.commandName,
+                codex: profile.effectiveCodex,
+                nickname: profile.nickname,
+                dangerousPermissionsEnabled: profile.dangerousPermissionsEnabled
+            )
+        }
+        set {
+            upsertLegacyAPIKeyProfile(
+                provider: .codex,
+                commandName: newValue.commandName,
+                nickname: newValue.nickname,
+                dangerousPermissionsEnabled: newValue.dangerousPermissionsEnabled,
+                claude: nil,
+                codex: newValue.codex
+            )
+        }
+    }
+
     public init(
         schemaVersion: Int = AppConfig.currentSchemaVersion,
         port: Int,
-        claudeAPI: ClaudeAPI = ClaudeAPI(),
-        codexAPI: CodexAPI = CodexAPI(),
+        apiKeyProfiles: [APIKeyProfile] = [],
         startAtLogin: Bool,
         showDockIcon: Bool,
         showMenuBarIcon: Bool,
@@ -414,8 +565,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
     ) {
         self.schemaVersion = schemaVersion
         self.port = port
-        self.claudeAPI = claudeAPI
-        self.codexAPI = codexAPI
+        self.apiKeyProfiles = apiKeyProfiles
         self.startAtLogin = startAtLogin
         self.showDockIcon = showDockIcon
         self.showMenuBarIcon = showMenuBarIcon
@@ -432,11 +582,152 @@ public struct AppConfig: Codable, Equatable, Sendable {
         self.logLevel = logLevel
     }
 
+    public init(
+        schemaVersion: Int = AppConfig.currentSchemaVersion,
+        port: Int,
+        claudeAPI: ClaudeAPI,
+        codexAPI: CodexAPI,
+        startAtLogin: Bool,
+        showDockIcon: Bool,
+        showMenuBarIcon: Bool,
+        showNotifications: Bool = false,
+        appearance: AppearanceMode = .system,
+        subscriptionUsage: SubscriptionUsage = SubscriptionUsage(),
+        usageOverlay: UsageOverlay = UsageOverlay(),
+        oauthCommandProfiles: [OAuthCommandProfile] = [],
+        roundRobinProfiles: [RoundRobinProfile] = [],
+        accountOrder: [String] = [],
+        bindAddress: String = "127.0.0.1",
+        autostartServer: Bool = false,
+        roundRobinEnabled: Bool = false,
+        logLevel: LogLevel = .info
+    ) {
+        self.init(
+            schemaVersion: schemaVersion,
+            port: port,
+            apiKeyProfiles: [
+                APIKeyProfile(
+                    id: "claude-api",
+                    provider: .claude,
+                    secretReference: .claudeAPIKey,
+                    commandName: claudeAPI.commandName,
+                    nickname: claudeAPI.nickname,
+                    dangerousPermissionsEnabled: claudeAPI.dangerousPermissionsEnabled,
+                    claude: claudeAPI.claude
+                ),
+                APIKeyProfile(
+                    id: "codex-api",
+                    provider: .codex,
+                    secretReference: .codexAPIKey,
+                    commandName: codexAPI.commandName,
+                    nickname: codexAPI.nickname,
+                    dangerousPermissionsEnabled: codexAPI.dangerousPermissionsEnabled,
+                    codex: codexAPI.codex
+                )
+            ],
+            startAtLogin: startAtLogin,
+            showDockIcon: showDockIcon,
+            showMenuBarIcon: showMenuBarIcon,
+            showNotifications: showNotifications,
+            appearance: appearance,
+            subscriptionUsage: subscriptionUsage,
+            usageOverlay: usageOverlay,
+            oauthCommandProfiles: oauthCommandProfiles,
+            roundRobinProfiles: roundRobinProfiles,
+            accountOrder: accountOrder,
+            bindAddress: bindAddress,
+            autostartServer: autostartServer,
+            roundRobinEnabled: roundRobinEnabled,
+            logLevel: logLevel
+        )
+    }
+
+    public init(
+        schemaVersion: Int = AppConfig.currentSchemaVersion,
+        port: Int,
+        claudeAPI: ClaudeAPI,
+        startAtLogin: Bool,
+        showDockIcon: Bool,
+        showMenuBarIcon: Bool,
+        showNotifications: Bool = false,
+        appearance: AppearanceMode = .system,
+        subscriptionUsage: SubscriptionUsage = SubscriptionUsage(),
+        usageOverlay: UsageOverlay = UsageOverlay(),
+        oauthCommandProfiles: [OAuthCommandProfile] = [],
+        roundRobinProfiles: [RoundRobinProfile] = [],
+        accountOrder: [String] = [],
+        bindAddress: String = "127.0.0.1",
+        autostartServer: Bool = false,
+        roundRobinEnabled: Bool = false,
+        logLevel: LogLevel = .info
+    ) {
+        self.init(
+            schemaVersion: schemaVersion,
+            port: port,
+            claudeAPI: claudeAPI,
+            codexAPI: CodexAPI(),
+            startAtLogin: startAtLogin,
+            showDockIcon: showDockIcon,
+            showMenuBarIcon: showMenuBarIcon,
+            showNotifications: showNotifications,
+            appearance: appearance,
+            subscriptionUsage: subscriptionUsage,
+            usageOverlay: usageOverlay,
+            oauthCommandProfiles: oauthCommandProfiles,
+            roundRobinProfiles: roundRobinProfiles,
+            accountOrder: accountOrder,
+            bindAddress: bindAddress,
+            autostartServer: autostartServer,
+            roundRobinEnabled: roundRobinEnabled,
+            logLevel: logLevel
+        )
+    }
+
+    public init(
+        schemaVersion: Int = AppConfig.currentSchemaVersion,
+        port: Int,
+        codexAPI: CodexAPI,
+        startAtLogin: Bool,
+        showDockIcon: Bool,
+        showMenuBarIcon: Bool,
+        showNotifications: Bool = false,
+        appearance: AppearanceMode = .system,
+        subscriptionUsage: SubscriptionUsage = SubscriptionUsage(),
+        usageOverlay: UsageOverlay = UsageOverlay(),
+        oauthCommandProfiles: [OAuthCommandProfile] = [],
+        roundRobinProfiles: [RoundRobinProfile] = [],
+        accountOrder: [String] = [],
+        bindAddress: String = "127.0.0.1",
+        autostartServer: Bool = false,
+        roundRobinEnabled: Bool = false,
+        logLevel: LogLevel = .info
+    ) {
+        self.init(
+            schemaVersion: schemaVersion,
+            port: port,
+            claudeAPI: ClaudeAPI(),
+            codexAPI: codexAPI,
+            startAtLogin: startAtLogin,
+            showDockIcon: showDockIcon,
+            showMenuBarIcon: showMenuBarIcon,
+            showNotifications: showNotifications,
+            appearance: appearance,
+            subscriptionUsage: subscriptionUsage,
+            usageOverlay: usageOverlay,
+            oauthCommandProfiles: oauthCommandProfiles,
+            roundRobinProfiles: roundRobinProfiles,
+            accountOrder: accountOrder,
+            bindAddress: bindAddress,
+            autostartServer: autostartServer,
+            roundRobinEnabled: roundRobinEnabled,
+            logLevel: logLevel
+        )
+    }
+
     private enum CodingKeys: String, CodingKey {
         case schemaVersion
         case port
-        case claudeAPI
-        case codexAPI
+        case apiKeyProfiles
         case startAtLogin
         case showDockIcon
         case showMenuBarIcon
@@ -455,11 +746,12 @@ public struct AppConfig: Codable, Equatable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        let apiKeyProfiles = try c.decodeIfPresent([APIKeyProfile].self, forKey: .apiKeyProfiles) ?? []
+        try Self.validateDecodedAPIKeyProfiles(apiKeyProfiles, codingPath: decoder.codingPath)
         self = AppConfig(
             schemaVersion: try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? AppConfig.currentSchemaVersion,
             port: try c.decode(Int.self, forKey: .port),
-            claudeAPI: try c.decodeIfPresent(ClaudeAPI.self, forKey: .claudeAPI) ?? ClaudeAPI(),
-            codexAPI: try c.decodeIfPresent(CodexAPI.self, forKey: .codexAPI) ?? CodexAPI(),
+            apiKeyProfiles: apiKeyProfiles,
             startAtLogin: try c.decodeIfPresent(Bool.self, forKey: .startAtLogin) ?? false,
             showDockIcon: try c.decodeIfPresent(Bool.self, forKey: .showDockIcon) ?? true,
             showMenuBarIcon: try c.decodeIfPresent(Bool.self, forKey: .showMenuBarIcon) ?? true,
@@ -478,11 +770,16 @@ public struct AppConfig: Codable, Equatable, Sendable {
     }
 
     public func encode(to encoder: Encoder) throws {
+        guard Self.apiKeyProfilesHaveValidIdentity(apiKeyProfiles) else {
+            throw EncodingError.invalidValue(apiKeyProfiles, .init(
+                codingPath: encoder.codingPath,
+                debugDescription: "Invalid or duplicate API key profile identity."
+            ))
+        }
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(AppConfig.currentSchemaVersion, forKey: .schemaVersion)
         try c.encode(port, forKey: .port)
-        try c.encode(claudeAPI, forKey: .claudeAPI)
-        try c.encode(codexAPI, forKey: .codexAPI)
+        try c.encode(apiKeyProfiles, forKey: .apiKeyProfiles)
         try c.encode(startAtLogin, forKey: .startAtLogin)
         try c.encode(showDockIcon, forKey: .showDockIcon)
         try c.encode(showMenuBarIcon, forKey: .showMenuBarIcon)
@@ -497,6 +794,54 @@ public struct AppConfig: Codable, Equatable, Sendable {
         try c.encode(autostartServer, forKey: .autostartServer)
         try c.encode(roundRobinEnabled, forKey: .roundRobinEnabled)
         try c.encode(logLevel, forKey: .logLevel)
+    }
+
+    private static func validateDecodedAPIKeyProfiles(
+        _ profiles: [APIKeyProfile],
+        codingPath: [CodingKey]
+    ) throws {
+        guard apiKeyProfilesHaveValidIdentity(profiles) else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: codingPath,
+                debugDescription: "Invalid or duplicate API key profile identity."
+            ))
+        }
+    }
+
+    private static func apiKeyProfilesHaveValidIdentity(_ profiles: [APIKeyProfile]) -> Bool {
+        var profileIDs: Set<String> = []
+        var secretReferences: Set<SecretReference> = []
+        return profiles.allSatisfy { profile in
+            profileIDs.insert(profile.id).inserted
+                && secretReferences.insert(profile.secretReference).inserted
+                && profile.hasValidIdentity
+        }
+    }
+
+    private mutating func upsertLegacyAPIKeyProfile(
+        provider: AuthProfileType,
+        commandName: String,
+        nickname: String,
+        dangerousPermissionsEnabled: Bool,
+        claude: ClaudeRouting?,
+        codex: Codex?
+    ) {
+        let legacy = APIKeyProfile.legacy(provider: provider)
+        let profile = APIKeyProfile(
+            id: legacy.id,
+            provider: provider,
+            secretReference: legacy.secretReference,
+            commandName: commandName,
+            nickname: nickname,
+            dangerousPermissionsEnabled: dangerousPermissionsEnabled,
+            claude: claude,
+            codex: codex
+        )
+        if let index = apiKeyProfiles.firstIndex(where: { $0.id == legacy.id }) {
+            apiKeyProfiles[index] = profile
+        } else {
+            apiKeyProfiles.append(profile)
+        }
     }
 
     #if DEBUG

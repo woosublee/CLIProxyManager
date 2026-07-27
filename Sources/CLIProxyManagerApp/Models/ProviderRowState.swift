@@ -28,11 +28,17 @@ struct ProviderRowID: Hashable, RawRepresentable, ExpressibleByStringLiteral, Cu
     static let codexAPI = ProviderRowID(rawValue: "codex-api")
 }
 
+enum ProviderCredentialKind: Equatable {
+    case oauth
+    case apiKey
+}
+
 struct ProviderRowState: Identifiable, Equatable {
     typealias ID = ProviderRowID
 
     let id: ID
     let providerType: AuthProfileType
+    let credentialKind: ProviderCredentialKind
     let authProfileID: String
     let commandProfileID: String
     let name: String
@@ -51,6 +57,7 @@ struct ProviderRowState: Identifiable, Equatable {
     init(
         id: ID,
         providerType: AuthProfileType? = nil,
+        credentialKind: ProviderCredentialKind = .oauth,
         authProfileID: String? = nil,
         commandProfileID: String? = nil,
         name: String,
@@ -68,6 +75,7 @@ struct ProviderRowState: Identifiable, Equatable {
     ) {
         self.id = id
         self.providerType = providerType ?? Self.inferredProviderType(from: id)
+        self.credentialKind = credentialKind
         self.authProfileID = authProfileID ?? id.rawValue
         self.commandProfileID = commandProfileID ?? id.rawValue
         self.name = name

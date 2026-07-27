@@ -56,17 +56,34 @@ public struct ShellFunctionRenderer: Sendable {
     public struct EnabledFunctions: Sendable {
         public var claudeOAuth: Bool
         public var codex: Bool
-        public var claudeAPI: Bool
-        public var codexAPI: Bool
+        public var apiKeyProfileIDs: Set<String>
 
-        public init(claudeOAuth: Bool, codex: Bool, claudeAPI: Bool, codexAPI: Bool = false) {
+        public init(
+            claudeOAuth: Bool,
+            codex: Bool,
+            apiKeyProfileIDs: Set<String>
+        ) {
             self.claudeOAuth = claudeOAuth
             self.codex = codex
-            self.claudeAPI = claudeAPI
-            self.codexAPI = codexAPI
+            self.apiKeyProfileIDs = apiKeyProfileIDs
         }
 
-        public static let none = EnabledFunctions(claudeOAuth: false, codex: false, claudeAPI: false, codexAPI: false)
+        public init(claudeOAuth: Bool, codex: Bool, claudeAPI: Bool, codexAPI: Bool = false) {
+            var profileIDs: Set<String> = []
+            if claudeAPI { profileIDs.insert("claude-api") }
+            if codexAPI { profileIDs.insert("codex-api") }
+            self.init(
+                claudeOAuth: claudeOAuth,
+                codex: codex,
+                apiKeyProfileIDs: profileIDs
+            )
+        }
+
+        public static let none = EnabledFunctions(
+            claudeOAuth: false,
+            codex: false,
+            apiKeyProfileIDs: []
+        )
     }
 
     private let config: AppConfig
@@ -105,24 +122,25 @@ public struct ShellFunctionRenderer: Sendable {
             script += renderRoundRobinFunction(roundRobinProfile)
         }
 
-        if enabledFunctions.claudeAPI, hasCommandName(config.claudeAPI.commandName) {
-            script += renderClaudeAPIFunction()
-        }
-
-        if enabledFunctions.codexAPI, hasCommandName(config.codexAPI.commandName) {
-            script += renderCodexAPIFunction()
+        for profile in apiKeyProfilesToRender() {
+            switch profile.provider {
+            case .claude:
+                script += renderClaudeAPIFunction(profile)
+            case .codex:
+                script += renderCodexAPIFunction(profile)
+            }
         }
 
         return script
     }
 
-    private func renderClaudeAPIFunction() -> String {
-        let claudeCommand = claudeCommand(skipPermissions: config.claudeAPI.dangerousPermissionsEnabled)
+    private func renderClaudeAPIFunction(_ profile: AppConfig.APIKeyProfile) -> String {
+        let claudeCommand = claudeCommand(skipPermissions: profile.dangerousPermissionsEnabled)
 
         return """
-        \(config.claudeAPI.commandName)() {
+        \(profile.commandName)() {
           local routing_env
-          if ! routing_env="$(\(shellSingleQuoted(helperCommand)) routing claude-models '--api')"; then
+          if ! routing_env="$(\(shellSingleQuoted(helperCommand)) routing claude-models '--api-profile' \(shellSingleQuoted(profile.id)))"; then
             return 1
           fi
           eval "$routing_env"
@@ -138,23 +156,24 @@ public struct ShellFunctionRenderer: Sendable {
         """
     }
 
-    private func renderCodexAPIFunction() -> String {
-        let claudeCommand = claudeCommand(skipPermissions: config.codexAPI.dangerousPermissionsEnabled)
-        let codex = config.codexAPI.codex
+    private func renderCodexAPIFunction(_ profile: AppConfig.APIKeyProfile) -> String {
+        let claudeCommand = claudeCommand(skipPermissions: profile.dangerousPermissionsEnabled)
+        let codex = profile.effectiveCodex
+        let prefix = profile.modelPrefix
         let autoCompactWindow = CodexContextWindowExport.autoCompactWindow(for: codex)
         let autoCompactLine = autoCompactWindow.map { "  CLAUDE_CODE_AUTO_COMPACT_WINDOW='\($0)' \\\n" } ?? ""
         return """
-        \(config.codexAPI.commandName)() {
-          if ! curl -sf -H 'Authorization: Bearer sk-dummy' "http://127.0.0.1:\(config.port)/v1/models" | grep -q 'cpm-codex-api/'; then
-            echo "CLIProxyAPI Manager is not running or the OpenAI API key is not configured. Start it with cpm start, then retry."
+        \(profile.commandName)() {
+          if ! curl -sf -H 'Authorization: Bearer sk-dummy' "http://127.0.0.1:\(config.port)/v1/models" | grep -Fq \(shellSingleQuoted("\(prefix)/")); then
+            echo "CLIProxyAPI Manager is not running or this OpenAI API key is not configured. Start it with cpm start, then retry."
             return 1
           fi
 
           ANTHROPIC_BASE_URL="http://127.0.0.1:\(config.port)" \\
           ANTHROPIC_AUTH_TOKEN='sk-dummy' \\
-          ANTHROPIC_DEFAULT_OPUS_MODEL=\(shellSingleQuoted(prefixedModel(codex.opus.modelIdentifier, prefix: "cpm-codex-api"))) \\
-          ANTHROPIC_DEFAULT_SONNET_MODEL=\(shellSingleQuoted(prefixedModel(codex.sonnet.modelIdentifier, prefix: "cpm-codex-api"))) \\
-          ANTHROPIC_DEFAULT_HAIKU_MODEL=\(shellSingleQuoted(prefixedModel(codex.haiku.modelIdentifier, prefix: "cpm-codex-api"))) \\
+          ANTHROPIC_DEFAULT_OPUS_MODEL=\(shellSingleQuoted(prefixedModel(codex.opus.modelIdentifier, prefix: prefix))) \\
+          ANTHROPIC_DEFAULT_SONNET_MODEL=\(shellSingleQuoted(prefixedModel(codex.sonnet.modelIdentifier, prefix: prefix))) \\
+          ANTHROPIC_DEFAULT_HAIKU_MODEL=\(shellSingleQuoted(prefixedModel(codex.haiku.modelIdentifier, prefix: prefix))) \\
         \(autoCompactLine)  \(claudeCommand)
         }
 
@@ -297,9 +316,15 @@ public struct ShellFunctionRenderer: Sendable {
     private func functionNamesToRender() -> [String] {
         var names = oauthCommandProfilesToRender().map(\.commandName)
         names.append(contentsOf: roundRobinProfilesToRender().map(\.commandName))
-        if enabledFunctions.claudeAPI, hasCommandName(config.claudeAPI.commandName) { names.append(config.claudeAPI.commandName) }
-        if enabledFunctions.codexAPI, hasCommandName(config.codexAPI.commandName) { names.append(config.codexAPI.commandName) }
+        names.append(contentsOf: apiKeyProfilesToRender().map(\.commandName))
         return names
+    }
+
+    private func apiKeyProfilesToRender() -> [AppConfig.APIKeyProfile] {
+        config.apiKeyProfiles.filter { profile in
+            enabledFunctions.apiKeyProfileIDs.contains(profile.id)
+                && hasCommandName(profile.commandName)
+        }
     }
 
     private func oauthCommandProfilesToRender() -> [AppConfig.OAuthCommandProfile] {

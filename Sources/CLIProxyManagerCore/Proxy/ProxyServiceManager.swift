@@ -244,8 +244,9 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
     private let fileManager: FileManager
     private let managementKeyProvider: @Sendable () -> String?
     private let usageEnabledProvider: @Sendable () -> Bool
-    private let claudeAPIKeyProvider: @Sendable () -> String?
-    private let codexAPIKeyProvider: @Sendable () -> String?
+    private let legacyClaudeAPIKeyProvider: (@Sendable () -> String?)?
+    private let legacyCodexAPIKeyProvider: (@Sendable () -> String?)?
+    private let apiKeyProvider: @Sendable (SecretReference) throws -> String?
     private let appConfigProvider: @Sendable () throws -> AppConfig
     private let processState = LockedProcessState()
     private let lifecycleLock = NSLock()
@@ -260,6 +261,7 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         usageEnabledProvider: (@Sendable () -> Bool)? = nil,
         claudeAPIKeyProvider: (@Sendable () -> String?)? = nil,
         codexAPIKeyProvider: (@Sendable () -> String?)? = nil,
+        apiKeyProvider: (@Sendable (SecretReference) throws -> String?)? = nil,
         appConfigProvider: (@Sendable () throws -> AppConfig)? = nil
     ) {
         self.init(
@@ -273,8 +275,9 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
             usageEnabledProvider: usageEnabledProvider ?? {
                 (try? AppConfigStore(paths: paths).load().isUsageEnabled) ?? false
             },
-            claudeAPIKeyProvider: claudeAPIKeyProvider ?? { try? FileSecretStore(paths: paths).get(.claudeAPIKey) },
-            codexAPIKeyProvider: codexAPIKeyProvider ?? { try? FileSecretStore(paths: paths).get(.codexAPIKey) },
+            claudeAPIKeyProvider: claudeAPIKeyProvider,
+            codexAPIKeyProvider: codexAPIKeyProvider,
+            apiKeyProvider: apiKeyProvider,
             appConfigProvider: appConfigProvider ?? { try AppConfigStore(paths: paths).load() }
         )
     }
@@ -290,6 +293,7 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         usageEnabledProvider: (@Sendable () -> Bool)? = nil,
         claudeAPIKeyProvider: (@Sendable () -> String?)? = nil,
         codexAPIKeyProvider: (@Sendable () -> String?)? = nil,
+        apiKeyProvider: (@Sendable (SecretReference) throws -> String?)? = nil,
         appConfigProvider: (@Sendable () throws -> AppConfig)? = nil
     ) {
         self.paths = paths
@@ -303,8 +307,22 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         self.usageEnabledProvider = usageEnabledProvider ?? {
             (try? AppConfigStore(paths: paths).load().isUsageEnabled) ?? false
         }
-        self.claudeAPIKeyProvider = claudeAPIKeyProvider ?? { try? FileSecretStore(paths: paths).get(.claudeAPIKey) }
-        self.codexAPIKeyProvider = codexAPIKeyProvider ?? { try? FileSecretStore(paths: paths).get(.codexAPIKey) }
+        self.legacyClaudeAPIKeyProvider = claudeAPIKeyProvider
+        self.legacyCodexAPIKeyProvider = codexAPIKeyProvider
+        if let apiKeyProvider {
+            self.apiKeyProvider = apiKeyProvider
+        } else if claudeAPIKeyProvider != nil || codexAPIKeyProvider != nil {
+            self.apiKeyProvider = { _ in nil }
+        } else {
+            let store = FileSecretStore(paths: paths)
+            self.apiKeyProvider = { reference in
+                do {
+                    return try store.get(reference)
+                } catch SecretStoreError.missingSecret {
+                    return nil
+                }
+            }
+        }
         self.appConfigProvider = appConfigProvider ?? { try AppConfigStore(paths: paths).load() }
     }
 
@@ -519,15 +537,51 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         }
     }
 
+    private struct ResolvedAPIKeyProfile {
+        let profile: AppConfig.APIKeyProfile
+        let key: String
+    }
+
+    private func appendLegacyCompatibilityProfilesIfNeeded(to config: inout AppConfig) {
+        if !config.apiKeyProfiles.contains(where: { $0.id == "claude-api" }),
+           nonEmpty(legacyClaudeAPIKeyProvider?()) != nil {
+            config.apiKeyProfiles.append(.legacy(provider: .claude))
+        }
+        if !config.apiKeyProfiles.contains(where: { $0.id == "codex-api" }),
+           nonEmpty(legacyCodexAPIKeyProvider?()) != nil {
+            config.apiKeyProfiles.append(.legacy(provider: .codex))
+        }
+    }
+
+    private func resolvedAPIKey(for profile: AppConfig.APIKeyProfile) throws -> String? {
+        if profile.secretReference == .claudeAPIKey,
+           let legacyClaudeAPIKeyProvider {
+            return nonEmpty(legacyClaudeAPIKeyProvider())
+        }
+        if profile.secretReference == .codexAPIKey,
+           let legacyCodexAPIKeyProvider {
+            return nonEmpty(legacyCodexAPIKeyProvider())
+        }
+        return nonEmpty(try apiKeyProvider(profile.secretReference))
+    }
+
     private func config(for port: Int) throws -> String {
-        let appConfig = try appConfigProvider()
+        var appConfig = try appConfigProvider()
         let usageEnabled = usageEnabledProvider()
-        let claudeAPIKey = nonEmpty(claudeAPIKeyProvider())
-        let codexAPIKey = nonEmpty(codexAPIKeyProvider())
-        let hasManagedAPIKey = claudeAPIKey != nil || codexAPIKey != nil
+        appendLegacyCompatibilityProfilesIfNeeded(to: &appConfig)
+        var resolvedAPIKeyProfiles: [ResolvedAPIKeyProfile] = []
+        for profile in appConfig.apiKeyProfiles {
+            do {
+                guard let key = try resolvedAPIKey(for: profile) else { continue }
+                resolvedAPIKeyProfiles.append(.init(profile: profile, key: key))
+            } catch is SecretStoreError {
+                continue
+            }
+        }
+        let hasManagedAPIKey = !resolvedAPIKeyProfiles.isEmpty
         let fastConfiguration = try CodexFastConfiguration(
             config: appConfig,
-            includeAPIKeyModels: codexAPIKey != nil
+            includedAPIKeyProfileIDs: Set(resolvedAPIKeyProfiles.map(\.profile.id))
         )
 
         let managementConfiguration: String
@@ -554,30 +608,37 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
             usageQueueConfiguration
         ].filter { !$0.isEmpty }.joined(separator: "\n")
 
+        let claudeProfiles = resolvedAPIKeyProfiles.filter { $0.profile.provider == .claude }
         let claudeAPIConfiguration: String
-        if let key = claudeAPIKey {
-            claudeAPIConfiguration = """
-            claude-api-key:
-              - api-key: \(yamlDoubleQuoted(key))
-                base-url: \(yamlDoubleQuoted("https://api.anthropic.com"))
-                prefix: \(yamlDoubleQuoted("cpm-claude-api"))
-            """
-        } else {
+        if claudeProfiles.isEmpty {
             claudeAPIConfiguration = ""
+        } else {
+            var lines = ["claude-api-key:"]
+            for resolved in claudeProfiles {
+                lines.append("  - api-key: \(yamlDoubleQuoted(resolved.key))")
+                lines.append("    base-url: \(yamlDoubleQuoted("https://api.anthropic.com"))")
+                lines.append("    prefix: \(yamlDoubleQuoted(resolved.profile.modelPrefix))")
+            }
+            claudeAPIConfiguration = lines.joined(separator: "\n")
         }
 
+        let codexProfiles = resolvedAPIKeyProfiles.filter { $0.profile.provider == .codex }
         let codexAPIConfiguration: String
-        if let codexAPIKey {
-            let entries = codexAPIModelsConfiguration(models: fastConfiguration.apiKeyCanonicalModels)
-            let models = entries.isEmpty ? "" : "\n    models:\n\(entries)"
-            codexAPIConfiguration = [
-                "codex-api-key:",
-                "  - api-key: \(yamlDoubleQuoted(codexAPIKey))",
-                "    base-url: \(yamlDoubleQuoted("https://api.openai.com/v1"))",
-                "    prefix: \(yamlDoubleQuoted("cpm-codex-api"))\(models)"
-            ].joined(separator: "\n")
-        } else {
+        if codexProfiles.isEmpty {
             codexAPIConfiguration = ""
+        } else {
+            var lines = ["codex-api-key:"]
+            for resolved in codexProfiles {
+                lines.append("  - api-key: \(yamlDoubleQuoted(resolved.key))")
+                lines.append("    base-url: \(yamlDoubleQuoted("https://api.openai.com/v1"))")
+                lines.append("    prefix: \(yamlDoubleQuoted(resolved.profile.modelPrefix))")
+                let models = fastConfiguration.apiKeyCanonicalModelsByProfileID[resolved.profile.id] ?? []
+                if !models.isEmpty {
+                    lines.append("    models:")
+                    lines.append(contentsOf: codexAPIModelsConfiguration(models: models))
+                }
+            }
+            codexAPIConfiguration = lines.joined(separator: "\n")
         }
 
         let oauthFastConfiguration = oauthFastAliasConfiguration(
@@ -639,13 +700,13 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         return lines.joined(separator: "\n")
     }
 
-    private func codexAPIModelsConfiguration(models: [String]) -> String {
+    private func codexAPIModelsConfiguration(models: [String]) -> [String] {
         var lines: [String] = []
         for model in models {
             lines.append("      - name: \(yamlDoubleQuoted(model))")
             lines.append("        alias: \(yamlDoubleQuoted(CodexFastMode.alias(for: model)))")
         }
-        return lines.joined(separator: "\n")
+        return lines
     }
 
     private func fastPayloadConfiguration(aliases: [String]) -> String {

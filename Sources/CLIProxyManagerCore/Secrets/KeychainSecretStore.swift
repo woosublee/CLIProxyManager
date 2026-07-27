@@ -8,7 +8,7 @@ public struct KeychainSecretStore: SecretStore {
         self.service = service
     }
 
-    public func get(_ key: SecretKey) throws -> String {
+    public func get(_ key: SecretReference) throws -> String {
         var query = baseQuery(for: key)
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         query[kSecReturnData as String] = true
@@ -26,7 +26,7 @@ public struct KeychainSecretStore: SecretStore {
         return value
     }
 
-    public func set(_ value: String, for key: SecretKey) throws {
+    public func set(_ value: String, for key: SecretReference) throws {
         let data = Data(value.utf8)
         let query = baseQuery(for: key)
         let attributes: [String: Any] = [kSecValueData as String: data]
@@ -49,14 +49,14 @@ public struct KeychainSecretStore: SecretStore {
         }
     }
 
-    public func delete(_ key: SecretKey) throws {
+    public func delete(_ key: SecretReference) throws {
         let status = SecItemDelete(baseQuery(for: key) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw SecretStoreError.writeFailed(key.rawValue)
         }
     }
 
-    private func baseQuery(for key: SecretKey) -> [String: Any] {
+    private func baseQuery(for key: SecretReference) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,

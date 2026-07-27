@@ -63,7 +63,7 @@ struct DashboardAccountSnapshot: Equatable, Identifiable {
         primaryActionTitle = status == .disconnected ? "Connect" : "Settings"
         showsMoreMenu = status != .disconnected
         isAccountDetailHidden = provider.accountDetailHidden
-        isAPIKeyProfile = provider.id == .claudeAPI || provider.id == .codexAPI
+        isAPIKeyProfile = provider.credentialKind == .apiKey
         showsAccountPrivacyToggle = status != .disconnected && !isAPIKeyProfile
         showsInUsageOverlay = provider.showsInUsageOverlay
     }

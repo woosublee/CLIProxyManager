@@ -1,5 +1,16 @@
 import Foundation
 
+public enum AppConfigStoreError: LocalizedError, Equatable {
+    case unsupportedSchemaVersion(Int)
+
+    public var errorDescription: String? {
+        switch self {
+        case .unsupportedSchemaVersion(let version):
+            "Config schema version \(version) is newer than this app supports."
+        }
+    }
+}
+
 public struct AppConfigStore: @unchecked Sendable {
     public let paths: ManagedPaths
     private let fileManager: FileManager
@@ -14,7 +25,11 @@ public struct AppConfigStore: @unchecked Sendable {
             return .canonical(.default)
         }
         let data = try Data(contentsOf: paths.configFile)
-        if try LegacyAppConfigDecoder.isLegacyDocument(data) {
+        let schemaVersion = try LegacyAppConfigDecoder.schemaVersion(in: data)
+        guard schemaVersion <= AppConfig.currentSchemaVersion else {
+            throw AppConfigStoreError.unsupportedSchemaVersion(schemaVersion)
+        }
+        if schemaVersion < AppConfig.currentSchemaVersion {
             return try LegacyAppConfigDecoder.decode(data)
         }
         return .canonical(try JSONDecoder().decode(AppConfig.self, from: data))

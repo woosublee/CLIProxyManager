@@ -111,6 +111,66 @@ final class APIUsageAccountingTests: XCTestCase {
         XCTAssertEqual(mapping.reason, .unknownProviderMapping)
     }
 
+    func testSameProviderProfilesMapToIndependentProfileIDs() {
+        let first = APIUsageProfileDescriptor(
+            profileID: "claude-api-11111111-1111-1111-1111-111111111111",
+            provider: .claude,
+            modelPrefix: "cpm-claude-api-11111111-1111-1111-1111-111111111111"
+        )
+        let second = APIUsageProfileDescriptor(
+            profileID: "claude-api-22222222-2222-2222-2222-222222222222",
+            provider: .claude,
+            modelPrefix: "cpm-claude-api-22222222-2222-2222-2222-222222222222"
+        )
+        let record = makeRecord(
+            provider: "claude",
+            executor: "ClaudeExecutor",
+            model: "\(second.modelPrefix)/claude-opus-5",
+            alias: "\(second.modelPrefix)/claude-opus-5"
+        )
+
+        guard case let .aggregate(input) = APIUsageRecordMapper().classify(
+            record,
+            profiles: [first, second]
+        ) else {
+            return XCTFail("Expected aggregate")
+        }
+        XCTAssertEqual(input.profileID, second.profileID)
+        XCTAssertEqual(input.model, "claude-opus-5")
+    }
+
+    func testDeletedManagedProfilePrefixCanStillBeAggregated() {
+        let profileID = "codex-api-33333333-3333-3333-3333-333333333333"
+        let prefix = "cpm-\(profileID)"
+        let record = makeRecord(
+            provider: "codex",
+            executor: "CodexExecutor",
+            model: "\(prefix)/gpt-5.6-sol",
+            alias: "\(prefix)/gpt-5.6-sol"
+        )
+
+        guard case let .aggregate(input) = APIUsageRecordMapper().classify(record, profiles: []) else {
+            return XCTFail("Expected aggregate")
+        }
+        XCTAssertEqual(input.profileID, profileID)
+        XCTAssertEqual(input.provider, .openAI)
+    }
+
+    func testHistoricalInferenceRejectsNonCanonicalShortProfileID() {
+        let prefix = "cpm-codex-api-team"
+        let record = makeRecord(
+            provider: "codex",
+            executor: "CodexExecutor",
+            model: "\(prefix)/gpt-5.6-sol",
+            alias: "\(prefix)/gpt-5.6-sol"
+        )
+
+        guard case let .issue(issue) = APIUsageRecordMapper().classify(record, profiles: []) else {
+            return XCTFail("Expected issue")
+        }
+        XCTAssertEqual(issue.reason, .unknownProviderMapping)
+    }
+
     func testCompleteFailedRequestRemainsAnAggregate() {
         var object = recordJSONObject()
         object["failed"] = true

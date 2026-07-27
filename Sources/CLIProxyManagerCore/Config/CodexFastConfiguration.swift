@@ -13,10 +13,26 @@ public enum CodexFastConfigurationError: LocalizedError, Equatable {
 
 public struct CodexFastConfiguration: Equatable, Sendable {
     public let oauthCanonicalModels: [String]
-    public let apiKeyCanonicalModels: [String]
+    public let apiKeyCanonicalModelsByProfileID: [String: [String]]
     public let allAliases: [String]
 
+    public var apiKeyCanonicalModels: [String] {
+        Set(apiKeyCanonicalModelsByProfileID.values.flatMap { $0 }).sorted()
+    }
+
     public init(config: AppConfig, includeAPIKeyModels: Bool = true) throws {
+        try self.init(
+            config: config,
+            includedAPIKeyProfileIDs: includeAPIKeyModels
+                ? Set(config.apiKeyProfiles.map(\.id))
+                : []
+        )
+    }
+
+    public init(
+        config: AppConfig,
+        includedAPIKeyProfileIDs: Set<String>
+    ) throws {
         try Self.validateNoManagedAliasCollisions(in: config)
 
         let oauthCodexConfigs: [AppConfig.Codex] = config.oauthCommandProfiles.compactMap { profile in
@@ -30,14 +46,25 @@ public struct CodexFastConfiguration: Equatable, Sendable {
         }
 
         oauthCanonicalModels = Self.fastModels(in: oauthCodexConfigs + roundRobinCodexConfigs)
-        apiKeyCanonicalModels = includeAPIKeyModels
-            ? Self.fastModels(in: [config.codexAPI.codex])
-            : []
-        allAliases = Set((oauthCanonicalModels + apiKeyCanonicalModels).map(CodexFastMode.alias(for:))).sorted()
+        apiKeyCanonicalModelsByProfileID = Dictionary(
+            uniqueKeysWithValues: config.apiKeyProfiles.compactMap { profile in
+                guard profile.provider == .codex,
+                      includedAPIKeyProfileIDs.contains(profile.id) else {
+                    return nil
+                }
+                return (profile.id, Self.fastModels(in: [profile.effectiveCodex]))
+            }
+        )
+        allAliases = Set(
+            (oauthCanonicalModels + apiKeyCanonicalModelsByProfileID.values.flatMap { $0 })
+                .map(CodexFastMode.alias(for:))
+        ).sorted()
     }
 
     private static func validateNoManagedAliasCollisions(in config: AppConfig) throws {
-        let allCodexConfigs = [config.codexAPI.codex]
+        let allCodexConfigs = config.apiKeyProfiles.compactMap { profile in
+            profile.provider == .codex ? profile.effectiveCodex : nil
+        }
             + config.oauthCommandProfiles.compactMap { $0.provider == .codex ? $0.codex : nil }
             + config.roundRobinProfiles.compactMap { $0.provider == .codex ? $0.codex : nil }
 

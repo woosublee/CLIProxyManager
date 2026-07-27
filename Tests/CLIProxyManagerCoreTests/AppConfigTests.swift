@@ -903,6 +903,60 @@ final class AppConfigTests: XCTestCase {
         XCTAssertNil(usage["isEnabled"])
     }
 
+    func testMultipleAPIKeyProfilesRoundTripWithStablePrefixes() throws {
+        let claudeID = "claude-api-11111111-1111-1111-1111-111111111111"
+        let codexID = "codex-api-22222222-2222-2222-2222-222222222222"
+        var config = AppConfig.default
+        config.apiKeyProfiles = [
+            .init(
+                id: claudeID,
+                provider: .claude,
+                secretReference: SecretReference.apiKeyProfile(claudeID)!,
+                commandName: "claude_personal",
+                nickname: "Personal",
+                claude: .automatic
+            ),
+            .init(
+                id: codexID,
+                provider: .codex,
+                secretReference: SecretReference.apiKeyProfile(codexID)!,
+                commandName: "codex_work",
+                nickname: "Work",
+                codex: .default
+            )
+        ]
+
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))
+
+        XCTAssertEqual(decoded.apiKeyProfiles, config.apiKeyProfiles)
+        XCTAssertEqual(decoded.apiKeyProfiles.map(\.modelPrefix), ["cpm-\(claudeID)", "cpm-\(codexID)"])
+    }
+
+    func testVersion3DecodeRejectsDuplicateAPIKeyProfileIdentity() {
+        let json = #"{"schemaVersion":3,"port":18317,"apiKeyProfiles":[{"id":"claude-api","provider":"claude","secretReference":"claude-api-key","commandName":"first","nickname":"","dangerousPermissionsEnabled":false,"claude":{"opus":"automatic","sonnet":"automatic","haiku":"automatic"}},{"id":"claude-api","provider":"claude","secretReference":"claude-api-key","commandName":"second","nickname":"","dangerousPermissionsEnabled":false,"claude":{"opus":"automatic","sonnet":"automatic","haiku":"automatic"}}]}"#
+
+        XCTAssertThrowsError(try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8)))
+    }
+
+    func testVersion3DecodeRejectsSecretReferenceThatDoesNotBelongToProfileIdentity() {
+        let json = #"{"schemaVersion":3,"port":18317,"apiKeyProfiles":[{"id":"claude-api","provider":"claude","secretReference":"codex-api-key","commandName":"claude","nickname":"","dangerousPermissionsEnabled":false,"claude":{"opus":"automatic","sonnet":"automatic","haiku":"automatic"}}]}"#
+
+        XCTAssertThrowsError(try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8)))
+    }
+
+    func testEncodingRejectsNonCanonicalAPIKeyProfileIdentity() {
+        var config = AppConfig.default
+        config.apiKeyProfiles = [
+            .init(
+                id: "claude-api-team",
+                provider: .claude,
+                secretReference: SecretReference.apiKeyProfile("claude-api-team")!
+            )
+        ]
+
+        XCTAssertThrowsError(try JSONEncoder().encode(config))
+    }
+
     private func decodeConfig(subscriptionUsageJSON: String, usageOverlayJSON: String) throws -> AppConfig {
         let json = """
         {

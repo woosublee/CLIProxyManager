@@ -76,6 +76,30 @@ final class FileSecretStoreTests: XCTestCase {
         }
     }
 
+    func testMultipleProfilesUseIndependentPrivateFiles() throws {
+        let paths = ManagedPaths(rootDirectory: try makeSandbox().appendingPathComponent("managed", isDirectory: true))
+        let store = FileSecretStore(paths: paths)
+        let first = try XCTUnwrap(SecretReference(rawValue: "claude-api-first-key"))
+        let second = try XCTUnwrap(SecretReference(rawValue: "claude-api-second-key"))
+
+        try store.set("first-secret", for: first)
+        try store.set("second-secret", for: second)
+
+        XCTAssertEqual(try store.get(first), "first-secret")
+        XCTAssertEqual(try store.get(second), "second-secret")
+        XCTAssertNotEqual(paths.apiKeyFile(for: first), paths.apiKeyFile(for: second))
+        XCTAssertEqual(fileMode(paths.apiKeyFile(for: first)), 0o600)
+        XCTAssertEqual(fileMode(paths.apiKeyFile(for: second)), 0o600)
+    }
+
+    func testSecretReferenceRejectsUnsafeFileNames() {
+        XCTAssertNil(SecretReference(rawValue: "../claude-key"))
+        XCTAssertNil(SecretReference(rawValue: "claude/key"))
+        XCTAssertNil(SecretReference(rawValue: "Claude-Key"))
+        XCTAssertNil(SecretReference(rawValue: "-claude-key"))
+        XCTAssertNotNil(SecretReference(rawValue: "claude-api-profile-key"))
+    }
+
     private func makeSandbox() throws -> URL {
         let sandbox = FileManager.default.temporaryDirectory
             .appendingPathComponent("CLIProxyManagerTests")
