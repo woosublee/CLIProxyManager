@@ -325,13 +325,26 @@ final class DashboardViewModel: ObservableObject {
     private var pendingForcedCodexResetCreditsRefresh = false
     private var codexResetCreditsLastAttemptAt: [String: Date] = [:]
     private var codexResetCreditsInFlightProfileIDs: Set<String> = []
+    private var pendingCodexResetCreditsProfileIDs: Set<String> = []
     private var codexResetCreditsRetryNotBefore: Date?
     private static let codexResetCreditsRefreshInterval: TimeInterval = 3 * 60 * 60
     private static let codexResetCreditsPreflightRetryInterval: TimeInterval = 60
     private static let maximumSubscriptionUsageSleepInterval: TimeInterval = 24 * 60 * 60
+    private struct ServerActionCompletion {
+        let succeeded: Bool
+        let performedConfigurationRestart: Bool
+    }
+
+    private struct PendingProxyConfigurationWorkResult {
+        var waitedForServerAction = false
+        var performedConfigurationRestart = false
+        var succeeded = true
+    }
+
     private var pendingProxyConfigurationRestartReasons: Set<ProxyConfigurationRestartReason> = []
     private var proxyConfigurationRestartTask: Task<Void, Never>?
-    private var serverActionCompletionWaiters: [CheckedContinuation<Void, Never>] = []
+    private var serverActionWaitsForReady = false
+    private var serverActionCompletionWaiters: [CheckedContinuation<ServerActionCompletion, Never>] = []
     private var ownedFastRestartFailureMessage: String?
     private var subscriptionUsageRefreshGeneration = 0
     private var codexResetCreditsRefreshGeneration = 0
@@ -1043,7 +1056,8 @@ final class DashboardViewModel: ObservableObject {
         return Set(profiles.compactMap { profile in
             guard profile.type == .codex else { return nil }
             if force { return profile.id }
-            guard !codexResetCreditsInFlightProfileIDs.contains(profile.id) else { return nil }
+            guard !codexResetCreditsInFlightProfileIDs.contains(profile.id),
+                  !pendingCodexResetCreditsProfileIDs.contains(profile.id) else { return nil }
             let reference = codexResetCreditsLastAttemptAt[profile.id]
                 ?? codexResetCreditsSnapshots[profile.id]?.fetchedAt
             guard let reference else { return profile.id }
@@ -1079,6 +1093,7 @@ final class DashboardViewModel: ObservableObject {
         codexResetCreditsSnapshots.removeAll()
         codexResetCreditsLastAttemptAt.removeAll()
         codexResetCreditsInFlightProfileIDs.removeAll()
+        pendingCodexResetCreditsProfileIDs.removeAll()
         codexResetCreditsRetryNotBefore = nil
         try? codexResetCreditsSnapshotCache.clear()
     }
@@ -1088,6 +1103,7 @@ final class DashboardViewModel: ObservableObject {
         codexResetCreditsSnapshots.removeValue(forKey: profileID)
         codexResetCreditsLastAttemptAt.removeValue(forKey: profileID)
         codexResetCreditsInFlightProfileIDs.remove(profileID)
+        pendingCodexResetCreditsProfileIDs.remove(profileID)
         persistCodexResetCreditSnapshots()
     }
 
@@ -1112,6 +1128,7 @@ final class DashboardViewModel: ObservableObject {
         subscriptionUsageNextUsageRefreshAt = nil
         subscriptionUsageRetryDelayNanoseconds = 60_000_000_000
         codexResetCreditsInFlightProfileIDs.removeAll()
+        pendingCodexResetCreditsProfileIDs.removeAll()
         codexResetCreditsRetryNotBefore = nil
     }
 
@@ -1152,6 +1169,7 @@ final class DashboardViewModel: ObservableObject {
         subscriptionUsagePollingDeadline = nil
         subscriptionUsageNextUsageRefreshAt = nil
         codexResetCreditsInFlightProfileIDs.removeAll()
+        pendingCodexResetCreditsProfileIDs.removeAll()
         return SubscriptionUsageRemovalRefreshContext(
             canceledActiveRefresh: true,
             requiresForcedRefresh: requiresForcedRefresh
@@ -1412,6 +1430,7 @@ final class DashboardViewModel: ObservableObject {
         )
         guard !profileIDs.isEmpty else { return nil }
         if let activeTask = codexResetCreditsRefreshTask {
+            pendingCodexResetCreditsProfileIDs.formUnion(profileIDs)
             if force {
                 pendingForcedCodexResetCreditsRefresh = true
             } else {
@@ -1473,15 +1492,17 @@ final class DashboardViewModel: ObservableObject {
         codexResetCreditsRefreshTask = nil
         codexResetCreditsRefreshIsForced = false
         codexResetCreditsInFlightProfileIDs.subtract(profileIDs)
-        if pendingForcedCodexResetCreditsRefresh {
-            pendingForcedCodexResetCreditsRefresh = false
-            pendingCodexResetCreditsRefresh = false
+        let shouldStartForcedPendingRefresh = pendingForcedCodexResetCreditsRefresh
+        let shouldStartPendingRefresh = pendingCodexResetCreditsRefresh
+        pendingForcedCodexResetCreditsRefresh = false
+        pendingCodexResetCreditsRefresh = false
+        pendingCodexResetCreditsProfileIDs.removeAll()
+        if shouldStartForcedPendingRefresh {
             _ = startCodexResetCreditsRefreshIfNeeded(
                 force: true,
                 now: codexResetCreditsNow()
             )
-        } else if pendingCodexResetCreditsRefresh {
-            pendingCodexResetCreditsRefresh = false
+        } else if shouldStartPendingRefresh {
             _ = startCodexResetCreditsRefreshIfNeeded(
                 force: false,
                 now: codexResetCreditsNow()
@@ -1598,11 +1619,18 @@ final class DashboardViewModel: ObservableObject {
         rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
     }
 
+    private var defersSubscriptionUsagePollingForConfigurationWork: Bool {
+        oauthDeferredSubscriptionUsageRefreshSessionID != nil
+            || !pendingProxyConfigurationRestartReasons.isEmpty
+            || proxyConfigurationRestartTask != nil
+    }
+
     private func scheduleSubscriptionUsagePollingIfNeeded(didRefreshUsage: Bool = false) {
         subscriptionUsagePollingTask?.cancel()
         subscriptionUsagePollingTask = nil
         subscriptionUsagePollingWakeReason = nil
         subscriptionUsagePollingDeadline = nil
+        guard !defersSubscriptionUsagePollingForConfigurationWork else { return }
         guard config.isSubscriptionUsageEnabled,
               subscriptionUsageKeyStore.isConfigured() else {
             subscriptionUsageNextUsageRefreshAt = nil
@@ -1701,7 +1729,8 @@ final class DashboardViewModel: ObservableObject {
     ) -> Date? {
         guard let deadline = profiles.compactMap({ profile -> Date? in
             guard profile.type == .codex,
-                  !codexResetCreditsInFlightProfileIDs.contains(profile.id) else {
+                  !codexResetCreditsInFlightProfileIDs.contains(profile.id),
+                  !pendingCodexResetCreditsProfileIDs.contains(profile.id) else {
                 return nil
             }
             let reference = codexResetCreditsLastAttemptAt[profile.id]
@@ -1889,6 +1918,7 @@ final class DashboardViewModel: ObservableObject {
         let sessionID = UUID()
         let provider = providerID(for: providerType)
         oauthLoginSessionID = sessionID
+        claimServerActionRefreshOwnershipIfNeeded(for: sessionID)
         completedOAuthLoginProvider = nil
         completedOAuthLoginIsInitialSetup = true
         activeOAuthLoginProvider = provider
@@ -1915,11 +1945,22 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
+    private func claimServerActionRefreshOwnershipIfNeeded(for sessionID: UUID) {
+        guard isServerActionInProgress, serverActionWaitsForReady else { return }
+        oauthDeferredSubscriptionUsageRefreshSessionID = sessionID
+    }
+
+    private func releaseServerActionRefreshOwnership(for sessionID: UUID) {
+        guard oauthDeferredSubscriptionUsageRefreshSessionID == sessionID else { return }
+        oauthDeferredSubscriptionUsageRefreshSessionID = nil
+    }
+
     func connectProvider(_ provider: ProviderRowState.ID) async {
         guard oauthLoginTask == nil, isProfileLoginInProgress == false else { return }
         let providerType = oauthProviderType(for: provider)
         let sessionID = UUID()
         oauthLoginSessionID = sessionID
+        claimServerActionRefreshOwnershipIfNeeded(for: sessionID)
         completedOAuthLoginProvider = nil
         completedOAuthLoginIsInitialSetup = true
         activeOAuthLoginProvider = providerID(for: providerType)
@@ -1964,6 +2005,7 @@ final class DashboardViewModel: ObservableObject {
 
     private func runOAuthLogin(_ providerType: AuthProfileType, sessionID: UUID, isInitialSetup: Bool) async {
         defer {
+            releaseServerActionRefreshOwnership(for: sessionID)
             if oauthLoginSessionID == sessionID {
                 isProfileLoginInProgress = false
                 activeOAuthLoginProvider = nil
@@ -1983,21 +2025,22 @@ final class DashboardViewModel: ObservableObject {
             applyCodexCredentialMigrationsIfNeeded()
             let completedID = reconcileOAuthLoginCompletion(providerType: providerType, beforeProfiles: beforeProfiles)
             refreshProfiles()
-            let defersRefreshFromServerAction = isServerActionInProgress
-                && (!pendingProxyConfigurationRestartReasons.isEmpty
-                    || oauthDeferredSubscriptionUsageRefreshSessionID != nil)
-            if defersRefreshFromServerAction {
-                oauthDeferredSubscriptionUsageRefreshSessionID = sessionID
-            }
-            let waitedForServerAction = await waitForPendingProxyConfigurationWork()
-            if oauthDeferredSubscriptionUsageRefreshSessionID == sessionID {
-                oauthDeferredSubscriptionUsageRefreshSessionID = nil
-            }
+            claimServerActionRefreshOwnershipIfNeeded(for: sessionID)
+            let ownsServerActionRefresh = oauthDeferredSubscriptionUsageRefreshSessionID == sessionID
+            let configurationWork = await waitForPendingProxyConfigurationWork()
             try Task.checkCancellation()
-            guard oauthLoginSessionID == sessionID else { return }
+            guard oauthLoginSessionID == sessionID,
+                  configurationWork.succeeded else { return }
             if serverStatus.severity == .ready,
-               (!waitedForServerAction || defersRefreshFromServerAction) {
+               (!configurationWork.waitedForServerAction || ownsServerActionRefresh) {
+                releaseServerActionRefreshOwnership(for: sessionID)
                 await refreshSubscriptionUsage()
+                try Task.checkCancellation()
+                guard oauthLoginSessionID == sessionID else { return }
+                if ownsServerActionRefresh,
+                   !configurationWork.performedConfigurationRestart {
+                    scheduleAPIUsageCollectorUpdateIfStarted()
+                }
             }
             completedOAuthLoginProvider = completedID
             completedOAuthLoginIsInitialSetup = isInitialSetup
@@ -2481,10 +2524,11 @@ final class DashboardViewModel: ObservableObject {
             proxyConfigurationRestartTask = nil
             schedulePendingProxyConfigurationRestartIfNeeded()
         }
-        await drainPendingProxyConfigurationRestarts()
+        _ = await drainPendingProxyConfigurationRestarts()
     }
 
-    private func drainPendingProxyConfigurationRestarts() async {
+    private func drainPendingProxyConfigurationRestarts() async -> Bool {
+        var succeeded = true
         while !pendingProxyConfigurationRestartReasons.isEmpty, serverControlState.isRunning {
             let reasons = pendingProxyConfigurationRestartReasons
             pendingProxyConfigurationRestartReasons.removeAll()
@@ -2492,6 +2536,7 @@ final class DashboardViewModel: ObservableObject {
                 try await restartProxyAndRefresh()
                 clearOwnedFastRestartFailureMessageIfNeeded(for: reasons)
             } catch {
+                succeeded = false
                 handleProxyConfigurationRestartFailure(error, reasons: reasons)
                 if !pendingProxyConfigurationRestartReasons.isEmpty {
                     serverControlState = .running
@@ -2501,6 +2546,7 @@ final class DashboardViewModel: ObservableObject {
         if !serverControlState.isRunning {
             pendingProxyConfigurationRestartReasons.removeAll()
         }
+        return succeeded
     }
 
     private func schedulePendingProxyConfigurationRestartIfNeeded() {
@@ -2729,7 +2775,7 @@ final class DashboardViewModel: ObservableObject {
             await refreshUntilServerIsReady()
             serverControlState = serverStatus.severity == .ready ? .running : .stopped
             if serverControlState.isRunning {
-                await drainPendingProxyConfigurationRestarts()
+                _ = await drainPendingProxyConfigurationRestarts()
             } else {
                 pendingProxyConfigurationRestartReasons.removeAll()
             }
@@ -3721,7 +3767,7 @@ final class DashboardViewModel: ObservableObject {
     ) async {
         await waitForConfigurationRestartIfNeeded()
         while isServerActionInProgress {
-            await waitForServerActionCompletion()
+            _ = await waitForServerActionCompletion()
         }
         _ = await executeServerAction(
             title: title,
@@ -3735,7 +3781,7 @@ final class DashboardViewModel: ObservableObject {
     private func restartServerAfterRequiredChange() async -> Bool {
         await waitForConfigurationRestartIfNeeded()
         while isServerActionInProgress {
-            await waitForServerActionCompletion()
+            _ = await waitForServerActionCompletion()
         }
         return await executeServerAction(
             title: "Failed to restart CLIProxyAPI",
@@ -3752,34 +3798,65 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
-    private func waitForPendingProxyConfigurationWork() async -> Bool {
-        var waitedForServerAction = false
+    private func waitForPendingProxyConfigurationWork() async -> PendingProxyConfigurationWorkResult {
+        var result = PendingProxyConfigurationWorkResult()
         while true {
             if let proxyConfigurationRestartTask {
+                result.performedConfigurationRestart = true
                 await proxyConfigurationRestartTask.value
+                if serverStatus.severity != .ready || !serverControlState.isRunning {
+                    result.succeeded = false
+                    return result
+                }
                 continue
             }
             if isServerActionInProgress {
-                waitedForServerAction = true
-                await waitForServerActionCompletion()
+                result.waitedForServerAction = true
+                let completion = await waitForServerActionCompletion()
+                result.performedConfigurationRestart = result.performedConfigurationRestart
+                    || completion.performedConfigurationRestart
+                if !completion.succeeded {
+                    result.succeeded = false
+                    return result
+                }
                 continue
             }
-            return waitedForServerAction
+            if !pendingProxyConfigurationRestartReasons.isEmpty {
+                guard serverControlState.isRunning else {
+                    result.succeeded = false
+                    return result
+                }
+                result.performedConfigurationRestart = true
+                let restartSucceeded = await drainPendingProxyConfigurationRestarts()
+                if !restartSucceeded {
+                    result.succeeded = false
+                    return result
+                }
+                continue
+            }
+            return result
         }
     }
 
-    private func waitForServerActionCompletion() async {
-        guard isServerActionInProgress else { return }
-        await withCheckedContinuation { continuation in
+    private func waitForServerActionCompletion() async -> ServerActionCompletion {
+        guard isServerActionInProgress else {
+            return ServerActionCompletion(
+                succeeded: true,
+                performedConfigurationRestart: false
+            )
+        }
+        return await withCheckedContinuation { continuation in
             serverActionCompletionWaiters.append(continuation)
         }
     }
 
-    private func finishServerAction() {
+    private func finishServerAction(_ completion: ServerActionCompletion) {
         isServerActionInProgress = false
+        serverActionWaitsForReady = false
+        schedulePendingProxyConfigurationRestartIfNeeded()
         let waiters = serverActionCompletionWaiters
         serverActionCompletionWaiters.removeAll()
-        waiters.forEach { $0.resume() }
+        waiters.forEach { $0.resume(returning: completion) }
     }
 
     @discardableResult
@@ -3790,10 +3867,21 @@ final class DashboardViewModel: ObservableObject {
         action: () async throws -> Void
     ) async -> Bool {
         guard !isPreparingAPIUsageForTermination, !Task.isCancelled else { return false }
+        var actionSucceeded = false
+        var performedConfigurationRestart = false
         isServerActionInProgress = true
+        serverActionWaitsForReady = waitForReady
+        if waitForReady, let oauthLoginSessionID {
+            oauthDeferredSubscriptionUsageRefreshSessionID = oauthLoginSessionID
+        }
         proxyRuntimeCertainty = .mayBeRunning
         serverControlState = transitionState
-        defer { finishServerAction() }
+        defer {
+            finishServerAction(ServerActionCompletion(
+                succeeded: actionSucceeded,
+                performedConfigurationRestart: performedConfigurationRestart
+            ))
+        }
 
         do {
             try await action()
@@ -3808,19 +3896,34 @@ final class DashboardViewModel: ObservableObject {
                 }
                 proxyRuntimeCertainty = .mayBeRunning
                 serverControlState = .running
-                let hadPendingConfigurationRestart = !pendingProxyConfigurationRestartReasons.isEmpty
-                let defersSubscriptionRefreshToOAuth = oauthDeferredSubscriptionUsageRefreshSessionID != nil
-                await drainPendingProxyConfigurationRestarts()
-                guard serverStatus.severity == .ready, serverControlState.isRunning else {
-                    return false
-                }
-                if !defersSubscriptionRefreshToOAuth {
+
+                while true {
+                    if !pendingProxyConfigurationRestartReasons.isEmpty {
+                        performedConfigurationRestart = true
+                    }
+                    let restartSucceeded = await drainPendingProxyConfigurationRestarts()
+                    guard restartSucceeded,
+                          serverStatus.severity == .ready,
+                          serverControlState.isRunning else {
+                        return false
+                    }
+                    if oauthDeferredSubscriptionUsageRefreshSessionID != nil {
+                        actionSucceeded = true
+                        return true
+                    }
+
                     await refreshSubscriptionUsage()
-                    if !hadPendingConfigurationRestart {
+                    guard !isPreparingAPIUsageForTermination, !Task.isCancelled else { return false }
+                    if !pendingProxyConfigurationRestartReasons.isEmpty
+                        || oauthDeferredSubscriptionUsageRefreshSessionID != nil {
+                        continue
+                    }
+                    if !performedConfigurationRestart {
                         scheduleAPIUsageCollectorUpdateIfStarted()
                     }
+                    actionSucceeded = true
+                    return true
                 }
-                return true
             }
 
             await refresh()
@@ -3830,11 +3933,15 @@ final class DashboardViewModel: ObservableObject {
             // After action completes, derive final state from the latest health.
             serverControlState = serverStatus.severity == .ready ? .running : .stopped
             if serverControlState.isRunning {
-                await drainPendingProxyConfigurationRestarts()
+                if !pendingProxyConfigurationRestartReasons.isEmpty {
+                    performedConfigurationRestart = true
+                }
+                actionSucceeded = await drainPendingProxyConfigurationRestarts()
             } else {
                 pendingProxyConfigurationRestartReasons.removeAll()
+                actionSucceeded = true
             }
-            return true
+            return actionSucceeded
         } catch {
             guard !isPreparingAPIUsageForTermination, !Task.isCancelled else { return false }
             pendingProxyConfigurationRestartReasons.removeAll()
