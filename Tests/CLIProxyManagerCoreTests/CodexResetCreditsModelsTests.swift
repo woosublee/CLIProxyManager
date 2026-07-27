@@ -27,8 +27,61 @@ final class CodexResetCreditsModelsTests: XCTestCase {
         XCTAssertFalse(encoded.contains("credit_id"))
     }
 
-    func testSubscriptionUsageReportDefaultsResetCreditOutcomesToEmpty() {
+    func testSubscriptionUsageReportDefaultsResetCreditMetadataToEmpty() {
         let report = SubscriptionUsageReport(statesByProfileID: [:], fetchedAt: .distantPast)
         XCTAssertEqual(report.resetCreditsOutcomesByProfileID, [:])
+        XCTAssertEqual(report.resetCreditsAttemptedProfileIDs, [])
+        XCTAssertEqual(report.resetCreditsDeferredProfileIDs, [])
     }
+
+    func testLegacyQuotaFetcherPreservesUsageSubsetAndReportsUnsupportedReset() async {
+        let usageProfile = AuthProfile(
+            fileName: "claude-work.json",
+            type: .claude,
+            email: "work@example.com",
+            accountID: nil,
+            expired: nil,
+            disabled: false
+        )
+        let resetProfile = AuthProfile(
+            fileName: "codex-work.json",
+            type: .codex,
+            email: "work@example.com",
+            accountID: "acct_example",
+            expired: nil,
+            disabled: false
+        )
+        let client = LegacySubscriptionQuotaClient()
+
+        let report = await client.fetchUsage(
+            port: 18_317,
+            profiles: [usageProfile, resetProfile],
+            usageProfileIDs: [usageProfile.id],
+            resetCreditsProfileIDs: [resetProfile.id]
+        )
+
+        let requestedProfileIDs = await client.requestedProfileIDs()
+        XCTAssertEqual(requestedProfileIDs, [[usageProfile.id]])
+        XCTAssertEqual(report.statesByProfileID, [usageProfile.id: .loading])
+        XCTAssertEqual(
+            report.resetCreditsOutcomesByProfileID,
+            [resetProfile.id: .unavailable(.endpointUnsupported)]
+        )
+        XCTAssertEqual(report.resetCreditsAttemptedProfileIDs, [])
+        XCTAssertEqual(report.resetCreditsDeferredProfileIDs, [resetProfile.id])
+    }
+}
+
+private actor LegacySubscriptionQuotaClient: SubscriptionQuotaFetching {
+    private var requests: [[String]] = []
+
+    func fetchUsage(port: Int, profiles: [AuthProfile]) async -> SubscriptionUsageReport {
+        requests.append(profiles.map(\.id))
+        return SubscriptionUsageReport(
+            statesByProfileID: Dictionary(uniqueKeysWithValues: profiles.map { ($0.id, .loading) }),
+            fetchedAt: Date(timeIntervalSince1970: 100)
+        )
+    }
+
+    func requestedProfileIDs() -> [[String]] { requests }
 }

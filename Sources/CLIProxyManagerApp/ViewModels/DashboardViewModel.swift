@@ -318,7 +318,11 @@ final class DashboardViewModel: ObservableObject {
     private var subscriptionUsageRefreshIsForced = false
     private var pendingForcedSubscriptionUsageRefresh = false
     private var codexResetCreditsLastAttemptAt: [String: Date] = [:]
+    private var codexResetCreditsInFlightProfileIDs: Set<String> = []
+    private var codexResetCreditsRetryNotBefore: Date?
     private static let codexResetCreditsRefreshInterval: TimeInterval = 3 * 60 * 60
+    private static let codexResetCreditsPreflightRetryInterval: TimeInterval = 60
+    private static let maximumSubscriptionUsageSleepInterval: TimeInterval = 24 * 60 * 60
     private var pendingProxyConfigurationRestartReasons: Set<ProxyConfigurationRestartReason> = []
     private var proxyConfigurationRestartTask: Task<Void, Never>?
     private var serverActionCompletionWaiters: [CheckedContinuation<Void, Never>] = []
@@ -1009,8 +1013,13 @@ final class DashboardViewModel: ObservableObject {
         let enabledCodexIDs = Set(authProfiles.filter {
             $0.type == .codex && isSubscriptionUsageEnabled(for: $0)
         }.map(\.id))
-        codexResetCreditsSnapshots = codexResetCreditsSnapshotCache.load().filter {
-            enabledCodexIDs.contains($0.key)
+        let loadedSnapshots = codexResetCreditsSnapshotCache.load()
+        let now = codexResetCreditsNow()
+        codexResetCreditsSnapshots = loadedSnapshots.filter {
+            enabledCodexIDs.contains($0.key) && $0.value.fetchedAt <= now
+        }
+        if codexResetCreditsSnapshots != loadedSnapshots {
+            try? codexResetCreditsSnapshotCache.save(codexResetCreditsSnapshots)
         }
     }
 
@@ -1019,7 +1028,12 @@ final class DashboardViewModel: ObservableObject {
         force: Bool,
         now: Date
     ) -> Set<String> {
-        Set(profiles.compactMap { profile in
+        if !force,
+           let retryNotBefore = codexResetCreditsRetryNotBefore,
+           now < retryNotBefore {
+            return []
+        }
+        return Set(profiles.compactMap { profile in
             guard profile.type == .codex else { return nil }
             if force { return profile.id }
             let reference = codexResetCreditsLastAttemptAt[profile.id]
@@ -1056,6 +1070,8 @@ final class DashboardViewModel: ObservableObject {
     private func clearCodexResetCreditSnapshots() {
         codexResetCreditsSnapshots.removeAll()
         codexResetCreditsLastAttemptAt.removeAll()
+        codexResetCreditsInFlightProfileIDs.removeAll()
+        codexResetCreditsRetryNotBefore = nil
         try? codexResetCreditsSnapshotCache.clear()
     }
 
@@ -1063,6 +1079,7 @@ final class DashboardViewModel: ObservableObject {
         guard let profileID else { return }
         codexResetCreditsSnapshots.removeValue(forKey: profileID)
         codexResetCreditsLastAttemptAt.removeValue(forKey: profileID)
+        codexResetCreditsInFlightProfileIDs.remove(profileID)
         persistCodexResetCreditSnapshots()
     }
 
@@ -1079,6 +1096,8 @@ final class DashboardViewModel: ObservableObject {
         subscriptionUsagePollingDeadline = nil
         subscriptionUsageNextUsageRefreshAt = nil
         subscriptionUsageRetryDelayNanoseconds = 60_000_000_000
+        codexResetCreditsInFlightProfileIDs.removeAll()
+        codexResetCreditsRetryNotBefore = nil
     }
 
     private struct SubscriptionUsageRemovalRefreshContext {
@@ -1107,6 +1126,7 @@ final class DashboardViewModel: ObservableObject {
         subscriptionUsagePollingWakeReason = nil
         subscriptionUsagePollingDeadline = nil
         subscriptionUsageNextUsageRefreshAt = nil
+        codexResetCreditsInFlightProfileIDs.removeAll()
         return SubscriptionUsageRemovalRefreshContext(
             canceledActiveRefresh: true,
             requiresForcedRefresh: requiresForcedRefresh
@@ -1205,19 +1225,19 @@ final class DashboardViewModel: ObservableObject {
             force: force,
             now: resetCreditsNow
         )
-        let requestedProfileIDs = Set(usageProfiles.map(\.id)).union(resetCreditsProfileIDs)
-        let profiles = enabledProfiles.filter { requestedProfileIDs.contains($0.id) }
-        guard !profiles.isEmpty else {
+        let usageProfileIDs = Set(usageProfiles.map(\.id))
+        let requestedProfileIDs = usageProfileIDs.union(resetCreditsProfileIDs)
+        let requestedProfiles = enabledProfiles.filter { requestedProfileIDs.contains($0.id) }
+        let resetCreditsProfiles = enabledProfiles.filter { resetCreditsProfileIDs.contains($0.id) }
+        guard !requestedProfiles.isEmpty else {
             scheduleSubscriptionUsagePollingIfNeeded()
             return
-        }
-        for profileID in resetCreditsProfileIDs {
-            codexResetCreditsLastAttemptAt[profileID] = resetCreditsNow
         }
 
         subscriptionUsageRefreshGeneration += 1
         let generation = subscriptionUsageRefreshGeneration
         isSubscriptionUsageRefreshInProgress = true
+        codexResetCreditsInFlightProfileIDs.formUnion(resetCreditsProfileIDs)
         let previousStates = subscriptionUsageStates
         if !force {
             let unavailableProfileIDs = Set(usageProfiles.compactMap { profile -> String? in
@@ -1229,23 +1249,79 @@ final class DashboardViewModel: ObservableObject {
         }
         let port = config.port
         let quotaClient = subscriptionQuotaClient
+        let supportsConcurrentUsageAndReset = quotaClient is any ConcurrentSubscriptionQuotaFetching
         let refreshTask = Task { [weak self] in
-            let report = await quotaClient.fetchUsage(
-                port: port,
-                profiles: profiles,
-                usageProfileIDs: Set(usageProfiles.map(\.id)),
-                resetCreditsProfileIDs: resetCreditsProfileIDs
-            )
-            guard !Task.isCancelled,
-                  let self,
-                  self.config.isSubscriptionUsageEnabled,
-                  self.subscriptionUsageKeyStore.isConfigured(),
-                  self.subscriptionUsageRefreshGeneration == generation else {
-                return
+            if supportsConcurrentUsageAndReset,
+               !usageProfiles.isEmpty,
+               !resetCreditsProfiles.isEmpty {
+                async let usageReport = quotaClient.fetchUsage(
+                    port: port,
+                    profiles: usageProfiles,
+                    usageProfileIDs: usageProfileIDs,
+                    resetCreditsProfileIDs: []
+                )
+                async let resetCreditsReport = quotaClient.fetchUsage(
+                    port: port,
+                    profiles: resetCreditsProfiles,
+                    usageProfileIDs: [],
+                    resetCreditsProfileIDs: resetCreditsProfileIDs
+                )
+                let completedUsageReport = await usageReport
+                guard !Task.isCancelled,
+                      let self,
+                      self.config.isSubscriptionUsageEnabled,
+                      self.subscriptionUsageKeyStore.isConfigured(),
+                      self.subscriptionUsageRefreshGeneration == generation else {
+                    return
+                }
+                self.applySubscriptionUsageReport(
+                    completedUsageReport,
+                    for: usageProfiles,
+                    previousStates: previousStates
+                )
+                self.rebuildProviderRows(claudeStatus: self.lastClaudeStatus, codexStatus: self.lastCodexStatus)
+                self.scheduleSubscriptionUsagePollingIfNeeded(didRefreshUsage: true)
+
+                let completedResetCreditsReport = await resetCreditsReport
+                guard !Task.isCancelled,
+                      self.config.isSubscriptionUsageEnabled,
+                      self.subscriptionUsageKeyStore.isConfigured(),
+                      self.subscriptionUsageRefreshGeneration == generation else {
+                    return
+                }
+                self.codexResetCreditsInFlightProfileIDs.subtract(resetCreditsProfileIDs)
+                self.commitCodexResetCreditAttemptMetadata(
+                    completedResetCreditsReport,
+                    requestedProfileIDs: resetCreditsProfileIDs,
+                    attemptedAt: resetCreditsNow
+                )
+                self.applySubscriptionUsageReport(completedResetCreditsReport, for: [])
+                self.rebuildProviderRows(claudeStatus: self.lastClaudeStatus, codexStatus: self.lastCodexStatus)
+                self.scheduleSubscriptionUsagePollingIfNeeded()
+            } else {
+                let report = await quotaClient.fetchUsage(
+                    port: port,
+                    profiles: requestedProfiles,
+                    usageProfileIDs: usageProfileIDs,
+                    resetCreditsProfileIDs: resetCreditsProfileIDs
+                )
+                guard !Task.isCancelled,
+                      let self,
+                      self.config.isSubscriptionUsageEnabled,
+                      self.subscriptionUsageKeyStore.isConfigured(),
+                      self.subscriptionUsageRefreshGeneration == generation else {
+                    return
+                }
+                self.codexResetCreditsInFlightProfileIDs.subtract(resetCreditsProfileIDs)
+                self.commitCodexResetCreditAttemptMetadata(
+                    report,
+                    requestedProfileIDs: resetCreditsProfileIDs,
+                    attemptedAt: resetCreditsNow
+                )
+                self.applySubscriptionUsageReport(report, for: usageProfiles, previousStates: previousStates)
+                self.rebuildProviderRows(claudeStatus: self.lastClaudeStatus, codexStatus: self.lastCodexStatus)
+                self.scheduleSubscriptionUsagePollingIfNeeded(didRefreshUsage: !usageProfiles.isEmpty)
             }
-            self.applySubscriptionUsageReport(report, for: usageProfiles, previousStates: previousStates)
-            self.rebuildProviderRows(claudeStatus: self.lastClaudeStatus, codexStatus: self.lastCodexStatus)
-            self.scheduleSubscriptionUsagePollingIfNeeded(didRefreshUsage: !usageProfiles.isEmpty)
         }
         subscriptionUsageRefreshTask = refreshTask
         subscriptionUsageRefreshIsForced = force
@@ -1258,6 +1334,27 @@ final class DashboardViewModel: ObservableObject {
                 pendingForcedSubscriptionUsageRefresh = false
                 await refreshSubscriptionUsage(force: true)
             }
+        }
+    }
+
+    private func commitCodexResetCreditAttemptMetadata(
+        _ report: SubscriptionUsageReport,
+        requestedProfileIDs: Set<String>,
+        attemptedAt: Date
+    ) {
+        guard !requestedProfileIDs.isEmpty else { return }
+        let classifiedProfileIDs = report.resetCreditsAttemptedProfileIDs
+            .union(report.resetCreditsDeferredProfileIDs)
+            .intersection(requestedProfileIDs)
+        for profileID in classifiedProfileIDs {
+            codexResetCreditsLastAttemptAt[profileID] = attemptedAt
+        }
+        if classifiedProfileIDs == requestedProfileIDs {
+            codexResetCreditsRetryNotBefore = nil
+        } else {
+            codexResetCreditsRetryNotBefore = attemptedAt.addingTimeInterval(
+                Self.codexResetCreditsPreflightRetryInterval
+            )
         }
     }
 
@@ -1449,17 +1546,32 @@ final class DashboardViewModel: ObservableObject {
         for profiles: [AuthProfile],
         now: Date
     ) -> Date? {
-        profiles.compactMap { profile -> Date? in
-            guard profile.type == .codex else { return nil }
+        guard let deadline = profiles.compactMap({ profile -> Date? in
+            guard profile.type == .codex,
+                  !codexResetCreditsInFlightProfileIDs.contains(profile.id) else {
+                return nil
+            }
             let reference = codexResetCreditsLastAttemptAt[profile.id]
                 ?? codexResetCreditsSnapshots[profile.id]?.fetchedAt
             guard let reference else { return now }
             return reference.addingTimeInterval(Self.codexResetCreditsRefreshInterval)
-        }.min()
+        }).min() else {
+            return nil
+        }
+        guard let retryNotBefore = codexResetCreditsRetryNotBefore else { return deadline }
+        return max(deadline, retryNotBefore)
     }
 
     private func nanoseconds(until deadline: Date, now: Date) -> UInt64 {
-        UInt64(ceil(max(0, deadline.timeIntervalSince(now)) * 1_000_000_000))
+        let interval = deadline.timeIntervalSince(now)
+        guard interval.isFinite else {
+            return UInt64(Self.maximumSubscriptionUsageSleepInterval * 1_000_000_000)
+        }
+        let boundedInterval = min(
+            max(0, interval),
+            Self.maximumSubscriptionUsageSleepInterval
+        )
+        return UInt64(ceil(boundedInterval * 1_000_000_000))
     }
 
     /// Called once on app launch. Auto-starts the server if the user opted in.
@@ -1718,6 +1830,9 @@ final class DashboardViewModel: ObservableObject {
             applyCodexCredentialMigrationsIfNeeded()
             let completedID = reconcileOAuthLoginCompletion(providerType: providerType, beforeProfiles: beforeProfiles)
             refreshProfiles()
+            if serverStatus.severity == .ready {
+                await refreshSubscriptionUsage()
+            }
             completedOAuthLoginProvider = completedID
             completedOAuthLoginIsInitialSetup = isInitialSetup
             settingsMessage = "\(providerName) connection was updated."
@@ -2717,8 +2832,13 @@ final class DashboardViewModel: ObservableObject {
                 using: result.mapping
             )
         }
-        if case .success(let profiles) = result.profiles {
+        switch result.profiles {
+        case .success(let profiles):
             authProfiles = profiles
+        case .failure where !result.mapping.isEmpty:
+            authProfiles = Self.remappingAuthProfiles(authProfiles, using: result.mapping)
+        case .failure:
+            break
         }
         if configChanged {
             cards = ProfileCard.makeDefaultCards(config: result.config)
@@ -2746,6 +2866,36 @@ final class DashboardViewModel: ObservableObject {
             }
             result[oldID] = profile.authProfileID
         }
+    }
+
+    private static func remappingAuthProfiles(
+        _ profiles: [AuthProfile],
+        using mapping: [String: String]
+    ) -> [AuthProfile] {
+        guard !mapping.isEmpty else { return profiles }
+        var remapped: [AuthProfile] = []
+        var indexByID: [String: Int] = [:]
+        for profile in profiles {
+            let profileID = mapping[profile.id] ?? profile.id
+            let updated = AuthProfile(
+                fileName: profileID,
+                type: profile.type,
+                email: profile.email,
+                accountID: profile.accountID,
+                expired: profile.expired,
+                disabled: profile.disabled,
+                prefix: profile.prefix
+            )
+            if let existingIndex = indexByID[profileID] {
+                if mapping[profile.id] == nil {
+                    remapped[existingIndex] = updated
+                }
+            } else {
+                indexByID[profileID] = remapped.count
+                remapped.append(updated)
+            }
+        }
+        return remapped
     }
 
     private static func remappingAuthProfileIDs(

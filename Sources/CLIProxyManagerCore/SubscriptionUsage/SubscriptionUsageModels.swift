@@ -127,15 +127,21 @@ public enum AccountSubscriptionUsageState: Equatable, Sendable {
 public struct SubscriptionUsageReport: Equatable, Sendable {
     public let statesByProfileID: [String: AccountSubscriptionUsageState]
     public let resetCreditsOutcomesByProfileID: [String: CodexResetCreditsRefreshOutcome]
+    public let resetCreditsAttemptedProfileIDs: Set<String>
+    public let resetCreditsDeferredProfileIDs: Set<String>
     public let fetchedAt: Date
 
     public init(
         statesByProfileID: [String: AccountSubscriptionUsageState],
         resetCreditsOutcomesByProfileID: [String: CodexResetCreditsRefreshOutcome] = [:],
+        resetCreditsAttemptedProfileIDs: Set<String> = [],
+        resetCreditsDeferredProfileIDs: Set<String> = [],
         fetchedAt: Date
     ) {
         self.statesByProfileID = statesByProfileID
         self.resetCreditsOutcomesByProfileID = resetCreditsOutcomesByProfileID
+        self.resetCreditsAttemptedProfileIDs = resetCreditsAttemptedProfileIDs
+        self.resetCreditsDeferredProfileIDs = resetCreditsDeferredProfileIDs
         self.fetchedAt = fetchedAt
     }
 }
@@ -155,13 +161,33 @@ public protocol SubscriptionQuotaFetching: Sendable {
     ) async -> SubscriptionUsageReport
 }
 
+public protocol ConcurrentSubscriptionQuotaFetching: SubscriptionQuotaFetching {}
+
 public extension SubscriptionQuotaFetching {
     func fetchUsage(
         port: Int,
         profiles: [AuthProfile],
         resetCreditsProfileIDs: Set<String>
     ) async -> SubscriptionUsageReport {
-        await fetchUsage(port: port, profiles: profiles)
+        let report = await fetchUsage(port: port, profiles: profiles)
+        let unsupportedResetProfileIDs = Set(profiles.compactMap { profile in
+            profile.type == .codex && resetCreditsProfileIDs.contains(profile.id)
+                ? profile.id
+                : nil
+        })
+        var outcomes = report.resetCreditsOutcomesByProfileID
+        for profileID in unsupportedResetProfileIDs {
+            outcomes[profileID] = .unavailable(.endpointUnsupported)
+        }
+        return SubscriptionUsageReport(
+            statesByProfileID: report.statesByProfileID,
+            resetCreditsOutcomesByProfileID: outcomes,
+            resetCreditsAttemptedProfileIDs: report.resetCreditsAttemptedProfileIDs
+                .subtracting(unsupportedResetProfileIDs),
+            resetCreditsDeferredProfileIDs: report.resetCreditsDeferredProfileIDs
+                .union(unsupportedResetProfileIDs),
+            fetchedAt: report.fetchedAt
+        )
     }
 
     func fetchUsage(
@@ -170,10 +196,25 @@ public extension SubscriptionQuotaFetching {
         usageProfileIDs: Set<String>,
         resetCreditsProfileIDs: Set<String>
     ) async -> SubscriptionUsageReport {
-        await fetchUsage(
-            port: port,
-            profiles: profiles,
-            resetCreditsProfileIDs: resetCreditsProfileIDs
+        let usageProfiles = profiles.filter { usageProfileIDs.contains($0.id) }
+        let report = await fetchUsage(port: port, profiles: usageProfiles)
+        let unsupportedResetProfileIDs = Set(profiles.compactMap { profile in
+            profile.type == .codex && resetCreditsProfileIDs.contains(profile.id)
+                ? profile.id
+                : nil
+        })
+        var outcomes = report.resetCreditsOutcomesByProfileID
+        for profileID in unsupportedResetProfileIDs {
+            outcomes[profileID] = .unavailable(.endpointUnsupported)
+        }
+        return SubscriptionUsageReport(
+            statesByProfileID: report.statesByProfileID.filter { usageProfileIDs.contains($0.key) },
+            resetCreditsOutcomesByProfileID: outcomes,
+            resetCreditsAttemptedProfileIDs: report.resetCreditsAttemptedProfileIDs
+                .subtracting(unsupportedResetProfileIDs),
+            resetCreditsDeferredProfileIDs: report.resetCreditsDeferredProfileIDs
+                .union(unsupportedResetProfileIDs),
+            fetchedAt: report.fetchedAt
         )
     }
 }
