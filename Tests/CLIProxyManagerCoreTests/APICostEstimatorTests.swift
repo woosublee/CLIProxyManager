@@ -567,10 +567,8 @@ final class APICostEstimatorTests: XCTestCase {
 
         XCTAssertEqual(states[firstID]?.snapshot?.day.requestCount, 1)
         XCTAssertEqual(states[secondID]?.snapshot?.day.requestCount, 2)
-        XCTAssertNotEqual(
-            states[firstID]?.snapshot?.day.estimatedUSD,
-            states[secondID]?.snapshot?.day.estimatedUSD
-        )
+        XCTAssertEqual(states[firstID]?.snapshot?.day.estimatedUSD, Decimal(string: "2.5"))
+        XCTAssertEqual(states[secondID]?.snapshot?.day.estimatedUSD, Decimal(string: "5"))
     }
 
     private func makeBucket(

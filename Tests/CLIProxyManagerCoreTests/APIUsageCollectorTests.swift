@@ -82,6 +82,47 @@ final class APIUsageCollectorTests: XCTestCase {
         XCTAssertEqual(report.statesByProfileID["claude-api"], .loading)
     }
 
+    func testDisabledReportKeepsFirstStateWhenProfileIDsAreDuplicated() async {
+        let profile = APIUsageProfileDescriptor.legacyClaude
+        let configuration = APIUsageCollectorConfiguration(
+            usageEnabled: false,
+            proxyReady: true,
+            port: 18_317,
+            profiles: [profile, profile],
+            reportingTimeZoneID: "UTC"
+        )
+        let collector = APIUsageCollector(
+            queueClient: RecordingQueueClient(results: []),
+            ledgerStore: RecordingLedgerStore()
+        )
+
+        let report = await collector.reload(configuration: configuration)
+
+        XCTAssertEqual(report.statesByProfileID, [profile.profileID: .disabled])
+    }
+
+    func testLoadingReportKeepsFirstStateWhenProfileIDsAreDuplicated() async {
+        let profile = APIUsageProfileDescriptor.legacyClaude
+        let configuration = APIUsageCollectorConfiguration(
+            usageEnabled: true,
+            proxyReady: true,
+            port: 18_317,
+            profiles: [profile, profile],
+            reportingTimeZoneID: "UTC"
+        )
+        let collector = APIUsageCollector(
+            queueClient: RecordingQueueClient(results: []),
+            ledgerStore: RecordingLedgerStore(
+                prepareError: .notInitialized,
+                initiallyInitialized: false
+            )
+        )
+
+        let report = await collector.reload(configuration: configuration)
+
+        XCTAssertEqual(report.statesByProfileID, [profile.profileID: .loading])
+    }
+
     func testReloadDrainsFullBatchesUntilShortBatchAndMergesEachRecordOnce() async {
         let queue = RecordingQueueClient(results: [
             .success(Array(repeating: makeQueueRecord(), count: 200)),

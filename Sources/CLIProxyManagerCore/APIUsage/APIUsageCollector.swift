@@ -1115,9 +1115,10 @@ public actor APIUsageCollector: APIUsageCollecting {
     ) -> APIUsageCollectionReport {
         APIUsageCollectionReport(
             identity: identity,
-            statesByProfileID: Dictionary(uniqueKeysWithValues: configuration.profiles.map {
-                ($0.profileID, APICostUsageState.disabled)
-            }),
+            statesByProfileID: Dictionary(
+                configuration.profiles.map { ($0.profileID, APICostUsageState.disabled) },
+                uniquingKeysWith: { first, _ in first }
+            ),
             collectedAt: at
         )
     }
@@ -1289,9 +1290,10 @@ public actor APIUsageCollector: APIUsageCollecting {
         configuration: APIUsageCollectorConfiguration,
         makeState: () -> APICostUsageState
     ) -> [String: APICostUsageState] {
-        Dictionary(uniqueKeysWithValues: configuration.profiles.map {
-            ($0.profileID, makeState())
-        })
+        Dictionary(
+            configuration.profiles.map { ($0.profileID, makeState()) },
+            uniquingKeysWith: { first, _ in first }
+        )
     }
 
     private func ordered(_ issues: [APICostIssue]) -> [APICostIssue] {

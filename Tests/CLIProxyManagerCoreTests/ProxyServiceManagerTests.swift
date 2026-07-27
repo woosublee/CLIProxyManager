@@ -224,6 +224,29 @@ final class ProxyServiceManagerTests: XCTestCase {
         XCTAssertFalse(yaml.contains("gpt-5.6-terra-fast"))
     }
 
+    func testStartReadsConfiguredLegacyCodexAPIKeyOnlyOnce() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let callCounter = ProviderCallCounter()
+        let manager = ProxyServiceManager(
+            paths: paths,
+            launcher: FakeProcessLauncher(),
+            codexAPIKeyProvider: {
+                callCounter.increment()
+                return "codex-key"
+            },
+            appConfigProvider: { .default }
+        )
+
+        try await manager.start(port: 8317)
+
+        let yaml = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
+        XCTAssertEqual(callCounter.value, 1)
+        XCTAssertTrue(yaml.contains("codex-key"))
+        XCTAssertTrue(yaml.contains("prefix: \"cpm-codex-api\""))
+    }
+
     func testStartKeepsNoFastCodexAPIYAMLByteCompatibleWithMainRenderer() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))

@@ -145,7 +145,7 @@ Follow the instructions in [Installation and macOS security warning](#installati
 
 ## Security
 
-CLIProxyManager stores OAuth profiles and preferences under `~/.cliproxy-manager`. The actual key for each API key profile is stored in a separate plaintext file under `~/.cliproxy-manager/api-keys/`; keys are not written to `config.json` or generated shell functions. The app applies `0700` permissions to the directory and `0600` permissions to each key and lock file, but anyone who can access your macOS account can read them. Do not copy, commit, or share this directory.
+CLIProxyManager stores OAuth profiles and preferences under `~/.cliproxy-manager`. The current release stores the actual key for each API key profile in a separate plaintext file under `~/.cliproxy-manager/api-keys/` and does not provide a setting to switch API keys to macOS Keychain. Keys are not written to `config.json` or generated shell functions. The app applies `0700` permissions to the directory and `0600` permissions to each key and lock file, but anyone who can access your macOS account can read them. Do not copy, commit, or share this directory.
 
 ## License
 

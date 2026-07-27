@@ -2,6 +2,20 @@ import XCTest
 @testable import CLIProxyManagerCore
 
 final class CLIProxyManagerCommandTests: XCTestCase {
+    func testHelpDoesNotAdvertiseUnsupportedLegacyClaudeModelsTarget() async throws {
+        let output = OutputDouble(isInteractive: false)
+        let command = CLIProxyManagerCommand(
+            secretStore: InMemorySecretStore(),
+            output: output
+        )
+
+        try await command.run(arguments: ["--help"])
+
+        let help = output.stdout.joined()
+        XCTAssertTrue(help.contains("--api-profile profile-id"))
+        XCTAssertFalse(help.contains("--legacy"))
+    }
+
     func testSecretGetStillPrintsSecret() async throws {
         let output = OutputDouble(isInteractive: false)
         let command = CLIProxyManagerCommand(
