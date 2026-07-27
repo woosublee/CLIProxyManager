@@ -17,31 +17,46 @@ struct CodexResetCreditBadge: View {
     let text: String
     let avatarSize: CGFloat
 
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var accessibilityContrast
+
     var body: some View {
         let height = CodexResetCreditBadgeMetrics.minimumHeight(for: avatarSize)
         Text(text)
             .font(.system(size: 8, weight: .bold, design: .rounded))
-            .foregroundStyle(.white)
+            .foregroundStyle(.primary)
             .monospacedDigit()
             .lineLimit(1)
             .padding(.horizontal, text.count == 1 ? 0 : 3)
             .frame(minWidth: height, minHeight: height)
-            .background(.ultraThinMaterial, in: Capsule())
-            .background(
-                LinearGradient(
-                    colors: [
-                        BrandPalette.statusError.opacity(0.78),
-                        BrandPalette.statusError.opacity(0.62)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                ),
-                in: Capsule()
-            )
-            .overlay {
-                Capsule().strokeBorder(.white.opacity(0.28), lineWidth: 0.5)
+            .background {
+                ZStack {
+                    if reduceTransparency {
+                        Capsule().fill(Color(nsColor: .windowBackgroundColor))
+                    } else {
+                        Capsule().fill(.ultraThinMaterial)
+                    }
+                    Capsule().fill(Color.primary.opacity(0.08))
+                }
             }
-            .shadow(color: .black.opacity(0.20), radius: 1.5, y: 1)
+            .overlay {
+                Capsule().strokeBorder(
+                    Color.primary.opacity(accessibilityContrast == .increased ? 0.42 : 0.20),
+                    lineWidth: accessibilityContrast == .increased ? 1 : 0.5
+                )
+            }
+            .overlay {
+                Capsule()
+                    .strokeBorder(.white.opacity(0.24), lineWidth: 0.5)
+                    .mask {
+                        LinearGradient(
+                            colors: [.white, .clear],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    }
+            }
+            .shadow(color: .black.opacity(0.16), radius: 1.5, y: 1)
     }
 }
 
@@ -64,7 +79,7 @@ struct CodexResetCreditAvatar: View {
             if let tooltip = presentation.tooltip,
                let accessibilityLabel = presentation.accessibilityLabel {
                 decoratedAvatar
-                    .help(tooltip)
+                    .fastTooltip(tooltip)
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel("\(accountName). \(accessibilityLabel)")
             } else {

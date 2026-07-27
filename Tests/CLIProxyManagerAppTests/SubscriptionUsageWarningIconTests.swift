@@ -9,7 +9,7 @@ final class SubscriptionUsageWarningIconTests: XCTestCase {
 
         XCTAssertEqual(icon.message, message)
         XCTAssertEqual(UsageWarningLayout.iconFrameSize, CGSize(width: 12, height: 12))
-        XCTAssertEqual(UsageWarningLayout.compactAvatarBottomTrailingOffset, CGSize(width: 10, height: 10))
+        XCTAssertEqual(UsageWarningLayout.compactAvatarBottomTrailingOffset, CGSize(width: 5, height: 5))
     }
 
     func testStaleStateKeepsSnapshotAndAddsWarningPresentation() {

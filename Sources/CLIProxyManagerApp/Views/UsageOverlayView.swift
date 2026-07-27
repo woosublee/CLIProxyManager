@@ -215,7 +215,6 @@ struct UsageOverlayChrome: View {
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
         .accessibilityLabel(accessibilityLabel)
-        .help(accessibilityLabel)
     }
 }
 
@@ -382,7 +381,7 @@ private struct ExpandedUsageOverlayAccountView: View {
                         }
                     }
                 }
-                .help(row.tooltip)
+                .fastTooltip(row.tooltip)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(row.accessibilityLabel)
             }

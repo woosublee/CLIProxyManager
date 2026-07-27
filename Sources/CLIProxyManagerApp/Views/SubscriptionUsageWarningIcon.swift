@@ -83,7 +83,7 @@ func subscriptionUsageWarningRows(
 enum UsageWarningLayout {
     static let iconFrameSize = CGSize(width: 12, height: 12)
     static let inlineSpacing: CGFloat = 6
-    static let compactAvatarBottomTrailingOffset = CGSize(width: 10, height: 10)
+    static let compactAvatarBottomTrailingOffset = CGSize(width: 5, height: 5)
 }
 
 struct UsageWarningAlignedRow<Content: View>: View {
@@ -139,7 +139,7 @@ struct UsageWarningIcon: View {
         Image(systemName: "exclamationmark.triangle.fill")
             .font(.system(size: 10, weight: .semibold))
             .foregroundStyle(BrandPalette.statusWarning)
-            .help(message)
+            .fastTooltip(message)
             .accessibilityLabel(Text(message))
     }
 }

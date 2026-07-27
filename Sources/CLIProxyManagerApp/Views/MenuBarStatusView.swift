@@ -204,6 +204,7 @@ private struct MenuBarAccountRow: View {
                         .lineLimit(1)
                     Spacer(minLength: 0)
                 }
+                .frame(minHeight: 22, alignment: .center)
                 if let connectionDetail = provider.menuBarConnectionDetail {
                     Text(connectionDetail)
                         .font(.system(size: 11.5))
@@ -298,7 +299,7 @@ private struct MenuBarAccountRow: View {
                         .frame(minWidth: 56, maxWidth: .infinity, alignment: .trailing)
                 }
                 .font(.system(size: 10.5, design: .monospaced))
-                .help(row.tooltip)
+                .fastTooltip(row.tooltip)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(row.accessibilityLabel)
             }

@@ -131,7 +131,6 @@ private struct CompactUsageAccountView: View {
                     .font(.system(size: 10, weight: .semibold))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .help(provider.usageOverlayDisplayName)
                     .accessibilityLabel(provider.usageOverlayDisplayName)
             }
 
@@ -151,7 +150,7 @@ private struct CompactUsageAccountView: View {
                                 .minimumScaleFactor(row.textLayout.minimumScaleFactor)
                                 .allowsTightening(true)
                                 .layoutPriority(1)
-                                .help(row.tooltip ?? "")
+                                .fastTooltip(row.tooltip)
                         }
                         .font(.system(size: 10, weight: .semibold, design: .monospaced))
                         .accessibilityElement(children: .ignore)
@@ -191,7 +190,7 @@ private struct CompactUsageIndicatorView: View {
         Image(systemName: indicator.symbolName)
             .font(.system(size: 9, weight: .semibold))
             .foregroundStyle(indicatorColor)
-            .help(indicator.message)
+            .fastTooltip(indicator.message)
             .accessibilityLabel(indicator.message)
     }
 
