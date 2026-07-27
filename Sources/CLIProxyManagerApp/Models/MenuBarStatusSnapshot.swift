@@ -2,6 +2,7 @@ import CLIProxyManagerCore
 
 struct MenuBarConnectedProvider: Equatable, Identifiable {
     let id: ProviderRowState.ID
+    let providerType: AuthProfileType
     let name: String           // Provider type, e.g. "Claude OAuth"
     let displayName: String    // Trimmed account nickname, or provider name fallback
     let functionName: String
@@ -9,6 +10,31 @@ struct MenuBarConnectedProvider: Equatable, Identifiable {
     let accountDetailHidden: Bool
     let usageState: ProviderUsageState
     let showsUsage: Bool
+    let resetCreditsSnapshot: CodexResetCreditsSnapshot?
+
+    init(
+        id: ProviderRowState.ID,
+        providerType: AuthProfileType? = nil,
+        name: String,
+        displayName: String,
+        functionName: String,
+        connectionDetail: String,
+        accountDetailHidden: Bool,
+        usageState: ProviderUsageState,
+        showsUsage: Bool,
+        resetCreditsSnapshot: CodexResetCreditsSnapshot? = nil
+    ) {
+        self.id = id
+        self.providerType = providerType ?? id.inferredProviderType
+        self.name = name
+        self.displayName = displayName
+        self.functionName = functionName
+        self.connectionDetail = connectionDetail
+        self.accountDetailHidden = accountDetailHidden
+        self.usageState = usageState
+        self.showsUsage = showsUsage
+        self.resetCreditsSnapshot = resetCreditsSnapshot
+    }
 
     var menuBarDisplayName: String {
         displayName
@@ -62,13 +88,15 @@ struct MenuBarStatusSnapshot: Equatable {
             .map { provider in
                 MenuBarConnectedProvider(
                     id: provider.id,
+                    providerType: provider.providerType,
                     name: provider.name,
                     displayName: provider.displayTitle,
                     functionName: provider.functionName,
                     connectionDetail: provider.connectionDetail,
                     accountDetailHidden: provider.accountDetailHidden,
                     usageState: provider.usageState,
-                    showsUsage: provider.showsUsage && showsUsage
+                    showsUsage: provider.showsUsage && showsUsage,
+                    resetCreditsSnapshot: provider.resetCreditsSnapshot
                 )
             }
         erroredCount = providers.filter(\.isErrored).count

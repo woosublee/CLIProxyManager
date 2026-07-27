@@ -3,7 +3,7 @@ import Foundation
 import FoundationNetworking
 #endif
 
-public struct CLIProxyAPISubscriptionQuotaClient: SubscriptionQuotaFetching {
+public struct CLIProxyAPISubscriptionQuotaClient: ConcurrentSubscriptionQuotaFetching {
     private let keyStore: any SubscriptionUsageManagementKeyProviding
     private let transport: any ManagementAPIHTTPTransport
     private let now: @Sendable () -> Date
@@ -27,12 +27,50 @@ public struct CLIProxyAPISubscriptionQuotaClient: SubscriptionQuotaFetching {
     }
 
     public func fetchUsage(port: Int, profiles: [AuthProfile]) async -> SubscriptionUsageReport {
+        await fetchUsage(port: port, profiles: profiles, resetCreditsProfileIDs: [])
+    }
+
+    public func fetchUsage(
+        port: Int,
+        profiles: [AuthProfile],
+        resetCreditsProfileIDs: Set<String>
+    ) async -> SubscriptionUsageReport {
+        await fetchUsage(
+            port: port,
+            profiles: profiles,
+            usageProfileIDs: Set(profiles.map(\.id)),
+            resetCreditsProfileIDs: resetCreditsProfileIDs
+        )
+    }
+
+    public func fetchUsage(
+        port: Int,
+        profiles: [AuthProfile],
+        usageProfileIDs: Set<String>,
+        resetCreditsProfileIDs: Set<String>
+    ) async -> SubscriptionUsageReport {
         let fetchedAt = now()
+        let usageProfiles = profiles.filter { usageProfileIDs.contains($0.id) }
+        let resetCreditsProfiles = profiles.filter {
+            $0.type == .codex && resetCreditsProfileIDs.contains($0.id)
+        }
         guard (1...65_535).contains(port) else {
-            return report(for: profiles, state: .unavailable(.proxyUnavailable), fetchedAt: fetchedAt)
+            return report(
+                for: usageProfiles,
+                state: .unavailable(.proxyUnavailable),
+                resetCreditsProfiles: resetCreditsProfiles,
+                resetCreditsIssue: .transientFailure,
+                fetchedAt: fetchedAt
+            )
         }
         guard keyStore.isConfigured(), let managementKey = try? keyStore.managementKey() else {
-            return report(for: profiles, state: .managementKeyNotConfigured, fetchedAt: fetchedAt)
+            return report(
+                for: usageProfiles,
+                state: .managementKeyNotConfigured,
+                resetCreditsProfiles: resetCreditsProfiles,
+                resetCreditsIssue: .transientFailure,
+                fetchedAt: fetchedAt
+            )
         }
 
         let baseURL = URL(string: "http://127.0.0.1:\(port)/v0/management")!
@@ -45,54 +83,135 @@ public struct CLIProxyAPISubscriptionQuotaClient: SubscriptionQuotaFetching {
                 body: nil
             )
         } catch {
-            return report(for: profiles, state: .unavailable(.proxyUnavailable), fetchedAt: fetchedAt)
+            return report(
+                for: usageProfiles,
+                state: .unavailable(.proxyUnavailable),
+                resetCreditsProfiles: resetCreditsProfiles,
+                resetCreditsIssue: .transientFailure,
+                fetchedAt: fetchedAt
+            )
         }
         guard (200..<300).contains(authFilesResponse.statusCode) else {
-            return report(for: profiles, state: .unavailable(issue(forManagementStatus: authFilesResponse.statusCode)), fetchedAt: fetchedAt)
+            return report(
+                for: usageProfiles,
+                state: .unavailable(issue(forManagementStatus: authFilesResponse.statusCode)),
+                resetCreditsProfiles: resetCreditsProfiles,
+                resetCreditsIssue: resetCreditsPreflightIssue(for: authFilesResponse.statusCode),
+                fetchedAt: fetchedAt
+            )
         }
 
         let credentialRecords: [ManagedCredential]
         do {
             credentialRecords = try decodeCredentialRecords(authFilesResponse.data)
         } catch {
-            return report(for: profiles, state: .unavailable(.schemaMismatch), fetchedAt: fetchedAt)
+            return report(
+                for: usageProfiles,
+                state: .unavailable(.schemaMismatch),
+                resetCreditsProfiles: resetCreditsProfiles,
+                resetCreditsIssue: .schemaMismatch,
+                fetchedAt: fetchedAt
+            )
         }
 
         var states: [String: AccountSubscriptionUsageState] = [:]
+        var resetCreditOutcomes: [String: CodexResetCreditsRefreshOutcome] = [:]
+        var resetCreditsAttemptedProfileIDs: Set<String> = []
+        var resetCreditsDeferredProfileIDs: Set<String> = []
         for profile in profiles {
+            let requestsUsage = usageProfileIDs.contains(profile.id)
+            let requestsResetCredits = profile.type == .codex
+                && resetCreditsProfileIDs.contains(profile.id)
+            guard requestsUsage || requestsResetCredits else { continue }
+
             if profile.disabled {
-                states[profile.id] = .unavailable(.credentialDisabled)
+                if requestsUsage {
+                    states[profile.id] = .unavailable(.credentialDisabled)
+                }
+                if requestsResetCredits {
+                    resetCreditOutcomes[profile.id] = .unavailable(.credentialRejected)
+                    resetCreditsDeferredProfileIDs.insert(profile.id)
+                }
                 continue
             }
             guard let credential = credentialRecords.first(where: {
                 $0.name == profile.fileName && $0.provider == profile.type.rawValue
             }) else {
-                states[profile.id] = .unavailable(.authFileNotMatched)
+                if requestsUsage {
+                    states[profile.id] = .unavailable(.authFileNotMatched)
+                }
+                if requestsResetCredits {
+                    resetCreditOutcomes[profile.id] = .unavailable(.credentialRejected)
+                    resetCreditsDeferredProfileIDs.insert(profile.id)
+                }
                 continue
             }
             if credential.disabled || credential.status == "disabled" {
-                states[profile.id] = .unavailable(.credentialDisabled)
+                if requestsUsage {
+                    states[profile.id] = .unavailable(.credentialDisabled)
+                }
+                if requestsResetCredits {
+                    resetCreditOutcomes[profile.id] = .unavailable(.credentialRejected)
+                    resetCreditsDeferredProfileIDs.insert(profile.id)
+                }
                 continue
             }
             if credential.status == "expired" {
-                states[profile.id] = .unavailable(.credentialExpired)
+                if requestsUsage {
+                    states[profile.id] = .unavailable(.credentialExpired)
+                }
+                if requestsResetCredits {
+                    resetCreditOutcomes[profile.id] = .unavailable(.credentialRejected)
+                    resetCreditsDeferredProfileIDs.insert(profile.id)
+                }
                 continue
             }
             guard !credential.authIndex.isEmpty else {
-                states[profile.id] = .unavailable(.authFileNotMatched)
+                if requestsUsage {
+                    states[profile.id] = .unavailable(.authFileNotMatched)
+                }
+                if requestsResetCredits {
+                    resetCreditOutcomes[profile.id] = .unavailable(.credentialRejected)
+                    resetCreditsDeferredProfileIDs.insert(profile.id)
+                }
                 continue
             }
 
-            states[profile.id] = await fetchUsage(
-                for: profile,
-                credential: credential,
-                managementBaseURL: baseURL,
-                managementKey: managementKey,
-                fetchedAt: fetchedAt
-            )
+            if requestsUsage {
+                states[profile.id] = await fetchUsage(
+                    for: profile,
+                    credential: credential,
+                    managementBaseURL: baseURL,
+                    managementKey: managementKey,
+                    fetchedAt: fetchedAt
+                )
+            }
+
+            if requestsResetCredits {
+                let result = await fetchResetCredits(
+                    for: profile,
+                    credential: credential,
+                    managementBaseURL: baseURL,
+                    managementKey: managementKey,
+                    fetchedAt: fetchedAt
+                )
+                resetCreditOutcomes[profile.id] = result.outcome
+                switch result.disposition {
+                case .attempted:
+                    resetCreditsAttemptedProfileIDs.insert(profile.id)
+                case .deferred:
+                    resetCreditsDeferredProfileIDs.insert(profile.id)
+                }
+            }
         }
 
-        return SubscriptionUsageReport(statesByProfileID: states, fetchedAt: fetchedAt)
+        return SubscriptionUsageReport(
+            statesByProfileID: states,
+            resetCreditsOutcomesByProfileID: resetCreditOutcomes,
+            resetCreditsAttemptedProfileIDs: resetCreditsAttemptedProfileIDs,
+            resetCreditsDeferredProfileIDs: resetCreditsDeferredProfileIDs,
+            fetchedAt: fetchedAt
+        )
     }
 
     private func fetchUsage(
@@ -154,13 +273,131 @@ public struct CLIProxyAPISubscriptionQuotaClient: SubscriptionQuotaFetching {
         }
     }
 
+    private enum ResetCreditsDisposition {
+        case attempted
+        case deferred
+    }
+
+    private struct ResetCreditsResult {
+        let outcome: CodexResetCreditsRefreshOutcome
+        let disposition: ResetCreditsDisposition
+    }
+
+    private func fetchResetCredits(
+        for profile: AuthProfile,
+        credential: ManagedCredential,
+        managementBaseURL: URL,
+        managementKey: String,
+        fetchedAt: Date
+    ) async -> ResetCreditsResult {
+        guard let accountID = profile.accountID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !accountID.isEmpty else {
+            return ResetCreditsResult(
+                outcome: .unavailable(.accountIDUnavailable),
+                disposition: .deferred
+            )
+        }
+
+        let requestBody: Data
+        do {
+            requestBody = try JSONSerialization.data(withJSONObject: [
+                "auth_index": credential.authIndex,
+                "method": "GET",
+                "url": "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits",
+                "header": [
+                    "Authorization": "Bearer $TOKEN$",
+                    "ChatGPT-Account-ID": accountID,
+                    "originator": "Codex Desktop",
+                    "Accept": "application/json"
+                ]
+            ], options: [.sortedKeys])
+        } catch {
+            return ResetCreditsResult(
+                outcome: .unavailable(.schemaMismatch),
+                disposition: .deferred
+            )
+        }
+
+        let outcome: CodexResetCreditsRefreshOutcome
+        do {
+            let response = try await sendManagementRequest(
+                url: managementBaseURL.appendingPathComponent("api-call"),
+                method: "POST",
+                managementKey: managementKey,
+                body: requestBody
+            )
+            guard (200..<300).contains(response.statusCode) else {
+                return ResetCreditsResult(
+                    outcome: .unavailable(resetCreditsIssue(for: response.statusCode)),
+                    disposition: .attempted
+                )
+            }
+
+            let apiResponse: APICallResponse
+            do {
+                apiResponse = try decodeAPICallResponse(response.data)
+            } catch {
+                return ResetCreditsResult(
+                    outcome: .unavailable(.schemaMismatch),
+                    disposition: .attempted
+                )
+            }
+            guard (200..<300).contains(apiResponse.statusCode) else {
+                return ResetCreditsResult(
+                    outcome: .unavailable(resetCreditsIssue(for: apiResponse.statusCode)),
+                    disposition: .attempted
+                )
+            }
+
+            do {
+                outcome = .available(try decodeResetCredits(
+                    apiResponse.body,
+                    profileID: profile.id,
+                    fetchedAt: fetchedAt
+                ))
+            } catch {
+                outcome = .unavailable(.schemaMismatch)
+            }
+        } catch {
+            outcome = .unavailable(.transientFailure)
+        }
+        return ResetCreditsResult(outcome: outcome, disposition: .attempted)
+    }
+
+    private func resetCreditsIssue(for statusCode: Int) -> CodexResetCreditsIssue {
+        switch statusCode {
+        case 401, 403: .credentialRejected
+        case 404, 405, 501: .endpointUnsupported
+        case 429, 500...599: .transientFailure
+        default: .transientFailure
+        }
+    }
+
+    private func resetCreditsPreflightIssue(for statusCode: Int) -> CodexResetCreditsIssue {
+        switch statusCode {
+        case 404, 405, 501: .endpointUnsupported
+        default: .transientFailure
+        }
+    }
+
     private func report(
         for profiles: [AuthProfile],
         state: AccountSubscriptionUsageState,
+        resetCreditsProfiles: [AuthProfile] = [],
+        resetCreditsIssue: CodexResetCreditsIssue? = nil,
         fetchedAt: Date
     ) -> SubscriptionUsageReport {
-        SubscriptionUsageReport(
+        let resetCreditsOutcomes: [String: CodexResetCreditsRefreshOutcome]
+        if let resetCreditsIssue {
+            resetCreditsOutcomes = Dictionary(uniqueKeysWithValues: resetCreditsProfiles.map {
+                ($0.id, .unavailable(resetCreditsIssue))
+            })
+        } else {
+            resetCreditsOutcomes = [:]
+        }
+        return SubscriptionUsageReport(
             statesByProfileID: Dictionary(uniqueKeysWithValues: profiles.map { ($0.id, state) }),
+            resetCreditsOutcomesByProfileID: resetCreditsOutcomes,
             fetchedAt: fetchedAt
         )
     }
@@ -291,6 +528,36 @@ public struct CLIProxyAPISubscriptionQuotaClient: SubscriptionQuotaFetching {
         return windows
     }
 
+    private func decodeResetCredits(
+        _ data: Data,
+        profileID: String,
+        fetchedAt: Date
+    ) throws -> CodexResetCreditsSnapshot {
+        let payload = try JSONDecoder().decode(CodexResetCreditsPayload.self, from: data)
+        guard payload.availableCount != nil || payload.totalEarnedCount != nil || payload.credits != nil else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: [],
+                debugDescription: "Missing reset-credit fields"
+            ))
+        }
+        let credits = try (payload.credits ?? []).map { credit in
+            CodexResetCredit(
+                title: credit.title,
+                status: credit.status,
+                resetType: credit.resetType,
+                expiresAt: try resetDate(credit.expiresAt),
+                grantedAt: try resetDate(credit.grantedAt)
+            )
+        }
+        return CodexResetCreditsSnapshot(
+            profileID: profileID,
+            reportedAvailableCount: payload.availableCount,
+            reportedTotalEarnedCount: payload.totalEarnedCount,
+            credits: credits,
+            fetchedAt: fetchedAt
+        )
+    }
+
     private func resetDate(_ value: Any?) throws -> Date? {
         guard let value, !(value is NSNull) else { return nil }
         if let seconds = number(value) {
@@ -361,6 +628,33 @@ private struct ManagedCredential {
         authIndex = record.authIndex
         status = record.status?.lowercased() ?? "ready"
         disabled = record.disabled
+    }
+}
+
+private struct CodexResetCreditsPayload: Decodable {
+    let availableCount: Int?
+    let totalEarnedCount: Int?
+    let credits: [CodexResetCreditPayload]?
+
+    enum CodingKeys: String, CodingKey {
+        case availableCount = "available_count"
+        case totalEarnedCount = "total_earned_count"
+        case credits
+    }
+}
+
+private struct CodexResetCreditPayload: Decodable {
+    let title: String?
+    let status: String?
+    let resetType: String?
+    let expiresAt: String?
+    let grantedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case title, status
+        case resetType = "reset_type"
+        case expiresAt = "expires_at"
+        case grantedAt = "granted_at"
     }
 }
 

@@ -52,6 +52,7 @@ struct ProviderRowState: Identifiable, Equatable {
     let accountDetailHidden: Bool
     let usageState: ProviderUsageState
     let showsUsage: Bool
+    let resetCreditsSnapshot: CodexResetCreditsSnapshot?
     let showsInUsageOverlay: Bool
 
     init(
@@ -71,6 +72,7 @@ struct ProviderRowState: Identifiable, Equatable {
         accountDetailHidden: Bool = true,
         usageState: ProviderUsageState = .subscription(.disabled),
         showsUsage: Bool = true,
+        resetCreditsSnapshot: CodexResetCreditsSnapshot? = nil,
         showsInUsageOverlay: Bool = true
     ) {
         self.id = id
@@ -89,6 +91,7 @@ struct ProviderRowState: Identifiable, Equatable {
         self.accountDetailHidden = accountDetailHidden
         self.usageState = usageState
         self.showsUsage = showsUsage
+        self.resetCreditsSnapshot = resetCreditsSnapshot
         self.showsInUsageOverlay = showsInUsageOverlay
     }
 

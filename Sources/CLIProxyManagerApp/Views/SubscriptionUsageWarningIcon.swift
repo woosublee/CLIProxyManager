@@ -83,7 +83,7 @@ func subscriptionUsageWarningRows(
 enum UsageWarningLayout {
     static let iconFrameSize = CGSize(width: 12, height: 12)
     static let inlineSpacing: CGFloat = 6
-    static let compactAvatarTrailingOffset: CGFloat = 10
+    static let compactAvatarBottomTrailingOffset = CGSize(width: 10, height: 10)
 }
 
 struct UsageWarningAlignedRow<Content: View>: View {

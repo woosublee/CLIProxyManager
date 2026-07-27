@@ -118,7 +118,7 @@ enum CodexModelLoadingState: Equatable, Sendable {
 
 @MainActor
 final class DashboardViewModel: ObservableObject {
-    private enum ProxyConfigurationRestartReason: Hashable {
+    private enum ProxyConfigurationRestartReason: Hashable, Sendable {
         case apiKey
         case configuration
         case fastMode
@@ -209,6 +209,7 @@ final class DashboardViewModel: ObservableObject {
     @Published var optionRows: [DashboardOptionRow] = []
     @Published var providerRows: [ProviderRowState] = []
     @Published private(set) var subscriptionUsageStates: [String: AccountSubscriptionUsageState] = [:]
+    @Published private(set) var codexResetCreditsSnapshots: [String: CodexResetCreditsSnapshot] = [:]
     @Published private(set) var apiCostUsageStates: [String: APICostUsageState] = [:]
     @Published private(set) var isSubscriptionUsageRefreshInProgress = false
     @Published private(set) var isSubscriptionUsageReloadInProgress = false
@@ -273,6 +274,8 @@ final class DashboardViewModel: ObservableObject {
     private let subscriptionQuotaClient: any SubscriptionQuotaFetching
     private let subscriptionUsageKeyStore: any SubscriptionUsageManagementKeyConfiguring
     private let subscriptionUsageSnapshotCache: any SubscriptionUsageSnapshotCaching
+    private let codexResetCreditsSnapshotCache: any CodexResetCreditsSnapshotCaching
+    private let codexResetCreditsNow: @Sendable () -> Date
     private let apiUsageCollector: any APIUsageCollecting
     private let claudeModelOptionsCache: any ClaudeModelOptionsCaching
     private let cpmInstallationService: any CPMInstallationManaging
@@ -282,7 +285,6 @@ final class DashboardViewModel: ObservableObject {
     private let settingsMessageAutoClearDelayNanoseconds: UInt64
     private var authProfiles: [AuthProfile] = []
     private var oauthLoginTask: Task<Void, Never>?
-    private var oauthLoginSessionID: UUID?
     private var settingsMessageAutoClearTask: Task<Void, Never>?
     private var configWriteProtectionMessage: String?
     private var applicationLaunchTask: Task<Void, Never>?
@@ -290,8 +292,16 @@ final class DashboardViewModel: ObservableObject {
     private var lastClaudeStatus: DiagnosticStatus?
     private var lastCodexStatus: DiagnosticStatus?
     private var lastPersistedConfig: AppConfig
+    private enum SubscriptionUsagePollingWakeReason: Equatable {
+        case usage
+        case resetCredits
+    }
     private var subscriptionUsagePollingTask: Task<Void, Never>?
+    private var subscriptionUsagePollingWakeReason: SubscriptionUsagePollingWakeReason?
+    private var subscriptionUsagePollingDeadline: Date?
+    private var subscriptionUsageNextUsageRefreshAt: Date?
     private var subscriptionUsageRefreshTask: Task<Void, Never>?
+    private var codexResetCreditsRefreshTask: Task<Void, Never>?
     private var apiUsageReportTask: Task<Void, Never>?
     private var apiUsageLifecycleTailTask: Task<Void, Never>?
     private var apiUsageLifecycleTailID: UUID?
@@ -307,15 +317,210 @@ final class DashboardViewModel: ObservableObject {
         case confirmedStopped
         case mayBeRunning
     }
+
+    private enum SubscriptionUsageRefreshPriority: Int, Comparable, Sendable {
+        case automatic
+        case forced
+
+        static func < (lhs: Self, rhs: Self) -> Bool {
+            lhs.rawValue < rhs.rawValue
+        }
+
+        var isForced: Bool { self == .forced }
+    }
+
+    private enum SubscriptionUsageRefreshSource: Hashable, Sendable {
+        case automatic
+        case serverAction(Int)
+        case oauth(UUID)
+    }
+
+    private enum SubscriptionUsageDispatchSourceAuthorization {
+        case sourceOwned
+        case independentHandoff
+    }
+
+    private struct SubscriptionUsageDispatchPermit: Equatable, Sendable {
+        enum Kind: Equatable, Sendable {
+            case usage
+            case resetCredits
+            case combined
+        }
+
+        let id: UUID
+        let kind: Kind
+        let configurationGeneration: Int
+        let source: SubscriptionUsageRefreshSource
+        let priority: SubscriptionUsageRefreshPriority
+        let port: Int
+        let profiles: [AuthProfile]
+        let usageProfileIDs: Set<String>
+        let resetCreditsProfileIDs: Set<String>
+        let attemptedAt: Date
+        let usageRefreshGeneration: Int?
+        let resetCreditsRefreshGeneration: Int?
+    }
+
+    private struct PendingCodexResetCreditsRefresh: Sendable {
+        var priority: SubscriptionUsageRefreshPriority
+        var source: SubscriptionUsageRefreshSource
+
+        mutating func merge(
+            priority newPriority: SubscriptionUsageRefreshPriority,
+            source newSource: SubscriptionUsageRefreshSource
+        ) {
+            if newPriority >= priority {
+                source = newSource
+            }
+            priority = max(priority, newPriority)
+        }
+    }
+
+    private enum SubscriptionUsageRefreshRequestResult {
+        case completed
+        case deferred
+    }
+
+    private enum DeferredSubscriptionUsageRefreshReason: Hashable {
+        case automatic
+        case oauthFinal
+        case serverActionHandback
+    }
+
+    private struct DeferredSubscriptionUsageRefresh {
+        var priority: SubscriptionUsageRefreshPriority
+        var reasons: Set<DeferredSubscriptionUsageRefreshReason>
+    }
+
+    private struct ConfigurationRestartFailure: Equatable, Sendable {
+        let generation: Int
+        let reasons: Set<ProxyConfigurationRestartReason>
+        let message: String
+
+        var ownedSettingsMessage: String? {
+            guard reasons.contains(.fastMode) else { return nil }
+            return "Fast mode settings were saved, but CLIProxyAPI could not restart: \(message)"
+        }
+    }
+
+    private struct ProxyConfigurationDrainResult: Equatable, Sendable {
+        enum Terminal: Equatable, Sendable {
+            case stable(
+                appliedGeneration: Int,
+                reasons: Set<ProxyConfigurationRestartReason>
+            )
+            case failed(ConfigurationRestartFailure)
+            case stopped
+        }
+
+        let terminal: Terminal
+        let performedRestart: Bool
+
+        var succeeded: Bool {
+            switch terminal {
+            case .stable, .stopped:
+                return true
+            case .failed:
+                return false
+            }
+        }
+    }
+
+    private struct ServerActionCompletion {
+        let generation: Int
+        let terminal: ProxyConfigurationDrainResult.Terminal
+
+        var succeeded: Bool {
+            switch terminal {
+            case .stable, .stopped:
+                return true
+            case .failed:
+                return false
+            }
+        }
+    }
+
+    private struct OAuthLoginSessionState {
+        enum Phase {
+            case authenticating
+            case reconciled
+        }
+
+        let id: UUID
+        let startedDuringServerActionGeneration: Int?
+        var phase: Phase = .authenticating
+        var observedServerActionCompletion: ServerActionCompletion?
+    }
+
+    private struct ConfigurationWorkState {
+        var generation = 0
+        var nextServerActionGeneration = 0
+        var activeServerActionGeneration: Int?
+        var oauthRefreshOwnerSessionID: UUID?
+        var lastAppliedGeneration = 0
+        var lastAppliedReasons: Set<ProxyConfigurationRestartReason> = []
+        var ownedRestartFailure: ConfigurationRestartFailure?
+        var deferredSubscriptionUsageRefresh: DeferredSubscriptionUsageRefresh?
+        var deferredCollectorUpdate = false
+
+        mutating func queueSubscriptionUsageRefresh(
+            _ priority: SubscriptionUsageRefreshPriority,
+            reason: DeferredSubscriptionUsageRefreshReason
+        ) {
+            if var deferredSubscriptionUsageRefresh {
+                deferredSubscriptionUsageRefresh.priority = max(
+                    deferredSubscriptionUsageRefresh.priority,
+                    priority
+                )
+                deferredSubscriptionUsageRefresh.reasons.insert(reason)
+                self.deferredSubscriptionUsageRefresh = deferredSubscriptionUsageRefresh
+            } else {
+                deferredSubscriptionUsageRefresh = DeferredSubscriptionUsageRefresh(
+                    priority: priority,
+                    reasons: [reason]
+                )
+            }
+        }
+
+        mutating func removeDeferredSubscriptionUsageRefreshReason(
+            _ reason: DeferredSubscriptionUsageRefreshReason
+        ) {
+            deferredSubscriptionUsageRefresh?.reasons.remove(reason)
+            if deferredSubscriptionUsageRefresh?.reasons.isEmpty == true {
+                deferredSubscriptionUsageRefresh = nil
+            }
+        }
+
+        mutating func clearDeferredRefreshWork() {
+            deferredSubscriptionUsageRefresh = nil
+            deferredCollectorUpdate = false
+        }
+    }
+
     private var proxyRuntimeCertainty = ProxyRuntimeCertainty.mayBeRunning
     private var hasStartedAPIUsageCollector = false
     private var subscriptionUsageRefreshIsForced = false
-    private var pendingForcedSubscriptionUsageRefresh = false
+    private var codexResetCreditsRefreshIsForced = false
+    private var activeSubscriptionUsageDispatchPermit: SubscriptionUsageDispatchPermit?
+    private var activeCodexResetCreditsDispatchPermit: SubscriptionUsageDispatchPermit?
+    private var activeCodexResetCreditsSourceAuthorization = SubscriptionUsageDispatchSourceAuthorization.sourceOwned
+    private var pendingCodexResetCreditsRefresh: PendingCodexResetCreditsRefresh?
+    private var codexResetCreditsLastAttemptAt: [String: Date] = [:]
+    private var codexResetCreditsInFlightProfileIDs: Set<String> = []
+    private var pendingCodexResetCreditsProfileIDs: Set<String> = []
+    private var codexResetCreditsRetryNotBefore: Date?
+    private static let codexResetCreditsRefreshInterval: TimeInterval = 3 * 60 * 60
+    private static let codexResetCreditsPreflightRetryInterval: TimeInterval = 60
+    private static let maximumSubscriptionUsageSleepInterval: TimeInterval = 24 * 60 * 60
+    private var oauthLoginSession: OAuthLoginSessionState?
+    private var oauthLoginSessionID: UUID? { oauthLoginSession?.id }
+    private var configurationWork = ConfigurationWorkState()
     private var pendingProxyConfigurationRestartReasons: Set<ProxyConfigurationRestartReason> = []
     private var proxyConfigurationRestartTask: Task<Void, Never>?
-    private var serverActionCompletionWaiters: [CheckedContinuation<Void, Never>] = []
-    private var ownedFastRestartFailureMessage: String?
+    private var serverActionWaitsForReady = false
+    private var serverActionCompletionWaiters: [CheckedContinuation<ServerActionCompletion, Never>] = []
     private var subscriptionUsageRefreshGeneration = 0
+    private var codexResetCreditsRefreshGeneration = 0
     private var subscriptionUsageRetryDelayNanoseconds: UInt64 = 60_000_000_000
 
     init(
@@ -335,6 +540,8 @@ final class DashboardViewModel: ObservableObject {
         subscriptionQuotaClient: any SubscriptionQuotaFetching = CLIProxyAPISubscriptionQuotaClient(),
         subscriptionUsageKeyStore: any SubscriptionUsageManagementKeyConfiguring = SubscriptionUsageManagementKeyFileStore(),
         subscriptionUsageSnapshotCache: any SubscriptionUsageSnapshotCaching = SubscriptionUsageSnapshotCacheFileStore(),
+        codexResetCreditsSnapshotCache: any CodexResetCreditsSnapshotCaching = CodexResetCreditsSnapshotCacheFileStore(),
+        codexResetCreditsNow: @escaping @Sendable () -> Date = { Date() },
         apiUsageCollector: any APIUsageCollecting = APIUsageCollector(),
         claudeModelOptionsCache: any ClaudeModelOptionsCaching = ClaudeModelOptionsCacheFileStore(),
         cpmInstallationService: (any CPMInstallationManaging)? = nil,
@@ -364,6 +571,8 @@ final class DashboardViewModel: ObservableObject {
         self.subscriptionQuotaClient = subscriptionQuotaClient
         self.subscriptionUsageKeyStore = subscriptionUsageKeyStore
         self.subscriptionUsageSnapshotCache = subscriptionUsageSnapshotCache
+        self.codexResetCreditsSnapshotCache = codexResetCreditsSnapshotCache
+        self.codexResetCreditsNow = codexResetCreditsNow
         self.apiUsageCollector = apiUsageCollector
         self.claudeModelOptionsCache = claudeModelOptionsCache
         let resolvedCPMInstallationService = cpmInstallationService ?? CPMInstallationService()
@@ -411,12 +620,14 @@ final class DashboardViewModel: ObservableObject {
                 to: persistedConfig,
                 authProfileStore: authProfileStore,
                 configStore: configStore,
-                subscriptionUsageSnapshotCache: subscriptionUsageSnapshotCache
+                subscriptionUsageSnapshotCache: subscriptionUsageSnapshotCache,
+                resetCreditsSnapshotCache: codexResetCreditsSnapshotCache
             )
         } else {
             credentialMigrationResult = CodexCredentialMigrationResult(
                 config: persistedConfig,
-                profiles: Result { try authProfileStore.profiles() }
+                profiles: Result { try authProfileStore.profiles() },
+                mapping: [:]
             )
         }
         persistedConfig = credentialMigrationResult.config
@@ -459,6 +670,7 @@ final class DashboardViewModel: ObservableObject {
         )
         restoreClaudeModelOptions()
         restoreSubscriptionUsageSnapshots()
+        restoreCodexResetCreditsSnapshots()
         reconcileAuthProfilePrefixes()
         rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
         rebuildOptionRows()
@@ -532,6 +744,7 @@ final class DashboardViewModel: ObservableObject {
                 }
                 setSubscriptionUsageStates(.disabled)
                 clearSubscriptionUsageSnapshots()
+                clearCodexResetCreditSnapshots()
                 lastSuccessfulSubscriptionUsageRefreshAt = nil
                 apiCostUsageStates.removeAll()
                 rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
@@ -624,6 +837,7 @@ final class DashboardViewModel: ObservableObject {
         }
         setSubscriptionUsageStates(.disabled)
         clearSubscriptionUsageSnapshots()
+        clearCodexResetCreditSnapshots()
         lastSuccessfulSubscriptionUsageRefreshAt = nil
         apiCostUsageStates.removeAll()
         rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
@@ -1002,6 +1216,45 @@ final class DashboardViewModel: ObservableObject {
         lastSuccessfulSubscriptionUsageRefreshAt = snapshots.values.map(\.fetchedAt).max()
     }
 
+    private func restoreCodexResetCreditsSnapshots() {
+        guard config.isSubscriptionUsageEnabled else { return }
+        let enabledCodexIDs = Set(authProfiles.filter {
+            $0.type == .codex && isSubscriptionUsageEnabled(for: $0)
+        }.map(\.id))
+        let loadedSnapshots = codexResetCreditsSnapshotCache.load()
+        let now = codexResetCreditsNow()
+        codexResetCreditsSnapshots = loadedSnapshots.filter {
+            enabledCodexIDs.contains($0.key) && $0.value.fetchedAt <= now
+        }
+        if codexResetCreditsSnapshots != loadedSnapshots {
+            try? codexResetCreditsSnapshotCache.save(codexResetCreditsSnapshots)
+        }
+    }
+
+    private func resetCreditsProfileIDs(
+        for profiles: [AuthProfile],
+        force: Bool,
+        now: Date
+    ) -> Set<String> {
+        if !force,
+           let retryNotBefore = codexResetCreditsRetryNotBefore,
+           now < retryNotBefore {
+            return []
+        }
+        return Set(profiles.compactMap { profile in
+            guard profile.type == .codex else { return nil }
+            if force { return profile.id }
+            guard !codexResetCreditsInFlightProfileIDs.contains(profile.id),
+                  !pendingCodexResetCreditsProfileIDs.contains(profile.id) else { return nil }
+            let reference = codexResetCreditsLastAttemptAt[profile.id]
+                ?? codexResetCreditsSnapshots[profile.id]?.fetchedAt
+            guard let reference else { return profile.id }
+            return now.timeIntervalSince(reference) >= Self.codexResetCreditsRefreshInterval
+                ? profile.id
+                : nil
+        })
+    }
+
     private func persistSuccessfulSubscriptionUsageSnapshots() {
         let enabledProfileIDs = Set(authProfiles.filter(isSubscriptionUsageEnabled(for:)).map(\.id))
         let snapshots = subscriptionUsageStates.reduce(into: [String: SubscriptionUsageSnapshot]()) { result, entry in
@@ -1016,16 +1269,56 @@ final class DashboardViewModel: ObservableObject {
         try? subscriptionUsageSnapshotCache.clear()
     }
 
+    private func persistCodexResetCreditSnapshots() {
+        let enabledCodexIDs = Set(authProfiles.filter {
+            $0.type == .codex && isSubscriptionUsageEnabled(for: $0)
+        }.map(\.id))
+        let snapshots = codexResetCreditsSnapshots.filter { enabledCodexIDs.contains($0.key) }
+        try? codexResetCreditsSnapshotCache.save(snapshots)
+    }
+
+    private func clearCodexResetCreditSnapshots() {
+        codexResetCreditsSnapshots.removeAll()
+        codexResetCreditsLastAttemptAt.removeAll()
+        codexResetCreditsInFlightProfileIDs.removeAll()
+        pendingCodexResetCreditsProfileIDs.removeAll()
+        codexResetCreditsRetryNotBefore = nil
+        try? codexResetCreditsSnapshotCache.clear()
+    }
+
+    private func removeCodexResetCreditState(for profileID: String?) {
+        guard let profileID else { return }
+        codexResetCreditsSnapshots.removeValue(forKey: profileID)
+        codexResetCreditsLastAttemptAt.removeValue(forKey: profileID)
+        codexResetCreditsInFlightProfileIDs.remove(profileID)
+        pendingCodexResetCreditsProfileIDs.remove(profileID)
+        persistCodexResetCreditSnapshots()
+    }
+
     private func cancelSubscriptionUsageWork() {
         subscriptionUsageRefreshGeneration += 1
+        codexResetCreditsRefreshGeneration += 1
         subscriptionUsageRefreshTask?.cancel()
         subscriptionUsageRefreshTask = nil
+        codexResetCreditsRefreshTask?.cancel()
+        codexResetCreditsRefreshTask = nil
         subscriptionUsageRefreshIsForced = false
-        pendingForcedSubscriptionUsageRefresh = false
+        activeSubscriptionUsageDispatchPermit = nil
+        configurationWork.clearDeferredRefreshWork()
+        codexResetCreditsRefreshIsForced = false
+        activeCodexResetCreditsDispatchPermit = nil
+        activeCodexResetCreditsSourceAuthorization = .sourceOwned
+        pendingCodexResetCreditsRefresh = nil
         isSubscriptionUsageRefreshInProgress = false
         subscriptionUsagePollingTask?.cancel()
         subscriptionUsagePollingTask = nil
+        subscriptionUsagePollingWakeReason = nil
+        subscriptionUsagePollingDeadline = nil
+        subscriptionUsageNextUsageRefreshAt = nil
         subscriptionUsageRetryDelayNanoseconds = 60_000_000_000
+        codexResetCreditsInFlightProfileIDs.removeAll()
+        pendingCodexResetCreditsProfileIDs.removeAll()
+        codexResetCreditsRetryNotBefore = nil
     }
 
     private struct SubscriptionUsageRemovalRefreshContext {
@@ -1034,8 +1327,13 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func invalidateSubscriptionUsageRefreshForRemoval() -> SubscriptionUsageRemovalRefreshContext {
-        let canceledActiveRefresh = subscriptionUsageRefreshTask != nil
-        let requiresForcedRefresh = subscriptionUsageRefreshIsForced || pendingForcedSubscriptionUsageRefresh
+        let canceledActiveRefresh = subscriptionUsageRefreshTask != nil || codexResetCreditsRefreshTask != nil
+        let requiresForcedRefresh = subscriptionUsageRefreshIsForced
+            || activeSubscriptionUsageDispatchPermit?.priority == .forced
+            || configurationWork.deferredSubscriptionUsageRefresh?.priority == .forced
+            || codexResetCreditsRefreshIsForced
+            || activeCodexResetCreditsDispatchPermit?.priority == .forced
+            || pendingCodexResetCreditsRefresh?.priority == .forced
         guard canceledActiveRefresh else {
             return SubscriptionUsageRemovalRefreshContext(
                 canceledActiveRefresh: false,
@@ -1044,13 +1342,26 @@ final class DashboardViewModel: ObservableObject {
         }
 
         subscriptionUsageRefreshGeneration += 1
+        codexResetCreditsRefreshGeneration += 1
         subscriptionUsageRefreshTask?.cancel()
         subscriptionUsageRefreshTask = nil
+        codexResetCreditsRefreshTask?.cancel()
+        codexResetCreditsRefreshTask = nil
         subscriptionUsageRefreshIsForced = false
-        pendingForcedSubscriptionUsageRefresh = false
+        activeSubscriptionUsageDispatchPermit = nil
+        configurationWork.clearDeferredRefreshWork()
+        codexResetCreditsRefreshIsForced = false
+        activeCodexResetCreditsDispatchPermit = nil
+        activeCodexResetCreditsSourceAuthorization = .sourceOwned
+        pendingCodexResetCreditsRefresh = nil
         isSubscriptionUsageRefreshInProgress = false
         subscriptionUsagePollingTask?.cancel()
         subscriptionUsagePollingTask = nil
+        subscriptionUsagePollingWakeReason = nil
+        subscriptionUsagePollingDeadline = nil
+        subscriptionUsageNextUsageRefreshAt = nil
+        codexResetCreditsInFlightProfileIDs.removeAll()
+        pendingCodexResetCreditsProfileIDs.removeAll()
         return SubscriptionUsageRemovalRefreshContext(
             canceledActiveRefresh: true,
             requiresForcedRefresh: requiresForcedRefresh
@@ -1113,26 +1424,392 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func refreshSubscriptionUsage(force: Bool = false) async {
-        if subscriptionUsageRefreshTask != nil {
-            if force {
-                pendingForcedSubscriptionUsageRefresh = true
-            }
-            return
+        _ = await refreshSubscriptionUsage(
+            force: force,
+            pollingWakeReason: nil,
+            source: .automatic
+        )
+    }
+
+    private func queueSubscriptionUsageRefresh(
+        _ priority: SubscriptionUsageRefreshPriority,
+        reason: DeferredSubscriptionUsageRefreshReason
+    ) {
+        configurationWork.queueSubscriptionUsageRefresh(priority, reason: reason)
+    }
+
+    private func deferredSubscriptionUsageRefreshReason(
+        for source: SubscriptionUsageRefreshSource
+    ) -> DeferredSubscriptionUsageRefreshReason {
+        switch source {
+        case .automatic:
+            return .automatic
+        case .serverAction:
+            return .serverActionHandback
+        case .oauth:
+            return .oauthFinal
         }
+    }
+
+    private func makeSubscriptionUsageDispatchPermit(
+        kind: SubscriptionUsageDispatchPermit.Kind,
+        source: SubscriptionUsageRefreshSource,
+        priority: SubscriptionUsageRefreshPriority,
+        profiles: [AuthProfile],
+        usageProfileIDs: Set<String>,
+        resetCreditsProfileIDs: Set<String>,
+        attemptedAt: Date,
+        usageRefreshGeneration: Int? = nil,
+        resetCreditsRefreshGeneration: Int? = nil
+    ) -> SubscriptionUsageDispatchPermit {
+        SubscriptionUsageDispatchPermit(
+            id: UUID(),
+            kind: kind,
+            configurationGeneration: configurationWork.generation,
+            source: source,
+            priority: priority,
+            port: config.port,
+            profiles: profiles,
+            usageProfileIDs: usageProfileIDs,
+            resetCreditsProfileIDs: resetCreditsProfileIDs,
+            attemptedAt: attemptedAt,
+            usageRefreshGeneration: usageRefreshGeneration,
+            resetCreditsRefreshGeneration: resetCreditsRefreshGeneration
+        )
+    }
+
+    private func isSubscriptionUsageDispatchAuthorized(
+        _ permit: SubscriptionUsageDispatchPermit
+    ) -> Bool {
+        let allowsCompletedSourceHandoff = permit.kind == .resetCredits
+            && activeCodexResetCreditsSourceAuthorization == .independentHandoff
+        guard permit.configurationGeneration == configurationWork.generation,
+              !configurationWorkBlocksSubscriptionUsageRefresh(
+                source: permit.source,
+                allowsCompletedSourceHandoff: allowsCompletedSourceHandoff
+              ),
+              config.port == permit.port,
+              config.isSubscriptionUsageEnabled,
+              subscriptionUsageKeyStore.isConfigured() else {
+            return false
+        }
+        let requestedProfileIDs = permit.usageProfileIDs.union(permit.resetCreditsProfileIDs)
+        guard Set(permit.profiles.map(\.id)) == requestedProfileIDs,
+              permit.usageProfileIDs.isSubset(of: requestedProfileIDs),
+              permit.resetCreditsProfileIDs.isSubset(of: requestedProfileIDs) else {
+            return false
+        }
+        let currentProfiles = authProfiles
+            .filter(isSubscriptionUsageEnabled(for:))
+            .filter { requestedProfileIDs.contains($0.id) }
+        guard currentProfiles == permit.profiles else { return false }
+
+        switch permit.kind {
+        case .usage, .combined:
+            guard activeSubscriptionUsageDispatchPermit == permit,
+                  permit.usageRefreshGeneration == subscriptionUsageRefreshGeneration else {
+                return false
+            }
+        case .resetCredits:
+            guard activeCodexResetCreditsDispatchPermit == permit,
+                  permit.resetCreditsRefreshGeneration == codexResetCreditsRefreshGeneration else {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func requeueSubscriptionUsageDispatch(
+        priority: SubscriptionUsageRefreshPriority,
+        source: SubscriptionUsageRefreshSource
+    ) {
+        queueSubscriptionUsageRefresh(
+            priority,
+            reason: deferredSubscriptionUsageRefreshReason(for: source)
+        )
+    }
+
+    private func invalidateSubscriptionUsageDispatchPermit(
+        _ permit: SubscriptionUsageDispatchPermit,
+        requeue: Bool,
+        scheduleStabilization: Bool
+    ) {
+        switch permit.kind {
+        case .usage, .combined:
+            guard activeSubscriptionUsageDispatchPermit == permit else { return }
+            if requeue {
+                requeueSubscriptionUsageDispatch(priority: permit.priority, source: permit.source)
+            }
+            activeSubscriptionUsageDispatchPermit = nil
+            subscriptionUsageRefreshGeneration &+= 1
+            subscriptionUsageRefreshTask?.cancel()
+            subscriptionUsageRefreshTask = nil
+            subscriptionUsageRefreshIsForced = false
+            isSubscriptionUsageRefreshInProgress = false
+            codexResetCreditsInFlightProfileIDs.subtract(permit.resetCreditsProfileIDs)
+        case .resetCredits:
+            guard activeCodexResetCreditsDispatchPermit == permit else { return }
+            if requeue {
+                requeueSubscriptionUsageDispatch(priority: permit.priority, source: permit.source)
+                if let pendingCodexResetCreditsRefresh {
+                    requeueSubscriptionUsageDispatch(
+                        priority: pendingCodexResetCreditsRefresh.priority,
+                        source: pendingCodexResetCreditsRefresh.source
+                    )
+                }
+            }
+            activeCodexResetCreditsDispatchPermit = nil
+            activeCodexResetCreditsSourceAuthorization = .sourceOwned
+            codexResetCreditsRefreshGeneration &+= 1
+            codexResetCreditsRefreshTask?.cancel()
+            codexResetCreditsRefreshTask = nil
+            codexResetCreditsRefreshIsForced = false
+            codexResetCreditsInFlightProfileIDs.subtract(permit.resetCreditsProfileIDs)
+            pendingCodexResetCreditsRefresh = nil
+            pendingCodexResetCreditsProfileIDs.removeAll()
+        }
+        if scheduleStabilization {
+            scheduleConfigurationWorkStabilization()
+        }
+    }
+
+    private func rejectSupersededSubscriptionUsageDispatch(
+        _ permit: SubscriptionUsageDispatchPermit
+    ) {
+        invalidateSubscriptionUsageDispatchPermit(
+            permit,
+            requeue: true,
+            scheduleStabilization: true
+        )
+    }
+
+    private func invalidateSupersededSubscriptionUsageDispatches() {
+        if let permit = activeSubscriptionUsageDispatchPermit,
+           permit.configurationGeneration < configurationWork.generation {
+            invalidateSubscriptionUsageDispatchPermit(
+                permit,
+                requeue: true,
+                scheduleStabilization: false
+            )
+        }
+        if let permit = activeCodexResetCreditsDispatchPermit,
+           permit.configurationGeneration < configurationWork.generation {
+            invalidateSubscriptionUsageDispatchPermit(
+                permit,
+                requeue: true,
+                scheduleStabilization: false
+            )
+        } else if let pendingCodexResetCreditsRefresh {
+            requeueSubscriptionUsageDispatch(
+                priority: pendingCodexResetCreditsRefresh.priority,
+                source: pendingCodexResetCreditsRefresh.source
+            )
+            self.pendingCodexResetCreditsRefresh = nil
+            pendingCodexResetCreditsProfileIDs.removeAll()
+        }
+    }
+
+    private func configurationWorkBlocksSubscriptionUsageRefresh(
+        source: SubscriptionUsageRefreshSource,
+        allowsCompletedSourceHandoff: Bool = false
+    ) -> Bool {
+        if !pendingProxyConfigurationRestartReasons.isEmpty || proxyConfigurationRestartTask != nil {
+            return true
+        }
+        if isServerActionInProgress,
+           configurationWork.activeServerActionGeneration == nil {
+            return true
+        }
+        if let activeGeneration = configurationWork.activeServerActionGeneration,
+           source != .serverAction(activeGeneration) {
+            return true
+        }
+        if let ownerSessionID = configurationWork.oauthRefreshOwnerSessionID,
+           source != .oauth(ownerSessionID) {
+            return true
+        }
+        switch source {
+        case .automatic:
+            return false
+        case .serverAction(let generation):
+            if configurationWork.activeServerActionGeneration == generation {
+                return false
+            }
+            return !allowsCompletedSourceHandoff
+                || configurationWork.activeServerActionGeneration != nil
+        case .oauth(let sessionID):
+            if configurationWork.oauthRefreshOwnerSessionID == sessionID {
+                return false
+            }
+            return !allowsCompletedSourceHandoff
+                || configurationWork.oauthRefreshOwnerSessionID != nil
+        }
+    }
+
+    @discardableResult
+    private func drainDeferredSubscriptionUsageRefresh(
+        source: SubscriptionUsageRefreshSource
+    ) async -> Bool {
+        guard subscriptionUsageRefreshTask == nil,
+              let deferredRefresh = configurationWork.deferredSubscriptionUsageRefresh,
+              !configurationWorkBlocksSubscriptionUsageRefresh(source: source) else {
+            return false
+        }
+        configurationWork.deferredSubscriptionUsageRefresh = nil
+        let result = await refreshSubscriptionUsage(
+            force: deferredRefresh.priority.isForced,
+            pollingWakeReason: nil,
+            source: source
+        )
+        return result == .completed
+    }
+
+    private func refreshSubscriptionUsage(
+        force: Bool,
+        pollingWakeReason: SubscriptionUsagePollingWakeReason?,
+        source: SubscriptionUsageRefreshSource
+    ) async -> SubscriptionUsageRefreshRequestResult {
         guard config.isSubscriptionUsageEnabled else {
+            configurationWork.deferredSubscriptionUsageRefresh = nil
             setSubscriptionUsageStates(.disabled)
-            return
+            return .completed
         }
         guard subscriptionUsageKeyStore.isConfigured() else {
+            configurationWork.deferredSubscriptionUsageRefresh = nil
             setSubscriptionUsageStates(.managementKeyNotConfigured)
-            return
+            return .completed
         }
-        let profiles = force
-            ? authProfiles.filter(isSubscriptionUsageEnabled(for:))
-            : refreshableSubscriptionUsageProfiles()
-        guard !profiles.isEmpty else {
-            subscriptionUsagePollingTask?.cancel()
-            subscriptionUsagePollingTask = nil
+        var priority: SubscriptionUsageRefreshPriority = force ? .forced : .automatic
+        if configurationWorkBlocksSubscriptionUsageRefresh(source: source)
+            || subscriptionUsageRefreshTask != nil {
+            queueSubscriptionUsageRefresh(
+                priority,
+                reason: deferredSubscriptionUsageRefreshReason(for: source)
+            )
+            return .deferred
+        }
+        if let deferredRefresh = configurationWork.deferredSubscriptionUsageRefresh {
+            priority = max(priority, deferredRefresh.priority)
+            configurationWork.deferredSubscriptionUsageRefresh = nil
+        }
+        let effectiveForce = priority.isForced
+
+        let enabledProfiles = authProfiles.filter(isSubscriptionUsageEnabled(for:))
+        let usageProfiles: [AuthProfile]
+        if effectiveForce {
+            usageProfiles = enabledProfiles
+        } else if pollingWakeReason == .resetCredits {
+            usageProfiles = []
+        } else {
+            usageProfiles = refreshableSubscriptionUsageProfiles()
+        }
+        let resetCreditsNow = codexResetCreditsNow()
+        if subscriptionQuotaClient is any ConcurrentSubscriptionQuotaFetching {
+            _ = startCodexResetCreditsRefreshIfNeeded(
+                force: effectiveForce,
+                now: resetCreditsNow,
+                source: source
+            )
+            guard !usageProfiles.isEmpty else {
+                scheduleSubscriptionUsagePollingIfNeeded()
+                return .completed
+            }
+            await refreshSubscriptionUsageOnly(
+                profiles: usageProfiles,
+                force: effectiveForce,
+                source: source
+            )
+            return .completed
+        }
+        let resetCreditsProfileIDs = resetCreditsProfileIDs(
+            for: enabledProfiles,
+            force: effectiveForce,
+            now: resetCreditsNow
+        )
+        let usageProfileIDs = Set(usageProfiles.map(\.id))
+        let requestedProfileIDs = usageProfileIDs.union(resetCreditsProfileIDs)
+        let requestedProfiles = enabledProfiles.filter { requestedProfileIDs.contains($0.id) }
+        guard !requestedProfiles.isEmpty else {
+            scheduleSubscriptionUsagePollingIfNeeded()
+            return .completed
+        }
+
+        subscriptionUsageRefreshGeneration += 1
+        let generation = subscriptionUsageRefreshGeneration
+        isSubscriptionUsageRefreshInProgress = true
+        codexResetCreditsInFlightProfileIDs.formUnion(resetCreditsProfileIDs)
+        let previousStates = subscriptionUsageStates
+        if !effectiveForce {
+            let unavailableProfileIDs = Set(usageProfiles.compactMap { profile -> String? in
+                previousStates[profile.id]?.snapshot == nil ? profile.id : nil
+            })
+            if !unavailableProfileIDs.isEmpty {
+                setSubscriptionUsageStates(.loading, profileIDs: unavailableProfileIDs)
+            }
+        }
+        let permit = makeSubscriptionUsageDispatchPermit(
+            kind: .combined,
+            source: source,
+            priority: priority,
+            profiles: requestedProfiles,
+            usageProfileIDs: usageProfileIDs,
+            resetCreditsProfileIDs: resetCreditsProfileIDs,
+            attemptedAt: resetCreditsNow,
+            usageRefreshGeneration: generation
+        )
+        let quotaClient = subscriptionQuotaClient
+        activeSubscriptionUsageDispatchPermit = permit
+        let refreshTask = Task { [weak self] in
+            guard let self else { return }
+            guard self.isSubscriptionUsageDispatchAuthorized(permit) else {
+                self.rejectSupersededSubscriptionUsageDispatch(permit)
+                return
+            }
+            let report = await quotaClient.fetchUsage(
+                port: permit.port,
+                profiles: permit.profiles,
+                usageProfileIDs: permit.usageProfileIDs,
+                resetCreditsProfileIDs: permit.resetCreditsProfileIDs
+            )
+            guard !Task.isCancelled,
+                  self.isSubscriptionUsageDispatchAuthorized(permit) else {
+                self.rejectSupersededSubscriptionUsageDispatch(permit)
+                return
+            }
+            self.codexResetCreditsInFlightProfileIDs.subtract(permit.resetCreditsProfileIDs)
+            self.commitCodexResetCreditAttemptMetadata(
+                report,
+                requestedProfileIDs: permit.resetCreditsProfileIDs,
+                attemptedAt: permit.attemptedAt
+            )
+            self.applySubscriptionUsageReport(report, for: usageProfiles, previousStates: previousStates)
+            self.rebuildProviderRows(claudeStatus: self.lastClaudeStatus, codexStatus: self.lastCodexStatus)
+            self.scheduleSubscriptionUsagePollingIfNeeded(didRefreshUsage: !usageProfiles.isEmpty)
+        }
+        subscriptionUsageRefreshTask = refreshTask
+        subscriptionUsageRefreshIsForced = effectiveForce
+        await refreshTask.value
+        if subscriptionUsageRefreshGeneration == generation,
+           activeSubscriptionUsageDispatchPermit == permit {
+            activeSubscriptionUsageDispatchPermit = nil
+            subscriptionUsageRefreshTask = nil
+            subscriptionUsageRefreshIsForced = false
+            isSubscriptionUsageRefreshInProgress = false
+            _ = await drainDeferredSubscriptionUsageRefresh(source: source)
+        }
+        return .completed
+    }
+
+    private func refreshSubscriptionUsageOnly(
+        profiles: [AuthProfile],
+        force: Bool,
+        source: SubscriptionUsageRefreshSource
+    ) async {
+        guard subscriptionUsageRefreshTask == nil else {
+            queueSubscriptionUsageRefresh(
+                force ? .forced : .automatic,
+                reason: deferredSubscriptionUsageRefreshReason(for: source)
+            )
             return
         }
 
@@ -1148,32 +1825,181 @@ final class DashboardViewModel: ObservableObject {
                 setSubscriptionUsageStates(.loading, profileIDs: unavailableProfileIDs)
             }
         }
-        let port = config.port
         let quotaClient = subscriptionQuotaClient
+        let profileIDs = Set(profiles.map(\.id))
+        let permit = makeSubscriptionUsageDispatchPermit(
+            kind: .usage,
+            source: source,
+            priority: force ? .forced : .automatic,
+            profiles: profiles,
+            usageProfileIDs: profileIDs,
+            resetCreditsProfileIDs: [],
+            attemptedAt: codexResetCreditsNow(),
+            usageRefreshGeneration: generation
+        )
+        activeSubscriptionUsageDispatchPermit = permit
         let refreshTask = Task { [weak self] in
-            let report = await quotaClient.fetchUsage(port: port, profiles: profiles)
+            guard let self else { return }
+            guard self.isSubscriptionUsageDispatchAuthorized(permit) else {
+                self.rejectSupersededSubscriptionUsageDispatch(permit)
+                return
+            }
+            let report = await quotaClient.fetchUsage(
+                port: permit.port,
+                profiles: permit.profiles,
+                usageProfileIDs: permit.usageProfileIDs,
+                resetCreditsProfileIDs: permit.resetCreditsProfileIDs
+            )
             guard !Task.isCancelled,
-                  let self,
-                  self.config.isSubscriptionUsageEnabled,
-                  self.subscriptionUsageKeyStore.isConfigured(),
-                  self.subscriptionUsageRefreshGeneration == generation else {
+                  self.isSubscriptionUsageDispatchAuthorized(permit) else {
+                self.rejectSupersededSubscriptionUsageDispatch(permit)
                 return
             }
             self.applySubscriptionUsageReport(report, for: profiles, previousStates: previousStates)
             self.rebuildProviderRows(claudeStatus: self.lastClaudeStatus, codexStatus: self.lastCodexStatus)
-            self.scheduleSubscriptionUsagePollingIfNeeded()
+            self.scheduleSubscriptionUsagePollingIfNeeded(didRefreshUsage: true)
         }
         subscriptionUsageRefreshTask = refreshTask
         subscriptionUsageRefreshIsForced = force
         await refreshTask.value
-        if subscriptionUsageRefreshGeneration == generation {
-            subscriptionUsageRefreshTask = nil
-            subscriptionUsageRefreshIsForced = false
-            isSubscriptionUsageRefreshInProgress = false
-            if pendingForcedSubscriptionUsageRefresh {
-                pendingForcedSubscriptionUsageRefresh = false
-                await refreshSubscriptionUsage(force: true)
+        guard subscriptionUsageRefreshGeneration == generation,
+              activeSubscriptionUsageDispatchPermit == permit else { return }
+        activeSubscriptionUsageDispatchPermit = nil
+        subscriptionUsageRefreshTask = nil
+        subscriptionUsageRefreshIsForced = false
+        isSubscriptionUsageRefreshInProgress = false
+        _ = await drainDeferredSubscriptionUsageRefresh(source: source)
+    }
+
+    @discardableResult
+    private func startCodexResetCreditsRefreshIfNeeded(
+        force: Bool,
+        now: Date,
+        source: SubscriptionUsageRefreshSource
+    ) -> Task<Void, Never>? {
+        guard config.isSubscriptionUsageEnabled,
+              subscriptionUsageKeyStore.isConfigured() else {
+            return nil
+        }
+        let enabledProfiles = authProfiles.filter(isSubscriptionUsageEnabled(for:))
+        let profileIDs = resetCreditsProfileIDs(
+            for: enabledProfiles,
+            force: force,
+            now: now
+        )
+        guard !profileIDs.isEmpty else { return nil }
+        if let activeTask = codexResetCreditsRefreshTask {
+            pendingCodexResetCreditsProfileIDs.formUnion(profileIDs)
+            let priority: SubscriptionUsageRefreshPriority = force ? .forced : .automatic
+            if var pendingCodexResetCreditsRefresh {
+                pendingCodexResetCreditsRefresh.merge(priority: priority, source: source)
+                self.pendingCodexResetCreditsRefresh = pendingCodexResetCreditsRefresh
+            } else {
+                pendingCodexResetCreditsRefresh = PendingCodexResetCreditsRefresh(
+                    priority: priority,
+                    source: source
+                )
             }
+            return activeTask
+        }
+
+        let profiles = enabledProfiles.filter { profileIDs.contains($0.id) }
+        codexResetCreditsRefreshGeneration += 1
+        let generation = codexResetCreditsRefreshGeneration
+        codexResetCreditsInFlightProfileIDs.formUnion(profileIDs)
+        let permit = makeSubscriptionUsageDispatchPermit(
+            kind: .resetCredits,
+            source: source,
+            priority: force ? .forced : .automatic,
+            profiles: profiles,
+            usageProfileIDs: [],
+            resetCreditsProfileIDs: profileIDs,
+            attemptedAt: now,
+            resetCreditsRefreshGeneration: generation
+        )
+        let quotaClient = subscriptionQuotaClient
+        activeCodexResetCreditsSourceAuthorization = .sourceOwned
+        activeCodexResetCreditsDispatchPermit = permit
+        let task = Task { [weak self] in
+            guard let self else { return }
+            defer { self.finishCodexResetCreditsRefresh(permit: permit) }
+            guard self.isSubscriptionUsageDispatchAuthorized(permit) else {
+                self.rejectSupersededSubscriptionUsageDispatch(permit)
+                return
+            }
+            let report = await quotaClient.fetchUsage(
+                port: permit.port,
+                profiles: permit.profiles,
+                usageProfileIDs: permit.usageProfileIDs,
+                resetCreditsProfileIDs: permit.resetCreditsProfileIDs
+            )
+            guard !Task.isCancelled,
+                  self.isSubscriptionUsageDispatchAuthorized(permit) else {
+                self.rejectSupersededSubscriptionUsageDispatch(permit)
+                return
+            }
+            self.commitCodexResetCreditAttemptMetadata(
+                report,
+                requestedProfileIDs: permit.resetCreditsProfileIDs,
+                attemptedAt: permit.attemptedAt
+            )
+            let enabledProfileIDs = Set(self.authProfiles.filter {
+                self.isSubscriptionUsageEnabled(for: $0)
+            }.map(\.id))
+            self.applyCodexResetCreditOutcomes(
+                report.resetCreditsOutcomesByProfileID,
+                enabledProfileIDs: enabledProfileIDs
+            )
+            self.rebuildProviderRows(claudeStatus: self.lastClaudeStatus, codexStatus: self.lastCodexStatus)
+        }
+        codexResetCreditsRefreshIsForced = force
+        codexResetCreditsRefreshTask = task
+        return task
+    }
+
+    private func finishCodexResetCreditsRefresh(
+        permit: SubscriptionUsageDispatchPermit
+    ) {
+        guard activeCodexResetCreditsDispatchPermit == permit,
+              codexResetCreditsRefreshGeneration == permit.resetCreditsRefreshGeneration else {
+            return
+        }
+        activeCodexResetCreditsDispatchPermit = nil
+        activeCodexResetCreditsSourceAuthorization = .sourceOwned
+        codexResetCreditsRefreshTask = nil
+        codexResetCreditsRefreshIsForced = false
+        codexResetCreditsInFlightProfileIDs.subtract(permit.resetCreditsProfileIDs)
+        let pendingRefresh = pendingCodexResetCreditsRefresh
+        pendingCodexResetCreditsRefresh = nil
+        pendingCodexResetCreditsProfileIDs.removeAll()
+        if let pendingRefresh {
+            _ = startCodexResetCreditsRefreshIfNeeded(
+                force: pendingRefresh.priority.isForced,
+                now: codexResetCreditsNow(),
+                source: pendingRefresh.source
+            )
+        }
+        scheduleSubscriptionUsagePollingIfNeeded()
+    }
+
+    private func commitCodexResetCreditAttemptMetadata(
+        _ report: SubscriptionUsageReport,
+        requestedProfileIDs: Set<String>,
+        attemptedAt: Date
+    ) {
+        guard !requestedProfileIDs.isEmpty else { return }
+        let classifiedProfileIDs = report.resetCreditsAttemptedProfileIDs
+            .union(report.resetCreditsDeferredProfileIDs)
+            .intersection(requestedProfileIDs)
+        for profileID in classifiedProfileIDs {
+            codexResetCreditsLastAttemptAt[profileID] = attemptedAt
+        }
+        if classifiedProfileIDs == requestedProfileIDs {
+            codexResetCreditsRetryNotBefore = nil
+        } else {
+            codexResetCreditsRetryNotBefore = attemptedAt.addingTimeInterval(
+                Self.codexResetCreditsPreflightRetryInterval
+            )
         }
     }
 
@@ -1202,6 +2028,25 @@ final class DashboardViewModel: ObservableObject {
         }
         if didUpdateStates {
             persistSuccessfulSubscriptionUsageSnapshots()
+        }
+        applyCodexResetCreditOutcomes(
+            report.resetCreditsOutcomesByProfileID,
+            enabledProfileIDs: enabledProfileIDs
+        )
+    }
+
+    private func applyCodexResetCreditOutcomes(
+        _ outcomes: [String: CodexResetCreditsRefreshOutcome],
+        enabledProfileIDs: Set<String>
+    ) {
+        var changed = false
+        for (profileID, outcome) in outcomes where enabledProfileIDs.contains(profileID) {
+            guard case let .available(snapshot) = outcome else { continue }
+            codexResetCreditsSnapshots[profileID] = snapshot
+            changed = true
+        }
+        if changed {
+            persistCodexResetCreditSnapshots()
         }
     }
 
@@ -1245,14 +2090,28 @@ final class DashboardViewModel: ObservableObject {
         rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
     }
 
-    private func scheduleSubscriptionUsagePollingIfNeeded() {
+    private var defersSubscriptionUsagePollingForConfigurationWork: Bool {
+        configurationWork.oauthRefreshOwnerSessionID != nil
+            || isServerActionInProgress
+            || !pendingProxyConfigurationRestartReasons.isEmpty
+            || proxyConfigurationRestartTask != nil
+    }
+
+    private func scheduleSubscriptionUsagePollingIfNeeded(didRefreshUsage: Bool = false) {
         subscriptionUsagePollingTask?.cancel()
+        subscriptionUsagePollingTask = nil
+        subscriptionUsagePollingWakeReason = nil
+        subscriptionUsagePollingDeadline = nil
+        guard !defersSubscriptionUsagePollingForConfigurationWork else { return }
         guard config.isSubscriptionUsageEnabled,
               subscriptionUsageKeyStore.isConfigured() else {
+            subscriptionUsageNextUsageRefreshAt = nil
             return
         }
 
-        let enabledProfileIDs = Set(authProfiles.filter(isSubscriptionUsageEnabled(for:)).map(\.id))
+        let now = codexResetCreditsNow()
+        let enabledProfiles = authProfiles.filter(isSubscriptionUsageEnabled(for:))
+        let enabledProfileIDs = Set(enabledProfiles.map(\.id))
         let hasRefreshableAccount = subscriptionUsageStates.contains { profileID, state in
             guard enabledProfileIDs.contains(profileID) else { return false }
             switch state {
@@ -1264,27 +2123,56 @@ final class DashboardViewModel: ObservableObject {
                 return false
             }
         }
-        guard hasRefreshableAccount else { return }
 
-        let hasRetriableFailure = subscriptionUsageStates.contains { profileID, state in
-            guard enabledProfileIDs.contains(profileID) else { return false }
-            if case let .stale(_, issue) = state {
-                return !issue.stopsPolling
+        if hasRefreshableAccount {
+            if didRefreshUsage || subscriptionUsageNextUsageRefreshAt == nil {
+                let hasRetriableFailure = subscriptionUsageStates.contains { profileID, state in
+                    guard enabledProfileIDs.contains(profileID) else { return false }
+                    if case let .stale(_, issue) = state {
+                        return !issue.stopsPolling
+                    }
+                    if case let .unavailable(issue) = state {
+                        return !issue.stopsPolling
+                    }
+                    return false
+                }
+                let usageDelay: UInt64
+                if hasRetriableFailure {
+                    usageDelay = subscriptionUsageRetryDelayNanoseconds
+                    subscriptionUsageRetryDelayNanoseconds = min(subscriptionUsageRetryDelayNanoseconds * 2, 900_000_000_000)
+                } else {
+                    usageDelay = 300_000_000_000
+                    subscriptionUsageRetryDelayNanoseconds = 60_000_000_000
+                }
+                subscriptionUsageNextUsageRefreshAt = now.addingTimeInterval(
+                    TimeInterval(usageDelay) / 1_000_000_000
+                )
             }
-            if case let .unavailable(issue) = state {
-                return !issue.stopsPolling
-            }
-            return false
-        }
-        let delay: UInt64
-        if hasRetriableFailure {
-            delay = subscriptionUsageRetryDelayNanoseconds
-            subscriptionUsageRetryDelayNanoseconds = min(subscriptionUsageRetryDelayNanoseconds * 2, 900_000_000_000)
         } else {
-            delay = 300_000_000_000
-            subscriptionUsageRetryDelayNanoseconds = 60_000_000_000
+            subscriptionUsageNextUsageRefreshAt = nil
         }
 
+        let resetCreditsDeadline = nextCodexResetCreditsRefreshAt(
+            for: enabledProfiles,
+            now: now
+        )
+        let wake: (reason: SubscriptionUsagePollingWakeReason, deadline: Date)
+        switch (subscriptionUsageNextUsageRefreshAt, resetCreditsDeadline) {
+        case let (usage?, resetCredits?) where usage <= resetCredits:
+            wake = (.usage, usage)
+        case let (_?, resetCredits?):
+            wake = (.resetCredits, resetCredits)
+        case let (usage?, nil):
+            wake = (.usage, usage)
+        case let (nil, resetCredits?):
+            wake = (.resetCredits, resetCredits)
+        case (nil, nil):
+            return
+        }
+
+        let delay = nanoseconds(until: wake.deadline, now: now)
+        subscriptionUsagePollingWakeReason = wake.reason
+        subscriptionUsagePollingDeadline = wake.deadline
         let sleep = subscriptionUsageSleep
         subscriptionUsagePollingTask = Task { [weak self] in
             do {
@@ -1292,8 +2180,53 @@ final class DashboardViewModel: ObservableObject {
             } catch {
                 return
             }
-            await self?.refreshSubscriptionUsage()
+            guard let self,
+                  self.subscriptionUsagePollingWakeReason == wake.reason,
+                  self.subscriptionUsagePollingDeadline == wake.deadline else {
+                return
+            }
+            self.subscriptionUsagePollingTask = nil
+            self.subscriptionUsagePollingWakeReason = nil
+            self.subscriptionUsagePollingDeadline = nil
+            _ = await self.refreshSubscriptionUsage(
+                force: false,
+                pollingWakeReason: wake.reason,
+                source: .automatic
+            )
         }
+    }
+
+    private func nextCodexResetCreditsRefreshAt(
+        for profiles: [AuthProfile],
+        now: Date
+    ) -> Date? {
+        guard let deadline = profiles.compactMap({ profile -> Date? in
+            guard profile.type == .codex,
+                  !codexResetCreditsInFlightProfileIDs.contains(profile.id),
+                  !pendingCodexResetCreditsProfileIDs.contains(profile.id) else {
+                return nil
+            }
+            let reference = codexResetCreditsLastAttemptAt[profile.id]
+                ?? codexResetCreditsSnapshots[profile.id]?.fetchedAt
+            guard let reference else { return now }
+            return reference.addingTimeInterval(Self.codexResetCreditsRefreshInterval)
+        }).min() else {
+            return nil
+        }
+        guard let retryNotBefore = codexResetCreditsRetryNotBefore else { return deadline }
+        return max(deadline, retryNotBefore)
+    }
+
+    private func nanoseconds(until deadline: Date, now: Date) -> UInt64 {
+        let interval = deadline.timeIntervalSince(now)
+        guard interval.isFinite else {
+            return UInt64(Self.maximumSubscriptionUsageSleepInterval * 1_000_000_000)
+        }
+        let boundedInterval = min(
+            max(0, interval),
+            Self.maximumSubscriptionUsageSleepInterval
+        )
+        return UInt64(ceil(boundedInterval * 1_000_000_000))
     }
 
     /// Called once on app launch. Auto-starts the server if the user opted in.
@@ -1366,6 +2299,12 @@ final class DashboardViewModel: ObservableObject {
         let enabledProfileIDs = Set(authProfiles.filter(isSubscriptionUsageEnabled(for:)).map(\.id))
         subscriptionUsageStates = subscriptionUsageStates.filter { enabledProfileIDs.contains($0.key) }
         persistSuccessfulSubscriptionUsageSnapshots()
+        let enabledCodexIDs = Set(authProfiles.filter {
+            $0.type == .codex && isSubscriptionUsageEnabled(for: $0)
+        }.map(\.id))
+        codexResetCreditsSnapshots = codexResetCreditsSnapshots.filter { enabledCodexIDs.contains($0.key) }
+        codexResetCreditsLastAttemptAt = codexResetCreditsLastAttemptAt.filter { enabledCodexIDs.contains($0.key) }
+        persistCodexResetCreditSnapshots()
         rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
     }
 
@@ -1455,7 +2394,7 @@ final class DashboardViewModel: ObservableObject {
         guard oauthLoginTask == nil else { return }
         let sessionID = UUID()
         let provider = providerID(for: providerType)
-        oauthLoginSessionID = sessionID
+        beginOAuthLoginSession(sessionID)
         completedOAuthLoginProvider = nil
         completedOAuthLoginIsInitialSetup = true
         activeOAuthLoginProvider = provider
@@ -1468,9 +2407,16 @@ final class DashboardViewModel: ObservableObject {
 
     func cancelOAuthLogin() {
         let cancelledProvider = activeOAuthLoginProvider
+        let cancelledSessionID = oauthLoginSessionID
         oauthLoginTask?.cancel()
         oauthLoginTask = nil
-        oauthLoginSessionID = nil
+        var releasedOwnership = false
+        if let cancelledSessionID,
+           oauthLoginSessionID == cancelledSessionID {
+            oauthLoginSession = nil
+            releasedOwnership = releaseOAuthRefreshOwnership(for: cancelledSessionID)
+            configurationWork.removeDeferredSubscriptionUsageRefreshReason(.oauthFinal)
+        }
         activeOAuthLoginProvider = nil
         completedOAuthLoginProvider = nil
         completedOAuthLoginIsInitialSetup = true
@@ -1480,13 +2426,49 @@ final class DashboardViewModel: ObservableObject {
             settingsMessage = "\(oauthProviderName(cancelledProvider)) login was cancelled."
             refreshProfiles()
         }
+        if releasedOwnership {
+            scheduleConfigurationWorkStabilization()
+        }
+    }
+
+    private func beginOAuthLoginSession(_ sessionID: UUID) {
+        let actionGeneration = serverActionWaitsForReady
+            ? configurationWork.activeServerActionGeneration
+            : nil
+        oauthLoginSession = OAuthLoginSessionState(
+            id: sessionID,
+            startedDuringServerActionGeneration: actionGeneration
+        )
+    }
+
+    private func markOAuthLoginReconciled(sessionID: UUID) {
+        guard let session = oauthLoginSession,
+              session.id == sessionID,
+              case .authenticating = session.phase else { return }
+        oauthLoginSession?.phase = .reconciled
+        configurationWork.oauthRefreshOwnerSessionID = sessionID
+        queueSubscriptionUsageRefresh(.automatic, reason: .oauthFinal)
+    }
+
+    private func handOffCodexResetCreditsSourceAuthorizationIfNeeded(
+        for source: SubscriptionUsageRefreshSource
+    ) {
+        guard activeCodexResetCreditsDispatchPermit?.source == source else { return }
+        activeCodexResetCreditsSourceAuthorization = .independentHandoff
+    }
+
+    @discardableResult
+    private func releaseOAuthRefreshOwnership(for sessionID: UUID) -> Bool {
+        guard configurationWork.oauthRefreshOwnerSessionID == sessionID else { return false }
+        configurationWork.oauthRefreshOwnerSessionID = nil
+        return true
     }
 
     func connectProvider(_ provider: ProviderRowState.ID) async {
         guard oauthLoginTask == nil, isProfileLoginInProgress == false else { return }
         let providerType = oauthProviderType(for: provider)
         let sessionID = UUID()
-        oauthLoginSessionID = sessionID
+        beginOAuthLoginSession(sessionID)
         completedOAuthLoginProvider = nil
         completedOAuthLoginIsInitialSetup = true
         activeOAuthLoginProvider = providerID(for: providerType)
@@ -1531,12 +2513,14 @@ final class DashboardViewModel: ObservableObject {
 
     private func runOAuthLogin(_ providerType: AuthProfileType, sessionID: UUID, isInitialSetup: Bool) async {
         defer {
+            _ = releaseOAuthRefreshOwnership(for: sessionID)
             if oauthLoginSessionID == sessionID {
                 isProfileLoginInProgress = false
                 activeOAuthLoginProvider = nil
                 oauthLoginTask = nil
-                oauthLoginSessionID = nil
+                oauthLoginSession = nil
             }
+            scheduleConfigurationWorkStabilization()
         }
 
         let beforeProfiles = authProfiles
@@ -1550,18 +2534,61 @@ final class DashboardViewModel: ObservableObject {
             applyCodexCredentialMigrationsIfNeeded()
             let completedID = reconcileOAuthLoginCompletion(providerType: providerType, beforeProfiles: beforeProfiles)
             refreshProfiles()
+            markOAuthLoginReconciled(sessionID: sessionID)
+
+            if oauthLoginSession?.observedServerActionCompletion?.succeeded == false {
+                preserveOAuthConfigurationWorkAfterFailure(sessionID: sessionID)
+                return
+            }
+
+            let pendingWorkSucceeded = await waitForPendingProxyConfigurationWork()
+            try Task.checkCancellation()
+            guard oauthLoginSessionID == sessionID else { return }
+            guard pendingWorkSucceeded else {
+                preserveOAuthConfigurationWorkAfterFailure(sessionID: sessionID)
+                return
+            }
+
+            if serverStatus.severity == .ready {
+                _ = await refreshSubscriptionUsage(
+                    force: false,
+                    pollingWakeReason: nil,
+                    source: .oauth(sessionID)
+                )
+                try Task.checkCancellation()
+                guard oauthLoginSessionID == sessionID else { return }
+                if configurationWork.deferredCollectorUpdate {
+                    configurationWork.deferredCollectorUpdate = false
+                    scheduleAPIUsageCollectorUpdateIfStarted()
+                }
+            }
+            handOffCodexResetCreditsSourceAuthorizationIfNeeded(for: .oauth(sessionID))
+            _ = releaseOAuthRefreshOwnership(for: sessionID)
             completedOAuthLoginProvider = completedID
             completedOAuthLoginIsInitialSetup = isInitialSetup
             settingsMessage = "\(providerName) connection was updated."
         } catch is CancellationError {
             guard oauthLoginSessionID == sessionID else { return }
+            let releasedOwnership = releaseOAuthRefreshOwnership(for: sessionID)
+            configurationWork.removeDeferredSubscriptionUsageRefreshReason(.oauthFinal)
             settingsMessage = "\(providerName) login was cancelled."
             refreshProfiles()
+            if releasedOwnership {
+                await stabilizeConfigurationWorkIfPossible()
+            }
         } catch {
             guard oauthLoginSessionID == sessionID else { return }
+            _ = releaseOAuthRefreshOwnership(for: sessionID)
             settingsMessage = "\(providerName) login failed: \(error.localizedDescription)"
             refreshProfiles()
         }
+    }
+
+    private func preserveOAuthConfigurationWorkAfterFailure(sessionID: UUID) {
+        guard oauthLoginSessionID == sessionID else { return }
+        requestProxyConfigurationRestart(reason: .configuration)
+        queueSubscriptionUsageRefresh(.automatic, reason: .oauthFinal)
+        _ = releaseOAuthRefreshOwnership(for: sessionID)
     }
 
     private func reconcileOAuthLoginCompletion(providerType: AuthProfileType, beforeProfiles: [AuthProfile]) -> ProviderRowState.ID {
@@ -1634,8 +2661,12 @@ final class DashboardViewModel: ObservableObject {
     func removeInitialProvider(_ provider: ProviderRowState.ID) {
         let refreshContext = invalidateSubscriptionUsageRefreshForRemoval()
         defer { resumeSubscriptionUsageAfterRemoval(refreshContext) }
+        let authProfileID = authProfileID(for: provider)
         do {
-            _ = try removeAuthProfile(for: provider)
+            let deleted = try removeAuthProfile(for: provider)
+            if deleted {
+                removeCodexResetCreditState(for: authProfileID)
+            }
             refreshProfiles()
             try resetProviderSettings(provider)
             settingsMessage = nil
@@ -1649,9 +2680,13 @@ final class DashboardViewModel: ObservableObject {
         let providerName = oauthProviderName(oauthProviderType(for: provider))
         let refreshContext = invalidateSubscriptionUsageRefreshForRemoval()
         defer { resumeSubscriptionUsageAfterRemoval(refreshContext) }
+        let authProfileID = authProfileID(for: provider)
 
         do {
             let deleted = try removeAuthProfile(for: provider)
+            if deleted {
+                removeCodexResetCreditState(for: authProfileID)
+            }
             try resetProviderSettings(provider)
             refreshProfiles()
             settingsMessage = deleted
@@ -1667,7 +2702,8 @@ final class DashboardViewModel: ObservableObject {
         let providerName = oauthProviderName(oauthProviderType(for: provider))
         cancelSubscriptionUsageWork()
         let priorConfig = config
-        let priorAuthDisabled = authProfiles.first { $0.id == authProfileID(for: provider) }?.disabled
+        let authProfileID = authProfileID(for: provider)
+        let priorAuthDisabled = authProfiles.first { $0.id == authProfileID }?.disabled
 
         do {
             let authUpdated = try setAuthProfileDisabled(!enabled, for: provider)
@@ -1688,6 +2724,9 @@ final class DashboardViewModel: ObservableObject {
                 validateShellFunctions: true,
                 preservingUnavailableRoundRobinProfiles: true
             )
+            if !enabled {
+                removeCodexResetCreditState(for: authProfileID)
+            }
             refreshProfiles()
             scheduleSubscriptionUsagePollingIfNeeded()
             settingsMessage = enabled
@@ -2039,9 +3078,20 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func requestProxyConfigurationRestart(reason: ProxyConfigurationRestartReason) {
-        guard serverControlState.isRunning || isServerActionInProgress || serverControlState.isTransitioning else {
+        let shouldRetainForExplicitRecovery: Bool
+        if case .error = serverControlState {
+            shouldRetainForExplicitRecovery = true
+        } else {
+            shouldRetainForExplicitRecovery = false
+        }
+        guard serverControlState.isRunning
+            || isServerActionInProgress
+            || serverControlState.isTransitioning
+            || shouldRetainForExplicitRecovery else {
             return
         }
+        configurationWork.generation &+= 1
+        invalidateSupersededSubscriptionUsageDispatches()
         pendingProxyConfigurationRestartReasons.insert(reason)
         schedulePendingProxyConfigurationRestartIfNeeded()
     }
@@ -2054,27 +3104,71 @@ final class DashboardViewModel: ObservableObject {
         defer {
             proxyConfigurationRestartTask = nil
             schedulePendingProxyConfigurationRestartIfNeeded()
+            scheduleConfigurationWorkStabilization()
         }
-        await drainPendingProxyConfigurationRestarts()
+        _ = await drainPendingProxyConfigurationRestarts()
     }
 
-    private func drainPendingProxyConfigurationRestarts() async {
+    private func drainPendingProxyConfigurationRestarts() async -> ProxyConfigurationDrainResult {
+        var performedRestart = false
         while !pendingProxyConfigurationRestartReasons.isEmpty, serverControlState.isRunning {
+            performedRestart = true
             let reasons = pendingProxyConfigurationRestartReasons
+            let attemptedGeneration = configurationWork.generation
             pendingProxyConfigurationRestartReasons.removeAll()
             do {
                 try await restartProxyAndRefresh()
-                clearOwnedFastRestartFailureMessageIfNeeded(for: reasons)
+                markProxyConfigurationGenerationApplied(
+                    attemptedGeneration,
+                    reasons: reasons
+                )
             } catch {
-                handleProxyConfigurationRestartFailure(error, reasons: reasons)
-                if !pendingProxyConfigurationRestartReasons.isEmpty {
+                let failure = ConfigurationRestartFailure(
+                    generation: attemptedGeneration,
+                    reasons: reasons,
+                    message: error.localizedDescription
+                )
+                let hasNewerExplicitWork = configurationWork.generation > attemptedGeneration
+                    && !pendingProxyConfigurationRestartReasons.isEmpty
+                guard !hasNewerExplicitWork else {
                     serverControlState = .running
+                    continue
                 }
+                pendingProxyConfigurationRestartReasons.formUnion(reasons)
+                handleProxyConfigurationRestartFailure(failure)
+                return ProxyConfigurationDrainResult(
+                    terminal: .failed(failure),
+                    performedRestart: performedRestart
+                )
             }
         }
-        if !serverControlState.isRunning {
+        if proxyRuntimeCertainty == .confirmedStopped {
             pendingProxyConfigurationRestartReasons.removeAll()
+            return ProxyConfigurationDrainResult(
+                terminal: .stopped,
+                performedRestart: performedRestart
+            )
         }
+        if pendingProxyConfigurationRestartReasons.isEmpty,
+           serverStatus.severity == .ready,
+           serverControlState.isRunning {
+            return ProxyConfigurationDrainResult(
+                terminal: .stable(
+                    appliedGeneration: configurationWork.lastAppliedGeneration,
+                    reasons: configurationWork.lastAppliedReasons
+                ),
+                performedRestart: performedRestart
+            )
+        }
+        let failure = configurationWork.ownedRestartFailure ?? ConfigurationRestartFailure(
+            generation: configurationWork.generation,
+            reasons: pendingProxyConfigurationRestartReasons,
+            message: serverStatus.message.isEmpty ? "Could not connect to the server." : serverStatus.message
+        )
+        return ProxyConfigurationDrainResult(
+            terminal: .failed(failure),
+            performedRestart: performedRestart
+        )
     }
 
     private func schedulePendingProxyConfigurationRestartIfNeeded() {
@@ -2086,36 +3180,66 @@ final class DashboardViewModel: ObservableObject {
         proxyConfigurationRestartTask = Task { await self.restartForPendingConfigurationChanges() }
     }
 
+    private func scheduleConfigurationWorkStabilization() {
+        Task { [weak self] in
+            await self?.stabilizeConfigurationWorkIfPossible()
+        }
+    }
+
+    private func stabilizeConfigurationWorkIfPossible() async {
+        guard !configurationWorkBlocksSubscriptionUsageRefresh(source: .automatic),
+              serverStatus.severity == .ready,
+              serverControlState.isRunning else {
+            return
+        }
+        _ = await drainDeferredSubscriptionUsageRefresh(source: .automatic)
+        guard !configurationWorkBlocksSubscriptionUsageRefresh(source: .automatic),
+              serverStatus.severity == .ready,
+              serverControlState.isRunning else {
+            return
+        }
+        if configurationWork.deferredCollectorUpdate {
+            configurationWork.deferredCollectorUpdate = false
+            scheduleAPIUsageCollectorUpdateIfStarted()
+        }
+        scheduleSubscriptionUsagePollingIfNeeded()
+    }
+
     private func handleProxyConfigurationRestartFailure(
-        _ error: Error,
-        reasons: Set<ProxyConfigurationRestartReason>
+        _ failure: ConfigurationRestartFailure
     ) {
-        let message = error.localizedDescription
+        configurationWork.ownedRestartFailure = failure
         updateStatuses(
             serverStatus: DiagnosticStatus(
                 severity: .error,
                 title: "Failed to restart CLIProxyAPI",
-                message: message
+                message: failure.message
             ),
             claudeStatus: nil
         )
-        serverControlState = .error(message)
-        if reasons.contains(.fastMode) {
-            let failureMessage = "Fast mode settings were saved, but CLIProxyAPI could not restart: \(message)"
-            ownedFastRestartFailureMessage = failureMessage
+        serverControlState = .error(failure.message)
+        if let failureMessage = failure.ownedSettingsMessage {
             settingsMessage = failureMessage
         }
     }
 
-    private func clearOwnedFastRestartFailureMessageIfNeeded(
-        for reasons: Set<ProxyConfigurationRestartReason>
+    private func markProxyConfigurationGenerationApplied(
+        _ generation: Int,
+        reasons: Set<ProxyConfigurationRestartReason>
     ) {
-        guard reasons.contains(.fastMode),
-              let ownedFastRestartFailureMessage else { return }
-        if settingsMessage == ownedFastRestartFailureMessage {
+        if generation >= configurationWork.lastAppliedGeneration {
+            configurationWork.lastAppliedGeneration = generation
+            configurationWork.lastAppliedReasons = reasons
+        }
+        guard let ownedFailure = configurationWork.ownedRestartFailure,
+              ownedFailure.generation <= generation else {
+            return
+        }
+        if let ownedMessage = ownedFailure.ownedSettingsMessage,
+           settingsMessage == ownedMessage {
             settingsMessage = nil
         }
-        self.ownedFastRestartFailureMessage = nil
+        configurationWork.ownedRestartFailure = nil
     }
 
     func removeAPIProvider(_ provider: ProviderRowState.ID) {
@@ -2309,7 +3433,7 @@ final class DashboardViewModel: ObservableObject {
             await refreshUntilServerIsReady()
             serverControlState = serverStatus.severity == .ready ? .running : .stopped
             if serverControlState.isRunning {
-                await drainPendingProxyConfigurationRestarts()
+                _ = await drainPendingProxyConfigurationRestarts()
             } else {
                 pendingProxyConfigurationRestartReasons.removeAll()
             }
@@ -2584,30 +3708,34 @@ final class DashboardViewModel: ObservableObject {
     private struct CodexCredentialMigrationResult {
         let config: AppConfig
         let profiles: Result<[AuthProfile], Error>
+        let mapping: [String: String]
     }
 
     private static func applyPreparedCodexCredentialMigrations(
         to config: AppConfig,
         authProfileStore: any AuthProfileManaging,
         configStore: any AppConfigStoring,
-        subscriptionUsageSnapshotCache: any SubscriptionUsageSnapshotCaching
+        subscriptionUsageSnapshotCache: any SubscriptionUsageSnapshotCaching,
+        resetCreditsSnapshotCache: any CodexResetCreditsSnapshotCaching
     ) -> CodexCredentialMigrationResult {
         let migrations: [AuthProfileMigration]
         do {
             migrations = try authProfileStore.prepareCodexCredentialMigrations()
         } catch {
-            return CodexCredentialMigrationResult(config: config, profiles: .failure(error))
+            return CodexCredentialMigrationResult(config: config, profiles: .failure(error), mapping: [:])
         }
         guard !migrations.isEmpty else {
             return CodexCredentialMigrationResult(
                 config: config,
-                profiles: Result { try authProfileStore.profiles() }
+                profiles: Result { try authProfileStore.profiles() },
+                mapping: [:]
             )
         }
 
         let mapping = migrationMapping(migrations)
         let migratedConfig = remappingAuthProfileIDs(in: config, using: mapping)
         let originalSnapshots = subscriptionUsageSnapshotCache.load()
+        let originalResetSnapshots = resetCreditsSnapshotCache.load()
         do {
             try configStore.save(migratedConfig)
             try remapSubscriptionUsageSnapshots(
@@ -2615,18 +3743,26 @@ final class DashboardViewModel: ObservableObject {
                 using: mapping,
                 cache: subscriptionUsageSnapshotCache
             )
+            try remapCodexResetCreditSnapshots(
+                originalResetSnapshots,
+                using: mapping,
+                cache: resetCreditsSnapshotCache
+            )
             try authProfileStore.finalizeCodexCredentialMigrations(migrations)
             return CodexCredentialMigrationResult(
                 config: migratedConfig,
-                profiles: Result { try authProfileStore.profiles() }
+                profiles: Result { try authProfileStore.profiles() },
+                mapping: mapping
             )
         } catch {
             try? configStore.save(config)
             try? subscriptionUsageSnapshotCache.save(originalSnapshots)
+            try? resetCreditsSnapshotCache.save(originalResetSnapshots)
             authProfileStore.rollbackCodexCredentialMigrations(migrations)
             return CodexCredentialMigrationResult(
                 config: config,
-                profiles: Result { try authProfileStore.profiles() }
+                profiles: Result { try authProfileStore.profiles() },
+                mapping: [:]
             )
         }
     }
@@ -2637,23 +3773,40 @@ final class DashboardViewModel: ObservableObject {
             to: config,
             authProfileStore: authProfileStore,
             configStore: configStore,
-            subscriptionUsageSnapshotCache: subscriptionUsageSnapshotCache
+            subscriptionUsageSnapshotCache: subscriptionUsageSnapshotCache,
+            resetCreditsSnapshotCache: codexResetCreditsSnapshotCache
         )
-        guard case .success(let profiles) = result.profiles else { return }
-        guard result.config != config else {
-            authProfiles = profiles
-            return
+        let configChanged = result.config != config
+        if configChanged {
+            config = result.config
+            lastPersistedConfig = result.config
         }
-        let mapping = Self.authProfileIDMapping(from: config, to: result.config)
-        config = result.config
-        lastPersistedConfig = result.config
-        authProfiles = profiles
-        subscriptionUsageStates = Self.remappingSubscriptionUsageStates(
-            subscriptionUsageStates,
-            using: mapping
-        )
-        cards = ProfileCard.makeDefaultCards(config: result.config)
-        rebuildOptionRows()
+        if !result.mapping.isEmpty {
+            subscriptionUsageStates = Self.remappingSubscriptionUsageStates(
+                subscriptionUsageStates,
+                using: result.mapping
+            )
+            codexResetCreditsSnapshots = Self.remappingCodexResetCreditSnapshots(
+                codexResetCreditsSnapshots,
+                using: result.mapping
+            )
+            codexResetCreditsLastAttemptAt = Self.remappingAttemptDates(
+                codexResetCreditsLastAttemptAt,
+                using: result.mapping
+            )
+        }
+        switch result.profiles {
+        case .success(let profiles):
+            authProfiles = profiles
+        case .failure where !result.mapping.isEmpty:
+            authProfiles = Self.remappingAuthProfiles(authProfiles, using: result.mapping)
+        case .failure:
+            break
+        }
+        if configChanged {
+            cards = ProfileCard.makeDefaultCards(config: result.config)
+            rebuildOptionRows()
+        }
     }
 
     private static func migrationMapping(_ migrations: [AuthProfileMigration]) -> [String: String] {
@@ -2676,6 +3829,36 @@ final class DashboardViewModel: ObservableObject {
             }
             result[oldID] = profile.authProfileID
         }
+    }
+
+    private static func remappingAuthProfiles(
+        _ profiles: [AuthProfile],
+        using mapping: [String: String]
+    ) -> [AuthProfile] {
+        guard !mapping.isEmpty else { return profiles }
+        var remapped: [AuthProfile] = []
+        var indexByID: [String: Int] = [:]
+        for profile in profiles {
+            let profileID = mapping[profile.id] ?? profile.id
+            let updated = AuthProfile(
+                fileName: profileID,
+                type: profile.type,
+                email: profile.email,
+                accountID: profile.accountID,
+                expired: profile.expired,
+                disabled: profile.disabled,
+                prefix: profile.prefix
+            )
+            if let existingIndex = indexByID[profileID] {
+                if mapping[profile.id] == nil {
+                    remapped[existingIndex] = updated
+                }
+            } else {
+                indexByID[profileID] = remapped.count
+                remapped.append(updated)
+            }
+        }
+        return remapped
     }
 
     private static func remappingAuthProfileIDs(
@@ -2723,6 +3906,51 @@ final class DashboardViewModel: ObservableObject {
         }
         if remapped != snapshots {
             try cache.save(remapped)
+        }
+    }
+
+    private static func remapCodexResetCreditSnapshots(
+        _ snapshots: [String: CodexResetCreditsSnapshot],
+        using mapping: [String: String],
+        cache: any CodexResetCreditsSnapshotCaching
+    ) throws {
+        guard !mapping.isEmpty else { return }
+        let remapped = remappingCodexResetCreditSnapshots(snapshots, using: mapping)
+        if remapped != snapshots {
+            try cache.save(remapped)
+        }
+    }
+
+    private static func remappingCodexResetCreditSnapshots(
+        _ snapshots: [String: CodexResetCreditsSnapshot],
+        using mapping: [String: String]
+    ) -> [String: CodexResetCreditsSnapshot] {
+        guard !mapping.isEmpty else { return snapshots }
+        var remapped: [String: CodexResetCreditsSnapshot] = [:]
+        for (key, snapshot) in snapshots {
+            let profileID = mapping[key] ?? mapping[snapshot.profileID] ?? snapshot.profileID
+            let updated = CodexResetCreditsSnapshot(
+                profileID: profileID,
+                reportedAvailableCount: snapshot.reportedAvailableCount,
+                reportedTotalEarnedCount: snapshot.reportedTotalEarnedCount,
+                credits: snapshot.credits,
+                fetchedAt: snapshot.fetchedAt
+            )
+            if let existing = remapped[profileID], existing.fetchedAt >= updated.fetchedAt {
+                continue
+            }
+            remapped[profileID] = updated
+        }
+        return remapped
+    }
+
+    private static func remappingAttemptDates(
+        _ dates: [String: Date],
+        using mapping: [String: String]
+    ) -> [String: Date] {
+        dates.reduce(into: [:]) { result, entry in
+            let profileID = mapping[entry.key] ?? entry.key
+            result[profileID] = max(result[profileID] ?? .distantPast, entry.value)
         }
     }
 
@@ -3267,6 +4495,9 @@ final class DashboardViewModel: ObservableObject {
                 isErrored: isProviderErrored(providerType: commandProfile.provider, enabledProfile: enabledProfile, diagnosticStatus: diagnosticStatus),
                 accountDetailHidden: commandProfile.accountDetailHidden,
                 usageState: .subscription(subscriptionUsageStates[authProfile.id] ?? defaultSubscriptionUsageState),
+                resetCreditsSnapshot: commandProfile.provider == .codex
+                    ? codexResetCreditsSnapshots[authProfile.id]
+                    : nil,
                 showsInUsageOverlay: showsInUsageOverlay(ProviderRowState.ID(rawValue: commandProfile.id))
             )
         }
@@ -3325,7 +4556,7 @@ final class DashboardViewModel: ObservableObject {
     ) async {
         await waitForConfigurationRestartIfNeeded()
         while isServerActionInProgress {
-            await waitForServerActionCompletion()
+            _ = await waitForServerActionCompletion()
         }
         _ = await executeServerAction(
             title: title,
@@ -3339,7 +4570,7 @@ final class DashboardViewModel: ObservableObject {
     private func restartServerAfterRequiredChange() async -> Bool {
         await waitForConfigurationRestartIfNeeded()
         while isServerActionInProgress {
-            await waitForServerActionCompletion()
+            _ = await waitForServerActionCompletion()
         }
         return await executeServerAction(
             title: "Failed to restart CLIProxyAPI",
@@ -3356,18 +4587,91 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
-    private func waitForServerActionCompletion() async {
-        guard isServerActionInProgress else { return }
-        await withCheckedContinuation { continuation in
+    private func waitForPendingProxyConfigurationWork() async -> Bool {
+        if let completion = oauthLoginSession?.observedServerActionCompletion,
+           !completion.succeeded {
+            return false
+        }
+        while true {
+            if let proxyConfigurationRestartTask {
+                await proxyConfigurationRestartTask.value
+                guard serverStatus.severity == .ready,
+                      serverControlState.isRunning else { return false }
+                continue
+            }
+            if isServerActionInProgress {
+                let completion = await waitForServerActionCompletion()
+                guard completion.succeeded else { return false }
+                continue
+            }
+            if !pendingProxyConfigurationRestartReasons.isEmpty {
+                guard serverControlState.isRunning else { return false }
+                let drainResult = await drainPendingProxyConfigurationRestarts()
+                guard drainResult.succeeded else { return false }
+                continue
+            }
+            return true
+        }
+    }
+
+    private func waitForServerActionCompletion() async -> ServerActionCompletion {
+        guard isServerActionInProgress,
+              configurationWork.activeServerActionGeneration != nil else {
+            return ServerActionCompletion(
+                generation: configurationWork.nextServerActionGeneration,
+                terminal: .stable(
+                    appliedGeneration: configurationWork.lastAppliedGeneration,
+                    reasons: configurationWork.lastAppliedReasons
+                )
+            )
+        }
+        return await withCheckedContinuation { continuation in
             serverActionCompletionWaiters.append(continuation)
         }
     }
 
-    private func finishServerAction() {
+    private func finishServerAction(_ completion: ServerActionCompletion) {
+        if completion.succeeded {
+            handOffCodexResetCreditsSourceAuthorizationIfNeeded(
+                for: .serverAction(completion.generation)
+            )
+        }
+        if configurationWork.activeServerActionGeneration == completion.generation {
+            configurationWork.activeServerActionGeneration = nil
+        }
+        if oauthLoginSession?.startedDuringServerActionGeneration == completion.generation,
+           oauthLoginSession?.observedServerActionCompletion == nil {
+            oauthLoginSession?.observedServerActionCompletion = completion
+        }
         isServerActionInProgress = false
+        serverActionWaitsForReady = false
+        schedulePendingProxyConfigurationRestartIfNeeded()
         let waiters = serverActionCompletionWaiters
         serverActionCompletionWaiters.removeAll()
-        waiters.forEach { $0.resume() }
+        waiters.forEach { $0.resume(returning: completion) }
+        scheduleConfigurationWorkStabilization()
+    }
+
+    private func serverActionTerminalResult(
+        succeeded: Bool
+    ) -> ProxyConfigurationDrainResult.Terminal {
+        if succeeded {
+            if proxyRuntimeCertainty == .confirmedStopped || !serverControlState.isRunning {
+                return .stopped
+            }
+            return .stable(
+                appliedGeneration: configurationWork.lastAppliedGeneration,
+                reasons: configurationWork.lastAppliedReasons
+            )
+        }
+        if let failure = configurationWork.ownedRestartFailure {
+            return .failed(failure)
+        }
+        return .failed(ConfigurationRestartFailure(
+            generation: configurationWork.generation,
+            reasons: pendingProxyConfigurationRestartReasons,
+            message: serverStatus.message.isEmpty ? "Could not connect to the server." : serverStatus.message
+        ))
     }
 
     @discardableResult
@@ -3378,10 +4682,23 @@ final class DashboardViewModel: ObservableObject {
         action: () async throws -> Void
     ) async -> Bool {
         guard !isPreparingAPIUsageForTermination, !Task.isCancelled else { return false }
+        configurationWork.nextServerActionGeneration &+= 1
+        let actionGeneration = configurationWork.nextServerActionGeneration
+        let reasonsAppliedByAction = waitForReady ? pendingProxyConfigurationRestartReasons : []
+        let configurationGenerationAppliedByAction = configurationWork.generation
+        var actionSucceeded = false
+        var performedConfigurationRestart = false
         isServerActionInProgress = true
+        serverActionWaitsForReady = waitForReady
+        configurationWork.activeServerActionGeneration = actionGeneration
         proxyRuntimeCertainty = .mayBeRunning
         serverControlState = transitionState
-        defer { finishServerAction() }
+        defer {
+            finishServerAction(ServerActionCompletion(
+                generation: actionGeneration,
+                terminal: serverActionTerminalResult(succeeded: actionSucceeded)
+            ))
+        }
 
         do {
             try await action()
@@ -3394,24 +4711,84 @@ final class DashboardViewModel: ObservableObject {
                         : serverStatus.message
                     throw ProxyRestartReadinessError(message: message)
                 }
-                await refreshUsageAfterServerChange()
-            } else {
-                await refresh()
+                proxyRuntimeCertainty = .mayBeRunning
+                serverControlState = .running
+                if configurationWork.generation == configurationGenerationAppliedByAction {
+                    pendingProxyConfigurationRestartReasons.subtract(reasonsAppliedByAction)
+                }
+                markProxyConfigurationGenerationApplied(
+                    configurationGenerationAppliedByAction,
+                    reasons: reasonsAppliedByAction
+                )
+                if !reasonsAppliedByAction.isEmpty {
+                    performedConfigurationRestart = true
+                    configurationWork.deferredCollectorUpdate = true
+                }
+
+                while true {
+                    if !pendingProxyConfigurationRestartReasons.isEmpty {
+                        performedConfigurationRestart = true
+                    }
+                    let restartResult = await drainPendingProxyConfigurationRestarts()
+                    guard restartResult.succeeded,
+                          serverStatus.severity == .ready,
+                          serverControlState.isRunning else {
+                        return false
+                    }
+
+                    let refreshResult = await refreshSubscriptionUsage(
+                        force: false,
+                        pollingWakeReason: nil,
+                        source: .serverAction(actionGeneration)
+                    )
+                    guard !isPreparingAPIUsageForTermination, !Task.isCancelled else { return false }
+                    if !pendingProxyConfigurationRestartReasons.isEmpty {
+                        continue
+                    }
+                    if configurationWork.oauthRefreshOwnerSessionID != nil {
+                        queueSubscriptionUsageRefresh(.automatic, reason: .serverActionHandback)
+                        if !performedConfigurationRestart {
+                            configurationWork.deferredCollectorUpdate = true
+                        }
+                        actionSucceeded = true
+                        return true
+                    }
+                    if refreshResult == .deferred {
+                        if !performedConfigurationRestart {
+                            configurationWork.deferredCollectorUpdate = true
+                        }
+                        actionSucceeded = true
+                        return true
+                    }
+                    if !performedConfigurationRestart {
+                        scheduleAPIUsageCollectorUpdateIfStarted()
+                    }
+                    actionSucceeded = true
+                    return true
+                }
             }
+
+            await refresh()
             proxyRuntimeCertainty = transitionState == .stopping
                 ? .confirmedStopped
                 : .mayBeRunning
             // After action completes, derive final state from the latest health.
             serverControlState = serverStatus.severity == .ready ? .running : .stopped
             if serverControlState.isRunning {
-                await drainPendingProxyConfigurationRestarts()
+                if !pendingProxyConfigurationRestartReasons.isEmpty {
+                    performedConfigurationRestart = true
+                }
+                let drainResult = await drainPendingProxyConfigurationRestarts()
+                actionSucceeded = drainResult.succeeded
             } else {
-                pendingProxyConfigurationRestartReasons.removeAll()
+                if proxyRuntimeCertainty == .confirmedStopped {
+                    pendingProxyConfigurationRestartReasons.removeAll()
+                }
+                actionSucceeded = true
             }
-            return true
+            return actionSucceeded
         } catch {
             guard !isPreparingAPIUsageForTermination, !Task.isCancelled else { return false }
-            pendingProxyConfigurationRestartReasons.removeAll()
             let message = error.localizedDescription
             updateStatuses(
                 serverStatus: DiagnosticStatus(
@@ -3422,6 +4799,17 @@ final class DashboardViewModel: ObservableObject {
                 claudeStatus: nil
             )
             serverControlState = .error(message)
+            if waitForReady, !reasonsAppliedByAction.isEmpty {
+                let failure = ConfigurationRestartFailure(
+                    generation: configurationGenerationAppliedByAction,
+                    reasons: reasonsAppliedByAction,
+                    message: message
+                )
+                configurationWork.ownedRestartFailure = failure
+                if let failureMessage = failure.ownedSettingsMessage {
+                    settingsMessage = failureMessage
+                }
+            }
             return false
         }
     }
@@ -3435,12 +4823,7 @@ final class DashboardViewModel: ObservableObject {
         }
         proxyRuntimeCertainty = .mayBeRunning
         serverControlState = .running
-        scheduleAPIUsageCollectorUpdateIfStarted()
-    }
-
-    private func refreshUsageAfterServerChange() async {
-        await refreshSubscriptionUsage()
-        scheduleAPIUsageCollectorUpdateIfStarted()
+        configurationWork.deferredCollectorUpdate = true
     }
 
     private func scheduleAPIUsageCollectorUpdateIfStarted() {

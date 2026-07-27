@@ -139,6 +139,413 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         XCTAssertEqual(body["url"] as? String, "https://chatgpt.com/backend-api/wham/usage")
     }
 
+    func testRequestedCodexResetCreditsUseAccountHeaderAndParseRedactedSnapshot() async throws {
+        let transport = StubSubscriptionUsageTransport(responses: [
+            .success(.init(data: Data(#"{"files":[{"name":"codex-work.json","provider":"codex","auth_index":"codex-index","status":"ready","disabled":false}]}"#.utf8), statusCode: 200)),
+            .success(.init(data: Data(#"{"status_code":200,"body":"{\"rate_limit\":{\"primary_window\":{\"used_percent\":20,\"reset_at\":1783645200}}}"}"#.utf8), statusCode: 200)),
+            .success(.init(data: Data(#"{"status_code":200,"body":"{\"available_count\":2,\"total_earned_count\":4,\"credits\":[{\"title\":\"Full reset (earned)\",\"status\":\"available\",\"reset_type\":\"full\",\"expires_at\":\"2026-07-31T12:40:00.123Z\",\"granted_at\":\"2026-07-25T00:00:00Z\"}]}"}"#.utf8), statusCode: 200))
+        ])
+        let now = Date(timeIntervalSince1970: 1_784_100_000)
+        let client = CLIProxyAPISubscriptionQuotaClient(
+            keyStore: StubManagementKeyStore(key: "management-secret"),
+            transport: transport,
+            now: { now }
+        )
+        let profile = AuthProfile(
+            fileName: "codex-work.json",
+            type: .codex,
+            email: "codex@example.com",
+            accountID: "acct_example",
+            expired: nil,
+            disabled: false
+        )
+
+        let report = await client.fetchUsage(
+            port: 18_317,
+            profiles: [profile],
+            resetCreditsProfileIDs: [profile.id]
+        )
+
+        guard case let .available(snapshot)? = report.resetCreditsOutcomesByProfileID[profile.id] else {
+            return XCTFail("Expected reset-credit snapshot")
+        }
+        XCTAssertEqual(snapshot.profileID, profile.id)
+        XCTAssertEqual(snapshot.reportedAvailableCount, 2)
+        XCTAssertEqual(snapshot.reportedTotalEarnedCount, 4)
+        XCTAssertEqual(snapshot.credits.first?.title, "Full reset (earned)")
+        XCTAssertEqual(snapshot.credits.first?.expiresAt, Date(timeIntervalSince1970: 1_785_501_600.123))
+        XCTAssertEqual(snapshot.fetchedAt, now)
+
+        let resetRequest = try XCTUnwrap(transport.requests.last?.httpBody)
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: resetRequest) as? [String: Any])
+        XCTAssertEqual(body["auth_index"] as? String, "codex-index")
+        XCTAssertEqual(body["method"] as? String, "GET")
+        XCTAssertEqual(body["url"] as? String, "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits")
+        let headers = try XCTUnwrap(body["header"] as? [String: String])
+        XCTAssertEqual(headers["Authorization"], "Bearer $TOKEN$")
+        XCTAssertEqual(headers["ChatGPT-Account-ID"], "acct_example")
+        XCTAssertEqual(headers["originator"], "Codex Desktop")
+        XCTAssertEqual(headers["Accept"], "application/json")
+        XCTAssertFalse(String(decoding: resetRequest, as: UTF8.self).contains("management-secret"))
+    }
+
+    func testResetOnlyCodexProfileSkipsUsageEndpointAndUsageState() async throws {
+        let transport = StubSubscriptionUsageTransport(responses: [
+            .success(.init(data: Data(#"{"files":[{"name":"codex.json","provider":"codex","auth_index":"codex-index","status":"ready","disabled":false}]}"#.utf8), statusCode: 200)),
+            .success(.init(data: Data(#"{"status_code":200,"body":"{\"available_count\":1,\"credits\":[{\"title\":\"Full reset\",\"status\":\"available\"}]}"}"#.utf8), statusCode: 200))
+        ])
+        let client = CLIProxyAPISubscriptionQuotaClient(
+            keyStore: StubManagementKeyStore(key: "management-secret"),
+            transport: transport
+        )
+        let profile = AuthProfile(
+            fileName: "codex.json",
+            type: .codex,
+            email: "codex@example.com",
+            accountID: "acct_example",
+            expired: nil,
+            disabled: false
+        )
+
+        let report = await client.fetchUsage(
+            port: 18_317,
+            profiles: [profile],
+            usageProfileIDs: [],
+            resetCreditsProfileIDs: [profile.id]
+        )
+
+        XCTAssertNil(report.statesByProfileID[profile.id])
+        guard case .available? = report.resetCreditsOutcomesByProfileID[profile.id] else {
+            return XCTFail("Expected reset credits to be available")
+        }
+        XCTAssertEqual(transport.requests.count, 2)
+        let proxyURLs = try transport.requests.compactMap { request -> String? in
+            guard let body = request.httpBody,
+                  let json = try JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+                return nil
+            }
+            return json["url"] as? String
+        }
+        XCTAssertEqual(proxyURLs, ["https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"])
+        XCTAssertFalse(proxyURLs.contains("https://chatgpt.com/backend-api/wham/usage"))
+    }
+
+    func testInvalidPortReturnsTypedResetOutcomeWithoutNetworkRequest() async {
+        let transport = StubSubscriptionUsageTransport(responses: [])
+        let client = CLIProxyAPISubscriptionQuotaClient(
+            keyStore: StubManagementKeyStore(key: "management-secret"),
+            transport: transport
+        )
+        let profile = AuthProfile(
+            fileName: "codex.json",
+            type: .codex,
+            email: "codex@example.com",
+            accountID: "acct_example",
+            expired: nil,
+            disabled: false
+        )
+
+        let report = await client.fetchUsage(
+            port: 0,
+            profiles: [profile],
+            usageProfileIDs: [],
+            resetCreditsProfileIDs: [profile.id]
+        )
+
+        XCTAssertEqual(report.resetCreditsOutcomesByProfileID[profile.id], .unavailable(.transientFailure))
+        XCTAssertEqual(report.resetCreditsAttemptedProfileIDs, [])
+        XCTAssertTrue(transport.requests.isEmpty)
+    }
+
+    func testMissingManagementKeyReturnsTypedResetOutcomeWithoutNetworkRequest() async {
+        let transport = StubSubscriptionUsageTransport(responses: [])
+        let client = CLIProxyAPISubscriptionQuotaClient(
+            keyStore: StubManagementKeyStore(key: nil),
+            transport: transport
+        )
+        let profile = AuthProfile(
+            fileName: "codex.json",
+            type: .codex,
+            email: "codex@example.com",
+            accountID: "acct_example",
+            expired: nil,
+            disabled: false
+        )
+
+        let report = await client.fetchUsage(
+            port: 18_317,
+            profiles: [profile],
+            usageProfileIDs: [],
+            resetCreditsProfileIDs: [profile.id]
+        )
+
+        XCTAssertEqual(report.resetCreditsOutcomesByProfileID[profile.id], .unavailable(.transientFailure))
+        XCTAssertEqual(report.resetCreditsAttemptedProfileIDs, [])
+        XCTAssertTrue(transport.requests.isEmpty)
+    }
+
+    func testAuthFilesAuthorizationFailureIsNotCredentialRejection() async {
+        let transport = StubSubscriptionUsageTransport(responses: [
+            .success(.init(data: Data(#"{}"#.utf8), statusCode: 401))
+        ])
+        let client = CLIProxyAPISubscriptionQuotaClient(
+            keyStore: StubManagementKeyStore(key: "management-secret"),
+            transport: transport
+        )
+        let profile = AuthProfile(
+            fileName: "codex.json",
+            type: .codex,
+            email: "codex@example.com",
+            accountID: "acct_example",
+            expired: nil,
+            disabled: false
+        )
+
+        let report = await client.fetchUsage(
+            port: 18_317,
+            profiles: [profile],
+            usageProfileIDs: [],
+            resetCreditsProfileIDs: [profile.id]
+        )
+
+        XCTAssertEqual(report.resetCreditsOutcomesByProfileID[profile.id], .unavailable(.transientFailure))
+        XCTAssertEqual(report.resetCreditsAttemptedProfileIDs, [])
+        XCTAssertEqual(report.resetCreditsDeferredProfileIDs, [])
+    }
+
+    func testAuthFilesTransportFailureReturnsTypedResetOutcomeWithoutAttempt() async {
+        let transport = StubSubscriptionUsageTransport(responses: [
+            .failure(URLError(.cannotConnectToHost))
+        ])
+        let client = CLIProxyAPISubscriptionQuotaClient(
+            keyStore: StubManagementKeyStore(key: "management-secret"),
+            transport: transport
+        )
+        let profile = AuthProfile(
+            fileName: "codex.json",
+            type: .codex,
+            email: "codex@example.com",
+            accountID: "acct_example",
+            expired: nil,
+            disabled: false
+        )
+
+        let report = await client.fetchUsage(
+            port: 18_317,
+            profiles: [profile],
+            usageProfileIDs: [],
+            resetCreditsProfileIDs: [profile.id]
+        )
+
+        XCTAssertEqual(report.resetCreditsOutcomesByProfileID[profile.id], .unavailable(.transientFailure))
+        XCTAssertEqual(report.resetCreditsAttemptedProfileIDs, [])
+        XCTAssertEqual(report.resetCreditsDeferredProfileIDs, [])
+    }
+
+    func testAuthFilesSchemaFailureReturnsResetSchemaMismatchWithoutAttempt() async {
+        let transport = StubSubscriptionUsageTransport(responses: [
+            .success(.init(data: Data(#"{}"#.utf8), statusCode: 200))
+        ])
+        let client = CLIProxyAPISubscriptionQuotaClient(
+            keyStore: StubManagementKeyStore(key: "management-secret"),
+            transport: transport
+        )
+        let profile = AuthProfile(
+            fileName: "codex.json",
+            type: .codex,
+            email: "codex@example.com",
+            accountID: "acct_example",
+            expired: nil,
+            disabled: false
+        )
+
+        let report = await client.fetchUsage(
+            port: 18_317,
+            profiles: [profile],
+            usageProfileIDs: [],
+            resetCreditsProfileIDs: [profile.id]
+        )
+
+        XCTAssertEqual(report.resetCreditsOutcomesByProfileID[profile.id], .unavailable(.schemaMismatch))
+        XCTAssertEqual(report.resetCreditsAttemptedProfileIDs, [])
+        XCTAssertEqual(report.resetCreditsDeferredProfileIDs, [])
+    }
+
+    func testMissingAccountIDRecordsDeferredResetDecision() async {
+        let transport = StubSubscriptionUsageTransport(responses: [
+            .success(.init(data: Data(#"{"files":[{"name":"codex.json","provider":"codex","auth_index":"codex-index","status":"ready","disabled":false}]}"#.utf8), statusCode: 200))
+        ])
+        let client = CLIProxyAPISubscriptionQuotaClient(
+            keyStore: StubManagementKeyStore(key: "management-secret"),
+            transport: transport
+        )
+        let profile = AuthProfile(
+            fileName: "codex.json",
+            type: .codex,
+            email: "codex@example.com",
+            accountID: nil,
+            expired: nil,
+            disabled: false
+        )
+
+        let report = await client.fetchUsage(
+            port: 18_317,
+            profiles: [profile],
+            usageProfileIDs: [],
+            resetCreditsProfileIDs: [profile.id]
+        )
+
+        XCTAssertEqual(report.resetCreditsOutcomesByProfileID[profile.id], .unavailable(.accountIDUnavailable))
+        XCTAssertEqual(report.resetCreditsAttemptedProfileIDs, [])
+        XCTAssertEqual(report.resetCreditsDeferredProfileIDs, [profile.id])
+    }
+
+    func testResetEndpointSchemaFailureRecordsDispatchedAttempt() async {
+        let transport = StubSubscriptionUsageTransport(responses: [
+            .success(.init(data: Data(#"{"files":[{"name":"codex.json","provider":"codex","auth_index":"codex-index","status":"ready","disabled":false}]}"#.utf8), statusCode: 200)),
+            .success(.init(data: Data(#"{}"#.utf8), statusCode: 200))
+        ])
+        let client = CLIProxyAPISubscriptionQuotaClient(
+            keyStore: StubManagementKeyStore(key: "management-secret"),
+            transport: transport
+        )
+        let profile = AuthProfile(
+            fileName: "codex.json",
+            type: .codex,
+            email: "codex@example.com",
+            accountID: "acct_example",
+            expired: nil,
+            disabled: false
+        )
+
+        let report = await client.fetchUsage(
+            port: 18_317,
+            profiles: [profile],
+            usageProfileIDs: [],
+            resetCreditsProfileIDs: [profile.id]
+        )
+
+        XCTAssertEqual(report.resetCreditsOutcomesByProfileID[profile.id], .unavailable(.schemaMismatch))
+        XCTAssertEqual(report.resetCreditsAttemptedProfileIDs, [profile.id])
+        XCTAssertEqual(report.resetCreditsDeferredProfileIDs, [])
+    }
+
+    func testUnselectedCodexProfileDoesNotCallResetCreditEndpoint() async {
+        let transport = StubSubscriptionUsageTransport(responses: [
+            .success(.init(data: Data(#"{"files":[{"name":"codex.json","provider":"codex","auth_index":"codex-index","status":"ready","disabled":false}]}"#.utf8), statusCode: 200)),
+            .success(.init(data: Data(#"{"status_code":200,"body":"{\"rate_limit\":{\"primary_window\":{\"used_percent\":20}}}"}"#.utf8), statusCode: 200))
+        ])
+        let client = CLIProxyAPISubscriptionQuotaClient(
+            keyStore: StubManagementKeyStore(key: "management-secret"),
+            transport: transport
+        )
+        let profile = AuthProfile(
+            fileName: "codex.json",
+            type: .codex,
+            email: "codex@example.com",
+            accountID: "acct_example",
+            expired: nil,
+            disabled: false
+        )
+
+        let report = await client.fetchUsage(
+            port: 18_317,
+            profiles: [profile],
+            resetCreditsProfileIDs: []
+        )
+
+        XCTAssertTrue(report.resetCreditsOutcomesByProfileID.isEmpty)
+        XCTAssertEqual(transport.requests.count, 2)
+    }
+
+    func testMissingAccountIDFailsOnlyResetCredits() async {
+        let transport = StubSubscriptionUsageTransport(responses: [
+            .success(.init(data: Data(#"{"files":[{"name":"codex.json","provider":"codex","auth_index":"codex-index","status":"ready","disabled":false}]}"#.utf8), statusCode: 200)),
+            .success(.init(data: Data(#"{"status_code":200,"body":"{\"rate_limit\":{\"primary_window\":{\"used_percent\":20}}}"}"#.utf8), statusCode: 200))
+        ])
+        let client = CLIProxyAPISubscriptionQuotaClient(
+            keyStore: StubManagementKeyStore(key: "management-secret"),
+            transport: transport
+        )
+        let profile = AuthProfile(
+            fileName: "codex.json",
+            type: .codex,
+            email: "codex@example.com",
+            accountID: nil,
+            expired: nil,
+            disabled: false
+        )
+
+        let report = await client.fetchUsage(
+            port: 18_317,
+            profiles: [profile],
+            resetCreditsProfileIDs: [profile.id]
+        )
+
+        guard case .available? = report.statesByProfileID[profile.id] else {
+            return XCTFail("Usage should remain available")
+        }
+        XCTAssertEqual(report.resetCreditsOutcomesByProfileID[profile.id], .unavailable(.accountIDUnavailable))
+        XCTAssertEqual(transport.requests.count, 2)
+    }
+
+    func testUsageFailureDoesNotDiscardResetCreditSuccess() async {
+        let transport = StubSubscriptionUsageTransport(responses: [
+            .success(.init(data: Data(#"{"files":[{"name":"codex.json","provider":"codex","auth_index":"codex-index","status":"ready","disabled":false}]}"#.utf8), statusCode: 200)),
+            .success(.init(data: Data(#"{"status_code":500,"body":"{}"}"#.utf8), statusCode: 200)),
+            .success(.init(data: Data(#"{"status_code":200,"body":"{\"available_count\":1,\"credits\":[{\"title\":\"Full reset\",\"status\":\"available\",\"expires_at\":\"2026-07-31T12:40:00Z\"}]}"}"#.utf8), statusCode: 200))
+        ])
+        let client = CLIProxyAPISubscriptionQuotaClient(
+            keyStore: StubManagementKeyStore(key: "management-secret"),
+            transport: transport
+        )
+        let profile = AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_example", expired: nil, disabled: false)
+
+        let report = await client.fetchUsage(port: 18_317, profiles: [profile], resetCreditsProfileIDs: [profile.id])
+
+        XCTAssertEqual(report.statesByProfileID[profile.id], .unavailable(.transientFailure))
+        guard case .available? = report.resetCreditsOutcomesByProfileID[profile.id] else {
+            return XCTFail("Reset credits should succeed independently")
+        }
+    }
+
+    func testMalformedResetCreditsDoNotDiscardUsageSuccess() async {
+        let transport = StubSubscriptionUsageTransport(responses: [
+            .success(.init(data: Data(#"{"files":[{"name":"codex.json","provider":"codex","auth_index":"codex-index","status":"ready","disabled":false}]}"#.utf8), statusCode: 200)),
+            .success(.init(data: Data(#"{"status_code":200,"body":"{\"rate_limit\":{\"primary_window\":{\"used_percent\":20}}}"}"#.utf8), statusCode: 200)),
+            .success(.init(data: Data(#"{"status_code":200,"body":"{\"available_count\":1,\"credits\":[{\"status\":\"available\",\"expires_at\":\"not-a-date\"}]}"}"#.utf8), statusCode: 200))
+        ])
+        let client = CLIProxyAPISubscriptionQuotaClient(
+            keyStore: StubManagementKeyStore(key: "management-secret"),
+            transport: transport
+        )
+        let profile = AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_example", expired: nil, disabled: false)
+
+        let report = await client.fetchUsage(port: 18_317, profiles: [profile], resetCreditsProfileIDs: [profile.id])
+
+        guard case .available? = report.statesByProfileID[profile.id] else {
+            return XCTFail("Usage should remain available")
+        }
+        XCTAssertEqual(report.resetCreditsOutcomesByProfileID[profile.id], .unavailable(.schemaMismatch))
+    }
+
+    func testClaudeProfileNeverRequestsResetCredits() async {
+        let transport = StubSubscriptionUsageTransport(responses: [
+            .success(.init(data: Data(#"{"files":[{"name":"claude.json","provider":"claude","auth_index":"claude-index","status":"ready","disabled":false}]}"#.utf8), statusCode: 200)),
+            .success(.init(data: Data(#"{"status_code":200,"body":"{\"five_hour\":{\"utilization\":10}}"}"#.utf8), statusCode: 200))
+        ])
+        let client = CLIProxyAPISubscriptionQuotaClient(
+            keyStore: StubManagementKeyStore(key: "management-secret"),
+            transport: transport
+        )
+        let profile = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
+
+        let report = await client.fetchUsage(port: 18_317, profiles: [profile], resetCreditsProfileIDs: [profile.id])
+
+        XCTAssertTrue(report.resetCreditsOutcomesByProfileID.isEmpty)
+        XCTAssertEqual(transport.requests.count, 2)
+    }
+
     func testManagementAuthorizationFailureMapsToManagementKeyRejected() async {
         let transport = StubSubscriptionUsageTransport(responses: [
             .success(.init(data: Data("{}".utf8), statusCode: 401))
