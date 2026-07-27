@@ -27,6 +27,14 @@ public struct CLIProxyAPISubscriptionQuotaClient: SubscriptionQuotaFetching {
     }
 
     public func fetchUsage(port: Int, profiles: [AuthProfile]) async -> SubscriptionUsageReport {
+        await fetchUsage(port: port, profiles: profiles, resetCreditsProfileIDs: [])
+    }
+
+    public func fetchUsage(
+        port: Int,
+        profiles: [AuthProfile],
+        resetCreditsProfileIDs: Set<String>
+    ) async -> SubscriptionUsageReport {
         let fetchedAt = now()
         guard (1...65_535).contains(port) else {
             return report(for: profiles, state: .unavailable(.proxyUnavailable), fetchedAt: fetchedAt)
@@ -59,6 +67,7 @@ public struct CLIProxyAPISubscriptionQuotaClient: SubscriptionQuotaFetching {
         }
 
         var states: [String: AccountSubscriptionUsageState] = [:]
+        var resetCreditOutcomes: [String: CodexResetCreditsRefreshOutcome] = [:]
         for profile in profiles {
             if profile.disabled {
                 states[profile.id] = .unavailable(.credentialDisabled)
@@ -90,9 +99,23 @@ public struct CLIProxyAPISubscriptionQuotaClient: SubscriptionQuotaFetching {
                 managementKey: managementKey,
                 fetchedAt: fetchedAt
             )
+
+            if profile.type == .codex, resetCreditsProfileIDs.contains(profile.id) {
+                resetCreditOutcomes[profile.id] = await fetchResetCredits(
+                    for: profile,
+                    credential: credential,
+                    managementBaseURL: baseURL,
+                    managementKey: managementKey,
+                    fetchedAt: fetchedAt
+                )
+            }
         }
 
-        return SubscriptionUsageReport(statesByProfileID: states, fetchedAt: fetchedAt)
+        return SubscriptionUsageReport(
+            statesByProfileID: states,
+            resetCreditsOutcomesByProfileID: resetCreditOutcomes,
+            fetchedAt: fetchedAt
+        )
     }
 
     private func fetchUsage(
@@ -151,6 +174,80 @@ public struct CLIProxyAPISubscriptionQuotaClient: SubscriptionQuotaFetching {
             }
         } catch {
             return .unavailable(.transientFailure)
+        }
+    }
+
+    private func fetchResetCredits(
+        for profile: AuthProfile,
+        credential: ManagedCredential,
+        managementBaseURL: URL,
+        managementKey: String,
+        fetchedAt: Date
+    ) async -> CodexResetCreditsRefreshOutcome {
+        guard let accountID = profile.accountID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !accountID.isEmpty else {
+            return .unavailable(.accountIDUnavailable)
+        }
+
+        let requestBody: Data
+        do {
+            requestBody = try JSONSerialization.data(withJSONObject: [
+                "auth_index": credential.authIndex,
+                "method": "GET",
+                "url": "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits",
+                "header": [
+                    "Authorization": "Bearer $TOKEN$",
+                    "ChatGPT-Account-ID": accountID,
+                    "originator": "Codex Desktop",
+                    "Accept": "application/json"
+                ]
+            ], options: [.sortedKeys])
+        } catch {
+            return .unavailable(.schemaMismatch)
+        }
+
+        let response: (data: Data, statusCode: Int)
+        do {
+            response = try await sendManagementRequest(
+                url: managementBaseURL.appendingPathComponent("api-call"),
+                method: "POST",
+                managementKey: managementKey,
+                body: requestBody
+            )
+        } catch {
+            return .unavailable(.transientFailure)
+        }
+        guard (200..<300).contains(response.statusCode) else {
+            return .unavailable(resetCreditsIssue(for: response.statusCode))
+        }
+
+        let apiResponse: APICallResponse
+        do {
+            apiResponse = try decodeAPICallResponse(response.data)
+        } catch {
+            return .unavailable(.schemaMismatch)
+        }
+        guard (200..<300).contains(apiResponse.statusCode) else {
+            return .unavailable(resetCreditsIssue(for: apiResponse.statusCode))
+        }
+
+        do {
+            return .available(try decodeResetCredits(
+                apiResponse.body,
+                profileID: profile.id,
+                fetchedAt: fetchedAt
+            ))
+        } catch {
+            return .unavailable(.schemaMismatch)
+        }
+    }
+
+    private func resetCreditsIssue(for statusCode: Int) -> CodexResetCreditsIssue {
+        switch statusCode {
+        case 401, 403: .credentialRejected
+        case 404, 405, 501: .endpointUnsupported
+        case 429, 500...599: .transientFailure
+        default: .transientFailure
         }
     }
 
@@ -291,6 +388,36 @@ public struct CLIProxyAPISubscriptionQuotaClient: SubscriptionQuotaFetching {
         return windows
     }
 
+    private func decodeResetCredits(
+        _ data: Data,
+        profileID: String,
+        fetchedAt: Date
+    ) throws -> CodexResetCreditsSnapshot {
+        let payload = try JSONDecoder().decode(CodexResetCreditsPayload.self, from: data)
+        guard payload.availableCount != nil || payload.totalEarnedCount != nil || payload.credits != nil else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: [],
+                debugDescription: "Missing reset-credit fields"
+            ))
+        }
+        let credits = try (payload.credits ?? []).map { credit in
+            CodexResetCredit(
+                title: credit.title,
+                status: credit.status,
+                resetType: credit.resetType,
+                expiresAt: try resetDate(credit.expiresAt),
+                grantedAt: try resetDate(credit.grantedAt)
+            )
+        }
+        return CodexResetCreditsSnapshot(
+            profileID: profileID,
+            reportedAvailableCount: payload.availableCount,
+            reportedTotalEarnedCount: payload.totalEarnedCount,
+            credits: credits,
+            fetchedAt: fetchedAt
+        )
+    }
+
     private func resetDate(_ value: Any?) throws -> Date? {
         guard let value, !(value is NSNull) else { return nil }
         if let seconds = number(value) {
@@ -361,6 +488,33 @@ private struct ManagedCredential {
         authIndex = record.authIndex
         status = record.status?.lowercased() ?? "ready"
         disabled = record.disabled
+    }
+}
+
+private struct CodexResetCreditsPayload: Decodable {
+    let availableCount: Int?
+    let totalEarnedCount: Int?
+    let credits: [CodexResetCreditPayload]?
+
+    enum CodingKeys: String, CodingKey {
+        case availableCount = "available_count"
+        case totalEarnedCount = "total_earned_count"
+        case credits
+    }
+}
+
+private struct CodexResetCreditPayload: Decodable {
+    let title: String?
+    let status: String?
+    let resetType: String?
+    let expiresAt: String?
+    let grantedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case title, status
+        case resetType = "reset_type"
+        case expiresAt = "expires_at"
+        case grantedAt = "granted_at"
     }
 }
 
