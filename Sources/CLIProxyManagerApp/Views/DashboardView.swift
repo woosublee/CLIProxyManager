@@ -814,7 +814,6 @@ struct ProviderAccountCardView: View {
                 )
         }
         .buttonStyle(.plain)
-        .fastTooltip(presentation.accessibilityLabel)
         .accessibilityLabel(presentation.accessibilityLabel)
     }
 

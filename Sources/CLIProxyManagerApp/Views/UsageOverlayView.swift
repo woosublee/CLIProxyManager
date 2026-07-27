@@ -215,7 +215,6 @@ struct UsageOverlayChrome: View {
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
         .accessibilityLabel(accessibilityLabel)
-        .fastTooltip(accessibilityLabel)
     }
 }
 
