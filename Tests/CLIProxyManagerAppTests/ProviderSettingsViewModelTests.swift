@@ -182,7 +182,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.config.claudeAPI.commandName, "ccapi")
     }
 
-    func testSaveCodexAPISettingsNormalizesPrefixedModelsBeforePersisting() throws {
+    func testSaveCodexAPISettingsStripsManagedPrefixAndPreservesNestedIdentifiers() throws {
         let store = StubConfigStore(config: .default)
         let viewModel = DashboardViewModel(
             configStore: store,
@@ -205,8 +205,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         )
 
         XCTAssertEqual(store.config.codexAPI.codex.opus.model, "gpt-5.6")
-        XCTAssertEqual(store.config.codexAPI.codex.sonnet.model, "gpt-5.6")
-        XCTAssertEqual(store.config.codexAPI.codex.haiku.model, "gpt-5.6-mini")
+        XCTAssertEqual(store.config.codexAPI.codex.sonnet.model, "codex-work/gpt-5.6")
+        XCTAssertEqual(store.config.codexAPI.codex.haiku.model, "openai/gpt-5.6-mini")
     }
 
     func testSaveCodexAPISettingsPersistsRoleRoutingAndItsOwnSkipPermissionSetting() throws {

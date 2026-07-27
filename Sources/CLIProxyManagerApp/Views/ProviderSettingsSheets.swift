@@ -34,19 +34,63 @@ enum CodexAPIModelOptions {
             .map { CodexModelOption(id: $0) }
     }
 
+    static let newProfileModels: [CodexModelOption] = [
+        CodexModelOption(
+            id: "gpt-5.6-sol",
+            supportedReasoning: [.low, .medium, .high, .xhigh, .max],
+            defaultReasoning: .low
+        ),
+        CodexModelOption(
+            id: "gpt-5.6-terra",
+            supportedReasoning: [.low, .medium, .high, .xhigh, .max],
+            defaultReasoning: .medium
+        ),
+        CodexModelOption(
+            id: "gpt-5.6-luna",
+            supportedReasoning: [.low, .medium, .high, .xhigh, .max],
+            defaultReasoning: .medium
+        ),
+        CodexModelOption(
+            id: "gpt-5.5",
+            supportedReasoning: [.low, .medium, .high, .xhigh],
+            defaultReasoning: .medium
+        ),
+        CodexModelOption(
+            id: "gpt-5.4",
+            supportedReasoning: [.low, .medium, .high, .xhigh],
+            defaultReasoning: .medium
+        )
+    ]
+
     static func baseModels(from models: [String]) -> [String] {
         var seen = Set<String>()
         return models.compactMap { model in
-            let unprefixed = model.split(separator: "/", omittingEmptySubsequences: false).last.map(String.init) ?? model
-            let baseModel = unprefixed.replacingOccurrences(
-                of: #"\((?:auto|low|medium|high|xhigh|max)\)$"#,
-                with: "",
-                options: .regularExpression
-            ).trimmingCharacters(in: .whitespacesAndNewlines)
-            let canonicalModel = CodexFastMode.canonicalModel(from: baseModel)
-            guard !canonicalModel.isEmpty, seen.insert(canonicalModel).inserted else { return nil }
+            let baseModel = CodexFastMode.canonicalModel(from: model)
+            let components = baseModel.split(separator: "/", omittingEmptySubsequences: false)
+            let unprefixed: String
+            if components.count > 1, components[0].lowercased().hasPrefix("cpm-") {
+                unprefixed = components.dropFirst().joined(separator: "/")
+            } else {
+                unprefixed = baseModel
+            }
+            let canonicalModel = unprefixed.trimmingCharacters(in: .whitespacesAndNewlines)
+            let lookupID = canonicalModel.lowercased()
+            guard !canonicalModel.isEmpty, seen.insert(lookupID).inserted else { return nil }
             return canonicalModel
         }
+    }
+
+    static func initialCodex(
+        _ codex: AppConfig.Codex,
+        isNewProfile: Bool,
+        defaultModel: String?
+    ) -> AppConfig.Codex {
+        var codex = normalized(codex)
+        guard isNewProfile, let defaultModel else { return codex }
+        codex.opus.model = defaultModel
+        codex.sonnet.model = defaultModel
+        codex.haiku.model = defaultModel
+        return codex
     }
 
     static func normalized(_ codex: AppConfig.Codex) -> AppConfig.Codex {
@@ -64,9 +108,16 @@ enum CodexAPIModelOptions {
     }
 }
 
-enum CodexAPIInitialDefaults {
-    static func shouldApply(isNewProfile: Bool, didApply: Bool) -> Bool {
-        isNewProfile && !didApply
+enum CodexAPIModelDiscovery {
+    static func shouldReloadOnAppear(isNewProfile: Bool) -> Bool {
+        !isNewProfile
+    }
+
+    static func modelsAfterRefresh(
+        current: [CodexModelOption],
+        refreshed: [CodexModelOption]
+    ) -> [CodexModelOption] {
+        refreshed.isEmpty ? current : refreshed
     }
 }
 
@@ -1176,13 +1227,13 @@ struct CodexAPIProviderSettingsSheet: View {
     @State private var dangerousPermissionsEnabled: Bool
     @State private var scopedAvailableModels: [CodexModelOption]
     @State private var isReloading = false
-    @State private var didApplyInitialDefaults = false
     @State private var apiKey = ""
     @State private var saveErrorMessage: String?
     @State private var commandNameCheckState: CommandNameCheckState = .checking
     let profileID: ProviderRowState.ID
     let isConfigured: Bool
     let isNewProfile: Bool
+    let availableModels: [CodexModelOption]
     let modelLoadingState: CodexModelLoadingState
     let refreshModels: () async throws -> [CodexModelOption]
     let preferredModel: ([CodexModelOption]) -> String?
@@ -1207,19 +1258,25 @@ struct CodexAPIProviderSettingsSheet: View {
             codex: normalizedCodex,
             availableModels: availableModels
         )
+        let initialCodex = CodexAPIModelOptions.initialCodex(
+            normalizedCodex,
+            isNewProfile: isNewProfile,
+            defaultModel: preferredModel(normalizedModels)
+        )
         _functionName = State(initialValue: profile.commandName)
         _nickname = State(initialValue: codexAPIInitialNickname(
             isNewProfile: isNewProfile,
             savedNickname: profile.nickname
         ))
-        _opus = State(initialValue: normalizedCodex.opus)
-        _sonnet = State(initialValue: normalizedCodex.sonnet)
-        _haiku = State(initialValue: normalizedCodex.haiku)
+        _opus = State(initialValue: initialCodex.opus)
+        _sonnet = State(initialValue: initialCodex.sonnet)
+        _haiku = State(initialValue: initialCodex.haiku)
         _dangerousPermissionsEnabled = State(initialValue: profile.dangerousPermissionsEnabled)
         _scopedAvailableModels = State(initialValue: normalizedModels)
         profileID = ProviderRowState.ID(rawValue: profile.id)
         self.isConfigured = isConfigured
         self.isNewProfile = isNewProfile
+        self.availableModels = availableModels
         self.modelLoadingState = modelLoadingState
         self.refreshModels = refreshModels
         self.preferredModel = preferredModel
@@ -1274,11 +1331,14 @@ struct CodexAPIProviderSettingsSheet: View {
                         .font(.system(size: 11))
                     }
                     .buttonStyle(.borderless)
-                    .disabled(CodexProviderModelLoadingPresentation.isRefreshDisabled(modelLoadingState: modelLoadingState, isReloading: isReloading))
+                    .disabled(isNewProfile || CodexProviderModelLoadingPresentation.isRefreshDisabled(modelLoadingState: modelLoadingState, isReloading: isReloading))
                 }
-                Text(CodexProviderModelLoadingPresentation.message(modelLoadingState: modelLoadingState, isReloading: isReloading) ?? "Map each Claude model tier to a GPT model, reasoning, and context window.")
+                Text(isNewProfile
+                    ? "Model capabilities are verified after saving this API key."
+                    : CodexProviderModelLoadingPresentation.message(modelLoadingState: modelLoadingState, isReloading: isReloading)
+                        ?? "Map each Claude model tier to a GPT model, reasoning, and context window.")
                     .font(.system(size: 11.5))
-                    .foregroundStyle(CodexProviderModelLoadingPresentation.isError(modelLoadingState: modelLoadingState, isReloading: isReloading) ? BrandPalette.statusError : .secondary)
+                    .foregroundStyle(!isNewProfile && CodexProviderModelLoadingPresentation.isError(modelLoadingState: modelLoadingState, isReloading: isReloading) ? BrandPalette.statusError : .secondary)
                 GroupCard {
                     CodexRoleRoutingFields(opus: $opus, sonnet: $sonnet, haiku: $haiku, availableModels: scopedAvailableModels)
                 }
@@ -1331,10 +1391,14 @@ struct CodexAPIProviderSettingsSheet: View {
             )
         }
         .task {
-            if !isNewProfile {
+            if CodexAPIModelDiscovery.shouldReloadOnAppear(isNewProfile: isNewProfile) {
                 await reloadModels()
             }
-            applyInitialDefaultsIfNeeded()
+        }
+        .onChange(of: availableModels) { _, models in
+            guard !isNewProfile, !models.isEmpty else { return }
+            scopedAvailableModels = models
+            applyDefaultModel(from: models)
         }
         .task(id: functionName) {
             commandNameCheckState = .checking
@@ -1352,25 +1416,15 @@ struct CodexAPIProviderSettingsSheet: View {
         isReloading = true
         defer { isReloading = false }
         do {
-            scopedAvailableModels = try await refreshModels()
-            applyDefaultModel(from: scopedAvailableModels)
-            if isNewProfile {
-                applyInitialDefaultsIfNeeded()
-            }
+            let models = CodexAPIModelDiscovery.modelsAfterRefresh(
+                current: scopedAvailableModels,
+                refreshed: try await refreshModels()
+            )
+            scopedAvailableModels = models
+            applyDefaultModel(from: models)
         } catch {
-            // Keep the current API-key-scoped options; OAuth/global models are not valid fallbacks.
+            // Keep the current options when model discovery is unavailable.
         }
-    }
-
-    private func applyInitialDefaultsIfNeeded() {
-        guard CodexAPIInitialDefaults.shouldApply(
-            isNewProfile: isNewProfile,
-            didApply: didApplyInitialDefaults
-        ), let defaultModel = preferredModel(scopedAvailableModels) else { return }
-        opus.model = defaultModel
-        sonnet.model = defaultModel
-        haiku.model = defaultModel
-        didApplyInitialDefaults = true
     }
 
     private func applyDefaultModel(from models: [CodexModelOption]) {

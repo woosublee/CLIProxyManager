@@ -40,10 +40,67 @@ final class ProviderSettingsSheetMetricsTests: XCTestCase {
         XCTAssertEqual(models, [CodexModelOption(id: "gpt-work-only")])
     }
 
-    func testCodexAPIInitialDefaultsApplyOnlyOnceForNewProfiles() {
-        XCTAssertTrue(CodexAPIInitialDefaults.shouldApply(isNewProfile: true, didApply: false))
-        XCTAssertFalse(CodexAPIInitialDefaults.shouldApply(isNewProfile: true, didApply: true))
-        XCTAssertFalse(CodexAPIInitialDefaults.shouldApply(isNewProfile: false, didApply: false))
+    func testCodexAPINewProfileModelsAreCredentialIndependentAndExposeReasoningCapabilities() {
+        let models = CodexAPIModelOptions.newProfileModels
+
+        XCTAssertEqual(models.map(\.id), [
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+            "gpt-5.5",
+            "gpt-5.4"
+        ])
+        XCTAssertEqual(
+            CodexRoleRoutingOptions.reasoningValues(
+                currentReasoning: .auto,
+                model: "gpt-5.6-sol",
+                options: models
+            ),
+            [.auto, .low, .medium, .high, .xhigh, .max]
+        )
+    }
+
+    func testCodexAPINewProfileAppliesDefaultModelSynchronouslyWithoutChangingReasoning() {
+        let initial = CodexAPIModelOptions.initialCodex(
+            AppConfig.Codex(
+                opus: .init(model: "gpt-5.6-sol", reasoning: .xhigh),
+                sonnet: .init(model: "gpt-5.6-sol", reasoning: .medium),
+                haiku: .init(model: "gpt-5.6-sol", reasoning: .low)
+            ),
+            isNewProfile: true,
+            defaultModel: "gpt-5.6-terra"
+        )
+
+        XCTAssertEqual(initial.opus, .init(model: "gpt-5.6-terra", reasoning: .xhigh))
+        XCTAssertEqual(initial.sonnet, .init(model: "gpt-5.6-terra", reasoning: .medium))
+        XCTAssertEqual(initial.haiku, .init(model: "gpt-5.6-terra", reasoning: .low))
+
+        let existing = CodexAPIModelOptions.initialCodex(
+            AppConfig.Codex(
+                opus: .init(model: "gpt-5.6-sol", reasoning: .high),
+                sonnet: .init(model: "gpt-5.5", reasoning: .medium),
+                haiku: .init(model: "gpt-5.4", reasoning: .low)
+            ),
+            isNewProfile: false,
+            defaultModel: "gpt-5.6-terra"
+        )
+        XCTAssertEqual(existing.opus.model, "gpt-5.6-sol")
+        XCTAssertEqual(existing.sonnet.model, "gpt-5.5")
+        XCTAssertEqual(existing.haiku.model, "gpt-5.4")
+    }
+
+    func testCodexAPINewProfileDoesNotReloadModelsOnAppear() {
+        XCTAssertFalse(CodexAPIModelDiscovery.shouldReloadOnAppear(isNewProfile: true))
+        XCTAssertTrue(CodexAPIModelDiscovery.shouldReloadOnAppear(isNewProfile: false))
+    }
+
+    func testCodexAPIEmptyRefreshKeepsCurrentScopedModels() {
+        let current = [CodexModelOption(id: "gpt-5.6-terra", supportedReasoning: [.low, .high])]
+
+        XCTAssertEqual(
+            CodexAPIModelDiscovery.modelsAfterRefresh(current: current, refreshed: []),
+            current
+        )
     }
 
     func testCodexAPIInitialModelsPreferScopedOptionsWithCapabilities() {
@@ -59,15 +116,15 @@ final class ProviderSettingsSheetMetricsTests: XCTestCase {
         XCTAssertEqual(models, scoped)
     }
 
-    func testCodexAPIModelsNormalizePrefixesReasoningAndDuplicates() {
+    func testCodexAPIModelsStripOnlyManagedPrefixAndPreserveNestedIdentifiers() {
         let models = CodexAPIModelOptions.baseModels(from: [
-            "cpm-codex-api/gpt-5.6(xhigh)",
-            "codex-work/gpt-5.6",
-            "openai/gpt-5.6-mini(low)",
+            "cpm-codex-api/openai/gpt-5.6(xhigh)",
+            "openai/gpt-5.6(xhigh)",
+            "cpm-codex-api/gpt-5.6-mini(low)",
             "gpt-5.6-mini"
         ])
 
-        XCTAssertEqual(models, ["gpt-5.6", "gpt-5.6-mini"])
+        XCTAssertEqual(models, ["openai/gpt-5.6", "gpt-5.6-mini"])
     }
 
     func testCodexAPIModelsCanonicalizeManagedFastAliases() {
