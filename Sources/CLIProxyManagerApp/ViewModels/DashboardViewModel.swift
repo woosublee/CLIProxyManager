@@ -331,6 +331,11 @@ final class DashboardViewModel: ObservableObject {
         case oauth(UUID)
     }
 
+    private enum SubscriptionUsageDispatchSourceAuthorization {
+        case sourceOwned
+        case independentHandoff
+    }
+
     private struct SubscriptionUsageDispatchPermit: Equatable, Sendable {
         enum Kind: Equatable, Sendable {
             case usage
@@ -494,6 +499,7 @@ final class DashboardViewModel: ObservableObject {
     private var codexResetCreditsRefreshIsForced = false
     private var activeSubscriptionUsageDispatchPermit: SubscriptionUsageDispatchPermit?
     private var activeCodexResetCreditsDispatchPermit: SubscriptionUsageDispatchPermit?
+    private var activeCodexResetCreditsSourceAuthorization = SubscriptionUsageDispatchSourceAuthorization.sourceOwned
     private var pendingCodexResetCreditsRefresh: PendingCodexResetCreditsRefresh?
     private var codexResetCreditsLastAttemptAt: [String: Date] = [:]
     private var codexResetCreditsInFlightProfileIDs: Set<String> = []
@@ -1282,6 +1288,7 @@ final class DashboardViewModel: ObservableObject {
         configurationWork.clearDeferredRefreshWork()
         codexResetCreditsRefreshIsForced = false
         activeCodexResetCreditsDispatchPermit = nil
+        activeCodexResetCreditsSourceAuthorization = .sourceOwned
         pendingCodexResetCreditsRefresh = nil
         isSubscriptionUsageRefreshInProgress = false
         subscriptionUsagePollingTask?.cancel()
@@ -1326,6 +1333,7 @@ final class DashboardViewModel: ObservableObject {
         configurationWork.clearDeferredRefreshWork()
         codexResetCreditsRefreshIsForced = false
         activeCodexResetCreditsDispatchPermit = nil
+        activeCodexResetCreditsSourceAuthorization = .sourceOwned
         pendingCodexResetCreditsRefresh = nil
         isSubscriptionUsageRefreshInProgress = false
         subscriptionUsagePollingTask?.cancel()
@@ -1454,8 +1462,13 @@ final class DashboardViewModel: ObservableObject {
     private func isSubscriptionUsageDispatchAuthorized(
         _ permit: SubscriptionUsageDispatchPermit
     ) -> Bool {
+        let allowsCompletedSourceHandoff = permit.kind == .resetCredits
+            && activeCodexResetCreditsSourceAuthorization == .independentHandoff
         guard permit.configurationGeneration == configurationWork.generation,
-              !configurationWorkBlocksSubscriptionUsageRefresh(source: permit.source),
+              !configurationWorkBlocksSubscriptionUsageRefresh(
+                source: permit.source,
+                allowsCompletedSourceHandoff: allowsCompletedSourceHandoff
+              ),
               config.port == permit.port,
               config.isSubscriptionUsageEnabled,
               subscriptionUsageKeyStore.isConfigured() else {
@@ -1527,6 +1540,7 @@ final class DashboardViewModel: ObservableObject {
                 }
             }
             activeCodexResetCreditsDispatchPermit = nil
+            activeCodexResetCreditsSourceAuthorization = .sourceOwned
             codexResetCreditsRefreshGeneration &+= 1
             codexResetCreditsRefreshTask?.cancel()
             codexResetCreditsRefreshTask = nil
@@ -1577,7 +1591,8 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func configurationWorkBlocksSubscriptionUsageRefresh(
-        source: SubscriptionUsageRefreshSource
+        source: SubscriptionUsageRefreshSource,
+        allowsCompletedSourceHandoff: Bool = false
     ) -> Bool {
         if !pendingProxyConfigurationRestartReasons.isEmpty || proxyConfigurationRestartTask != nil {
             return true
@@ -1598,9 +1613,17 @@ final class DashboardViewModel: ObservableObject {
         case .automatic:
             return false
         case .serverAction(let generation):
-            return configurationWork.activeServerActionGeneration != generation
+            if configurationWork.activeServerActionGeneration == generation {
+                return false
+            }
+            return !allowsCompletedSourceHandoff
+                || configurationWork.activeServerActionGeneration != nil
         case .oauth(let sessionID):
-            return configurationWork.oauthRefreshOwnerSessionID != sessionID
+            if configurationWork.oauthRefreshOwnerSessionID == sessionID {
+                return false
+            }
+            return !allowsCompletedSourceHandoff
+                || configurationWork.oauthRefreshOwnerSessionID != nil
         }
     }
 
@@ -1876,6 +1899,7 @@ final class DashboardViewModel: ObservableObject {
             resetCreditsRefreshGeneration: generation
         )
         let quotaClient = subscriptionQuotaClient
+        activeCodexResetCreditsSourceAuthorization = .sourceOwned
         activeCodexResetCreditsDispatchPermit = permit
         let task = Task { [weak self] in
             guard let self else { return }
@@ -1922,6 +1946,7 @@ final class DashboardViewModel: ObservableObject {
             return
         }
         activeCodexResetCreditsDispatchPermit = nil
+        activeCodexResetCreditsSourceAuthorization = .sourceOwned
         codexResetCreditsRefreshTask = nil
         codexResetCreditsRefreshIsForced = false
         codexResetCreditsInFlightProfileIDs.subtract(permit.resetCreditsProfileIDs)
@@ -2402,6 +2427,13 @@ final class DashboardViewModel: ObservableObject {
         queueSubscriptionUsageRefresh(.automatic, reason: .oauthFinal)
     }
 
+    private func handOffCodexResetCreditsSourceAuthorizationIfNeeded(
+        for source: SubscriptionUsageRefreshSource
+    ) {
+        guard activeCodexResetCreditsDispatchPermit?.source == source else { return }
+        activeCodexResetCreditsSourceAuthorization = .independentHandoff
+    }
+
     @discardableResult
     private func releaseOAuthRefreshOwnership(for sessionID: UUID) -> Bool {
         guard configurationWork.oauthRefreshOwnerSessionID == sessionID else { return false }
@@ -2507,6 +2539,7 @@ final class DashboardViewModel: ObservableObject {
                     scheduleAPIUsageCollectorUpdateIfStarted()
                 }
             }
+            handOffCodexResetCreditsSourceAuthorizationIfNeeded(for: .oauth(sessionID))
             _ = releaseOAuthRefreshOwnership(for: sessionID)
             completedOAuthLoginProvider = completedID
             completedOAuthLoginIsInitialSetup = isInitialSetup
@@ -4403,6 +4436,11 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func finishServerAction(_ completion: ServerActionCompletion) {
+        if completion.succeeded {
+            handOffCodexResetCreditsSourceAuthorizationIfNeeded(
+                for: .serverAction(completion.generation)
+            )
+        }
         if configurationWork.activeServerActionGeneration == completion.generation {
             configurationWork.activeServerActionGeneration = nil
         }
