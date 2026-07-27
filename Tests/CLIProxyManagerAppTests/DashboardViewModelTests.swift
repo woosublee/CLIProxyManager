@@ -1094,9 +1094,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(failedRestartDelays, [])
         XCTAssertEqual(fixture.viewModel.serverStatus.severity, .error)
 
-        fixture.viewModel.serverStatus = readyStatus()
-        fixture.viewModel.serverControlState = .running
-        await fixture.viewModel.refreshSubscriptionUsage()
+        await fixture.viewModel.restartServer()
 
         let recoveryFetchCount = await fixture.quotaClient.fetchCallCount()
         let resetProfileIDSets = await fixture.quotaClient.requestedResetCreditProfileIDSets()
@@ -1104,7 +1102,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(resetProfileIDSets, [[fixture.profile.id]])
     }
 
-    func testCancellingOAuthDuringReadyWaitActionSkipsActionAndFollowUpUsageRefresh() async {
+    func testCancellingOAuthDuringReadyWaitActionResumesExactlyOneActionRefresh() async {
         let fixture = activeRestartOAuthFixture()
 
         let serverAction = Task { await fixture.viewModel.restartServer() }
@@ -1125,7 +1123,9 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         await login.value
 
         let fetchCount = await fixture.quotaClient.fetchCallCount()
-        XCTAssertEqual(fetchCount, 0)
+        let resetProfileIDSets = await fixture.quotaClient.requestedResetCreditProfileIDSets()
+        XCTAssertEqual(fetchCount, 1)
+        XCTAssertEqual(resetProfileIDSets, [[fixture.profile.id]])
         XCTAssertEqual(fixture.viewModel.settingsMessage, "Codex OAuth login was cancelled.")
     }
 
@@ -1246,9 +1246,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         )
         XCTAssertEqual(fixture.viewModel.serverStatus.severity, .error)
 
-        fixture.viewModel.serverStatus = readyStatus()
-        fixture.viewModel.serverControlState = .running
-        await fixture.viewModel.refreshSubscriptionUsage()
+        await fixture.viewModel.restartServer()
         let didRequestResetAfterRecovery = await fixture.quotaClient.waitForResetRequests(expectedCount: 1)
         let resetProfileIDSetsAfterRecovery = await fixture.quotaClient.requestedResetCreditProfileIDSets()
         XCTAssertTrue(didRequestResetAfterRecovery)
@@ -1256,7 +1254,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertNil(fixture.viewModel.completedOAuthLoginProvider)
     }
 
-    func testCancellingLateOAuthSessionDrainsRestartWithoutChangedProfileRefresh() async {
+    func testCancellingLateOAuthSessionDrainsRestartAndResumesActionRefresh() async {
         let fixture = await lateActionRefreshOAuthFixture()
         let serverAction = Task { await fixture.viewModel.restartServer() }
         let reachedFirstRestart = await fixture.proxyService.reachesRestartCount(1)
@@ -1279,13 +1277,18 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         fixture.proxyService.releaseRestart(2)
         await serverAction.value
         await login.value
+        let didResumeReset = await fixture.quotaClient.waitForResetRequests(expectedCount: 1)
         await waitForAPIUsageUpdates(fixture.collector, expectedCount: 1)
 
         let usageAfterCancellation = await fixture.quotaClient.requestedUsageProfileIDSets()
         let resetsAfterCancellation = await fixture.quotaClient.requestedResetCreditProfileIDSets()
         let collectorUpdates = await fixture.collector.updateConfigurations()
-        XCTAssertEqual(usageAfterCancellation, [[fixture.claude.id], [fixture.claude.id]])
-        XCTAssertEqual(resetsAfterCancellation, [])
+        XCTAssertTrue(didResumeReset)
+        XCTAssertEqual(
+            usageAfterCancellation,
+            [[fixture.claude.id], [fixture.claude.id], [fixture.codex.id]]
+        )
+        XCTAssertEqual(resetsAfterCancellation, [[fixture.codex.id]])
         XCTAssertEqual(collectorUpdates.count, 1)
         XCTAssertNil(fixture.viewModel.completedOAuthLoginProvider)
         XCTAssertEqual(fixture.viewModel.settingsMessage, "Codex OAuth login was cancelled.")
@@ -1329,6 +1332,227 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             [[fixture.claude.id], [fixture.claude.id], [fixture.codex.id]]
         )
         XCTAssertEqual(resetProfileIDSets, [[fixture.codex.id]])
+        XCTAssertEqual(collectorUpdates.count, 1)
+        XCTAssertEqual(fixture.viewModel.completedOAuthLoginProvider, .codex)
+        XCTAssertEqual(fixture.viewModel.settingsMessage, "Codex OAuth connection was updated.")
+    }
+
+    func testArmedPollWakeQueuesChangedProfilesDuringReconciledOAuthRestart() async {
+        let oauth = SuspendedOAuthLoginService()
+        let fixture = configurationWorkOAuthFixture(
+            oauthLoginService: oauth,
+            suspendedRestartCount: 1
+        )
+        await fixture.viewModel.refreshSubscriptionUsage()
+        await fixture.sleeper.waitForSleeps(expectedCount: 1)
+
+        fixture.viewModel.startOAuthLogin(providerType: .codex)
+        await oauth.waitUntilStarted()
+        oauth.complete()
+        await waitForOAuthReconciliation(fixture.authStore)
+        let reachedRestart = await fixture.proxyService.reachesRestartCount(1)
+        XCTAssertTrue(reachedRestart)
+
+        await fixture.sleeper.resumeNext()
+        for _ in 0..<10 { await Task.yield() }
+
+        let usageBeforeRestart = await fixture.quotaClient.requestedUsageProfileIDSets()
+        let resetsBeforeRestart = await fixture.quotaClient.requestedResetCreditProfileIDSets()
+        let delaysBeforeRestart = await fixture.sleeper.delays()
+        XCTAssertEqual(usageBeforeRestart, [[fixture.claude.id]])
+        XCTAssertEqual(resetsBeforeRestart, [])
+        XCTAssertEqual(delaysBeforeRestart.count, 1)
+
+        fixture.proxyService.releaseRestart(1)
+        await waitForOAuthCompletion(fixture.viewModel)
+        let didRefreshUsage = await fixture.quotaClient.waitForUsageRequests(expectedCount: 2)
+        let didRefreshReset = await fixture.quotaClient.waitForResetRequests(expectedCount: 1)
+        XCTAssertTrue(didRefreshUsage)
+        XCTAssertTrue(didRefreshReset)
+
+        let finalUsage = await fixture.quotaClient.requestedUsageProfileIDSets()
+        let finalResets = await fixture.quotaClient.requestedResetCreditProfileIDSets()
+        XCTAssertEqual(finalUsage, [[fixture.claude.id], [fixture.claude.id, fixture.codex.id]])
+        XCTAssertEqual(finalResets, [[fixture.codex.id]])
+    }
+
+    func testForcedManualReloadQueuesPriorityDuringOAuthConfigurationWork() async {
+        let oauth = SuspendedOAuthLoginService()
+        let fixture = configurationWorkOAuthFixture(
+            oauthLoginService: oauth,
+            suspendedRestartCount: 1,
+            initialUsageReport: SubscriptionUsageReport(
+                statesByProfileID: ["claude-existing.json": .unavailable(.credentialExpired)],
+                fetchedAt: Date(timeIntervalSince1970: 10)
+            )
+        )
+        await fixture.viewModel.refreshSubscriptionUsage()
+
+        fixture.viewModel.startOAuthLogin(providerType: .codex)
+        await oauth.waitUntilStarted()
+        oauth.complete()
+        await waitForOAuthReconciliation(fixture.authStore)
+        let reachedRestart = await fixture.proxyService.reachesRestartCount(1)
+        XCTAssertTrue(reachedRestart)
+
+        await fixture.viewModel.reloadSubscriptionUsage()
+
+        let usageBeforeRestart = await fixture.quotaClient.requestedUsageProfileIDSets()
+        let resetsBeforeRestart = await fixture.quotaClient.requestedResetCreditProfileIDSets()
+        XCTAssertEqual(usageBeforeRestart, [[fixture.claude.id]])
+        XCTAssertEqual(resetsBeforeRestart, [])
+
+        fixture.proxyService.releaseRestart(1)
+        await waitForOAuthCompletion(fixture.viewModel)
+        let didRefreshUsage = await fixture.quotaClient.waitForUsageRequests(expectedCount: 2)
+        let didRefreshReset = await fixture.quotaClient.waitForResetRequests(expectedCount: 1)
+        XCTAssertTrue(didRefreshUsage)
+        XCTAssertTrue(didRefreshReset)
+
+        let finalUsage = await fixture.quotaClient.requestedUsageProfileIDSets()
+        let finalResets = await fixture.quotaClient.requestedResetCreditProfileIDSets()
+        XCTAssertEqual(finalUsage, [[fixture.claude.id], [fixture.claude.id, fixture.codex.id]])
+        XCTAssertEqual(finalResets, [[fixture.codex.id]])
+    }
+
+    func testLateOAuthReconciliationObservesFailedActionAndRecoversOnOneExplicitRestart() async {
+        let restartFailure = NSError(
+            domain: "LateActionFailure",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "Restart failed"]
+        )
+        let oauth = SuspendedOAuthLoginService()
+        let fixture = configurationWorkOAuthFixture(
+            oauthLoginService: oauth,
+            restartErrors: [restartFailure, nil],
+            suspendedRestartCount: 2
+        )
+        await fixture.viewModel.prepareUsage()
+        await fixture.collector.resetUpdates()
+        let baselineDelays = await fixture.sleeper.delays()
+
+        let failedAction = Task { await fixture.viewModel.restartServer() }
+        let reachedFailedRestart = await fixture.proxyService.reachesRestartCount(1)
+        XCTAssertTrue(reachedFailedRestart)
+        fixture.viewModel.startOAuthLogin(providerType: .codex)
+        await oauth.waitUntilStarted()
+
+        fixture.proxyService.releaseRestart(1)
+        await failedAction.value
+        XCTAssertEqual(fixture.viewModel.serverStatus.severity, .error)
+        XCTAssertEqual(fixture.viewModel.serverStatus.message, "Restart failed")
+
+        oauth.complete()
+        await waitForOAuthCompletion(fixture.viewModel)
+
+        let usageAfterFailure = await fixture.quotaClient.requestedUsageProfileIDSets()
+        let resetsAfterFailure = await fixture.quotaClient.requestedResetCreditProfileIDSets()
+        let collectorAfterFailure = await fixture.collector.updateConfigurations()
+        let delaysAfterFailure = await fixture.sleeper.delays()
+        XCTAssertNil(fixture.viewModel.completedOAuthLoginProvider)
+        XCTAssertNotEqual(fixture.viewModel.settingsMessage, "Codex OAuth connection was updated.")
+        XCTAssertEqual(usageAfterFailure, [[fixture.claude.id]])
+        XCTAssertEqual(resetsAfterFailure, [])
+        XCTAssertEqual(collectorAfterFailure, [])
+        XCTAssertEqual(delaysAfterFailure, baselineDelays)
+        XCTAssertEqual(fixture.viewModel.serverStatus.message, "Restart failed")
+
+        let recovery = Task { await fixture.viewModel.restartServer() }
+        let reachedRecoveryRestart = await fixture.proxyService.reachesRestartCount(2)
+        XCTAssertTrue(reachedRecoveryRestart)
+        fixture.proxyService.releaseRestart(2)
+        await recovery.value
+        let didRefreshUsage = await fixture.quotaClient.waitForUsageRequests(expectedCount: 2)
+        let didRefreshReset = await fixture.quotaClient.waitForResetRequests(expectedCount: 1)
+        await waitForAPIUsageUpdates(fixture.collector, expectedCount: 1)
+        XCTAssertTrue(didRefreshUsage)
+        XCTAssertTrue(didRefreshReset)
+
+        let finalUsage = await fixture.quotaClient.requestedUsageProfileIDSets()
+        let finalResets = await fixture.quotaClient.requestedResetCreditProfileIDSets()
+        let finalCollectorUpdates = await fixture.collector.updateConfigurations()
+        XCTAssertEqual(fixture.proxyService.restartPorts.count, 2)
+        XCTAssertEqual(finalUsage, [[fixture.claude.id], [fixture.claude.id, fixture.codex.id]])
+        XCTAssertEqual(finalResets, [[fixture.codex.id]])
+        XCTAssertEqual(finalCollectorUpdates.count, 1)
+        XCTAssertNil(fixture.viewModel.completedOAuthLoginProvider)
+    }
+
+    func testPreReconciliationOAuthDoesNotSuppressActionOrPollingAfterImmediateCancel() async {
+        let oauth = DeferredCancellationOAuthLoginService()
+        let fixture = configurationWorkOAuthFixture(oauthLoginService: oauth)
+        await fixture.viewModel.prepareUsage()
+        await fixture.collector.resetUpdates()
+        await fixture.sleeper.waitForSleeps(expectedCount: 1)
+
+        fixture.viewModel.startOAuthLogin(providerType: .codex)
+        await oauth.waitForInvocationCount(1)
+        await fixture.viewModel.restartServer()
+        let didRunActionUsage = await fixture.quotaClient.waitForUsageRequests(expectedCount: 2)
+        await waitForAPIUsageUpdates(fixture.collector, expectedCount: 1)
+        await fixture.sleeper.waitForSleeps(expectedCount: 2)
+        XCTAssertTrue(didRunActionUsage)
+
+        fixture.viewModel.cancelOAuthLogin()
+        XCTAssertNil(fixture.viewModel.activeOAuthLoginProvider)
+        XCTAssertFalse(fixture.viewModel.isProfileLoginInProgress)
+
+        await fixture.sleeper.resumeNext()
+        let didRunPollingUsage = await fixture.quotaClient.waitForUsageRequests(expectedCount: 3)
+        let collectorUpdates = await fixture.collector.updateConfigurations()
+        XCTAssertTrue(didRunPollingUsage)
+        XCTAssertEqual(collectorUpdates.count, 1)
+
+        oauth.releaseInvocation(at: 0)
+    }
+
+    func testCancelledStaleOAuthTaskCannotReleaseReplacementReconciledOwnership() async {
+        let oauth = DeferredCancellationOAuthLoginService()
+        let fixture = configurationWorkOAuthFixture(
+            oauthLoginService: oauth,
+            suspendedRestartCount: 2
+        )
+        await fixture.viewModel.prepareUsage()
+        await fixture.collector.resetUpdates()
+
+        let serverAction = Task { await fixture.viewModel.restartServer() }
+        let reachedFirstRestart = await fixture.proxyService.reachesRestartCount(1)
+        XCTAssertTrue(reachedFirstRestart)
+        fixture.viewModel.startOAuthLogin(providerType: .codex)
+        await oauth.waitForInvocationCount(1)
+        fixture.viewModel.cancelOAuthLogin()
+        fixture.viewModel.startOAuthLogin(providerType: .codex)
+        await oauth.waitForInvocationCount(2)
+
+        oauth.releaseInvocation(at: 1)
+        await waitForOAuthReconciliation(fixture.authStore)
+        oauth.releaseInvocation(at: 0)
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(fixture.viewModel.activeOAuthLoginProvider, .codex)
+        XCTAssertTrue(fixture.viewModel.isProfileLoginInProgress)
+
+        fixture.proxyService.releaseRestart(1)
+        let reachedSecondRestart = await fixture.proxyService.reachesRestartCount(2)
+        let usageBeforeRestart = await fixture.quotaClient.requestedUsageProfileIDSets()
+        let resetsBeforeRestart = await fixture.quotaClient.requestedResetCreditProfileIDSets()
+        XCTAssertTrue(reachedSecondRestart)
+        XCTAssertEqual(usageBeforeRestart, [[fixture.claude.id]])
+        XCTAssertEqual(resetsBeforeRestart, [])
+
+        fixture.proxyService.releaseRestart(2)
+        await serverAction.value
+        await waitForOAuthCompletion(fixture.viewModel)
+        let didRefreshUsage = await fixture.quotaClient.waitForUsageRequests(expectedCount: 2)
+        let didRefreshReset = await fixture.quotaClient.waitForResetRequests(expectedCount: 1)
+        await waitForAPIUsageUpdates(fixture.collector, expectedCount: 1)
+        XCTAssertTrue(didRefreshUsage)
+        XCTAssertTrue(didRefreshReset)
+
+        let finalUsage = await fixture.quotaClient.requestedUsageProfileIDSets()
+        let finalResets = await fixture.quotaClient.requestedResetCreditProfileIDSets()
+        let collectorUpdates = await fixture.collector.updateConfigurations()
+        XCTAssertEqual(finalUsage, [[fixture.claude.id], [fixture.claude.id, fixture.codex.id]])
+        XCTAssertEqual(finalResets, [[fixture.codex.id]])
         XCTAssertEqual(collectorUpdates.count, 1)
         XCTAssertEqual(fixture.viewModel.completedOAuthLoginProvider, .codex)
         XCTAssertEqual(fixture.viewModel.settingsMessage, "Codex OAuth connection was updated.")
@@ -3285,6 +3509,69 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         XCTAssertNil(viewModel.settingsMessage)
         XCTAssertEqual(proxyService.restartPorts, [config.port, config.port])
+    }
+
+    func testExplicitRecoveryRestartPreservesSameReasonChangeQueuedDuringAction() async throws {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "codex",
+                provider: .codex,
+                authProfileID: "codex.json",
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
+        let proxyService = StubProxyServiceStarter(
+            restartErrors: [
+                NSError(domain: "FastMode", code: 1, userInfo: [NSLocalizedDescriptionKey: "First restart failed"]),
+                nil,
+                nil
+            ],
+            suspendedRestartCount: 2
+        )
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: codexAuthProfileStore(),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            serverStatusRetryDelayNanoseconds: 0,
+            settingsMessageAutoClearDelayNanoseconds: 60_000_000_000
+        )
+        viewModel.serverControlState = .running
+        var firstGeneration = config.oauthCommandProfiles[0].codex!
+        firstGeneration.opus.fastModeEnabled = true
+        try viewModel.saveCodexSettings(functionName: "ccodex", codex: firstGeneration)
+        let reachedFailedRestart = await proxyService.reachesRestartCount(1)
+        XCTAssertTrue(reachedFailedRestart)
+        proxyService.releaseRestart(1)
+        for _ in 0..<1_000 where viewModel.serverControlState != .error("First restart failed") {
+            await Task.yield()
+        }
+
+        let recovery = Task { await viewModel.restartServer() }
+        let reachedRecoveryRestart = await proxyService.reachesRestartCount(2)
+        XCTAssertTrue(reachedRecoveryRestart)
+        var secondGeneration = firstGeneration
+        secondGeneration.sonnet = .init(
+            model: "gpt-5.6-sol",
+            reasoning: .auto,
+            fastModeEnabled: true
+        )
+        try viewModel.saveCodexSettings(functionName: "ccodex", codex: secondGeneration)
+
+        proxyService.releaseRestart(2)
+        let reachedQueuedRestart = await proxyService.reachesRestartCount(3)
+        await recovery.value
+
+        XCTAssertTrue(reachedQueuedRestart)
+        XCTAssertEqual(proxyService.restartPorts, [config.port, config.port, config.port])
+        XCTAssertNil(viewModel.settingsMessage)
     }
 
     func testFastRestartReadinessFailureShowsSettingsMessage() async throws {
@@ -8591,6 +8878,103 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         )
     }
 
+    private func configurationWorkOAuthFixture(
+        oauthLoginService: any OAuthLoginStarting,
+        restartErrors: [Error?] = [],
+        suspendedRestartCount: Int = 0,
+        initialUsageReport: SubscriptionUsageReport? = nil
+    ) -> (
+        claude: AuthProfile,
+        codex: AuthProfile,
+        authStore: StubAuthProfileStore,
+        quotaClient: ConfigurationGateSplitSubscriptionQuotaClient,
+        proxyService: StubProxyServiceStarter,
+        collector: APIUsageCollectorDouble,
+        sleeper: SubscriptionUsageSleepGate,
+        viewModel: DashboardViewModel
+    ) {
+        let claude = AuthProfile(
+            fileName: "claude-existing.json",
+            type: .claude,
+            email: "claude-existing@example.com",
+            accountID: nil,
+            expired: nil,
+            disabled: false
+        )
+        let codex = AuthProfile(
+            fileName: "codex-changed.json",
+            type: .codex,
+            email: "codex-changed@example.com",
+            accountID: "acct_changed_example",
+            expired: nil,
+            disabled: false
+        )
+        let disabledCodex = AuthProfile(
+            fileName: codex.fileName,
+            type: codex.type,
+            email: codex.email,
+            accountID: codex.accountID,
+            expired: codex.expired,
+            disabled: true
+        )
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        config.oauthCommandProfiles = [
+            .init(
+                id: "codex",
+                provider: .codex,
+                authProfileID: codex.id,
+                codex: AppConfig.Codex(
+                    opus: .init(model: "gpt-5.6-terra", reasoning: .xhigh, fastModeEnabled: true),
+                    sonnet: .init(model: "gpt-5.6-terra", reasoning: .medium),
+                    haiku: .init(model: "gpt-5.6-terra", reasoning: .low)
+                ),
+                isEnabled: false
+            )
+        ]
+        let authStore = StubAuthProfileStore(profiles: [claude, disabledCodex])
+        authStore.nextProfiles = [claude, codex]
+        let quotaClient = ConfigurationGateSplitSubscriptionQuotaClient(
+            initialUsageReport: initialUsageReport
+        )
+        let proxyService = StubProxyServiceStarter(
+            restartErrors: restartErrors,
+            suspendedRestartCount: suspendedRestartCount
+        )
+        let collector = APIUsageCollectorDouble()
+        let sleeper = SubscriptionUsageSleepGate()
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: authStore,
+            oauthLoginService: oauthLoginService,
+            proxyHealthClient: ProxyHealthClient(
+                httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))
+            ),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            subscriptionQuotaClient: quotaClient,
+            subscriptionUsageKeyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            apiUsageCollector: collector,
+            secretStore: InMemorySecretStore(),
+            subscriptionUsageSleep: { delay in try await sleeper.sleep(delay) },
+            serverStatusRetryDelayNanoseconds: 0
+        )
+        viewModel.serverStatus = readyStatus()
+        viewModel.serverControlState = .running
+        return (
+            claude,
+            codex,
+            authStore,
+            quotaClient,
+            proxyService,
+            collector,
+            sleeper,
+            viewModel
+        )
+    }
+
     private func waitForOAuthReconciliation(_ authStore: StubAuthProfileStore) async {
         for _ in 0..<1_000 {
             if !authStore.disabledIDUpdates.isEmpty { return }
@@ -9631,6 +10015,104 @@ private actor RecordingSubscriptionQuotaClient: SubscriptionQuotaFetching {
 
     func fetchCallCount() -> Int { callCount }
     func requestedProfileIDs() -> [[String]] { profileIDs }
+    func requestedUsageProfileIDSets() -> [Set<String>] { usageProfileIDSets }
+    func requestedResetCreditProfileIDSets() -> [Set<String>] { resetCreditProfileIDSets }
+}
+
+private actor ConfigurationGateSplitSubscriptionQuotaClient: ConcurrentSubscriptionQuotaFetching {
+    private var initialUsageReport: SubscriptionUsageReport?
+    private var usageProfileIDSets: [Set<String>] = []
+    private var resetCreditProfileIDSets: [Set<String>] = []
+
+    init(initialUsageReport: SubscriptionUsageReport? = nil) {
+        self.initialUsageReport = initialUsageReport
+    }
+
+    func fetchUsage(port: Int, profiles: [AuthProfile]) async -> SubscriptionUsageReport {
+        await fetchUsage(port: port, profiles: profiles, resetCreditsProfileIDs: [])
+    }
+
+    func fetchUsage(
+        port: Int,
+        profiles: [AuthProfile],
+        resetCreditsProfileIDs: Set<String>
+    ) async -> SubscriptionUsageReport {
+        await fetchUsage(
+            port: port,
+            profiles: profiles,
+            usageProfileIDs: Set(profiles.map(\.id)),
+            resetCreditsProfileIDs: resetCreditsProfileIDs
+        )
+    }
+
+    func fetchUsage(
+        port: Int,
+        profiles: [AuthProfile],
+        usageProfileIDs: Set<String>,
+        resetCreditsProfileIDs: Set<String>
+    ) async -> SubscriptionUsageReport {
+        if !resetCreditsProfileIDs.isEmpty {
+            resetCreditProfileIDSets.append(resetCreditsProfileIDs)
+            return SubscriptionUsageReport(
+                statesByProfileID: [:],
+                resetCreditsOutcomesByProfileID: Dictionary(
+                    uniqueKeysWithValues: resetCreditsProfileIDs.map {
+                        ($0, .unavailable(.transientFailure))
+                    }
+                ),
+                resetCreditsAttemptedProfileIDs: resetCreditsProfileIDs,
+                fetchedAt: Date(timeIntervalSince1970: TimeInterval(resetCreditProfileIDSets.count))
+            )
+        }
+
+        usageProfileIDSets.append(usageProfileIDs)
+        if let initialUsageReport {
+            self.initialUsageReport = nil
+            return initialUsageReport
+        }
+        let states = Dictionary(
+            uniqueKeysWithValues: profiles.compactMap { profile -> (String, AccountSubscriptionUsageState)? in
+                guard usageProfileIDs.contains(profile.id) else { return nil }
+                return (
+                    profile.id,
+                    .available(SubscriptionUsageSnapshot(
+                        profileID: profile.id,
+                        provider: profile.type,
+                        windows: [
+                            UsageWindow(
+                                id: "primary",
+                                label: "Primary",
+                                usedPercent: 25,
+                                resetAt: nil
+                            )
+                        ],
+                        fetchedAt: Date(timeIntervalSince1970: TimeInterval(usageProfileIDSets.count))
+                    ))
+                )
+            }
+        )
+        return SubscriptionUsageReport(
+            statesByProfileID: states,
+            fetchedAt: Date(timeIntervalSince1970: TimeInterval(usageProfileIDSets.count))
+        )
+    }
+
+    func waitForUsageRequests(expectedCount: Int) async -> Bool {
+        for _ in 0..<1_000 {
+            if usageProfileIDSets.count >= expectedCount { return true }
+            await Task.yield()
+        }
+        return usageProfileIDSets.count >= expectedCount
+    }
+
+    func waitForResetRequests(expectedCount: Int) async -> Bool {
+        for _ in 0..<1_000 {
+            if resetCreditProfileIDSets.count >= expectedCount { return true }
+            await Task.yield()
+        }
+        return resetCreditProfileIDSets.count >= expectedCount
+    }
+
     func requestedUsageProfileIDSets() -> [Set<String>] { usageProfileIDSets }
     func requestedResetCreditProfileIDSets() -> [Set<String>] { resetCreditProfileIDSets }
 }
