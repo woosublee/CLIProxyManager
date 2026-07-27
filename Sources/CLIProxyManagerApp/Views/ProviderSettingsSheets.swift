@@ -694,7 +694,8 @@ struct ClaudeOAuthProviderSettingsSheet: View {
                         }
                         .buttonStyle(.plain)
                         .disabled(isReloadingModels)
-                        .help("Refresh models for this Claude account")
+                        .fastTooltip("Refresh models for this Claude account")
+                        .accessibilityLabel("Refresh models for this Claude account")
                     }
                     ClaudeRoleRoutingFields(routing: $claudeRouting, options: scopedModels)
                     if isReloadingModels {
@@ -1134,7 +1135,8 @@ struct ClaudeAPIProviderSettingsSheet: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(isReloadingModels)
-                    .help("Refresh models for this Claude API key")
+                    .fastTooltip("Refresh models for this Claude API key")
+                    .accessibilityLabel("Refresh models for this Claude API key")
                 }
                 ClaudeRoleRoutingFields(routing: $claudeRouting, options: scopedModels)
                 if isReloadingModels {

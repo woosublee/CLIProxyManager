@@ -16,7 +16,8 @@ struct ProviderListView: View {
                 } label: {
                     Image(systemName: "plus")
                 }
-                .help("Add provider")
+                .fastTooltip("Add provider")
+                .accessibilityLabel("Add provider")
             }
 
             VStack(spacing: 10) {

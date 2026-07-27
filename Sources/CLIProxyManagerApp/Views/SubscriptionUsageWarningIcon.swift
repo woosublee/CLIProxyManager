@@ -139,7 +139,7 @@ struct UsageWarningIcon: View {
         Image(systemName: "exclamationmark.triangle.fill")
             .font(.system(size: 10, weight: .semibold))
             .foregroundStyle(BrandPalette.statusWarning)
-            .help(message)
+            .fastTooltip(message)
             .accessibilityLabel(Text(message))
     }
 }
