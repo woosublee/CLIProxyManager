@@ -40,10 +40,10 @@ final class ProviderSettingsSheetMetricsTests: XCTestCase {
         XCTAssertEqual(models, [CodexModelOption(id: "gpt-work-only")])
     }
 
-    func testCodexAPIInitialDefaultsApplyOnlyOnceWhileUnconfigured() {
-        XCTAssertTrue(CodexAPIInitialDefaults.shouldApply(isConfigured: false, didApply: false))
-        XCTAssertFalse(CodexAPIInitialDefaults.shouldApply(isConfigured: false, didApply: true))
-        XCTAssertFalse(CodexAPIInitialDefaults.shouldApply(isConfigured: true, didApply: false))
+    func testCodexAPIInitialDefaultsApplyOnlyOnceForNewProfiles() {
+        XCTAssertTrue(CodexAPIInitialDefaults.shouldApply(isNewProfile: true, didApply: false))
+        XCTAssertFalse(CodexAPIInitialDefaults.shouldApply(isNewProfile: true, didApply: true))
+        XCTAssertFalse(CodexAPIInitialDefaults.shouldApply(isNewProfile: false, didApply: false))
     }
 
     func testCodexAPIInitialModelsPreferScopedOptionsWithCapabilities() {

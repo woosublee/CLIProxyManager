@@ -148,6 +148,24 @@ public struct APICostEstimator: Sendable {
         ledger: APIUsageLedgerReadModel,
         now: Date
     ) -> [String: APICostUsageState] {
+        states(
+            for: profiles.map { provider, profileID in
+                APIUsageProfileDescriptor(
+                    profileID: profileID,
+                    provider: provider,
+                    modelPrefix: "cpm-\(profileID)"
+                )
+            },
+            ledger: ledger,
+            now: now
+        )
+    }
+
+    public func states(
+        for profiles: [APIUsageProfileDescriptor],
+        ledger: APIUsageLedgerReadModel,
+        now: Date
+    ) -> [String: APICostUsageState] {
         let invalidTimeZone = TimeZone(identifier: ledger.metadata.reportingTimeZoneID) == nil
         let bounds = invalidTimeZone
             ? APIUsagePeriodCalculator.bounds(at: ledger.bounds.intervalReference, timeZoneID: "UTC")
@@ -157,7 +175,9 @@ public struct APICostEstimator: Sendable {
         let reportingTimeZoneID = invalidTimeZone ? "UTC" : bounds.resolvedTimeZoneID
         let updatedAt = ledger.metadata.lastSuccessfulDrainAt ?? ledger.metadata.trackingStartedAt
 
-        return Dictionary(uniqueKeysWithValues: profiles.map { provider, profileID in
+        return Dictionary(uniqueKeysWithValues: profiles.map { profile in
+            let provider = profile.provider
+            let profileID = profile.profileID
             var day = PeriodAccumulator()
             var month = PeriodAccumulator()
 

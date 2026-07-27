@@ -155,7 +155,7 @@ final class ShellFunctionRendererTests: XCTestCase {
         ).render()
 
         let function = renderedFunction(named: configuredCommands().claudeAPI.commandName, in: script)
-        XCTAssertTrue(function.contains("routing claude-models '--api'"))
+        XCTAssertTrue(function.contains("routing claude-models '--api-profile' 'claude-api'"))
         XCTAssertFalse(function.contains("CLIProxy Manager is not running"))
     }
 
@@ -590,7 +590,7 @@ final class ShellFunctionRendererTests: XCTestCase {
         ).render()
 
         let function = renderedFunction(named: config.claudeAPI.commandName, in: script)
-        XCTAssertTrue(function.contains("routing claude-models '--api'"))
+        XCTAssertTrue(function.contains("routing claude-models '--api-profile' 'claude-api'"))
         XCTAssertTrue(function.contains("ANTHROPIC_BASE_URL=\"http://127.0.0.1:\(config.port)\""))
         XCTAssertTrue(function.contains("ANTHROPIC_AUTH_TOKEN='sk-dummy'"))
         XCTAssertTrue(function.contains("ANTHROPIC_DEFAULT_OPUS_MODEL=\"$ANTHROPIC_DEFAULT_OPUS_MODEL\""))
@@ -611,7 +611,7 @@ final class ShellFunctionRendererTests: XCTestCase {
         ).render()
 
         let function = renderedFunction(named: config.claudeAPI.commandName, in: script)
-        XCTAssertTrue(function.contains("routing claude-models '--api'"))
+        XCTAssertTrue(function.contains("routing claude-models '--api-profile' 'claude-api'"))
         XCTAssertTrue(function.contains("ANTHROPIC_DEFAULT_OPUS_MODEL=\"$ANTHROPIC_DEFAULT_OPUS_MODEL\""))
         XCTAssertFalse(function.contains("--dangerously-skip-permissions"))
         XCTAssertFalse(function.contains("ANTHROPIC_MODEL="))
@@ -698,11 +698,49 @@ final class ShellFunctionRendererTests: XCTestCase {
 
         let function = renderedFunction(named: config.codexAPI.commandName, in: script)
         XCTAssertTrue(function.contains("http://127.0.0.1:\(config.port)/v1/models"))
-        XCTAssertTrue(function.contains("grep -q 'cpm-codex-api/'"))
+        XCTAssertTrue(function.contains("grep -Fq 'cpm-codex-api/'"))
         XCTAssertTrue(function.contains("OpenAI API key is not configured"))
         XCTAssertTrue(function.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='cpm-codex-api/gpt-5.6(xhigh)'"))
         XCTAssertTrue(function.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL='cpm-codex-api/gpt-5.6-mini(low)'"))
         XCTAssertFalse(function.contains("--dangerously-skip-permissions"))
+    }
+
+    func testMultipleAPIKeyProfilesRenderIndependentCommandsAndPrefixes() throws {
+        var config = AppConfig.default
+        let claudeID = "claude-api-11111111-1111-1111-1111-111111111111"
+        let codexID = "codex-api-22222222-2222-2222-2222-222222222222"
+        config.apiKeyProfiles = [
+            .init(
+                id: claudeID,
+                provider: .claude,
+                secretReference: SecretReference.apiKeyProfile(claudeID)!,
+                commandName: "claude_personal",
+                claude: .automatic
+            ),
+            .init(
+                id: codexID,
+                provider: .codex,
+                secretReference: SecretReference.apiKeyProfile(codexID)!,
+                commandName: "codex_work",
+                codex: .default
+            )
+        ]
+
+        let script = try ShellFunctionRenderer(
+            config: config,
+            helperCommand: "/usr/local/bin/cpm",
+            enabledFunctions: .init(
+                claudeOAuth: false,
+                codex: false,
+                apiKeyProfileIDs: [claudeID, codexID]
+            )
+        ).render()
+
+        XCTAssertTrue(script.contains("claude_personal()"))
+        XCTAssertTrue(script.contains("routing claude-models '--api-profile' '\(claudeID)'"))
+        XCTAssertTrue(script.contains("codex_work()"))
+        XCTAssertTrue(script.contains("cpm-\(codexID)/"))
+        XCTAssertFalse(script.contains("claude-api-11111111-1111-1111-1111-111111111111-key"))
     }
 
     func testInvalidDisabledProviderCommandNameDoesNotBlockRendering() throws {

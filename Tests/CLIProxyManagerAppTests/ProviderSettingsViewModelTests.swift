@@ -6,14 +6,14 @@ import CLIProxyManagerCore
 final class ProviderSettingsViewModelTests: XCTestCase {
     func testNewCodexAPIKeyStartsWithBlankNickname() {
         XCTAssertEqual(
-            codexAPIInitialNickname(isConfigured: false, savedNickname: "Saved nickname"),
+            codexAPIInitialNickname(isNewProfile: true, savedNickname: "Saved nickname"),
             ""
         )
     }
 
-    func testConfiguredCodexAPIKeyKeepsSavedNickname() {
+    func testExistingCodexAPIKeyKeepsSavedNicknameEvenWhenSecretIsMissing() {
         XCTAssertEqual(
-            codexAPIInitialNickname(isConfigured: true, savedNickname: "Saved nickname"),
+            codexAPIInitialNickname(isNewProfile: false, savedNickname: "Saved nickname"),
             "Saved nickname"
         )
     }
@@ -44,6 +44,61 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(apiRows.map { $0.id.rawValue }, ["claude-api", "codex-api"])
         XCTAssertEqual(apiRows.map { $0.name }, ["Claude API Key", "OpenAI API Key"])
         XCTAssertEqual(apiRows.map(\.usageState), [.apiCost(.disabled), .apiCost(.disabled)])
+        XCTAssertEqual(apiRows.map(\.credentialKind), [.apiKey, .apiKey])
+    }
+
+    func testMultipleClaudeAPIKeyProfilesCanBeCreatedEditedAndRemovedIndependently() throws {
+        let store = StubConfigStore(config: .default)
+        let secrets = InMemorySecretStore()
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: StubShellInstaller(),
+            proxyService: StubProxyService(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: secrets
+        )
+        let firstID = "claude-api-11111111-1111-1111-1111-111111111111"
+        let secondID = "claude-api-22222222-2222-2222-2222-222222222222"
+        let firstReference = try XCTUnwrap(SecretReference.apiKeyProfile(firstID))
+        let secondReference = try XCTUnwrap(SecretReference.apiKeyProfile(secondID))
+
+        try viewModel.saveClaudeAPISettings(
+            profileID: firstID,
+            secretReference: firstReference,
+            functionName: "claude_personal",
+            nickname: "Personal",
+            dangerousPermissionsEnabled: false,
+            key: "first-key"
+        )
+        try viewModel.saveClaudeAPISettings(
+            profileID: secondID,
+            secretReference: secondReference,
+            functionName: "claude_work",
+            nickname: "Work",
+            dangerousPermissionsEnabled: true,
+            key: "second-key"
+        )
+        try viewModel.saveClaudeAPISettings(
+            profileID: firstID,
+            secretReference: firstReference,
+            functionName: "claude_personal_new",
+            nickname: "Personal Updated",
+            dangerousPermissionsEnabled: false,
+            key: nil
+        )
+
+        XCTAssertEqual(Set(viewModel.config.apiKeyProfiles.map(\.id)), [firstID, secondID])
+        XCTAssertEqual(viewModel.apiKeyProfile(id: firstID)?.commandName, "claude_personal_new")
+        XCTAssertEqual(viewModel.apiKeyProfile(id: secondID)?.commandName, "claude_work")
+        XCTAssertEqual(try secrets.get(firstReference), "first-key")
+        XCTAssertEqual(try secrets.get(secondReference), "second-key")
+
+        viewModel.removeAPIProvider(.init(rawValue: firstID))
+
+        XCTAssertNil(viewModel.apiKeyProfile(id: firstID))
+        XCTAssertNotNil(viewModel.apiKeyProfile(id: secondID))
+        XCTAssertThrowsError(try secrets.get(firstReference))
+        XCTAssertEqual(try secrets.get(secondReference), "second-key")
     }
 
     func testConfiguredAPIKeyRowsExposePersistedNicknames() {
@@ -1858,7 +1913,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertFalse(installer.installedFunctionNames.contains("ccodex"))
     }
 
-    func testDormantAPICommandDoesNotBlockOAuthCommandValidationWhenKeyIsMissing() async {
+    func testMissingSecretAPICommandRemainsReservedDuringOAuthCommandValidation() async {
         var config = AppConfig.default
         config.claudeAPI.commandName = "shared"
         config.oauthCommandProfiles = [
@@ -1889,7 +1944,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
 
         let availability = await viewModel.commandNameAvailability(provider: .claude, functionName: "shared")
 
-        XCTAssertEqual(availability, .available)
+        XCTAssertEqual(availability, .unavailable("Command name `shared` is already used by another provider."))
     }
 
     func testClaudeAPICommandNameAvailabilityChecksAgainstOAuthCommands() async {

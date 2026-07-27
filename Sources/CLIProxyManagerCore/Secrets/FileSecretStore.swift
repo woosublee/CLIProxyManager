@@ -15,13 +15,13 @@ public struct FileSecretStore: SecretStore, @unchecked Sendable {
         self.fileManager = fileManager
     }
 
-    public func get(_ key: SecretKey) throws -> String {
+    public func get(_ key: SecretReference) throws -> String {
         try withExclusiveLock(for: key) {
             try readSecretLocked(for: key)
         }
     }
 
-    public func set(_ value: String, for key: SecretKey) throws {
+    public func set(_ value: String, for key: SecretReference) throws {
         let normalizedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedValue.isEmpty else {
             throw SecretStoreError.writeFailed(key.rawValue)
@@ -32,7 +32,7 @@ public struct FileSecretStore: SecretStore, @unchecked Sendable {
         }
     }
 
-    public func delete(_ key: SecretKey) throws {
+    public func delete(_ key: SecretReference) throws {
         try withExclusiveLock(for: key) {
             let secretFile = paths.apiKeyFile(for: key)
             guard try validateSecretFileForDeletionLocked(secretFile, key: key) else { return }
@@ -42,7 +42,7 @@ public struct FileSecretStore: SecretStore, @unchecked Sendable {
         }
     }
 
-    private func readSecretLocked(for key: SecretKey) throws -> String {
+    private func readSecretLocked(for key: SecretReference) throws -> String {
         let secretFile = paths.apiKeyFile(for: key)
         let fileDescriptor = open(secretFile.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
         guard fileDescriptor >= 0 else {
@@ -70,7 +70,7 @@ public struct FileSecretStore: SecretStore, @unchecked Sendable {
         }
     }
 
-    private func validateSecretFileForDeletionLocked(_ secretFile: URL, key: SecretKey) throws -> Bool {
+    private func validateSecretFileForDeletionLocked(_ secretFile: URL, key: SecretReference) throws -> Bool {
         let fileDescriptor = open(secretFile.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
         guard fileDescriptor >= 0 else {
             if errno == ENOENT {
@@ -84,7 +84,7 @@ public struct FileSecretStore: SecretStore, @unchecked Sendable {
         return true
     }
 
-    private func validateSecretFileDescriptor(_ fileDescriptor: Int32, key: SecretKey) throws {
+    private func validateSecretFileDescriptor(_ fileDescriptor: Int32, key: SecretReference) throws {
         var fileStatus = stat()
         guard fstat(fileDescriptor, &fileStatus) == 0,
               fileStatus.st_mode & S_IFMT == S_IFREG,
@@ -94,7 +94,7 @@ public struct FileSecretStore: SecretStore, @unchecked Sendable {
         }
     }
 
-    private func writeSecretLocked(_ value: String, for key: SecretKey) throws {
+    private func writeSecretLocked(_ value: String, for key: SecretReference) throws {
         let envelopeData: Data
         do {
             let encoder = JSONEncoder()
@@ -136,7 +136,7 @@ public struct FileSecretStore: SecretStore, @unchecked Sendable {
         temporaryFileExists = false
     }
 
-    private func writeAll(_ data: Data, to fileDescriptor: Int32, key: SecretKey) throws {
+    private func writeAll(_ data: Data, to fileDescriptor: Int32, key: SecretReference) throws {
         try data.withUnsafeBytes { buffer in
             guard let baseAddress = buffer.baseAddress else {
                 throw SecretStoreError.writeFailed(key.rawValue)
@@ -157,7 +157,7 @@ public struct FileSecretStore: SecretStore, @unchecked Sendable {
         }
     }
 
-    private func withExclusiveLock<T>(for key: SecretKey, _ body: () throws -> T) throws -> T {
+    private func withExclusiveLock<T>(for key: SecretReference, _ body: () throws -> T) throws -> T {
         try prepareAPIKeysDirectory()
         let lockFile = paths.apiKeyFile(for: key).appendingPathExtension("lock")
         let fileDescriptor = open(

@@ -535,8 +535,47 @@ final class APICostEstimatorTests: XCTestCase {
         XCTAssertEqual(issues, [.corruptedLedger])
     }
 
+    func testSameProviderProfilesProduceIndependentCostStates() {
+        let firstID = "codex-api-11111111-1111-1111-1111-111111111111"
+        let secondID = "codex-api-22222222-2222-2222-2222-222222222222"
+        let ledger = readModel(buckets: [
+            makeBucket(
+                provider: .openAI,
+                profileID: firstID,
+                model: "gpt-5.6-terra",
+                uncached: 1_000_000,
+                requests: 1
+            ),
+            makeBucket(
+                provider: .openAI,
+                profileID: secondID,
+                model: "gpt-5.6-terra",
+                uncached: 2_000_000,
+                requests: 2
+            )
+        ])
+        let profiles = [
+            APIUsageProfileDescriptor(profileID: firstID, provider: .openAI, modelPrefix: "cpm-\(firstID)"),
+            APIUsageProfileDescriptor(profileID: secondID, provider: .openAI, modelPrefix: "cpm-\(secondID)")
+        ]
+
+        let states = APICostEstimator(catalog: .current).states(
+            for: profiles,
+            ledger: ledger,
+            now: ledger.bounds.intervalReference
+        )
+
+        XCTAssertEqual(states[firstID]?.snapshot?.day.requestCount, 1)
+        XCTAssertEqual(states[secondID]?.snapshot?.day.requestCount, 2)
+        XCTAssertNotEqual(
+            states[firstID]?.snapshot?.day.estimatedUSD,
+            states[secondID]?.snapshot?.day.estimatedUSD
+        )
+    }
+
     private func makeBucket(
         provider: APIUsageProvider,
+        profileID: String? = nil,
         model: String,
         uncached: Int64,
         read: Int64 = 0,
@@ -553,7 +592,7 @@ final class APICostEstimatorTests: XCTestCase {
         APIUsageLedgerBucket(
             key: .init(
                 localDate: localDate,
-                profileID: provider.profileID,
+                profileID: profileID ?? provider.profileID,
                 provider: provider,
                 model: model,
                 effectiveServiceTier: provider == .claude ? "standard" : "default",
