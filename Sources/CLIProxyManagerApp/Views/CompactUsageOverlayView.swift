@@ -131,7 +131,6 @@ private struct CompactUsageAccountView: View {
                     .font(.system(size: 10, weight: .semibold))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .fastTooltip(provider.usageOverlayDisplayName)
                     .accessibilityLabel(provider.usageOverlayDisplayName)
             }
 

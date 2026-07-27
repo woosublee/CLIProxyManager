@@ -23,6 +23,7 @@ final class CodexResetCreditBadgeLayoutTests: XCTestCase {
         XCTAssertTrue(expanded.contains("now: refreshStatusReferenceDate"))
         XCTAssertTrue(compact.contains("CodexResetCreditAvatar("))
         XCTAssertTrue(compact.contains(".overlay(alignment: .bottomTrailing)"))
+        XCTAssertFalse(compact.contains(".fastTooltip(provider.usageOverlayDisplayName)"))
         XCTAssertTrue(badge.contains(".ultraThinMaterial"))
         XCTAssertTrue(badge.contains("accessibilityReduceTransparency"))
         XCTAssertTrue(badge.contains("accessibilityContrast"))
