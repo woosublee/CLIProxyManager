@@ -407,7 +407,8 @@ final class DashboardViewModel: ObservableObject {
                 to: persistedConfig,
                 authProfileStore: authProfileStore,
                 configStore: configStore,
-                subscriptionUsageSnapshotCache: subscriptionUsageSnapshotCache
+                subscriptionUsageSnapshotCache: subscriptionUsageSnapshotCache,
+                resetCreditsSnapshotCache: codexResetCreditsSnapshotCache
             )
         } else {
             credentialMigrationResult = CodexCredentialMigrationResult(
@@ -529,6 +530,7 @@ final class DashboardViewModel: ObservableObject {
                 }
                 setSubscriptionUsageStates(.disabled)
                 clearSubscriptionUsageSnapshots()
+                clearCodexResetCreditSnapshots()
                 lastSuccessfulSubscriptionUsageRefreshAt = nil
                 apiCostUsageStates.removeAll()
                 rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
@@ -622,6 +624,7 @@ final class DashboardViewModel: ObservableObject {
         }
         setSubscriptionUsageStates(.disabled)
         clearSubscriptionUsageSnapshots()
+        clearCodexResetCreditSnapshots()
         lastSuccessfulSubscriptionUsageRefreshAt = nil
         apiCostUsageStates.removeAll()
         rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
@@ -1041,6 +1044,20 @@ final class DashboardViewModel: ObservableObject {
         try? subscriptionUsageSnapshotCache.clear()
     }
 
+    private func persistCodexResetCreditSnapshots() {
+        let enabledCodexIDs = Set(authProfiles.filter {
+            $0.type == .codex && isSubscriptionUsageEnabled(for: $0)
+        }.map(\.id))
+        let snapshots = codexResetCreditsSnapshots.filter { enabledCodexIDs.contains($0.key) }
+        try? codexResetCreditsSnapshotCache.save(snapshots)
+    }
+
+    private func clearCodexResetCreditSnapshots() {
+        codexResetCreditsSnapshots.removeAll()
+        codexResetCreditsLastAttemptAt.removeAll()
+        try? codexResetCreditsSnapshotCache.clear()
+    }
+
     private func cancelSubscriptionUsageWork() {
         subscriptionUsageRefreshGeneration += 1
         subscriptionUsageRefreshTask?.cancel()
@@ -1279,7 +1296,7 @@ final class DashboardViewModel: ObservableObject {
             changed = true
         }
         if changed {
-            try? codexResetCreditsSnapshotCache.save(codexResetCreditsSnapshots)
+            persistCodexResetCreditSnapshots()
         }
     }
 
@@ -1507,6 +1524,12 @@ final class DashboardViewModel: ObservableObject {
         let enabledProfileIDs = Set(authProfiles.filter(isSubscriptionUsageEnabled(for:)).map(\.id))
         subscriptionUsageStates = subscriptionUsageStates.filter { enabledProfileIDs.contains($0.key) }
         persistSuccessfulSubscriptionUsageSnapshots()
+        let enabledCodexIDs = Set(authProfiles.filter {
+            $0.type == .codex && isSubscriptionUsageEnabled(for: $0)
+        }.map(\.id))
+        codexResetCreditsSnapshots = codexResetCreditsSnapshots.filter { enabledCodexIDs.contains($0.key) }
+        codexResetCreditsLastAttemptAt = codexResetCreditsLastAttemptAt.filter { enabledCodexIDs.contains($0.key) }
+        persistCodexResetCreditSnapshots()
         rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
     }
 
@@ -2594,7 +2617,8 @@ final class DashboardViewModel: ObservableObject {
         to config: AppConfig,
         authProfileStore: any AuthProfileManaging,
         configStore: any AppConfigStoring,
-        subscriptionUsageSnapshotCache: any SubscriptionUsageSnapshotCaching
+        subscriptionUsageSnapshotCache: any SubscriptionUsageSnapshotCaching,
+        resetCreditsSnapshotCache: any CodexResetCreditsSnapshotCaching
     ) -> CodexCredentialMigrationResult {
         let migrations: [AuthProfileMigration]
         do {
@@ -2612,12 +2636,18 @@ final class DashboardViewModel: ObservableObject {
         let mapping = migrationMapping(migrations)
         let migratedConfig = remappingAuthProfileIDs(in: config, using: mapping)
         let originalSnapshots = subscriptionUsageSnapshotCache.load()
+        let originalResetSnapshots = resetCreditsSnapshotCache.load()
         do {
             try configStore.save(migratedConfig)
             try remapSubscriptionUsageSnapshots(
                 originalSnapshots,
                 using: mapping,
                 cache: subscriptionUsageSnapshotCache
+            )
+            try remapCodexResetCreditSnapshots(
+                originalResetSnapshots,
+                using: mapping,
+                cache: resetCreditsSnapshotCache
             )
             try authProfileStore.finalizeCodexCredentialMigrations(migrations)
             return CodexCredentialMigrationResult(
@@ -2627,6 +2657,7 @@ final class DashboardViewModel: ObservableObject {
         } catch {
             try? configStore.save(config)
             try? subscriptionUsageSnapshotCache.save(originalSnapshots)
+            try? resetCreditsSnapshotCache.save(originalResetSnapshots)
             authProfileStore.rollbackCodexCredentialMigrations(migrations)
             return CodexCredentialMigrationResult(
                 config: config,
@@ -2640,7 +2671,8 @@ final class DashboardViewModel: ObservableObject {
             to: config,
             authProfileStore: authProfileStore,
             configStore: configStore,
-            subscriptionUsageSnapshotCache: subscriptionUsageSnapshotCache
+            subscriptionUsageSnapshotCache: subscriptionUsageSnapshotCache,
+            resetCreditsSnapshotCache: codexResetCreditsSnapshotCache
         )
         guard case .success(let profiles) = result.profiles else { return }
         guard result.config != config else {
@@ -2653,6 +2685,14 @@ final class DashboardViewModel: ObservableObject {
         authProfiles = profiles
         subscriptionUsageStates = Self.remappingSubscriptionUsageStates(
             subscriptionUsageStates,
+            using: mapping
+        )
+        codexResetCreditsSnapshots = Self.remappingCodexResetCreditSnapshots(
+            codexResetCreditsSnapshots,
+            using: mapping
+        )
+        codexResetCreditsLastAttemptAt = Self.remappingAttemptDates(
+            codexResetCreditsLastAttemptAt,
             using: mapping
         )
         cards = ProfileCard.makeDefaultCards(config: result.config)
@@ -2726,6 +2766,51 @@ final class DashboardViewModel: ObservableObject {
         }
         if remapped != snapshots {
             try cache.save(remapped)
+        }
+    }
+
+    private static func remapCodexResetCreditSnapshots(
+        _ snapshots: [String: CodexResetCreditsSnapshot],
+        using mapping: [String: String],
+        cache: any CodexResetCreditsSnapshotCaching
+    ) throws {
+        guard !mapping.isEmpty else { return }
+        let remapped = remappingCodexResetCreditSnapshots(snapshots, using: mapping)
+        if remapped != snapshots {
+            try cache.save(remapped)
+        }
+    }
+
+    private static func remappingCodexResetCreditSnapshots(
+        _ snapshots: [String: CodexResetCreditsSnapshot],
+        using mapping: [String: String]
+    ) -> [String: CodexResetCreditsSnapshot] {
+        guard !mapping.isEmpty else { return snapshots }
+        var remapped: [String: CodexResetCreditsSnapshot] = [:]
+        for (key, snapshot) in snapshots {
+            let profileID = mapping[key] ?? mapping[snapshot.profileID] ?? snapshot.profileID
+            let updated = CodexResetCreditsSnapshot(
+                profileID: profileID,
+                reportedAvailableCount: snapshot.reportedAvailableCount,
+                reportedTotalEarnedCount: snapshot.reportedTotalEarnedCount,
+                credits: snapshot.credits,
+                fetchedAt: snapshot.fetchedAt
+            )
+            if let existing = remapped[profileID], existing.fetchedAt >= updated.fetchedAt {
+                continue
+            }
+            remapped[profileID] = updated
+        }
+        return remapped
+    }
+
+    private static func remappingAttemptDates(
+        _ dates: [String: Date],
+        using mapping: [String: String]
+    ) -> [String: Date] {
+        dates.reduce(into: [:]) { result, entry in
+            let profileID = mapping[entry.key] ?? entry.key
+            result[profileID] = max(result[profileID] ?? .distantPast, entry.value)
         }
     }
 

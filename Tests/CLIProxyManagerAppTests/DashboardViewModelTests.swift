@@ -985,6 +985,12 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oldID: oldSnapshot,
             newID: newerSnapshot
         ])
+        let oldReset = resetCreditSnapshot(profileID: oldID, fetchedAt: Date(timeIntervalSince1970: 10))
+        let newReset = resetCreditSnapshot(profileID: newID, fetchedAt: Date(timeIntervalSince1970: 20))
+        let resetCache = CodexResetCreditsSnapshotCacheDouble(snapshots: [
+            oldID: oldReset,
+            newID: newReset
+        ])
         let authStore = MigratingAuthProfileStore(
             before: [AuthProfile(fileName: oldID, type: .codex, email: "user@example.com", accountID: "acct_123", expired: nil, disabled: false, prefix: "codex-personal")],
             after: [AuthProfile(fileName: newID, type: .codex, email: "user@example.com", accountID: "acct_123", expired: nil, disabled: false, prefix: "codex-personal")],
@@ -1001,6 +1007,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             proxyService: StubProxyServiceStarter(),
             claudeConnector: connectedClaudeConnector(),
             subscriptionUsageSnapshotCache: cache,
+            codexResetCreditsSnapshotCache: resetCache,
             secretStore: InMemorySecretStore()
         )
 
@@ -1020,6 +1027,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.config.oauthCommandProfiles.first?.authProfileID, newID)
         XCTAssertEqual(authStore.finalizedMigrations, [.init(oldID: oldID, newID: newID)])
         XCTAssertEqual(cache.load(), [newID: newerSnapshot])
+        XCTAssertEqual(resetCache.load(), [newID: newReset])
+        XCTAssertEqual(viewModel.codexResetCreditsSnapshots, [newID: newReset])
     }
 
     func testInitialCodexCredentialMigrationRestoresConfigWhenFinalizationFails() {
@@ -1037,6 +1046,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             fetchedAt: Date(timeIntervalSince1970: 10)
         )
         let cache = SubscriptionUsageSnapshotCacheDouble(snapshots: [oldID: originalSnapshot])
+        let originalReset = resetCreditSnapshot(profileID: oldID, fetchedAt: Date(timeIntervalSince1970: 10))
+        let resetCache = CodexResetCreditsSnapshotCacheDouble(snapshots: [oldID: originalReset])
         let authStore = MigratingAuthProfileStore(
             before: [AuthProfile(fileName: oldID, type: .codex, email: "user@example.com", accountID: "acct_123", expired: nil, disabled: false)],
             after: [AuthProfile(fileName: newID, type: .codex, email: "user@example.com", accountID: "acct_123", expired: nil, disabled: false)],
@@ -1054,6 +1065,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             proxyService: StubProxyServiceStarter(),
             claudeConnector: connectedClaudeConnector(),
             subscriptionUsageSnapshotCache: cache,
+            codexResetCreditsSnapshotCache: resetCache,
             secretStore: InMemorySecretStore()
         )
 
@@ -1063,6 +1075,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(store.config.oauthCommandProfiles.first?.authProfileID, oldID)
         XCTAssertEqual(viewModel.config.oauthCommandProfiles.first?.authProfileID, oldID)
         XCTAssertEqual(cache.load(), [oldID: originalSnapshot])
+        XCTAssertEqual(resetCache.load(), [oldID: originalReset])
+        XCTAssertEqual(viewModel.codexResetCreditsSnapshots, [oldID: originalReset])
         XCTAssertEqual(authStore.rolledBackMigrations, [.init(oldID: oldID, newID: newID)])
     }
 
@@ -4015,6 +4029,39 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertTrue(proxy.restartPorts.isEmpty)
     }
 
+    func testDisablingCodexAccountRemovesItsResetCreditSnapshot() {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        config.oauthCommandProfiles = [
+            .init(id: "codex-work", provider: .codex, authProfileID: "codex-work.json", commandName: "codexwork")
+        ]
+        let profile = AuthProfile(
+            fileName: "codex-work.json",
+            type: .codex,
+            email: "codex@example.com",
+            accountID: "acct_example",
+            expired: nil,
+            disabled: false
+        )
+        let snapshot = resetCreditSnapshot(profileID: profile.id, fetchedAt: Date(timeIntervalSince1970: 100))
+        let cache = CodexResetCreditsSnapshotCacheDouble(snapshots: [profile.id: snapshot])
+        let authStore = StubAuthProfileStore(profiles: [profile])
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [profile],
+            authProfileStore: authStore,
+            codexResetCreditsSnapshotCache: cache
+        )
+
+        viewModel.setProviderEnabled(.init(rawValue: "codex-work"), enabled: false)
+
+        XCTAssertNil(viewModel.codexResetCreditsSnapshots[profile.id])
+        XCTAssertNil(cache.load()[profile.id])
+    }
+
     func testTurningOffLastConsumerDeletesKeyClearsCacheAndRestarts() async throws {
         var config = AppConfig.default
         config.usageOverlay.isVisible = true
@@ -4023,9 +4070,16 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let cache = SubscriptionUsageSnapshotCacheDouble(snapshots: ["saved": .init(
             profileID: "saved", provider: .codex, windows: [], fetchedAt: .distantPast
         )])
+        let profile = AuthProfile(
+            fileName: "saved", type: .codex, email: nil, accountID: nil, expired: nil, disabled: false
+        )
+        let resetCreditCache = CodexResetCreditsSnapshotCacheDouble(snapshots: [
+            profile.id: resetCreditSnapshot(profileID: profile.id, fetchedAt: .distantPast)
+        ])
         let viewModel = subscriptionUsageViewModel(
             config: config, configStore: StubConfigStore(config: config), keyStore: keyStore,
-            proxyService: proxy, subscriptionUsageSnapshotCache: cache
+            proxyService: proxy, profiles: [profile], subscriptionUsageSnapshotCache: cache,
+            codexResetCreditsSnapshotCache: resetCreditCache
         )
         await viewModel.refresh()
 
@@ -4035,6 +4089,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertFalse(viewModel.config.isSubscriptionUsageEnabled)
         XCTAssertEqual(keyStore.deleteCallCount, 1)
         XCTAssertTrue(cache.isEmpty)
+        XCTAssertTrue(resetCreditCache.isEmpty)
+        XCTAssertTrue(viewModel.codexResetCreditsSnapshots.isEmpty)
         XCTAssertEqual(proxy.restartPorts, [config.port])
     }
 
@@ -4079,8 +4135,19 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         config.usageOverlay = .init(isVisible: true, alwaysOnTop: true, backgroundOpacity: 0.45)
         let keyStore = SubscriptionUsageManagementKeyDouble(isConfiguredValue: true)
         let proxy = StubProxyServiceStarter()
+        let profile = AuthProfile(
+            fileName: "codex.json", type: .codex, email: nil, accountID: nil, expired: nil, disabled: false
+        )
+        let resetCreditCache = CodexResetCreditsSnapshotCacheDouble(snapshots: [
+            profile.id: resetCreditSnapshot(profileID: profile.id, fetchedAt: .distantPast)
+        ])
         let viewModel = subscriptionUsageViewModel(
-            config: config, configStore: StubConfigStore(config: config), keyStore: keyStore, proxyService: proxy
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: keyStore,
+            proxyService: proxy,
+            profiles: [profile],
+            codexResetCreditsSnapshotCache: resetCreditCache
         )
         await viewModel.refresh()
 
@@ -4091,6 +4158,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertFalse(viewModel.config.usageOverlay.isVisible)
         XCTAssertFalse(viewModel.config.isSubscriptionUsageEnabled)
         XCTAssertFalse(keyStore.isConfigured())
+        XCTAssertTrue(resetCreditCache.isEmpty)
+        XCTAssertTrue(viewModel.codexResetCreditsSnapshots.isEmpty)
     }
 
     func testResetAllSettingsRestartsRunningServerWhenPortReturnsToDefaultWithoutUsageKey() async {
@@ -5265,26 +5334,33 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         config.subscriptionUsage.showInMenuBar = true
         config.oauthCommandProfiles = [
             AppConfig.OAuthCommandProfile(
-                id: "claude-work",
-                provider: .claude,
-                authProfileID: "claude-work.json",
-                commandName: "ccwork"
+                id: "codex-work",
+                provider: .codex,
+                authProfileID: "codex-work.json",
+                commandName: "codexwork"
             )
         ]
         let profile = AuthProfile(
-            fileName: "claude-work.json",
-            type: .claude,
+            fileName: "codex-work.json",
+            type: .codex,
             email: "work@example.com",
-            accountID: nil,
+            accountID: "acct_example",
             expired: nil,
             disabled: false
         )
         let initialState = availableUsageState(for: profile)
         let snapshot = try! XCTUnwrap(initialState.snapshot)
+        let initialReset = resetCreditSnapshot(profileID: profile.id, fetchedAt: Date(timeIntervalSince1970: 10))
+        let refreshedReset = resetCreditSnapshot(profileID: profile.id, fetchedAt: Date(timeIntervalSince1970: 60))
         let quotaClient = SuspendedSubscriptionQuotaClient(reportsBeforeSuspension: [
-            .init(statesByProfileID: [profile.id: initialState], fetchedAt: snapshot.fetchedAt)
+            .init(
+                statesByProfileID: [profile.id: initialState],
+                resetCreditsOutcomesByProfileID: [profile.id: .available(initialReset)],
+                fetchedAt: snapshot.fetchedAt
+            )
         ])
         let cache = SubscriptionUsageSnapshotCacheDouble()
+        let resetCache = CodexResetCreditsSnapshotCacheDouble(snapshots: [profile.id: initialReset])
         let authStore = StubAuthProfileStore(profiles: [profile], supportsIDDelete: true)
         let viewModel = subscriptionUsageViewModel(
             config: config,
@@ -5294,24 +5370,29 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             profiles: [profile],
             authProfileStore: authStore,
             quotaClient: quotaClient,
-            subscriptionUsageSnapshotCache: cache
+            subscriptionUsageSnapshotCache: cache,
+            codexResetCreditsSnapshotCache: resetCache
         )
         viewModel.serverStatus = readyStatus()
 
         await viewModel.refreshSubscriptionUsage()
         XCTAssertEqual(cache.load(), [profile.id: snapshot])
+        XCTAssertEqual(resetCache.load(), [profile.id: initialReset])
 
         let refresh = Task { await viewModel.refreshSubscriptionUsage(force: true) }
         await waitForUsageFetches(quotaClient, expectedCount: 2)
-        viewModel.removeProvider(ProviderRowState.ID(rawValue: "claude-work"))
+        viewModel.removeProvider(ProviderRowState.ID(rawValue: "codex-work"))
         await quotaClient.resolveAll(with: .init(
             statesByProfileID: [profile.id: .unavailable(.transientFailure)],
+            resetCreditsOutcomesByProfileID: [profile.id: .available(refreshedReset)],
             fetchedAt: Date(timeIntervalSince1970: 60)
         ))
         await refresh.value
 
         XCTAssertNil(viewModel.subscriptionUsageStates[profile.id])
         XCTAssertNil(cache.load()[profile.id])
+        XCTAssertNil(viewModel.codexResetCreditsSnapshots[profile.id])
+        XCTAssertNil(resetCache.load()[profile.id])
     }
 
     func testRemovingAccountDuringColdAutomaticRefreshImmediatelyRestartsRemainingAccount() async {
