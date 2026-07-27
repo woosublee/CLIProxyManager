@@ -283,6 +283,7 @@ final class DashboardViewModel: ObservableObject {
     private var authProfiles: [AuthProfile] = []
     private var oauthLoginTask: Task<Void, Never>?
     private var oauthLoginSessionID: UUID?
+    private var oauthDeferredSubscriptionUsageRefreshSessionID: UUID?
     private var settingsMessageAutoClearTask: Task<Void, Never>?
     private var applicationLaunchTask: Task<Void, Never>?
     private var applicationLaunchGeneration = 0
@@ -1247,15 +1248,12 @@ final class DashboardViewModel: ObservableObject {
         }
         let resetCreditsNow = codexResetCreditsNow()
         if subscriptionQuotaClient is any ConcurrentSubscriptionQuotaFetching {
-            let resetTask = startCodexResetCreditsRefreshIfNeeded(
+            _ = startCodexResetCreditsRefreshIfNeeded(
                 force: force,
                 now: resetCreditsNow
             )
             guard !usageProfiles.isEmpty else {
-                if resetTask == nil {
-                    scheduleSubscriptionUsagePollingIfNeeded()
-                }
-                await resetTask?.value
+                scheduleSubscriptionUsagePollingIfNeeded()
                 return
             }
             await refreshSubscriptionUsageOnly(
@@ -1985,10 +1983,20 @@ final class DashboardViewModel: ObservableObject {
             applyCodexCredentialMigrationsIfNeeded()
             let completedID = reconcileOAuthLoginCompletion(providerType: providerType, beforeProfiles: beforeProfiles)
             refreshProfiles()
-            await waitForPendingProxyConfigurationWork()
+            let defersRefreshFromServerAction = isServerActionInProgress
+                && (!pendingProxyConfigurationRestartReasons.isEmpty
+                    || oauthDeferredSubscriptionUsageRefreshSessionID != nil)
+            if defersRefreshFromServerAction {
+                oauthDeferredSubscriptionUsageRefreshSessionID = sessionID
+            }
+            let waitedForServerAction = await waitForPendingProxyConfigurationWork()
+            if oauthDeferredSubscriptionUsageRefreshSessionID == sessionID {
+                oauthDeferredSubscriptionUsageRefreshSessionID = nil
+            }
             try Task.checkCancellation()
             guard oauthLoginSessionID == sessionID else { return }
-            if serverStatus.severity == .ready {
+            if serverStatus.severity == .ready,
+               (!waitedForServerAction || defersRefreshFromServerAction) {
                 await refreshSubscriptionUsage()
             }
             completedOAuthLoginProvider = completedID
@@ -3744,17 +3752,19 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
-    private func waitForPendingProxyConfigurationWork() async {
+    private func waitForPendingProxyConfigurationWork() async -> Bool {
+        var waitedForServerAction = false
         while true {
             if let proxyConfigurationRestartTask {
                 await proxyConfigurationRestartTask.value
                 continue
             }
             if isServerActionInProgress {
+                waitedForServerAction = true
                 await waitForServerActionCompletion()
                 continue
             }
-            return
+            return waitedForServerAction
         }
     }
 
@@ -3796,10 +3806,24 @@ final class DashboardViewModel: ObservableObject {
                         : serverStatus.message
                     throw ProxyRestartReadinessError(message: message)
                 }
-                await refreshUsageAfterServerChange()
-            } else {
-                await refresh()
+                proxyRuntimeCertainty = .mayBeRunning
+                serverControlState = .running
+                let hadPendingConfigurationRestart = !pendingProxyConfigurationRestartReasons.isEmpty
+                let defersSubscriptionRefreshToOAuth = oauthDeferredSubscriptionUsageRefreshSessionID != nil
+                await drainPendingProxyConfigurationRestarts()
+                guard serverStatus.severity == .ready, serverControlState.isRunning else {
+                    return false
+                }
+                if !defersSubscriptionRefreshToOAuth {
+                    await refreshSubscriptionUsage()
+                    if !hadPendingConfigurationRestart {
+                        scheduleAPIUsageCollectorUpdateIfStarted()
+                    }
+                }
+                return true
             }
+
+            await refresh()
             proxyRuntimeCertainty = transitionState == .stopping
                 ? .confirmedStopped
                 : .mayBeRunning
@@ -3837,11 +3861,6 @@ final class DashboardViewModel: ObservableObject {
         }
         proxyRuntimeCertainty = .mayBeRunning
         serverControlState = .running
-        scheduleAPIUsageCollectorUpdateIfStarted()
-    }
-
-    private func refreshUsageAfterServerChange() async {
-        await refreshSubscriptionUsage()
         scheduleAPIUsageCollectorUpdateIfStarted()
     }
 
