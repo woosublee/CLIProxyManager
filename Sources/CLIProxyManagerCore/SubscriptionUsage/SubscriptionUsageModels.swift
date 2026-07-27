@@ -126,16 +126,37 @@ public enum AccountSubscriptionUsageState: Equatable, Sendable {
 
 public struct SubscriptionUsageReport: Equatable, Sendable {
     public let statesByProfileID: [String: AccountSubscriptionUsageState]
+    public let resetCreditsOutcomesByProfileID: [String: CodexResetCreditsRefreshOutcome]
     public let fetchedAt: Date
 
-    public init(statesByProfileID: [String: AccountSubscriptionUsageState], fetchedAt: Date) {
+    public init(
+        statesByProfileID: [String: AccountSubscriptionUsageState],
+        resetCreditsOutcomesByProfileID: [String: CodexResetCreditsRefreshOutcome] = [:],
+        fetchedAt: Date
+    ) {
         self.statesByProfileID = statesByProfileID
+        self.resetCreditsOutcomesByProfileID = resetCreditsOutcomesByProfileID
         self.fetchedAt = fetchedAt
     }
 }
 
 public protocol SubscriptionQuotaFetching: Sendable {
     func fetchUsage(port: Int, profiles: [AuthProfile]) async -> SubscriptionUsageReport
+    func fetchUsage(
+        port: Int,
+        profiles: [AuthProfile],
+        resetCreditsProfileIDs: Set<String>
+    ) async -> SubscriptionUsageReport
+}
+
+public extension SubscriptionQuotaFetching {
+    func fetchUsage(
+        port: Int,
+        profiles: [AuthProfile],
+        resetCreditsProfileIDs: Set<String>
+    ) async -> SubscriptionUsageReport {
+        await fetchUsage(port: port, profiles: profiles)
+    }
 }
 
 public protocol SubscriptionUsageManagementKeyConfiguring: Sendable {
