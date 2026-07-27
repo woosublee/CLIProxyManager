@@ -1145,20 +1145,21 @@ final class DashboardViewModel: ObservableObject {
             setSubscriptionUsageStates(.managementKeyNotConfigured)
             return
         }
-        let profiles = force
-            ? authProfiles.filter(isSubscriptionUsageEnabled(for:))
-            : refreshableSubscriptionUsageProfiles()
+        let enabledProfiles = authProfiles.filter(isSubscriptionUsageEnabled(for:))
+        let usageProfiles = force ? enabledProfiles : refreshableSubscriptionUsageProfiles()
+        let resetCreditsNow = codexResetCreditsNow()
+        let resetCreditsProfileIDs = resetCreditsProfileIDs(
+            for: enabledProfiles,
+            force: force,
+            now: resetCreditsNow
+        )
+        let requestedProfileIDs = Set(usageProfiles.map(\.id)).union(resetCreditsProfileIDs)
+        let profiles = enabledProfiles.filter { requestedProfileIDs.contains($0.id) }
         guard !profiles.isEmpty else {
             subscriptionUsagePollingTask?.cancel()
             subscriptionUsagePollingTask = nil
             return
         }
-        let resetCreditsNow = codexResetCreditsNow()
-        let resetCreditsProfileIDs = resetCreditsProfileIDs(
-            for: profiles,
-            force: force,
-            now: resetCreditsNow
-        )
         for profileID in resetCreditsProfileIDs {
             codexResetCreditsLastAttemptAt[profileID] = resetCreditsNow
         }
@@ -1168,7 +1169,7 @@ final class DashboardViewModel: ObservableObject {
         isSubscriptionUsageRefreshInProgress = true
         let previousStates = subscriptionUsageStates
         if !force {
-            let unavailableProfileIDs = Set(profiles.compactMap { profile -> String? in
+            let unavailableProfileIDs = Set(usageProfiles.compactMap { profile -> String? in
                 previousStates[profile.id]?.snapshot == nil ? profile.id : nil
             })
             if !unavailableProfileIDs.isEmpty {
@@ -1190,7 +1191,7 @@ final class DashboardViewModel: ObservableObject {
                   self.subscriptionUsageRefreshGeneration == generation else {
                 return
             }
-            self.applySubscriptionUsageReport(report, for: profiles, previousStates: previousStates)
+            self.applySubscriptionUsageReport(report, for: usageProfiles, previousStates: previousStates)
             self.rebuildProviderRows(claudeStatus: self.lastClaudeStatus, codexStatus: self.lastCodexStatus)
             self.scheduleSubscriptionUsagePollingIfNeeded()
         }

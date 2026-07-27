@@ -4883,6 +4883,81 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(requestedResetCreditProfileIDSets, [[codex.id], [], [codex.id]])
     }
 
+    func testTerminalUsageProfileStillRequestsDueResetCreditsWithoutRestartingUsagePolling() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let codex = AuthProfile(
+            fileName: "codex.json",
+            type: .codex,
+            email: "codex@example.com",
+            accountID: "acct_example",
+            expired: nil,
+            disabled: false
+        )
+        let claude = AuthProfile(
+            fileName: "claude.json",
+            type: .claude,
+            email: "claude@example.com",
+            accountID: nil,
+            expired: nil,
+            disabled: false
+        )
+        let clock = MutableDateProvider(Date(timeIntervalSince1970: 100))
+        let resetSnapshot = resetCreditSnapshot(
+            profileID: codex.id,
+            fetchedAt: Date(timeIntervalSince1970: 100 + 10_800)
+        )
+        let quota = RecordingSubscriptionQuotaClient(reports: [
+            SubscriptionUsageReport(
+                statesByProfileID: [
+                    codex.id: .unavailable(.schemaMismatch),
+                    claude.id: availableUsageState(for: claude)
+                ],
+                resetCreditsOutcomesByProfileID: [codex.id: .unavailable(.transientFailure)],
+                fetchedAt: Date(timeIntervalSince1970: 100)
+            ),
+            availableUsageReport(for: claude),
+            SubscriptionUsageReport(
+                statesByProfileID: [
+                    codex.id: availableUsageState(for: codex),
+                    claude.id: availableUsageState(for: claude)
+                ],
+                resetCreditsOutcomesByProfileID: [codex.id: .available(resetSnapshot)],
+                fetchedAt: Date(timeIntervalSince1970: 100 + 10_800)
+            )
+        ])
+        let sleeper = SubscriptionUsageSleepRecorder()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [codex, claude],
+            quotaClient: quota,
+            codexResetCreditsNow: { clock.now() },
+            subscriptionUsageSleep: { delay in try await sleeper.sleep(delay) }
+        )
+        viewModel.serverStatus = readyStatus()
+
+        await viewModel.refreshSubscriptionUsage()
+        clock.set(Date(timeIntervalSince1970: 100 + 10_799))
+        await viewModel.refreshSubscriptionUsage()
+        clock.set(Date(timeIntervalSince1970: 100 + 10_800))
+        await viewModel.refreshSubscriptionUsage()
+
+        let requestedProfileIDs = await quota.requestedProfileIDs()
+        let requestedResetCreditProfileIDSets = await quota.requestedResetCreditProfileIDSets()
+        let pollingDelays = await sleeper.delays()
+        XCTAssertEqual(
+            requestedProfileIDs,
+            [[codex.id, claude.id], [claude.id], [codex.id, claude.id]]
+        )
+        XCTAssertEqual(requestedResetCreditProfileIDSets, [[codex.id], [], [codex.id]])
+        XCTAssertEqual(viewModel.subscriptionUsageStates[codex.id], .unavailable(.schemaMismatch))
+        XCTAssertEqual(viewModel.codexResetCreditsSnapshots[codex.id], resetSnapshot)
+        XCTAssertEqual(pollingDelays, [300_000_000_000, 300_000_000_000, 300_000_000_000])
+    }
+
     func testReloadUsageAlwaysRequestsActiveCodexResetCredits() async {
         var config = AppConfig.default
         config.subscriptionUsage.showInMenuBar = true
