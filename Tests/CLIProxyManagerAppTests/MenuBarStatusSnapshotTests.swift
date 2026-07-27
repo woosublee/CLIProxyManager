@@ -167,6 +167,47 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
         XCTAssertEqual(windowIDs, [["five_hour", "seven_day"], ["primary"]])
     }
 
+    func testSnapshotCarriesResetCreditsOnlyForCodexOAuthAccount() throws {
+        let reset = CodexResetCreditsSnapshot(
+            profileID: "codex.json",
+            reportedAvailableCount: 1,
+            reportedTotalEarnedCount: 1,
+            credits: [],
+            fetchedAt: .distantPast
+        )
+        let snapshot = MenuBarStatusSnapshot(
+            serverStatus: DiagnosticStatus(severity: .ready, title: "Running", message: "Ready"),
+            providers: [
+                ProviderRowState(
+                    id: .codex,
+                    providerType: .codex,
+                    name: "Codex OAuth",
+                    nickname: "Work",
+                    functionName: "codex",
+                    connectionTitle: "Connected",
+                    connectionDetail: "codex@example.com",
+                    isConnected: true,
+                    resetCreditsSnapshot: reset
+                ),
+                ProviderRowState(
+                    id: .claude,
+                    providerType: .claude,
+                    name: "Claude OAuth",
+                    nickname: "Claude",
+                    functionName: "claude",
+                    connectionTitle: "Connected",
+                    connectionDetail: "claude@example.com",
+                    isConnected: true
+                )
+            ]
+        )
+
+        XCTAssertEqual(snapshot.connectedProviders.first?.providerType, .codex)
+        XCTAssertEqual(snapshot.connectedProviders.first?.resetCreditsSnapshot, reset)
+        XCTAssertEqual(snapshot.connectedProviders.last?.providerType, .claude)
+        XCTAssertNil(snapshot.connectedProviders.last?.resetCreditsSnapshot)
+    }
+
     func testSnapshotCanHideMenuBarUsageWithoutDiscardingFetchedState() throws {
         let available = AccountSubscriptionUsageState.available(.init(
             profileID: "codex.json",
@@ -174,6 +215,13 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
             windows: [.init(id: "primary", label: "Primary", usedPercent: 25, resetAt: nil)],
             fetchedAt: Date(timeIntervalSince1970: 0)
         ))
+        let reset = CodexResetCreditsSnapshot(
+            profileID: "codex.json",
+            reportedAvailableCount: 1,
+            reportedTotalEarnedCount: 1,
+            credits: [],
+            fetchedAt: .distantPast
+        )
         let snapshot = MenuBarStatusSnapshot(
             serverStatus: DiagnosticStatus(severity: .ready, title: "Running", message: "Ready"),
             providers: [ProviderRowState(
@@ -184,7 +232,8 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
                 connectionTitle: "Connected",
                 connectionDetail: "codex@example.com",
                 isConnected: true,
-                usageState: .subscription(available)
+                usageState: .subscription(available),
+                resetCreditsSnapshot: reset
             )],
             showsUsage: false
         )
@@ -192,6 +241,7 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
         let provider = try XCTUnwrap(snapshot.connectedProviders.first)
         XCTAssertFalse(provider.showsUsage)
         XCTAssertEqual(provider.usageState, .subscription(available))
+        XCTAssertEqual(provider.resetCreditsSnapshot, reset)
     }
 
     func testSnapshotKeepsProviderCapabilityDisabledWhenMenuBarPreferenceIsEnabled() throws {

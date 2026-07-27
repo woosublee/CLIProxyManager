@@ -3342,6 +3342,9 @@ final class DashboardViewModel: ObservableObject {
                 isErrored: isProviderErrored(providerType: commandProfile.provider, enabledProfile: enabledProfile, diagnosticStatus: diagnosticStatus),
                 accountDetailHidden: commandProfile.accountDetailHidden,
                 usageState: .subscription(subscriptionUsageStates[authProfile.id] ?? defaultSubscriptionUsageState),
+                resetCreditsSnapshot: commandProfile.provider == .codex
+                    ? codexResetCreditsSnapshots[authProfile.id]
+                    : nil,
                 showsInUsageOverlay: showsInUsageOverlay(ProviderRowState.ID(rawValue: commandProfile.id))
             )
         }
