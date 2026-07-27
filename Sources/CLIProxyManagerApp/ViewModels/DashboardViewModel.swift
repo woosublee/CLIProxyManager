@@ -206,6 +206,7 @@ final class DashboardViewModel: ObservableObject {
     @Published var optionRows: [DashboardOptionRow] = []
     @Published var providerRows: [ProviderRowState] = []
     @Published private(set) var subscriptionUsageStates: [String: AccountSubscriptionUsageState] = [:]
+    @Published private(set) var codexResetCreditsSnapshots: [String: CodexResetCreditsSnapshot] = [:]
     @Published private(set) var apiCostUsageStates: [String: APICostUsageState] = [:]
     @Published private(set) var isSubscriptionUsageRefreshInProgress = false
     @Published private(set) var isSubscriptionUsageReloadInProgress = false
@@ -270,6 +271,8 @@ final class DashboardViewModel: ObservableObject {
     private let subscriptionQuotaClient: any SubscriptionQuotaFetching
     private let subscriptionUsageKeyStore: any SubscriptionUsageManagementKeyConfiguring
     private let subscriptionUsageSnapshotCache: any SubscriptionUsageSnapshotCaching
+    private let codexResetCreditsSnapshotCache: any CodexResetCreditsSnapshotCaching
+    private let codexResetCreditsNow: @Sendable () -> Date
     private let apiUsageCollector: any APIUsageCollecting
     private let claudeModelOptionsCache: any ClaudeModelOptionsCaching
     private let cpmInstallationService: any CPMInstallationManaging
@@ -307,6 +310,8 @@ final class DashboardViewModel: ObservableObject {
     private var hasStartedAPIUsageCollector = false
     private var subscriptionUsageRefreshIsForced = false
     private var pendingForcedSubscriptionUsageRefresh = false
+    private var codexResetCreditsLastAttemptAt: [String: Date] = [:]
+    private static let codexResetCreditsRefreshInterval: TimeInterval = 3 * 60 * 60
     private var pendingProxyConfigurationRestartReasons: Set<ProxyConfigurationRestartReason> = []
     private var proxyConfigurationRestartTask: Task<Void, Never>?
     private var serverActionCompletionWaiters: [CheckedContinuation<Void, Never>] = []
@@ -331,6 +336,8 @@ final class DashboardViewModel: ObservableObject {
         subscriptionQuotaClient: any SubscriptionQuotaFetching = CLIProxyAPISubscriptionQuotaClient(),
         subscriptionUsageKeyStore: any SubscriptionUsageManagementKeyConfiguring = SubscriptionUsageManagementKeyFileStore(),
         subscriptionUsageSnapshotCache: any SubscriptionUsageSnapshotCaching = SubscriptionUsageSnapshotCacheFileStore(),
+        codexResetCreditsSnapshotCache: any CodexResetCreditsSnapshotCaching = CodexResetCreditsSnapshotCacheFileStore(),
+        codexResetCreditsNow: @escaping @Sendable () -> Date = { Date() },
         apiUsageCollector: any APIUsageCollecting = APIUsageCollector(),
         claudeModelOptionsCache: any ClaudeModelOptionsCaching = ClaudeModelOptionsCacheFileStore(),
         cpmInstallationService: (any CPMInstallationManaging)? = nil,
@@ -360,6 +367,8 @@ final class DashboardViewModel: ObservableObject {
         self.subscriptionQuotaClient = subscriptionQuotaClient
         self.subscriptionUsageKeyStore = subscriptionUsageKeyStore
         self.subscriptionUsageSnapshotCache = subscriptionUsageSnapshotCache
+        self.codexResetCreditsSnapshotCache = codexResetCreditsSnapshotCache
+        self.codexResetCreditsNow = codexResetCreditsNow
         self.apiUsageCollector = apiUsageCollector
         self.claudeModelOptionsCache = claudeModelOptionsCache
         let resolvedCPMInstallationService = cpmInstallationService ?? CPMInstallationService()
@@ -439,6 +448,7 @@ final class DashboardViewModel: ObservableObject {
         )
         restoreClaudeModelOptions()
         restoreSubscriptionUsageSnapshots()
+        restoreCodexResetCreditsSnapshots()
         reconcileAuthProfilePrefixes()
         rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
         rebuildOptionRows()
@@ -983,6 +993,33 @@ final class DashboardViewModel: ObservableObject {
         lastSuccessfulSubscriptionUsageRefreshAt = snapshots.values.map(\.fetchedAt).max()
     }
 
+    private func restoreCodexResetCreditsSnapshots() {
+        guard config.isSubscriptionUsageEnabled else { return }
+        let enabledCodexIDs = Set(authProfiles.filter {
+            $0.type == .codex && isSubscriptionUsageEnabled(for: $0)
+        }.map(\.id))
+        codexResetCreditsSnapshots = codexResetCreditsSnapshotCache.load().filter {
+            enabledCodexIDs.contains($0.key)
+        }
+    }
+
+    private func resetCreditsProfileIDs(
+        for profiles: [AuthProfile],
+        force: Bool,
+        now: Date
+    ) -> Set<String> {
+        Set(profiles.compactMap { profile in
+            guard profile.type == .codex else { return nil }
+            if force { return profile.id }
+            let reference = codexResetCreditsLastAttemptAt[profile.id]
+                ?? codexResetCreditsSnapshots[profile.id]?.fetchedAt
+            guard let reference else { return profile.id }
+            return now.timeIntervalSince(reference) >= Self.codexResetCreditsRefreshInterval
+                ? profile.id
+                : nil
+        })
+    }
+
     private func persistSuccessfulSubscriptionUsageSnapshots() {
         let enabledProfileIDs = Set(authProfiles.filter(isSubscriptionUsageEnabled(for:)).map(\.id))
         let snapshots = subscriptionUsageStates.reduce(into: [String: SubscriptionUsageSnapshot]()) { result, entry in
@@ -1116,6 +1153,15 @@ final class DashboardViewModel: ObservableObject {
             subscriptionUsagePollingTask = nil
             return
         }
+        let resetCreditsNow = codexResetCreditsNow()
+        let resetCreditsProfileIDs = resetCreditsProfileIDs(
+            for: profiles,
+            force: force,
+            now: resetCreditsNow
+        )
+        for profileID in resetCreditsProfileIDs {
+            codexResetCreditsLastAttemptAt[profileID] = resetCreditsNow
+        }
 
         subscriptionUsageRefreshGeneration += 1
         let generation = subscriptionUsageRefreshGeneration
@@ -1132,7 +1178,11 @@ final class DashboardViewModel: ObservableObject {
         let port = config.port
         let quotaClient = subscriptionQuotaClient
         let refreshTask = Task { [weak self] in
-            let report = await quotaClient.fetchUsage(port: port, profiles: profiles)
+            let report = await quotaClient.fetchUsage(
+                port: port,
+                profiles: profiles,
+                resetCreditsProfileIDs: resetCreditsProfileIDs
+            )
             guard !Task.isCancelled,
                   let self,
                   self.config.isSubscriptionUsageEnabled,
@@ -1183,6 +1233,25 @@ final class DashboardViewModel: ObservableObject {
         }
         if didUpdateStates {
             persistSuccessfulSubscriptionUsageSnapshots()
+        }
+        applyCodexResetCreditOutcomes(
+            report.resetCreditsOutcomesByProfileID,
+            enabledProfileIDs: enabledProfileIDs
+        )
+    }
+
+    private func applyCodexResetCreditOutcomes(
+        _ outcomes: [String: CodexResetCreditsRefreshOutcome],
+        enabledProfileIDs: Set<String>
+    ) {
+        var changed = false
+        for (profileID, outcome) in outcomes where enabledProfileIDs.contains(profileID) {
+            guard case let .available(snapshot) = outcome else { continue }
+            codexResetCreditsSnapshots[profileID] = snapshot
+            changed = true
+        }
+        if changed {
+            try? codexResetCreditsSnapshotCache.save(codexResetCreditsSnapshots)
         }
     }
 
