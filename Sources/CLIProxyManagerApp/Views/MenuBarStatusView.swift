@@ -204,6 +204,7 @@ private struct MenuBarAccountRow: View {
                         .lineLimit(1)
                     Spacer(minLength: 0)
                 }
+                .frame(minHeight: 22, alignment: .center)
                 if let connectionDetail = provider.menuBarConnectionDetail {
                     Text(connectionDetail)
                         .font(.system(size: 11.5))

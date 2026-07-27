@@ -19,6 +19,7 @@ final class CodexResetCreditBadgeLayoutTests: XCTestCase {
 
         XCTAssertTrue(menu.contains("CodexResetCreditAvatar("))
         XCTAssertTrue(menu.contains("now: refreshAgeReferenceDate"))
+        XCTAssertTrue(menu.contains(".frame(minHeight: 22, alignment: .center)"))
         XCTAssertTrue(expanded.contains("CodexResetCreditAvatar("))
         XCTAssertTrue(expanded.contains("now: refreshStatusReferenceDate"))
         XCTAssertTrue(compact.contains("CodexResetCreditAvatar("))
