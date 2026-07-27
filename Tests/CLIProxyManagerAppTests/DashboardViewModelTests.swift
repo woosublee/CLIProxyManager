@@ -1031,6 +1031,178 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.codexResetCreditsSnapshots, [newID: newReset])
     }
 
+    func testLiveCodexCredentialMigrationUsesAuthoritativeMappingWhenConfigIsUnchanged() async throws {
+        let oldID = "codex-old-user@example.com.json"
+        let newID = "codex-new-user@example.com.json"
+        let oldProfile = AuthProfile(
+            fileName: oldID,
+            type: .codex,
+            email: "user@example.com",
+            accountID: "acct_example",
+            expired: nil,
+            disabled: false
+        )
+        let newProfile = AuthProfile(
+            fileName: newID,
+            type: .codex,
+            email: "user@example.com",
+            accountID: "acct_example",
+            expired: nil,
+            disabled: false
+        )
+        let oldReset = resetCreditSnapshot(
+            profileID: oldID,
+            fetchedAt: Date(timeIntervalSince1970: 200)
+        )
+        let newReset = resetCreditSnapshot(
+            profileID: newID,
+            fetchedAt: Date(timeIntervalSince1970: 100)
+        )
+        let quotaClient = RecordingSubscriptionQuotaClient(reports: [
+            .init(
+                statesByProfileID: [
+                    oldID: availableUsageState(for: oldProfile),
+                    newID: availableUsageState(for: newProfile)
+                ],
+                resetCreditsOutcomesByProfileID: [
+                    oldID: .available(oldReset),
+                    newID: .available(newReset)
+                ],
+                fetchedAt: Date(timeIntervalSince1970: 1_000)
+            )
+        ])
+        let authStore = LoginMigratingAuthProfileStore(
+            initial: [oldProfile, newProfile],
+            afterLogin: [newProfile],
+            migration: .init(oldID: oldID, newID: newID)
+        )
+        let configStore = StubConfigStore(
+            loadError: NSError(domain: "test", code: 1)
+        )
+        let resetCache = CodexResetCreditsSnapshotCacheDouble()
+        let viewModel = DashboardViewModel(
+            configStore: configStore,
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: authStore,
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector(),
+            subscriptionQuotaClient: quotaClient,
+            subscriptionUsageKeyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            codexResetCreditsSnapshotCache: resetCache,
+            codexResetCreditsNow: { Date(timeIntervalSince1970: 1_000) },
+            secretStore: InMemorySecretStore()
+        )
+        try viewModel.saveSubscriptionUsageMenuBarVisible(true)
+        await viewModel.prepareUsage()
+        authStore.completeLogin()
+
+        viewModel.refreshProfiles()
+
+        let migrated = try XCTUnwrap(viewModel.codexResetCreditsSnapshots[newID])
+        XCTAssertEqual(migrated.profileID, newID)
+        XCTAssertEqual(migrated.fetchedAt, oldReset.fetchedAt)
+        XCTAssertNil(viewModel.codexResetCreditsSnapshots[oldID])
+        XCTAssertEqual(resetCache.load(), [newID: migrated])
+    }
+
+    func testLiveCodexCredentialMigrationPreservesLatestAttemptCollisionUsingAuthoritativeMapping() async {
+        let oldID = "codex-old-user@example.com.json"
+        let newID = "codex-new-user@example.com.json"
+        let oldProfile = AuthProfile(
+            fileName: oldID,
+            type: .codex,
+            email: "user@example.com",
+            accountID: "acct_example",
+            expired: nil,
+            disabled: false
+        )
+        let newProfile = AuthProfile(
+            fileName: newID,
+            type: .codex,
+            email: "user@example.com",
+            accountID: "acct_example",
+            expired: nil,
+            disabled: false
+        )
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        config.oauthCommandProfiles = [
+            .init(id: "duplicate", provider: .codex, authProfileID: newID),
+            .init(id: "duplicate", provider: .codex, authProfileID: oldID)
+        ]
+        let initialOldReset = resetCreditSnapshot(
+            profileID: oldID,
+            fetchedAt: Date(timeIntervalSince1970: 19_900)
+        )
+        let initialNewReset = resetCreditSnapshot(
+            profileID: newID,
+            fetchedAt: Date(timeIntervalSince1970: 0)
+        )
+        let refreshedNewReset = resetCreditSnapshot(
+            profileID: newID,
+            fetchedAt: Date(timeIntervalSince1970: 100)
+        )
+        let refreshedOldReset = resetCreditSnapshot(
+            profileID: oldID,
+            fetchedAt: Date(timeIntervalSince1970: 1_200)
+        )
+        let quotaClient = RecordingSubscriptionQuotaClient(reports: [
+            .init(
+                statesByProfileID: [
+                    oldID: availableUsageState(for: oldProfile),
+                    newID: availableUsageState(for: newProfile)
+                ],
+                resetCreditsOutcomesByProfileID: [newID: .available(refreshedNewReset)],
+                fetchedAt: Date(timeIntervalSince1970: 20_000)
+            ),
+            .init(
+                statesByProfileID: [
+                    oldID: availableUsageState(for: oldProfile),
+                    newID: availableUsageState(for: newProfile)
+                ],
+                resetCreditsOutcomesByProfileID: [oldID: .available(refreshedOldReset)],
+                fetchedAt: Date(timeIntervalSince1970: 30_750)
+            ),
+            .init(
+                statesByProfileID: [newID: availableUsageState(for: newProfile)],
+                fetchedAt: Date(timeIntervalSince1970: 31_000)
+            )
+        ])
+        let authStore = LoginMigratingAuthProfileStore(
+            initial: [oldProfile, newProfile],
+            afterLogin: [newProfile],
+            migration: .init(oldID: oldID, newID: newID)
+        )
+        let resetCache = CodexResetCreditsSnapshotCacheDouble(snapshots: [
+            oldID: initialOldReset,
+            newID: initialNewReset
+        ])
+        let now = MutableDateProvider(Date(timeIntervalSince1970: 20_000))
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [oldProfile, newProfile],
+            authProfileStore: authStore,
+            quotaClient: quotaClient,
+            codexResetCreditsSnapshotCache: resetCache,
+            codexResetCreditsNow: { now.now() }
+        )
+        await viewModel.refreshSubscriptionUsage()
+        now.set(Date(timeIntervalSince1970: 30_750))
+        await viewModel.refreshSubscriptionUsage()
+        authStore.completeLogin()
+        viewModel.refreshProfiles()
+        now.set(Date(timeIntervalSince1970: 31_000))
+
+        await viewModel.refreshSubscriptionUsage()
+
+        let requestedResetIDs = await quotaClient.requestedResetCreditProfileIDSets()
+        XCTAssertEqual(requestedResetIDs, [Set([newID]), Set([oldID]), []])
+    }
+
     func testInitialCodexCredentialMigrationRestoresConfigWhenFinalizationFails() {
         let oldID = "codex-user@example.com-pro.json"
         let newID = "codex-182d1cfd-user@example.com-pro.json"
@@ -4060,6 +4232,66 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         XCTAssertNil(viewModel.codexResetCreditsSnapshots[profile.id])
         XCTAssertNil(cache.load()[profile.id])
+    }
+
+    func testDisablingCodexAccountCleansResetCreditStateWhenProfileReloadFails() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        config.oauthCommandProfiles = [
+            .init(id: "codex-work", provider: .codex, authProfileID: "codex-work.json", commandName: "codexwork")
+        ]
+        let profile = AuthProfile(
+            fileName: "codex-work.json",
+            type: .codex,
+            email: "codex@example.com",
+            accountID: "acct_example",
+            expired: nil,
+            disabled: false
+        )
+        let snapshot = resetCreditSnapshot(
+            profileID: profile.id,
+            fetchedAt: Date(timeIntervalSince1970: 100)
+        )
+        let quotaClient = RecordingSubscriptionQuotaClient(reports: [
+            .init(
+                statesByProfileID: [profile.id: availableUsageState(for: profile)],
+                resetCreditsOutcomesByProfileID: [profile.id: .available(snapshot)],
+                fetchedAt: Date(timeIntervalSince1970: 200)
+            ),
+            .init(
+                statesByProfileID: [profile.id: availableUsageState(for: profile)],
+                fetchedAt: Date(timeIntervalSince1970: 201)
+            )
+        ])
+        let cache = CodexResetCreditsSnapshotCacheDouble(snapshots: [profile.id: snapshot])
+        let authStore = ReloadFailingAfterDisableAuthProfileStore(profile: profile)
+        let now = MutableDateProvider(Date(timeIntervalSince1970: 200))
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [profile],
+            authProfileStore: authStore,
+            quotaClient: quotaClient,
+            codexResetCreditsSnapshotCache: cache,
+            codexResetCreditsNow: { now.now() }
+        )
+        await viewModel.refreshSubscriptionUsage(force: true)
+
+        viewModel.setProviderEnabled(.init(rawValue: "codex-work"), enabled: false)
+
+        XCTAssertNil(viewModel.codexResetCreditsSnapshots[profile.id])
+        XCTAssertNil(cache.load()[profile.id])
+
+        authStore.recoverProfileReloads()
+        viewModel.setProviderEnabled(.init(rawValue: "codex-work"), enabled: true)
+        now.set(Date(timeIntervalSince1970: 201))
+        await viewModel.refreshSubscriptionUsage()
+        await waitForUsageFetches(quotaClient, expectedCount: 2)
+
+        let requestedResetIDs = await quotaClient.requestedResetCreditProfileIDSets()
+        XCTAssertEqual(requestedResetIDs, [Set([profile.id]), Set([profile.id])])
     }
 
     func testTurningOffLastConsumerDeletesKeyClearsCacheAndRestarts() async throws {
@@ -8524,6 +8756,65 @@ private struct ThrowingAuthProfileStore: AuthProfileManaging {
     func profiles() throws -> [AuthProfile] { throw error }
     func setDisabled(_: Bool, for _: AuthProfileType) throws -> Int { throw error }
     func delete(for _: AuthProfileType) throws -> Int { throw error }
+}
+
+private final class ReloadFailingAfterDisableAuthProfileStore: AuthProfileManaging, @unchecked Sendable {
+    private let lock = NSLock()
+    private var profile: AuthProfile
+    private var profileReloadsFail = false
+
+    init(profile: AuthProfile) {
+        self.profile = profile
+    }
+
+    func recoverProfileReloads() {
+        lock.withLock { profileReloadsFail = false }
+    }
+
+    func profiles() throws -> [AuthProfile] {
+        try lock.withLock {
+            if profileReloadsFail {
+                throw NSError(domain: "test", code: 1)
+            }
+            return [profile]
+        }
+    }
+
+    func setDisabled(_ disabled: Bool, id: String) throws -> Bool {
+        lock.withLock {
+            guard profile.id == id else { return false }
+            profile = AuthProfile(
+                fileName: profile.fileName,
+                type: profile.type,
+                email: profile.email,
+                accountID: profile.accountID,
+                expired: profile.expired,
+                disabled: disabled,
+                prefix: profile.prefix
+            )
+            profileReloadsFail = disabled
+            return true
+        }
+    }
+
+    func setPrefix(_ prefix: String?, id: String) throws -> Bool {
+        lock.withLock {
+            guard profile.id == id else { return false }
+            profile = AuthProfile(
+                fileName: profile.fileName,
+                type: profile.type,
+                email: profile.email,
+                accountID: profile.accountID,
+                expired: profile.expired,
+                disabled: profile.disabled,
+                prefix: prefix
+            )
+            return true
+        }
+    }
+
+    func setDisabled(_: Bool, for _: AuthProfileType) throws -> Int { 0 }
+    func delete(for _: AuthProfileType) throws -> Int { 0 }
 }
 
 private final class StubAuthProfileStore: AuthProfileManaging, @unchecked Sendable {

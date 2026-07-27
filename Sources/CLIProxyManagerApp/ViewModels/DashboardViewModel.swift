@@ -413,7 +413,8 @@ final class DashboardViewModel: ObservableObject {
         } else {
             credentialMigrationResult = CodexCredentialMigrationResult(
                 config: persistedConfig,
-                profiles: Result { try authProfileStore.profiles() }
+                profiles: Result { try authProfileStore.profiles() },
+                mapping: [:]
             )
         }
         persistedConfig = credentialMigrationResult.config
@@ -1056,6 +1057,13 @@ final class DashboardViewModel: ObservableObject {
         codexResetCreditsSnapshots.removeAll()
         codexResetCreditsLastAttemptAt.removeAll()
         try? codexResetCreditsSnapshotCache.clear()
+    }
+
+    private func removeCodexResetCreditState(for profileID: String?) {
+        guard let profileID else { return }
+        codexResetCreditsSnapshots.removeValue(forKey: profileID)
+        codexResetCreditsLastAttemptAt.removeValue(forKey: profileID)
+        persistCodexResetCreditSnapshots()
     }
 
     private func cancelSubscriptionUsageWork() {
@@ -1794,8 +1802,12 @@ final class DashboardViewModel: ObservableObject {
     func removeInitialProvider(_ provider: ProviderRowState.ID) {
         let refreshContext = invalidateSubscriptionUsageRefreshForRemoval()
         defer { resumeSubscriptionUsageAfterRemoval(refreshContext) }
+        let authProfileID = authProfileID(for: provider)
         do {
-            _ = try removeAuthProfile(for: provider)
+            let deleted = try removeAuthProfile(for: provider)
+            if deleted {
+                removeCodexResetCreditState(for: authProfileID)
+            }
             refreshProfiles()
             try resetProviderSettings(provider)
             settingsMessage = nil
@@ -1809,9 +1821,13 @@ final class DashboardViewModel: ObservableObject {
         let providerName = oauthProviderName(oauthProviderType(for: provider))
         let refreshContext = invalidateSubscriptionUsageRefreshForRemoval()
         defer { resumeSubscriptionUsageAfterRemoval(refreshContext) }
+        let authProfileID = authProfileID(for: provider)
 
         do {
             let deleted = try removeAuthProfile(for: provider)
+            if deleted {
+                removeCodexResetCreditState(for: authProfileID)
+            }
             try resetProviderSettings(provider)
             refreshProfiles()
             settingsMessage = deleted
@@ -1827,7 +1843,8 @@ final class DashboardViewModel: ObservableObject {
         let providerName = oauthProviderName(oauthProviderType(for: provider))
         cancelSubscriptionUsageWork()
         let priorConfig = config
-        let priorAuthDisabled = authProfiles.first { $0.id == authProfileID(for: provider) }?.disabled
+        let authProfileID = authProfileID(for: provider)
+        let priorAuthDisabled = authProfiles.first { $0.id == authProfileID }?.disabled
 
         do {
             let authUpdated = try setAuthProfileDisabled(!enabled, for: provider)
@@ -1848,6 +1865,9 @@ final class DashboardViewModel: ObservableObject {
                 validateShellFunctions: true,
                 preservingUnavailableRoundRobinProfiles: true
             )
+            if !enabled {
+                removeCodexResetCreditState(for: authProfileID)
+            }
             refreshProfiles()
             scheduleSubscriptionUsagePollingIfNeeded()
             settingsMessage = enabled
@@ -2611,6 +2631,7 @@ final class DashboardViewModel: ObservableObject {
     private struct CodexCredentialMigrationResult {
         let config: AppConfig
         let profiles: Result<[AuthProfile], Error>
+        let mapping: [String: String]
     }
 
     private static func applyPreparedCodexCredentialMigrations(
@@ -2624,12 +2645,13 @@ final class DashboardViewModel: ObservableObject {
         do {
             migrations = try authProfileStore.prepareCodexCredentialMigrations()
         } catch {
-            return CodexCredentialMigrationResult(config: config, profiles: .failure(error))
+            return CodexCredentialMigrationResult(config: config, profiles: .failure(error), mapping: [:])
         }
         guard !migrations.isEmpty else {
             return CodexCredentialMigrationResult(
                 config: config,
-                profiles: Result { try authProfileStore.profiles() }
+                profiles: Result { try authProfileStore.profiles() },
+                mapping: [:]
             )
         }
 
@@ -2652,7 +2674,8 @@ final class DashboardViewModel: ObservableObject {
             try authProfileStore.finalizeCodexCredentialMigrations(migrations)
             return CodexCredentialMigrationResult(
                 config: migratedConfig,
-                profiles: Result { try authProfileStore.profiles() }
+                profiles: Result { try authProfileStore.profiles() },
+                mapping: mapping
             )
         } catch {
             try? configStore.save(config)
@@ -2661,7 +2684,8 @@ final class DashboardViewModel: ObservableObject {
             authProfileStore.rollbackCodexCredentialMigrations(migrations)
             return CodexCredentialMigrationResult(
                 config: config,
-                profiles: Result { try authProfileStore.profiles() }
+                profiles: Result { try authProfileStore.profiles() },
+                mapping: [:]
             )
         }
     }
@@ -2674,29 +2698,32 @@ final class DashboardViewModel: ObservableObject {
             subscriptionUsageSnapshotCache: subscriptionUsageSnapshotCache,
             resetCreditsSnapshotCache: codexResetCreditsSnapshotCache
         )
-        guard case .success(let profiles) = result.profiles else { return }
-        guard result.config != config else {
-            authProfiles = profiles
-            return
+        let configChanged = result.config != config
+        if configChanged {
+            config = result.config
+            lastPersistedConfig = result.config
         }
-        let mapping = Self.authProfileIDMapping(from: config, to: result.config)
-        config = result.config
-        lastPersistedConfig = result.config
-        authProfiles = profiles
-        subscriptionUsageStates = Self.remappingSubscriptionUsageStates(
-            subscriptionUsageStates,
-            using: mapping
-        )
-        codexResetCreditsSnapshots = Self.remappingCodexResetCreditSnapshots(
-            codexResetCreditsSnapshots,
-            using: mapping
-        )
-        codexResetCreditsLastAttemptAt = Self.remappingAttemptDates(
-            codexResetCreditsLastAttemptAt,
-            using: mapping
-        )
-        cards = ProfileCard.makeDefaultCards(config: result.config)
-        rebuildOptionRows()
+        if !result.mapping.isEmpty {
+            subscriptionUsageStates = Self.remappingSubscriptionUsageStates(
+                subscriptionUsageStates,
+                using: result.mapping
+            )
+            codexResetCreditsSnapshots = Self.remappingCodexResetCreditSnapshots(
+                codexResetCreditsSnapshots,
+                using: result.mapping
+            )
+            codexResetCreditsLastAttemptAt = Self.remappingAttemptDates(
+                codexResetCreditsLastAttemptAt,
+                using: result.mapping
+            )
+        }
+        if case .success(let profiles) = result.profiles {
+            authProfiles = profiles
+        }
+        if configChanged {
+            cards = ProfileCard.makeDefaultCards(config: result.config)
+            rebuildOptionRows()
+        }
     }
 
     private static func migrationMapping(_ migrations: [AuthProfileMigration]) -> [String: String] {
