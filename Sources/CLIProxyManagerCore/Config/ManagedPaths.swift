@@ -47,6 +47,10 @@ public struct ManagedPaths: Equatable, Sendable {
         rootDirectory.appendingPathComponent("subscription-usage-snapshots.json")
     }
 
+    public var codexResetCreditsSnapshotCacheFile: URL {
+        rootDirectory.appendingPathComponent("codex-reset-credits.json")
+    }
+
     public var claudeModelOptionsCacheFile: URL {
         rootDirectory.appendingPathComponent("claude-model-options.json")
     }
