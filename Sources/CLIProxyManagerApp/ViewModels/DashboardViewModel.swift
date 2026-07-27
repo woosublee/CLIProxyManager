@@ -289,7 +289,14 @@ final class DashboardViewModel: ObservableObject {
     private var lastClaudeStatus: DiagnosticStatus?
     private var lastCodexStatus: DiagnosticStatus?
     private var lastPersistedConfig: AppConfig
+    private enum SubscriptionUsagePollingWakeReason: Equatable {
+        case usage
+        case resetCredits
+    }
     private var subscriptionUsagePollingTask: Task<Void, Never>?
+    private var subscriptionUsagePollingWakeReason: SubscriptionUsagePollingWakeReason?
+    private var subscriptionUsagePollingDeadline: Date?
+    private var subscriptionUsageNextUsageRefreshAt: Date?
     private var subscriptionUsageRefreshTask: Task<Void, Never>?
     private var apiUsageReportTask: Task<Void, Never>?
     private var apiUsageLifecycleTailTask: Task<Void, Never>?
@@ -1043,6 +1050,9 @@ final class DashboardViewModel: ObservableObject {
         isSubscriptionUsageRefreshInProgress = false
         subscriptionUsagePollingTask?.cancel()
         subscriptionUsagePollingTask = nil
+        subscriptionUsagePollingWakeReason = nil
+        subscriptionUsagePollingDeadline = nil
+        subscriptionUsageNextUsageRefreshAt = nil
         subscriptionUsageRetryDelayNanoseconds = 60_000_000_000
     }
 
@@ -1069,6 +1079,9 @@ final class DashboardViewModel: ObservableObject {
         isSubscriptionUsageRefreshInProgress = false
         subscriptionUsagePollingTask?.cancel()
         subscriptionUsagePollingTask = nil
+        subscriptionUsagePollingWakeReason = nil
+        subscriptionUsagePollingDeadline = nil
+        subscriptionUsageNextUsageRefreshAt = nil
         return SubscriptionUsageRemovalRefreshContext(
             canceledActiveRefresh: true,
             requiresForcedRefresh: requiresForcedRefresh
@@ -1131,6 +1144,13 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func refreshSubscriptionUsage(force: Bool = false) async {
+        await refreshSubscriptionUsage(force: force, pollingWakeReason: nil)
+    }
+
+    private func refreshSubscriptionUsage(
+        force: Bool,
+        pollingWakeReason: SubscriptionUsagePollingWakeReason?
+    ) async {
         if subscriptionUsageRefreshTask != nil {
             if force {
                 pendingForcedSubscriptionUsageRefresh = true
@@ -1146,7 +1166,14 @@ final class DashboardViewModel: ObservableObject {
             return
         }
         let enabledProfiles = authProfiles.filter(isSubscriptionUsageEnabled(for:))
-        let usageProfiles = force ? enabledProfiles : refreshableSubscriptionUsageProfiles()
+        let usageProfiles: [AuthProfile]
+        if force {
+            usageProfiles = enabledProfiles
+        } else if pollingWakeReason == .resetCredits {
+            usageProfiles = []
+        } else {
+            usageProfiles = refreshableSubscriptionUsageProfiles()
+        }
         let resetCreditsNow = codexResetCreditsNow()
         let resetCreditsProfileIDs = resetCreditsProfileIDs(
             for: enabledProfiles,
@@ -1193,7 +1220,7 @@ final class DashboardViewModel: ObservableObject {
             }
             self.applySubscriptionUsageReport(report, for: usageProfiles, previousStates: previousStates)
             self.rebuildProviderRows(claudeStatus: self.lastClaudeStatus, codexStatus: self.lastCodexStatus)
-            self.scheduleSubscriptionUsagePollingIfNeeded()
+            self.scheduleSubscriptionUsagePollingIfNeeded(didRefreshUsage: !usageProfiles.isEmpty)
         }
         subscriptionUsageRefreshTask = refreshTask
         subscriptionUsageRefreshIsForced = force
@@ -1296,13 +1323,18 @@ final class DashboardViewModel: ObservableObject {
         rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
     }
 
-    private func scheduleSubscriptionUsagePollingIfNeeded() {
+    private func scheduleSubscriptionUsagePollingIfNeeded(didRefreshUsage: Bool = false) {
         subscriptionUsagePollingTask?.cancel()
+        subscriptionUsagePollingTask = nil
+        subscriptionUsagePollingWakeReason = nil
+        subscriptionUsagePollingDeadline = nil
         guard config.isSubscriptionUsageEnabled,
               subscriptionUsageKeyStore.isConfigured() else {
+            subscriptionUsageNextUsageRefreshAt = nil
             return
         }
 
+        let now = codexResetCreditsNow()
         let enabledProfiles = authProfiles.filter(isSubscriptionUsageEnabled(for:))
         let enabledProfileIDs = Set(enabledProfiles.map(\.id))
         let hasRefreshableAccount = subscriptionUsageStates.contains { profileID, state in
@@ -1317,45 +1349,55 @@ final class DashboardViewModel: ObservableObject {
             }
         }
 
-        let usageDelay: UInt64?
         if hasRefreshableAccount {
-            let hasRetriableFailure = subscriptionUsageStates.contains { profileID, state in
-                guard enabledProfileIDs.contains(profileID) else { return false }
-                if case let .stale(_, issue) = state {
-                    return !issue.stopsPolling
+            if didRefreshUsage || subscriptionUsageNextUsageRefreshAt == nil {
+                let hasRetriableFailure = subscriptionUsageStates.contains { profileID, state in
+                    guard enabledProfileIDs.contains(profileID) else { return false }
+                    if case let .stale(_, issue) = state {
+                        return !issue.stopsPolling
+                    }
+                    if case let .unavailable(issue) = state {
+                        return !issue.stopsPolling
+                    }
+                    return false
                 }
-                if case let .unavailable(issue) = state {
-                    return !issue.stopsPolling
+                let usageDelay: UInt64
+                if hasRetriableFailure {
+                    usageDelay = subscriptionUsageRetryDelayNanoseconds
+                    subscriptionUsageRetryDelayNanoseconds = min(subscriptionUsageRetryDelayNanoseconds * 2, 900_000_000_000)
+                } else {
+                    usageDelay = 300_000_000_000
+                    subscriptionUsageRetryDelayNanoseconds = 60_000_000_000
                 }
-                return false
-            }
-            if hasRetriableFailure {
-                usageDelay = subscriptionUsageRetryDelayNanoseconds
-                subscriptionUsageRetryDelayNanoseconds = min(subscriptionUsageRetryDelayNanoseconds * 2, 900_000_000_000)
-            } else {
-                usageDelay = 300_000_000_000
-                subscriptionUsageRetryDelayNanoseconds = 60_000_000_000
+                subscriptionUsageNextUsageRefreshAt = now.addingTimeInterval(
+                    TimeInterval(usageDelay) / 1_000_000_000
+                )
             }
         } else {
-            usageDelay = nil
+            subscriptionUsageNextUsageRefreshAt = nil
         }
 
-        let resetCreditsDelay = nextCodexResetCreditsRefreshDelayNanoseconds(
+        let resetCreditsDeadline = nextCodexResetCreditsRefreshAt(
             for: enabledProfiles,
-            now: codexResetCreditsNow()
+            now: now
         )
-        let delay: UInt64
-        switch (usageDelay, resetCreditsDelay) {
-        case let (usage?, resetCredits?):
-            delay = min(usage, resetCredits)
+        let wake: (reason: SubscriptionUsagePollingWakeReason, deadline: Date)
+        switch (subscriptionUsageNextUsageRefreshAt, resetCreditsDeadline) {
+        case let (usage?, resetCredits?) where usage <= resetCredits:
+            wake = (.usage, usage)
+        case let (_?, resetCredits?):
+            wake = (.resetCredits, resetCredits)
         case let (usage?, nil):
-            delay = usage
+            wake = (.usage, usage)
         case let (nil, resetCredits?):
-            delay = resetCredits
+            wake = (.resetCredits, resetCredits)
         case (nil, nil):
             return
         }
 
+        let delay = nanoseconds(until: wake.deadline, now: now)
+        subscriptionUsagePollingWakeReason = wake.reason
+        subscriptionUsagePollingDeadline = wake.deadline
         let sleep = subscriptionUsageSleep
         subscriptionUsagePollingTask = Task { [weak self] in
             do {
@@ -1363,26 +1405,36 @@ final class DashboardViewModel: ObservableObject {
             } catch {
                 return
             }
-            await self?.refreshSubscriptionUsage()
+            guard let self,
+                  self.subscriptionUsagePollingWakeReason == wake.reason,
+                  self.subscriptionUsagePollingDeadline == wake.deadline else {
+                return
+            }
+            self.subscriptionUsagePollingTask = nil
+            self.subscriptionUsagePollingWakeReason = nil
+            self.subscriptionUsagePollingDeadline = nil
+            await self.refreshSubscriptionUsage(
+                force: false,
+                pollingWakeReason: wake.reason
+            )
         }
     }
 
-    private func nextCodexResetCreditsRefreshDelayNanoseconds(
+    private func nextCodexResetCreditsRefreshAt(
         for profiles: [AuthProfile],
         now: Date
-    ) -> UInt64? {
-        let remainingIntervals = profiles.compactMap { profile -> TimeInterval? in
+    ) -> Date? {
+        profiles.compactMap { profile -> Date? in
             guard profile.type == .codex else { return nil }
             let reference = codexResetCreditsLastAttemptAt[profile.id]
                 ?? codexResetCreditsSnapshots[profile.id]?.fetchedAt
-            guard let reference else { return 0 }
-            return max(
-                0,
-                Self.codexResetCreditsRefreshInterval - now.timeIntervalSince(reference)
-            )
-        }
-        guard let remaining = remainingIntervals.min() else { return nil }
-        return UInt64(ceil(remaining * 1_000_000_000))
+            guard let reference else { return now }
+            return reference.addingTimeInterval(Self.codexResetCreditsRefreshInterval)
+        }.min()
+    }
+
+    private func nanoseconds(until deadline: Date, now: Date) -> UInt64 {
+        UInt64(ceil(max(0, deadline.timeIntervalSince(now)) * 1_000_000_000))
     }
 
     /// Called once on app launch. Auto-starts the server if the user opted in.
