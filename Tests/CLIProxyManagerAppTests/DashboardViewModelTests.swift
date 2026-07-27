@@ -1194,7 +1194,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertTrue(didRequestFinalReset)
         XCTAssertEqual(
             usageProfileIDSets,
-            [[fixture.claude.id], [fixture.claude.id], [fixture.codex.id]]
+            [[fixture.claude.id], [fixture.claude.id], [fixture.claude.id, fixture.codex.id]]
         )
         XCTAssertEqual(resetProfileIDSets, [[fixture.codex.id]])
         XCTAssertEqual(collectorUpdates.count, 1)
@@ -1286,7 +1286,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertTrue(didResumeReset)
         XCTAssertEqual(
             usageAfterCancellation,
-            [[fixture.claude.id], [fixture.claude.id], [fixture.codex.id]]
+            [[fixture.claude.id], [fixture.claude.id], [fixture.claude.id, fixture.codex.id]]
         )
         XCTAssertEqual(resetsAfterCancellation, [[fixture.codex.id]])
         XCTAssertEqual(collectorUpdates.count, 1)
@@ -1329,7 +1329,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertTrue(didRequestFinalReset)
         XCTAssertEqual(
             usageProfileIDSets,
-            [[fixture.claude.id], [fixture.claude.id], [fixture.codex.id]]
+            [[fixture.claude.id], [fixture.claude.id], [fixture.claude.id, fixture.codex.id]]
         )
         XCTAssertEqual(resetProfileIDSets, [[fixture.codex.id]])
         XCTAssertEqual(collectorUpdates.count, 1)
@@ -1415,6 +1415,219 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(finalResets, [[fixture.codex.id]])
     }
 
+    func testConfigurationSupersessionBeforeClientDispatchCancelsStaleSplitWorkAndRequeuesForcedOnce() async throws {
+        let now = Date(timeIntervalSince1970: 10_000)
+        let oldProfile = AuthProfile(
+            fileName: "codex.json",
+            type: .codex,
+            email: "old@example.com",
+            accountID: "acct_old_example",
+            expired: nil,
+            disabled: false,
+            prefix: "codex-account"
+        )
+        let newProfile = AuthProfile(
+            fileName: oldProfile.fileName,
+            type: oldProfile.type,
+            email: "new@example.com",
+            accountID: "acct_new_example",
+            expired: nil,
+            disabled: false,
+            prefix: "codex-account"
+        )
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        config.oauthCommandProfiles = [
+            .init(
+                id: "codex",
+                provider: .codex,
+                authProfileID: oldProfile.id,
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
+        let authStore = StubAuthProfileStore(profiles: [oldProfile])
+        let quotaClient = DispatchControlledConcurrentSubscriptionQuotaClient(
+            cancellationMode: .aware,
+            suspendFirstUsage: true,
+            suspendFirstReset: true
+        )
+        let proxyService = ContinuationProxyService()
+        let resetCache = CodexResetCreditsSnapshotCacheDouble(snapshots: [
+            oldProfile.id: resetCreditSnapshot(profileID: oldProfile.id, fetchedAt: now)
+        ])
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: authStore,
+            oauthLoginService: StubOAuthLoginService(),
+            proxyHealthClient: ProxyHealthClient(
+                httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))
+            ),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            subscriptionQuotaClient: quotaClient,
+            subscriptionUsageKeyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            codexResetCreditsSnapshotCache: resetCache,
+            codexResetCreditsNow: { now },
+            secretStore: InMemorySecretStore(),
+            serverStatusRetryDelayNanoseconds: 0
+        )
+        viewModel.serverStatus = readyStatus()
+        viewModel.serverControlState = .running
+
+        let reload = Task { await viewModel.reloadSubscriptionUsage() }
+        await quotaClient.waitForUsageEntries(1)
+        await quotaClient.waitForResetEntries(1)
+
+        authStore.nextProfiles = [newProfile]
+        viewModel.refreshProfiles()
+        var updatedCodex = config.oauthCommandProfiles[0].codex!
+        updatedCodex.opus.fastModeEnabled = true
+        try viewModel.saveCodexSettings(functionName: "ccodex", codex: updatedCodex)
+        await proxyService.waitForRestart(1)
+
+        quotaClient.releaseFirstUsageDispatch()
+        quotaClient.releaseFirstResetDispatch()
+        await quotaClient.waitForUsageCompletions(1)
+        await quotaClient.waitForResetCompletions(1)
+
+        let staleUsageDispatches = await quotaClient.actualUsageDispatches()
+        let staleResetDispatches = await quotaClient.actualResetDispatches()
+        XCTAssertEqual(staleUsageDispatches, [])
+        XCTAssertEqual(staleResetDispatches, [])
+
+        await proxyService.resolveRestart(1)
+        await quotaClient.waitForActualUsage(1)
+        await quotaClient.waitForActualReset(1)
+        await reload.value
+
+        let usageDispatches = await quotaClient.actualUsageDispatches()
+        let resetDispatches = await quotaClient.actualResetDispatches()
+        XCTAssertEqual(usageDispatches.count, 1)
+        XCTAssertEqual(resetDispatches.count, 1)
+        XCTAssertEqual(usageDispatches[0].profiles, [newProfile])
+        XCTAssertEqual(resetDispatches[0].profiles, [newProfile])
+        XCTAssertEqual(usageDispatches[0].usageProfileIDs, [newProfile.id])
+        XCTAssertEqual(resetDispatches[0].resetCreditsProfileIDs, [newProfile.id])
+    }
+
+    func testCancellationResistantStaleResetAttemptCannotSuppressStableGenerationReset() async throws {
+        let now = Date(timeIntervalSince1970: 20_000)
+        let oldProfile = AuthProfile(
+            fileName: "codex.json",
+            type: .codex,
+            email: "old@example.com",
+            accountID: "acct_old_example",
+            expired: nil,
+            disabled: false,
+            prefix: "codex-account"
+        )
+        let newProfile = AuthProfile(
+            fileName: oldProfile.fileName,
+            type: oldProfile.type,
+            email: "new@example.com",
+            accountID: "acct_new_example",
+            expired: nil,
+            disabled: false,
+            prefix: "codex-account"
+        )
+        let staleSnapshot = resetCreditSnapshot(
+            profileID: oldProfile.id,
+            fetchedAt: Date(timeIntervalSince1970: 100)
+        )
+        let stableSnapshot = resetCreditSnapshot(
+            profileID: newProfile.id,
+            fetchedAt: Date(timeIntervalSince1970: 200)
+        )
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        config.oauthCommandProfiles = [
+            .init(
+                id: "codex",
+                provider: .codex,
+                authProfileID: oldProfile.id,
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
+        let authStore = StubAuthProfileStore(profiles: [oldProfile])
+        let quotaClient = DispatchControlledConcurrentSubscriptionQuotaClient(
+            cancellationMode: .resistant,
+            suspendFirstReset: true,
+            resetReports: [
+                SubscriptionUsageReport(
+                    statesByProfileID: [:],
+                    resetCreditsOutcomesByProfileID: [oldProfile.id: .available(staleSnapshot)],
+                    resetCreditsAttemptedProfileIDs: [oldProfile.id],
+                    fetchedAt: staleSnapshot.fetchedAt
+                ),
+                SubscriptionUsageReport(
+                    statesByProfileID: [:],
+                    resetCreditsOutcomesByProfileID: [newProfile.id: .available(stableSnapshot)],
+                    resetCreditsAttemptedProfileIDs: [newProfile.id],
+                    fetchedAt: stableSnapshot.fetchedAt
+                )
+            ]
+        )
+        let proxyService = ContinuationProxyService()
+        let resetCache = CodexResetCreditsSnapshotCacheDouble()
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: authStore,
+            oauthLoginService: StubOAuthLoginService(),
+            proxyHealthClient: ProxyHealthClient(
+                httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))
+            ),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            subscriptionQuotaClient: quotaClient,
+            subscriptionUsageKeyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            codexResetCreditsSnapshotCache: resetCache,
+            codexResetCreditsNow: { now },
+            secretStore: InMemorySecretStore(),
+            serverStatusRetryDelayNanoseconds: 0
+        )
+        viewModel.serverStatus = readyStatus()
+        viewModel.serverControlState = .running
+
+        let refresh = Task { await viewModel.refreshSubscriptionUsage() }
+        await quotaClient.waitForResetEntries(1)
+
+        authStore.nextProfiles = [newProfile]
+        viewModel.refreshProfiles()
+        var updatedCodex = config.oauthCommandProfiles[0].codex!
+        updatedCodex.opus.fastModeEnabled = true
+        try viewModel.saveCodexSettings(functionName: "ccodex", codex: updatedCodex)
+        await proxyService.waitForRestart(1)
+
+        quotaClient.releaseFirstResetDispatch()
+        await quotaClient.waitForResetCompletions(1)
+        let staleReportWasDiscarded = viewModel.codexResetCreditsSnapshots.isEmpty
+            && resetCache.storedSnapshots().isEmpty
+        XCTAssertTrue(staleReportWasDiscarded)
+
+        await proxyService.resolveRestart(1)
+        guard staleReportWasDiscarded else {
+            await refresh.value
+            return
+        }
+
+        await quotaClient.waitForActualReset(2)
+        await refresh.value
+        let resetDispatches = await quotaClient.actualResetDispatches()
+        XCTAssertEqual(resetDispatches.count, 2)
+        XCTAssertEqual(resetDispatches[0].profiles, [oldProfile])
+        XCTAssertEqual(resetDispatches[1].profiles, [newProfile])
+        XCTAssertEqual(viewModel.codexResetCreditsSnapshots[newProfile.id], stableSnapshot)
+        XCTAssertEqual(resetCache.storedSnapshots()[newProfile.id], stableSnapshot)
+    }
+
     func testLateOAuthReconciliationObservesFailedActionAndRecoversOnOneExplicitRestart() async {
         let restartFailure = NSError(
             domain: "LateActionFailure",
@@ -1476,6 +1689,182 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(finalResets, [[fixture.codex.id]])
         XCTAssertEqual(finalCollectorUpdates.count, 1)
         XCTAssertNil(fixture.viewModel.completedOAuthLoginProvider)
+    }
+
+    func testLateOAuthObservesTerminalSuccessAfterSupersededRestartFailureInSameDrain() async throws {
+        let now = Date(timeIntervalSince1970: 30_000)
+        let profile = AuthProfile(
+            fileName: "codex.json",
+            type: .codex,
+            email: "codex@example.com",
+            accountID: "acct_example",
+            expired: nil,
+            disabled: false,
+            prefix: "codex-account"
+        )
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        config.oauthCommandProfiles = [
+            .init(
+                id: "codex",
+                provider: .codex,
+                authProfileID: profile.id,
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
+        let authStore = StubAuthProfileStore(profiles: [profile])
+        let oauth = SuspendedOAuthLoginService()
+        let quotaClient = DispatchControlledConcurrentSubscriptionQuotaClient(
+            cancellationMode: .aware
+        )
+        let proxyService = ContinuationProxyService()
+        let collector = APIUsageCollectorDouble()
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: authStore,
+            oauthLoginService: oauth,
+            proxyHealthClient: ProxyHealthClient(
+                httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))
+            ),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            subscriptionQuotaClient: quotaClient,
+            subscriptionUsageKeyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            codexResetCreditsSnapshotCache: CodexResetCreditsSnapshotCacheDouble(snapshots: [
+                profile.id: resetCreditSnapshot(profileID: profile.id, fetchedAt: now)
+            ]),
+            codexResetCreditsNow: { now },
+            apiUsageCollector: collector,
+            secretStore: InMemorySecretStore(),
+            serverStatusRetryDelayNanoseconds: 0
+        )
+        viewModel.serverStatus = readyStatus()
+        viewModel.serverControlState = .running
+        await viewModel.prepareUsage()
+        await quotaClient.resetRecords()
+        await collector.resetUpdates()
+
+        let action = Task { await viewModel.restartServer() }
+        await proxyService.waitForRestart(1)
+        let login = Task { await viewModel.connectProvider(.codex) }
+        await oauth.waitUntilStarted()
+
+        var firstGeneration = config.oauthCommandProfiles[0].codex!
+        firstGeneration.opus.fastModeEnabled = true
+        try viewModel.saveCodexSettings(functionName: "ccodex", codex: firstGeneration)
+        await proxyService.resolveRestart(1)
+        await proxyService.waitForRestart(2)
+
+        var secondGeneration = firstGeneration
+        secondGeneration.sonnet = .init(
+            model: "gpt-5.6-sol",
+            reasoning: .auto,
+            fastModeEnabled: true
+        )
+        try viewModel.saveCodexSettings(functionName: "ccodex", codex: secondGeneration)
+        await proxyService.resolveRestart(2, errorMessage: "Intermediate restart failed")
+        await proxyService.waitForRestart(3)
+
+        oauth.complete()
+        await authStore.waitForDisabledIDUpdateCount(1)
+        await proxyService.resolveRestart(3)
+        await action.value
+        await login.value
+
+        XCTAssertEqual(viewModel.serverStatus.severity, .ready)
+        XCTAssertTrue(viewModel.serverControlState.isRunning)
+        XCTAssertEqual(viewModel.completedOAuthLoginProvider, .codex)
+        XCTAssertEqual(viewModel.settingsMessage, "Codex OAuth connection was updated.")
+        XCTAssertEqual(oauth.invocationCount, 1)
+        guard viewModel.completedOAuthLoginProvider == .codex else { return }
+
+        await quotaClient.waitForActualUsage(1)
+        await collector.waitForUpdateCount(1)
+        let usageDispatches = await quotaClient.actualUsageDispatches()
+        let collectorUpdates = await collector.updateConfigurations()
+        XCTAssertEqual(usageDispatches.count, 1)
+        XCTAssertEqual(usageDispatches[0].profiles, [profile])
+        XCTAssertEqual(collectorUpdates.count, 1)
+        let restartPorts = await proxyService.recordedRestartPorts()
+        XCTAssertEqual(restartPorts.count, 3)
+    }
+
+    func testNewerDifferentReasonSuccessClearsSupersededFastFailureOwnership() async throws {
+        let profile = AuthProfile(
+            fileName: "codex.json",
+            type: .codex,
+            email: "codex@example.com",
+            accountID: "acct_example",
+            expired: nil,
+            disabled: false,
+            prefix: "codex-account"
+        )
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        config.oauthCommandProfiles = [
+            .init(
+                id: "codex",
+                provider: .codex,
+                authProfileID: profile.id,
+                commandName: "ccodex",
+                codex: .default,
+                modelPrefix: "codex-account"
+            )
+        ]
+        let quotaClient = DispatchControlledConcurrentSubscriptionQuotaClient(
+            cancellationMode: .aware
+        )
+        let proxyService = ContinuationProxyService()
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: [profile]),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyHealthClient: ProxyHealthClient(
+                httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))
+            ),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            subscriptionQuotaClient: quotaClient,
+            subscriptionUsageKeyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            secretStore: InMemorySecretStore(),
+            serverStatusRetryDelayNanoseconds: 0
+        )
+        viewModel.serverStatus = readyStatus()
+        viewModel.serverControlState = .running
+
+        let action = Task { await viewModel.restartServer() }
+        await proxyService.waitForRestart(1)
+        var fastGeneration = config.oauthCommandProfiles[0].codex!
+        fastGeneration.opus.fastModeEnabled = true
+        try viewModel.saveCodexSettings(functionName: "ccodex", codex: fastGeneration)
+        await proxyService.resolveRestart(1)
+        await proxyService.waitForRestart(2)
+
+        try viewModel.saveClaudeAPISettings(
+            functionName: "ccapi",
+            dangerousPermissionsEnabled: false,
+            key: "new-key"
+        )
+        await proxyService.resolveRestart(2, errorMessage: "Fast restart failed")
+        await proxyService.waitForRestart(3)
+        await proxyService.resolveRestart(3)
+        await action.value
+
+        let usageDispatches = await quotaClient.actualUsageDispatches()
+        XCTAssertEqual(viewModel.serverStatus.severity, .ready)
+        XCTAssertTrue(viewModel.serverControlState.isRunning)
+        XCTAssertNil(viewModel.settingsMessage)
+        XCTAssertEqual(usageDispatches.count, 1)
+        guard usageDispatches.count == 1 else { return }
+        XCTAssertEqual(usageDispatches[0].profiles, [profile])
+        let restartPorts = await proxyService.recordedRestartPorts()
+        XCTAssertEqual(restartPorts.count, 3)
     }
 
     func testPreReconciliationOAuthDoesNotSuppressActionOrPollingAfterImmediateCancel() async {
@@ -9496,6 +9885,7 @@ private actor APIUsageCollectorDouble: APIUsageCollecting {
     private var updates: [APIUsageCollectorConfiguration] = []
     private var recordedStopReasons: [APIUsageCollectorStopReason] = []
     private var startWaiters: [(expectedCount: Int, continuation: CheckedContinuation<Void, Never>)] = []
+    private var updateWaiters: [(expectedCount: Int, continuation: CheckedContinuation<Void, Never>)] = []
     private var stopWaiters: [CheckedContinuation<Void, Never>] = []
     private var reportSubscriberWaiters: [CheckedContinuation<Void, Never>] = []
     private var reportContinuation: AsyncStream<APIUsageCollectionReport>.Continuation?
@@ -9558,6 +9948,9 @@ private actor APIUsageCollectorDouble: APIUsageCollecting {
         configuration: APIUsageCollectorConfiguration
     ) async -> APIUsageCollectionReport {
         updates.append(configuration)
+        let readyWaiters = updateWaiters.filter { updates.count >= $0.expectedCount }
+        updateWaiters.removeAll { updates.count >= $0.expectedCount }
+        readyWaiters.forEach { $0.continuation.resume() }
         if suspendsUpdate {
             await updateGate.wait()
         }
@@ -9639,6 +10032,13 @@ private actor APIUsageCollectorDouble: APIUsageCollecting {
         if startCalls >= expectedCount { return }
         await withCheckedContinuation { continuation in
             startWaiters.append((expectedCount, continuation))
+        }
+    }
+
+    func waitForUpdateCount(_ expectedCount: Int) async {
+        if updates.count >= expectedCount { return }
+        await withCheckedContinuation { continuation in
+            updateWaiters.append((expectedCount, continuation))
         }
     }
 
@@ -10017,6 +10417,284 @@ private actor RecordingSubscriptionQuotaClient: SubscriptionQuotaFetching {
     func requestedProfileIDs() -> [[String]] { profileIDs }
     func requestedUsageProfileIDSets() -> [Set<String>] { usageProfileIDSets }
     func requestedResetCreditProfileIDSets() -> [Set<String>] { resetCreditProfileIDSets }
+}
+
+private final class SubscriptionDispatchGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Bool, Never>?
+    private var resolution: Bool?
+
+    func wait(cancellationAware: Bool) async -> Bool {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                let currentResolution = lock.withLock { () -> Bool? in
+                    if let resolution = self.resolution { return resolution }
+                    self.continuation = continuation
+                    return nil
+                }
+                if let currentResolution {
+                    continuation.resume(returning: currentResolution)
+                }
+            }
+        } onCancel: {
+            if cancellationAware {
+                self.resolve(shouldDispatch: false)
+            }
+        }
+    }
+
+    func release() {
+        resolve(shouldDispatch: true)
+    }
+
+    private func resolve(shouldDispatch: Bool) {
+        let continuation = lock.withLock { () -> CheckedContinuation<Bool, Never>? in
+            guard resolution == nil else { return nil }
+            resolution = shouldDispatch
+            let continuation = self.continuation
+            self.continuation = nil
+            return continuation
+        }
+        continuation?.resume(returning: shouldDispatch)
+    }
+}
+
+private actor DispatchControlledConcurrentSubscriptionQuotaClient: ConcurrentSubscriptionQuotaFetching {
+    enum CancellationMode: Equatable {
+        case aware
+        case resistant
+    }
+
+    struct DispatchRecord: Equatable {
+        let port: Int
+        let profiles: [AuthProfile]
+        let usageProfileIDs: Set<String>
+        let resetCreditsProfileIDs: Set<String>
+    }
+
+    private let cancellationMode: CancellationMode
+    private let suspendFirstUsage: Bool
+    private let suspendFirstReset: Bool
+    private let usageGate = SubscriptionDispatchGate()
+    private let resetGate = SubscriptionDispatchGate()
+    private var usageReports: [SubscriptionUsageReport]
+    private var resetReports: [SubscriptionUsageReport]
+    private var enteredUsage: [DispatchRecord] = []
+    private var enteredReset: [DispatchRecord] = []
+    private var actualUsage: [DispatchRecord] = []
+    private var actualReset: [DispatchRecord] = []
+    private var completedUsageCount = 0
+    private var completedResetCount = 0
+    private var usageEntryWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+    private var resetEntryWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+    private var usageCompletionWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+    private var resetCompletionWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+    private var actualUsageWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+    private var actualResetWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+
+    init(
+        cancellationMode: CancellationMode,
+        suspendFirstUsage: Bool = false,
+        suspendFirstReset: Bool = false,
+        usageReports: [SubscriptionUsageReport] = [],
+        resetReports: [SubscriptionUsageReport] = []
+    ) {
+        self.cancellationMode = cancellationMode
+        self.suspendFirstUsage = suspendFirstUsage
+        self.suspendFirstReset = suspendFirstReset
+        self.usageReports = usageReports
+        self.resetReports = resetReports
+    }
+
+    func fetchUsage(port: Int, profiles: [AuthProfile]) async -> SubscriptionUsageReport {
+        await fetchUsage(port: port, profiles: profiles, resetCreditsProfileIDs: [])
+    }
+
+    func fetchUsage(
+        port: Int,
+        profiles: [AuthProfile],
+        resetCreditsProfileIDs: Set<String>
+    ) async -> SubscriptionUsageReport {
+        await fetchUsage(
+            port: port,
+            profiles: profiles,
+            usageProfileIDs: Set(profiles.map(\.id)),
+            resetCreditsProfileIDs: resetCreditsProfileIDs
+        )
+    }
+
+    func fetchUsage(
+        port: Int,
+        profiles: [AuthProfile],
+        usageProfileIDs: Set<String>,
+        resetCreditsProfileIDs: Set<String>
+    ) async -> SubscriptionUsageReport {
+        let record = DispatchRecord(
+            port: port,
+            profiles: profiles,
+            usageProfileIDs: usageProfileIDs,
+            resetCreditsProfileIDs: resetCreditsProfileIDs
+        )
+        if !resetCreditsProfileIDs.isEmpty {
+            enteredReset.append(record)
+            resumeWaiters(&resetEntryWaiters, currentCount: enteredReset.count)
+            let shouldSuspend = suspendFirstReset && enteredReset.count == 1
+            if shouldSuspend {
+                let shouldDispatch = await resetGate.wait(cancellationAware: cancellationMode == .aware)
+                guard shouldDispatch else {
+                    completedResetCount += 1
+                    resumeWaiters(&resetCompletionWaiters, currentCount: completedResetCount)
+                    return SubscriptionUsageReport(statesByProfileID: [:], fetchedAt: Date())
+                }
+            }
+            actualReset.append(record)
+            resumeWaiters(&actualResetWaiters, currentCount: actualReset.count)
+            let report = resetReports.isEmpty
+                ? resetReport(for: record, ordinal: actualReset.count)
+                : resetReports.removeFirst()
+            completedResetCount += 1
+            resumeWaiters(&resetCompletionWaiters, currentCount: completedResetCount)
+            return report
+        }
+
+        enteredUsage.append(record)
+        resumeWaiters(&usageEntryWaiters, currentCount: enteredUsage.count)
+        let shouldSuspend = suspendFirstUsage && enteredUsage.count == 1
+        if shouldSuspend {
+            let shouldDispatch = await usageGate.wait(cancellationAware: cancellationMode == .aware)
+            guard shouldDispatch else {
+                completedUsageCount += 1
+                resumeWaiters(&usageCompletionWaiters, currentCount: completedUsageCount)
+                return SubscriptionUsageReport(statesByProfileID: [:], fetchedAt: Date())
+            }
+        }
+        actualUsage.append(record)
+        resumeWaiters(&actualUsageWaiters, currentCount: actualUsage.count)
+        let report = usageReports.isEmpty
+            ? usageReport(for: record, ordinal: actualUsage.count)
+            : usageReports.removeFirst()
+        completedUsageCount += 1
+        resumeWaiters(&usageCompletionWaiters, currentCount: completedUsageCount)
+        return report
+    }
+
+    func waitForUsageEntries(_ expectedCount: Int) async {
+        if enteredUsage.count >= expectedCount { return }
+        await withCheckedContinuation { continuation in
+            usageEntryWaiters.append((expectedCount, continuation))
+        }
+    }
+
+    func waitForResetEntries(_ expectedCount: Int) async {
+        if enteredReset.count >= expectedCount { return }
+        await withCheckedContinuation { continuation in
+            resetEntryWaiters.append((expectedCount, continuation))
+        }
+    }
+
+    func waitForUsageCompletions(_ expectedCount: Int) async {
+        if completedUsageCount >= expectedCount { return }
+        await withCheckedContinuation { continuation in
+            usageCompletionWaiters.append((expectedCount, continuation))
+        }
+    }
+
+    func waitForResetCompletions(_ expectedCount: Int) async {
+        if completedResetCount >= expectedCount { return }
+        await withCheckedContinuation { continuation in
+            resetCompletionWaiters.append((expectedCount, continuation))
+        }
+    }
+
+    func waitForActualUsage(_ expectedCount: Int) async {
+        if actualUsage.count >= expectedCount { return }
+        await withCheckedContinuation { continuation in
+            actualUsageWaiters.append((expectedCount, continuation))
+        }
+    }
+
+    func waitForActualReset(_ expectedCount: Int) async {
+        if actualReset.count >= expectedCount { return }
+        await withCheckedContinuation { continuation in
+            actualResetWaiters.append((expectedCount, continuation))
+        }
+    }
+
+    nonisolated func releaseFirstUsageDispatch() {
+        usageGate.release()
+    }
+
+    nonisolated func releaseFirstResetDispatch() {
+        resetGate.release()
+    }
+
+    func actualUsageDispatches() -> [DispatchRecord] { actualUsage }
+    func actualResetDispatches() -> [DispatchRecord] { actualReset }
+
+    func resetRecords() {
+        enteredUsage.removeAll()
+        enteredReset.removeAll()
+        actualUsage.removeAll()
+        actualReset.removeAll()
+        completedUsageCount = 0
+        completedResetCount = 0
+    }
+
+    private func resumeWaiters(
+        _ waiters: inout [(Int, CheckedContinuation<Void, Never>)],
+        currentCount: Int
+    ) {
+        let ready = waiters.filter { currentCount >= $0.0 }.map(\.1)
+        waiters.removeAll { currentCount >= $0.0 }
+        ready.forEach { $0.resume() }
+    }
+
+    private func usageReport(for record: DispatchRecord, ordinal: Int) -> SubscriptionUsageReport {
+        let states: [String: AccountSubscriptionUsageState] = Dictionary(
+            uniqueKeysWithValues: record.profiles.compactMap { profile -> (String, AccountSubscriptionUsageState)? in
+            guard record.usageProfileIDs.contains(profile.id) else { return nil }
+            return (
+                profile.id,
+                AccountSubscriptionUsageState.available(SubscriptionUsageSnapshot(
+                    profileID: profile.id,
+                    provider: profile.type,
+                    windows: [UsageWindow(
+                        id: "primary",
+                        label: "Primary",
+                        usedPercent: 25,
+                        resetAt: nil
+                    )],
+                    fetchedAt: Date(timeIntervalSince1970: TimeInterval(100 + ordinal))
+                ))
+            )
+        })
+        return SubscriptionUsageReport(
+            statesByProfileID: states,
+            fetchedAt: Date(timeIntervalSince1970: TimeInterval(100 + ordinal))
+        )
+    }
+
+    private func resetReport(for record: DispatchRecord, ordinal: Int) -> SubscriptionUsageReport {
+        let fetchedAt = Date(timeIntervalSince1970: TimeInterval(200 + ordinal))
+        let outcomes = Dictionary(uniqueKeysWithValues: record.resetCreditsProfileIDs.map { profileID in
+            (
+                profileID,
+                CodexResetCreditsRefreshOutcome.available(CodexResetCreditsSnapshot(
+                    profileID: profileID,
+                    reportedAvailableCount: 1,
+                    reportedTotalEarnedCount: 1,
+                    credits: [],
+                    fetchedAt: fetchedAt
+                ))
+            )
+        })
+        return SubscriptionUsageReport(
+            statesByProfileID: [:],
+            resetCreditsOutcomesByProfileID: outcomes,
+            resetCreditsAttemptedProfileIDs: record.resetCreditsProfileIDs,
+            fetchedAt: fetchedAt
+        )
+    }
 }
 
 private actor ConfigurationGateSplitSubscriptionQuotaClient: ConcurrentSubscriptionQuotaFetching {
@@ -10434,6 +11112,7 @@ private final class CodexResetCreditsSnapshotCacheDouble: CodexResetCreditsSnaps
     var isEmpty: Bool { snapshots.isEmpty }
     func load() -> [String: CodexResetCreditsSnapshot] { snapshots }
     func save(_ snapshots: [String: CodexResetCreditsSnapshot]) throws { self.snapshots = snapshots }
+    func storedSnapshots() -> [String: CodexResetCreditsSnapshot] { snapshots }
     func clear() throws { snapshots = [:] }
 }
 
@@ -10874,6 +11553,7 @@ private final class StubAuthProfileStore: AuthProfileManaging, @unchecked Sendab
     private var _disabledIDUpdates: [DisabledIDUpdate] = []
     private var _deletedIDs: [String] = []
     private var _deleteInvocations: [AuthProfileType] = []
+    private var disabledIDUpdateWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
     private let supportsIDDelete: Bool
     var nextProfiles: [AuthProfile]?
 
@@ -10930,8 +11610,10 @@ private final class StubAuthProfileStore: AuthProfileManaging, @unchecked Sendab
     }
 
     func setDisabled(_ disabled: Bool, id: String) throws -> Bool {
-        lock.withLock {
-            guard let index = _profiles.firstIndex(where: { $0.id == id }) else { return false }
+        let result = lock.withLock { () -> (Bool, [CheckedContinuation<Void, Never>]) in
+            guard let index = _profiles.firstIndex(where: { $0.id == id }) else {
+                return (false, [])
+            }
             _disabledIDUpdates.append(DisabledIDUpdate(id: id, disabled: disabled))
             let profile = _profiles[index]
             _profiles[index] = AuthProfile(
@@ -10943,7 +11625,26 @@ private final class StubAuthProfileStore: AuthProfileManaging, @unchecked Sendab
                 disabled: disabled,
                 prefix: profile.prefix
             )
-            return true
+            let ready = disabledIDUpdateWaiters
+                .filter { _disabledIDUpdates.count >= $0.0 }
+                .map(\.1)
+            disabledIDUpdateWaiters.removeAll { _disabledIDUpdates.count >= $0.0 }
+            return (true, ready)
+        }
+        result.1.forEach { $0.resume() }
+        return result.0
+    }
+
+    func waitForDisabledIDUpdateCount(_ expectedCount: Int) async {
+        await withCheckedContinuation { continuation in
+            let shouldResume = lock.withLock { () -> Bool in
+                if _disabledIDUpdates.count >= expectedCount { return true }
+                disabledIDUpdateWaiters.append((expectedCount, continuation))
+                return false
+            }
+            if shouldResume {
+                continuation.resume()
+            }
         }
     }
 
@@ -11241,6 +11942,57 @@ private final class BundledProxyReconcilerDouble: BundledProxyReconciling, @unch
         if let error { throw error }
         return result!
     }
+}
+
+private actor ContinuationProxyService: ProxyServiceControlling {
+    private struct RestartFailure: LocalizedError, Sendable {
+        let message: String
+        var errorDescription: String? { message }
+    }
+
+    private var ports: [Int] = []
+    private var restartPorts: [Int] = []
+    private var stopCount = 0
+    private var restartContinuations: [Int: CheckedContinuation<Void, Error>] = [:]
+    private var restartWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+
+    func start(port: Int) async throws {
+        ports.append(port)
+    }
+
+    func stop() async throws {
+        stopCount += 1
+    }
+
+    func restart(port: Int) async throws {
+        restartPorts.append(port)
+        let invocation = restartPorts.count
+        let readyWaiters = restartWaiters.filter { invocation >= $0.0 }.map(\.1)
+        restartWaiters.removeAll { invocation >= $0.0 }
+        readyWaiters.forEach { $0.resume() }
+        try await withCheckedThrowingContinuation { continuation in
+            restartContinuations[invocation] = continuation
+        }
+    }
+
+    func waitForRestart(_ invocation: Int) async {
+        if restartPorts.count >= invocation { return }
+        await withCheckedContinuation { continuation in
+            restartWaiters.append((invocation, continuation))
+        }
+    }
+
+    func resolveRestart(_ invocation: Int, errorMessage: String? = nil) {
+        guard let continuation = restartContinuations.removeValue(forKey: invocation) else { return }
+        if let errorMessage {
+            continuation.resume(throwing: RestartFailure(message: errorMessage))
+        } else {
+            continuation.resume()
+        }
+    }
+
+    func recordedRestartPorts() -> [Int] { restartPorts }
+    func recordedStopCount() -> Int { stopCount }
 }
 
 private final class StubProxyServiceStarter: ProxyServiceControlling, @unchecked Sendable {
