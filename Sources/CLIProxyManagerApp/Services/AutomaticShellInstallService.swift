@@ -5,18 +5,23 @@ struct AutomaticShellInstallService: Sendable {
     struct EnabledFunctions: Sendable {
         var claudeOAuth: Bool
         var codex: Bool
-        var claudeAPI: Bool
-        var codexAPI: Bool
+        var apiKeyProfileIDs: Set<String>
 
-        init(claudeOAuth: Bool, codex: Bool, claudeAPI: Bool, codexAPI: Bool = false) {
+        init(claudeOAuth: Bool, codex: Bool, apiKeyProfileIDs: Set<String>) {
             self.claudeOAuth = claudeOAuth
             self.codex = codex
-            self.claudeAPI = claudeAPI
-            self.codexAPI = codexAPI
+            self.apiKeyProfileIDs = apiKeyProfileIDs
         }
 
-        static let none = EnabledFunctions(claudeOAuth: false, codex: false, claudeAPI: false, codexAPI: false)
-        static let allOAuth = EnabledFunctions(claudeOAuth: true, codex: true, claudeAPI: false, codexAPI: false)
+        init(claudeOAuth: Bool, codex: Bool, claudeAPI: Bool, codexAPI: Bool = false) {
+            var profileIDs: Set<String> = []
+            if claudeAPI { profileIDs.insert("claude-api") }
+            if codexAPI { profileIDs.insert("codex-api") }
+            self.init(claudeOAuth: claudeOAuth, codex: codex, apiKeyProfileIDs: profileIDs)
+        }
+
+        static let none = EnabledFunctions(claudeOAuth: false, codex: false, apiKeyProfileIDs: [])
+        static let allOAuth = EnabledFunctions(claudeOAuth: true, codex: true, apiKeyProfileIDs: [])
     }
 
     private let installer: any ShellFunctionInstalling
@@ -82,25 +87,31 @@ struct AutomaticShellInstallService: Sendable {
         guard isEnabled else { return }
         let includeClaudeOAuth = shouldIncludeOAuth(provider: .claude, config: config, enabled: enabledFunctions.claudeOAuth)
         let includeCodex = shouldIncludeOAuth(provider: .codex, config: config, enabled: enabledFunctions.codex)
-        let includeClaudeAPI = try enabledFunctions.claudeAPI
-            && !config.claudeAPI.commandName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && hasAPIKey(.claudeAPIKey)
-        let includeCodexAPI = try enabledFunctions.codexAPI
-            && !config.codexAPI.commandName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && hasAPIKey(.codexAPIKey)
+        var includedAPIKeyProfileIDs: Set<String> = []
+        for profile in config.apiKeyProfiles where enabledFunctions.apiKeyProfileIDs.contains(profile.id) {
+            guard !profile.commandName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                continue
+            }
+            do {
+                guard try hasAPIKey(profile.secretReference) else { continue }
+                includedAPIKeyProfileIDs.insert(profile.id)
+            } catch {
+                continue
+            }
+        }
         let script = try ShellFunctionRenderer(
             config: config,
             helperCommand: helperCommand ?? defaultHelperCommand,
             enabledFunctions: ShellFunctionRenderer.EnabledFunctions(
                 claudeOAuth: includeClaudeOAuth,
                 codex: includeCodex,
-                claudeAPI: includeClaudeAPI,
-                codexAPI: includeCodexAPI
+                apiKeyProfileIDs: includedAPIKeyProfileIDs
             )
         ).render()
         var functionNames = oauthFunctionNames(config: config, includeClaudeOAuth: includeClaudeOAuth, includeCodex: includeCodex)
-        if includeClaudeAPI { functionNames.append(config.claudeAPI.commandName) }
-        if includeCodexAPI { functionNames.append(config.codexAPI.commandName) }
+        functionNames.append(contentsOf: config.apiKeyProfiles.compactMap { profile in
+            includedAPIKeyProfileIDs.contains(profile.id) ? profile.commandName : nil
+        })
         try installer.install(functionScript: script, functionNames: functionNames)
     }
 
@@ -133,7 +144,7 @@ struct AutomaticShellInstallService: Sendable {
         return names
     }
 
-    private func hasAPIKey(_ key: SecretKey) throws -> Bool {
+    private func hasAPIKey(_ key: SecretReference) throws -> Bool {
         do {
             return try !secretStore.get(key).isEmpty
         } catch SecretStoreError.missingSecret {

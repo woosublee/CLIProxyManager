@@ -180,7 +180,25 @@ final class AppConfigStoreTests: XCTestCase {
         XCTAssertTrue(loaded.requiresCanonicalRewrite)
     }
 
-    func testCanonicalSaveWritesOnlyVersion2ProviderKeys() throws {
+    func testVersion2SingletonAPISettingsDecodeAsFixedProfiles() throws {
+        let sandbox = try makeSandbox()
+        let store = AppConfigStore(paths: ManagedPaths(rootDirectory: sandbox))
+        let json = #"{"schemaVersion":2,"port":18317,"claudeAPI":{"commandName":"claude_work","nickname":"Work","dangerousPermissionsEnabled":true},"codexAPI":{"commandName":"codex_personal","nickname":"Personal","codex":{"opus":{"model":"gpt-5.6-terra","reasoning":"xhigh"},"sonnet":{"model":"gpt-5.6-terra","reasoning":"medium"},"haiku":{"model":"gpt-5.6-terra","reasoning":"low"}},"dangerousPermissionsEnabled":false},"startAtLogin":false,"showDockIcon":true,"showMenuBarIcon":true}"#
+        try json.write(to: store.paths.configFile, atomically: true, encoding: .utf8)
+
+        let result = try store.loadDocument()
+
+        XCTAssertTrue(result.requiresCanonicalRewrite)
+        XCTAssertEqual(result.config.apiKeyProfiles.map(\.id), ["claude-api", "codex-api"])
+        XCTAssertEqual(result.config.apiKeyProfiles[0].secretReference, .claudeAPIKey)
+        XCTAssertEqual(result.config.apiKeyProfiles[0].commandName, "claude_work")
+        XCTAssertEqual(result.config.apiKeyProfiles[0].nickname, "Work")
+        XCTAssertTrue(result.config.apiKeyProfiles[0].dangerousPermissionsEnabled)
+        XCTAssertEqual(result.config.apiKeyProfiles[1].secretReference, .codexAPIKey)
+        XCTAssertEqual(result.config.apiKeyProfiles[1].commandName, "codex_personal")
+    }
+
+    func testCanonicalSaveWritesVersion3APIKeyProfiles() throws {
         let sandbox = try makeSandbox()
         let store = AppConfigStore(paths: ManagedPaths(rootDirectory: sandbox))
         var config = AppConfig.default
@@ -192,10 +210,12 @@ final class AppConfigStoreTests: XCTestCase {
         let object = try XCTUnwrap(
             JSONSerialization.jsonObject(with: Data(contentsOf: store.paths.configFile)) as? [String: Any]
         )
-        XCTAssertEqual(object["schemaVersion"] as? Int, 2)
-        XCTAssertNotNil(object["claudeAPI"])
-        XCTAssertNotNil(object["codexAPI"])
+        XCTAssertEqual(object["schemaVersion"] as? Int, 3)
+        let profiles = try XCTUnwrap(object["apiKeyProfiles"] as? [[String: Any]])
+        XCTAssertEqual(Set(profiles.compactMap { $0["id"] as? String }), ["claude-api", "codex-api"])
         for legacyKey in [
+            "claudeAPI",
+            "codexAPI",
             "commands",
             "ccapi",
             "ccodex",
@@ -204,6 +224,20 @@ final class AppConfigStoreTests: XCTestCase {
             "includeDangerouslySkipPermissions"
         ] {
             XCTAssertNil(object[legacyKey], "Unexpected legacy key: \(legacyKey)")
+        }
+    }
+
+    func testStoreRejectsFutureSchemaVersion() throws {
+        let sandbox = try makeSandbox()
+        let store = AppConfigStore(paths: ManagedPaths(rootDirectory: sandbox))
+        try #"{"schemaVersion":99,"port":18317}"#.write(
+            to: store.paths.configFile,
+            atomically: true,
+            encoding: .utf8
+        )
+
+        XCTAssertThrowsError(try store.loadDocument()) { error in
+            XCTAssertEqual(error as? AppConfigStoreError, .unsupportedSchemaVersion(99))
         }
     }
 

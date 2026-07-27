@@ -63,13 +63,21 @@ public struct AppConfigLoadResult: Equatable, Sendable {
 }
 
 enum LegacyAppConfigDecoder {
-    static func isLegacyDocument(_ data: Data) throws -> Bool {
+    static func schemaVersion(in data: Data) throws -> Int {
         let object = try JSONSerialization.jsonObject(with: data)
-        guard let dictionary = object as? [String: Any] else { return true }
-        return (dictionary["schemaVersion"] as? Int ?? 1) < AppConfig.currentSchemaVersion
+        guard let dictionary = object as? [String: Any] else { return 1 }
+        return dictionary["schemaVersion"] as? Int ?? 1
+    }
+
+    static func isLegacyDocument(_ data: Data) throws -> Bool {
+        try schemaVersion(in: data) < AppConfig.currentSchemaVersion
     }
 
     static func decode(_ data: Data) throws -> AppConfigLoadResult {
+        if try schemaVersion(in: data) == 2 {
+            return try decodeVersion2(data)
+        }
+
         let legacy = try JSONDecoder().decode(LegacyDocument.self, from: data)
         let claudeAPI = AppConfig.ClaudeAPI(
             commandName: legacy.commands.claudeAPI,
@@ -82,8 +90,7 @@ enum LegacyAppConfigDecoder {
 
         let config = AppConfig(
             port: legacy.port,
-            claudeAPI: claudeAPI,
-            codexAPI: codexAPI,
+            apiKeyProfiles: apiKeyProfiles(claude: claudeAPI, codex: codexAPI),
             startAtLogin: legacy.startAtLogin,
             showDockIcon: legacy.showDockIcon,
             showMenuBarIcon: legacy.showMenuBarIcon,
@@ -122,6 +129,102 @@ enum LegacyAppConfigDecoder {
             legacyOAuthDefaults: oauthDefaults,
             requiresCanonicalRewrite: true
         )
+    }
+
+    private static func decodeVersion2(_ data: Data) throws -> AppConfigLoadResult {
+        let document = try JSONDecoder().decode(Version2Document.self, from: data)
+        let config = AppConfig(
+            port: document.port,
+            apiKeyProfiles: apiKeyProfiles(claude: document.claudeAPI, codex: document.codexAPI),
+            startAtLogin: document.startAtLogin,
+            showDockIcon: document.showDockIcon,
+            showMenuBarIcon: document.showMenuBarIcon,
+            showNotifications: false,
+            appearance: document.appearance,
+            subscriptionUsage: document.subscriptionUsage,
+            usageOverlay: document.usageOverlay,
+            oauthCommandProfiles: document.oauthCommandProfiles,
+            roundRobinProfiles: document.roundRobinProfiles,
+            accountOrder: document.accountOrder,
+            bindAddress: document.bindAddress,
+            autostartServer: document.autostartServer,
+            roundRobinEnabled: false,
+            logLevel: document.logLevel
+        )
+        return AppConfigLoadResult(
+            config: config,
+            legacyOAuthDefaults: nil,
+            requiresCanonicalRewrite: true
+        )
+    }
+
+    private static func apiKeyProfiles(
+        claude: AppConfig.ClaudeAPI,
+        codex: AppConfig.CodexAPI
+    ) -> [AppConfig.APIKeyProfile] {
+        [
+            AppConfig.APIKeyProfile(
+                id: "claude-api",
+                provider: .claude,
+                secretReference: .claudeAPIKey,
+                commandName: claude.commandName,
+                nickname: claude.nickname,
+                dangerousPermissionsEnabled: claude.dangerousPermissionsEnabled,
+                claude: claude.claude
+            ),
+            AppConfig.APIKeyProfile(
+                id: "codex-api",
+                provider: .codex,
+                secretReference: .codexAPIKey,
+                commandName: codex.commandName,
+                nickname: codex.nickname,
+                dangerousPermissionsEnabled: codex.dangerousPermissionsEnabled,
+                codex: codex.codex
+            )
+        ]
+    }
+
+    private struct Version2Document: Decodable {
+        var port: Int
+        var claudeAPI: AppConfig.ClaudeAPI
+        var codexAPI: AppConfig.CodexAPI
+        var startAtLogin: Bool
+        var showDockIcon: Bool
+        var showMenuBarIcon: Bool
+        var appearance: AppearanceMode
+        var subscriptionUsage: AppConfig.SubscriptionUsage
+        var usageOverlay: AppConfig.UsageOverlay
+        var oauthCommandProfiles: [AppConfig.OAuthCommandProfile]
+        var roundRobinProfiles: [AppConfig.RoundRobinProfile]
+        var accountOrder: [String]
+        var bindAddress: String
+        var autostartServer: Bool
+        var logLevel: LogLevel
+
+        private enum CodingKeys: String, CodingKey {
+            case port, claudeAPI, codexAPI, startAtLogin, showDockIcon, showMenuBarIcon
+            case appearance, subscriptionUsage, usageOverlay, oauthCommandProfiles
+            case roundRobinProfiles, accountOrder, bindAddress, autostartServer, logLevel
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            port = try c.decodeIfPresent(Int.self, forKey: .port) ?? AppConfig.default.port
+            claudeAPI = try c.decodeIfPresent(AppConfig.ClaudeAPI.self, forKey: .claudeAPI) ?? AppConfig.ClaudeAPI()
+            codexAPI = try c.decodeIfPresent(AppConfig.CodexAPI.self, forKey: .codexAPI) ?? AppConfig.CodexAPI()
+            startAtLogin = try c.decodeIfPresent(Bool.self, forKey: .startAtLogin) ?? false
+            showDockIcon = try c.decodeIfPresent(Bool.self, forKey: .showDockIcon) ?? true
+            showMenuBarIcon = try c.decodeIfPresent(Bool.self, forKey: .showMenuBarIcon) ?? true
+            appearance = try c.decodeIfPresent(AppearanceMode.self, forKey: .appearance) ?? .system
+            subscriptionUsage = try c.decodeIfPresent(AppConfig.SubscriptionUsage.self, forKey: .subscriptionUsage) ?? .init()
+            usageOverlay = try c.decodeIfPresent(AppConfig.UsageOverlay.self, forKey: .usageOverlay) ?? .init()
+            oauthCommandProfiles = try c.decodeIfPresent([AppConfig.OAuthCommandProfile].self, forKey: .oauthCommandProfiles) ?? []
+            roundRobinProfiles = try c.decodeIfPresent([AppConfig.RoundRobinProfile].self, forKey: .roundRobinProfiles) ?? []
+            accountOrder = try c.decodeIfPresent([String].self, forKey: .accountOrder) ?? []
+            bindAddress = try c.decodeIfPresent(String.self, forKey: .bindAddress) ?? "127.0.0.1"
+            autostartServer = try c.decodeIfPresent(Bool.self, forKey: .autostartServer) ?? false
+            logLevel = try c.decodeIfPresent(LogLevel.self, forKey: .logLevel) ?? .info
+        }
     }
 
     private struct LegacyDocument: Decodable {

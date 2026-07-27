@@ -9,6 +9,29 @@ public enum APIUsageProvider: String, Codable, CaseIterable, Hashable, Sendable 
     }
 }
 
+public struct APIUsageProfileDescriptor: Equatable, Hashable, Sendable {
+    public let profileID: String
+    public let provider: APIUsageProvider
+    public let modelPrefix: String
+
+    public init(profileID: String, provider: APIUsageProvider, modelPrefix: String) {
+        self.profileID = profileID
+        self.provider = provider
+        self.modelPrefix = modelPrefix
+    }
+
+    public static let legacyClaude = APIUsageProfileDescriptor(
+        profileID: "claude-api",
+        provider: .claude,
+        modelPrefix: "cpm-claude-api"
+    )
+    public static let legacyOpenAI = APIUsageProfileDescriptor(
+        profileID: "codex-api",
+        provider: .openAI,
+        modelPrefix: "cpm-codex-api"
+    )
+}
+
 public enum APIUsagePricingVariant: String, Codable, Hashable, Sendable {
     case standard
     case priority
@@ -50,11 +73,18 @@ public struct APIUsageRecordMapper: Sendable {
     public init() {}
 
     public func classify(_ record: APIUsageQueueRecord) -> APIUsageRecordDisposition {
+        classify(record, profiles: [.legacyClaude, .legacyOpenAI])
+    }
+
+    public func classify(
+        _ record: APIUsageQueueRecord,
+        profiles: [APIUsageProfileDescriptor]
+    ) -> APIUsageRecordDisposition {
         let authType = normalized(record.authType)
         guard ["apikey", "api_key", "api-key"].contains(authType) else {
             return .ignored
         }
-        guard let provider = mappedProvider(record) else {
+        guard let profile = mappedProfile(record, profiles: profiles) else {
             return .issue(.init(
                 timestamp: record.timestamp,
                 profileID: nil,
@@ -62,10 +92,11 @@ public struct APIUsageRecordMapper: Sendable {
                 reason: .unknownProviderMapping
             ))
         }
+        let provider = profile.provider
         guard record.accountingVersion == 2, record.tokenBreakdown.schemaVersion == 2 else {
             return .issue(.init(
                 timestamp: record.timestamp,
-                profileID: provider.profileID,
+                profileID: profile.profileID,
                 provider: provider,
                 reason: .unsupportedAccountingVersion
             ))
@@ -73,13 +104,13 @@ public struct APIUsageRecordMapper: Sendable {
         guard record.tokenBreakdown.quality == .complete, valid(record.tokenBreakdown) else {
             return .issue(.init(
                 timestamp: record.timestamp,
-                profileID: provider.profileID,
+                profileID: profile.profileID,
                 provider: provider,
                 reason: .incompleteTokenAccounting
             ))
         }
 
-        let model = canonicalModel(record.model, provider: provider)
+        let model = canonicalModel(record.model, profile: profile)
         let rawTier = normalized(record.responseServiceTier.flatMap(nonEmpty) ?? record.serviceTier)
         let tier = canonicalServiceTier(rawTier, provider: provider)
         let longContextModels: Set<String> = [
@@ -104,7 +135,7 @@ public struct APIUsageRecordMapper: Sendable {
 
         return .aggregate(.init(
             timestamp: record.timestamp,
-            profileID: provider.profileID,
+            profileID: profile.profileID,
             provider: provider,
             model: model,
             effectiveServiceTier: tier.isEmpty ? "default" : tier,
@@ -114,23 +145,49 @@ public struct APIUsageRecordMapper: Sendable {
         ))
     }
 
-    private func mappedProvider(_ record: APIUsageQueueRecord) -> APIUsageProvider? {
+    private func mappedProfile(
+        _ record: APIUsageQueueRecord,
+        profiles: [APIUsageProfileDescriptor]
+    ) -> APIUsageProfileDescriptor? {
         guard record.hasAuthIndex else { return nil }
 
         let provider = normalized(record.provider)
         let executor = normalized(record.executorType)
-        let alias = normalized(record.alias)
-        if ["claude", "anthropic"].contains(provider),
-           executor.contains("claude"),
-           alias.hasPrefix("cpm-claude-api/") {
-            return .claude
+        let aliasPrefix = normalized(record.alias).split(separator: "/", maxSplits: 1).first.map(String.init) ?? ""
+        let expectedProvider: APIUsageProvider?
+        if ["claude", "anthropic"].contains(provider), executor.contains("claude") {
+            expectedProvider = .claude
+        } else if ["codex", "openai"].contains(provider),
+                  executor.contains("codex") || executor.contains("openai") {
+            expectedProvider = .openAI
+        } else {
+            expectedProvider = nil
         }
-        if ["codex", "openai"].contains(provider),
-           (executor.contains("codex") || executor.contains("openai")),
-           alias.hasPrefix("cpm-codex-api/") {
-            return .openAI
+        guard let expectedProvider else { return nil }
+
+        if let profile = profiles.first(where: {
+            $0.provider == expectedProvider && normalized($0.modelPrefix) == aliasPrefix
+        }) {
+            return profile
         }
-        return nil
+        return inferredManagedProfile(prefix: aliasPrefix, provider: expectedProvider)
+    }
+
+    private func inferredManagedProfile(
+        prefix: String,
+        provider: APIUsageProvider
+    ) -> APIUsageProfileDescriptor? {
+        guard prefix.hasPrefix("cpm-") else { return nil }
+        let profileID = String(prefix.dropFirst("cpm-".count))
+        let expectedProfileProvider: AuthProfileType = provider == .claude ? .claude : .codex
+        guard AppConfig.APIKeyProfile.provider(forID: profileID) == expectedProfileProvider else {
+            return nil
+        }
+        return APIUsageProfileDescriptor(
+            profileID: profileID,
+            provider: provider,
+            modelPrefix: prefix
+        )
     }
 
     private func canonicalServiceTier(_ tier: String, provider: APIUsageProvider) -> String {
@@ -145,19 +202,21 @@ public struct APIUsageRecordMapper: Sendable {
         }
     }
 
-    private func canonicalModel(_ model: String, provider: APIUsageProvider) -> String {
+    private func canonicalModel(
+        _ model: String,
+        profile: APIUsageProfileDescriptor
+    ) -> String {
         let normalizedModel = normalized(model)
+        let routingPrefix = normalized(profile.modelPrefix) + "/"
 
-        switch provider {
+        switch profile.provider {
         case .claude:
-            let prefix = "cpm-claude-api/"
-            guard normalizedModel.hasPrefix(prefix) else { return normalizedModel }
-            return String(normalizedModel.dropFirst(prefix.count))
+            guard normalizedModel.hasPrefix(routingPrefix) else { return normalizedModel }
+            return String(normalizedModel.dropFirst(routingPrefix.count))
         case .openAI:
-            let prefix = "cpm-codex-api/"
             let modelWithoutRoutingPrefix: String
-            if normalizedModel.hasPrefix(prefix) {
-                modelWithoutRoutingPrefix = String(normalizedModel.dropFirst(prefix.count))
+            if normalizedModel.hasPrefix(routingPrefix) {
+                modelWithoutRoutingPrefix = String(normalizedModel.dropFirst(routingPrefix.count))
             } else if normalizedModel.contains("/") {
                 return normalizedModel
             } else {

@@ -14,8 +14,8 @@ CLIProxyManager는 여러 Claude·Codex OAuth 구독, Claude·OpenAI API Key, �
 
 ## 주요 기능
 
-- Claude·Codex OAuth 계정과 Claude·OpenAI API Key를 한곳에서 추가하고 관리
-- 계정별 명령어·별칭·활성화 상태·순서·상세정보 공개 여부·Usage HUD 표시 여부 설정
+- Claude·Codex OAuth 계정과 provider별 복수 Claude·OpenAI API Key profile을 한곳에서 추가하고 관리
+- OAuth 계정과 API Key profile별 명령어·별칭·순서·Usage HUD 표시 여부와 인증 방식별 설정 관리
 - Claude OAuth의 Direct/CLIProxyAPI 연결 선택과 계정별 Claude model mapping
 - Codex OAuth와 OpenAI API Key의 Opus·Sonnet·Haiku 역할별 GPT model, reasoning, 감지된 context window, Fast mode 설정
 - 선택한 OAuth 계정을 새 CLI session마다 순환하고 session 안에서는 계정을 고정하는 round-robin 명령어
@@ -41,8 +41,8 @@ GitHub Releases에서 직접 내려받은 배포본만 사용하세요.
 
 ## 시작하기
 
-1. 앱에서 **Add Provider**를 눌러 Claude/Codex OAuth subscription 또는 Claude/OpenAI API Key를 추가합니다.
-2. 계정별 Settings에서 nickname과 전용 명령어를 지정합니다. 예: `claude-work`, `codex-personal`
+1. 앱에서 **Add Provider**를 눌러 Claude/Codex OAuth subscription 또는 Claude/OpenAI API Key profile을 추가합니다. 같은 provider의 API Key profile도 여러 개 등록할 수 있습니다.
+2. 계정 또는 API Key profile별 Settings에서 nickname과 전용 명령어를 지정합니다. 예: `claude-work`, `codex-personal`
 3. 새 터미널을 열거나 다음 명령을 실행합니다.
 
    ```zsh
@@ -61,7 +61,8 @@ GitHub Releases에서 직접 내려받은 배포본만 사용하세요.
 - 메인 화면에서 drag handle이나 더보기 메뉴를 사용해 계정 순서를 바꿀 수 있습니다. 같은 순서가 메뉴바와 Usage HUD에도 적용됩니다.
 - OAuth 계정은 비활성화했다가 다시 활성화할 수 있고, 계정 상세정보를 흐리거나 Usage HUD 표시 대상에서 제외할 수 있습니다.
 - Claude OAuth는 **Direct** 또는 **CLIProxyAPI** 연결을 선택할 수 있습니다. Direct는 Claude Code의 현재 model policy를 사용하고, CLIProxyAPI 연결은 계정별 model mapping을 사용합니다.
-- Codex OAuth와 OpenAI API Key는 Opus·Sonnet·Haiku 역할마다 GPT model과 reasoning을 선택할 수 있습니다. 지원 모델에서는 Fast mode를 켤 수 있으며, 감지된 context window는 Claude Code auto-compaction에 반영됩니다.
+- 각 Claude·OpenAI API Key profile은 독립적인 명령어, nickname, model routing, permission 설정과 고유 proxy prefix를 사용합니다.
+- Codex OAuth와 각 OpenAI API Key profile은 Opus·Sonnet·Haiku 역할마다 GPT model과 reasoning을 선택할 수 있습니다. 지원 모델에서는 Fast mode를 켤 수 있으며, 감지된 context window는 Claude Code auto-compaction에 반영됩니다.
 - **Settings → General → Routing**에서 provider별 round-robin 명령어를 만들 수 있습니다. 최소 2개 계정을 선택하면 새 CLI session마다 다음 계정으로 순환하고, 선택된 계정은 해당 session 동안 고정됩니다.
 
 ## 사용량 HUD
@@ -71,7 +72,7 @@ GitHub Releases에서 직접 내려받은 배포본만 사용하세요.
 - 창의 투명도와 항상 위 표시 여부를 설정하고, 메뉴바에서 HUD를 다시 표시하거나 숨길 수 있습니다.
 - 메인 화면의 각 계정 카드에서 Usage HUD 버튼을 눌러 HUD에 표시할 계정을 선택할 수 있습니다. 선택은 expanded·compact 보기에 함께 적용되고 앱 재실행 후에도 유지됩니다.
 - OAuth 계정은 API가 보고한 `5h`, `7d`, `1mo` 기간의 사용률과 reset 시각을 표시합니다.
-- Claude·OpenAI API Key는 로컬 CLIProxyAPI usage record를 집계해 Day/Mon token, request, 예상 비용을 표시합니다. 비용은 수집된 usage와 앱의 price catalog를 바탕으로 한 추정치이며 provider 청구서가 아닙니다.
+- 각 Claude·OpenAI API Key profile은 고유 routing prefix로 로컬 CLIProxyAPI usage record를 분리 집계해 Day/Mon token, request, 예상 비용을 표시합니다. 비용은 수집된 usage와 앱의 price catalog를 바탕으로 한 추정치이며 provider 청구서가 아닙니다.
 - HUD 우측 상단의 축소·확장 버튼으로 300pt 폭의 expanded 보기와 108pt 폭의 compact 보기를 전환할 수 있습니다.
 - compact 보기는 account avatar·이름과 기간별 사용률 또는 Day/Mon 예상 비용을 세로로 표시합니다. loading·unavailable·disabled·stale 상태에서는 `—`와 상태 indicator를 표시합니다.
 - 선택한 HUD mode와 account 목록은 앱 재실행 후에도 유지됩니다.
@@ -144,7 +145,7 @@ source ~/.zshrc
 
 ## 보안
 
-앱은 OAuth 프로필과 설정을 `~/.cliproxy-manager` 아래에서 관리합니다. API Key는 `~/.cliproxy-manager/api-keys/`의 평문 파일에 저장합니다. 앱은 디렉터리에 `0700`, 각 key 파일에 `0600` 권한을 적용하지만 macOS 계정에 접근할 수 있는 사용자는 값을 읽을 수 있습니다. 이 디렉터리를 복사·공유하거나 저장소에 커밋하지 마세요.
+앱은 OAuth 프로필과 설정을 `~/.cliproxy-manager` 아래에서 관리합니다. 현재 릴리스는 각 API Key profile의 실제 key를 `~/.cliproxy-manager/api-keys/`의 별도 평문 파일에 저장하며, macOS Keychain으로 전환하는 설정은 제공하지 않습니다. Key는 `config.json`과 generated shell function에 포함되지 않습니다. 앱은 디렉터리에 `0700`, 각 key와 lock 파일에 `0600` 권한을 적용하지만 macOS 계정에 접근할 수 있는 사용자는 값을 읽을 수 있습니다. 이 디렉터리를 복사·공유하거나 저장소에 커밋하지 마세요.
 
 ## 라이선스
 

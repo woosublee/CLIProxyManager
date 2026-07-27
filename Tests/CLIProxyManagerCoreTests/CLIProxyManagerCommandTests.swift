@@ -2,6 +2,20 @@ import XCTest
 @testable import CLIProxyManagerCore
 
 final class CLIProxyManagerCommandTests: XCTestCase {
+    func testHelpDoesNotAdvertiseUnsupportedLegacyClaudeModelsTarget() async throws {
+        let output = OutputDouble(isInteractive: false)
+        let command = CLIProxyManagerCommand(
+            secretStore: InMemorySecretStore(),
+            output: output
+        )
+
+        try await command.run(arguments: ["--help"])
+
+        let help = output.stdout.joined()
+        XCTAssertTrue(help.contains("--api-profile profile-id"))
+        XCTAssertFalse(help.contains("--legacy"))
+    }
+
     func testSecretGetStillPrintsSecret() async throws {
         let output = OutputDouble(isInteractive: false)
         let command = CLIProxyManagerCommand(
@@ -26,6 +40,33 @@ final class CLIProxyManagerCommandTests: XCTestCase {
         XCTAssertEqual(output.stdout, ["codex-secret\n"])
     }
 
+    func testSecretGetResolvesAPIKeyProfileID() async throws {
+        let sandbox = try makeSandbox()
+        let configStore = AppConfigStore(paths: ManagedPaths(rootDirectory: sandbox))
+        let profileID = "claude-api-11111111-1111-1111-1111-111111111111"
+        let reference = try XCTUnwrap(SecretReference.apiKeyProfile(profileID))
+        var config = AppConfig.default
+        config.apiKeyProfiles = [
+            .init(
+                id: profileID,
+                provider: .claude,
+                secretReference: reference,
+                commandName: "claude_personal"
+            )
+        ]
+        try configStore.save(config)
+        let output = OutputDouble(isInteractive: false)
+        let command = CLIProxyManagerCommand(
+            secretStore: InMemorySecretStore(values: [reference: "profile-secret"]),
+            configStore: configStore,
+            output: output
+        )
+
+        try await command.run(arguments: ["secret", "get", profileID])
+
+        XCTAssertEqual(output.stdout, ["profile-secret\n"])
+    }
+
     func testSecretMutationsExplainThatRunningProxyNeedsRestart() async throws {
         let output = OutputDouble(isInteractive: false)
         let command = CLIProxyManagerCommand(
@@ -41,6 +82,26 @@ final class CLIProxyManagerCommandTests: XCTestCase {
             "Restart CLIProxyAPI with `cpm restart` to apply the API key change.\n",
             "Restart CLIProxyAPI with `cpm restart` to apply the API key change.\n"
         ])
+    }
+
+    func testLegacySecretSetCreatesCanonicalProfileWhenConfigHasNoAPIProfiles() async throws {
+        let sandbox = try makeSandbox()
+        let configStore = AppConfigStore(paths: ManagedPaths(rootDirectory: sandbox))
+        var config = AppConfig.default
+        config.apiKeyProfiles = []
+        try configStore.save(config)
+        let secretStore = InMemorySecretStore()
+        let command = CLIProxyManagerCommand(
+            secretStore: secretStore,
+            configStore: configStore,
+            input: { "new-secret\n" },
+            output: OutputDouble(isInteractive: false)
+        )
+
+        try await command.run(arguments: ["secret", "set", "claude-api-key"])
+
+        XCTAssertEqual(try configStore.load().apiKeyProfiles, [.legacy(provider: .claude)])
+        XCTAssertEqual(try secretStore.get(.claudeAPIKey), "new-secret")
     }
 
     func testDefaultCLICommandReadsAPIKeyFromManagedFileStore() async throws {
@@ -699,6 +760,46 @@ final class CLIProxyManagerCommandTests: XCTestCase {
         XCTAssertEqual(models.requests.map { "\($0.port):\($0.prefix)" }, ["18888:cpm-claude-api"])
         XCTAssertTrue(output.stdout.joined().contains("cpm-claude-api/claude-opus-4-7"))
         XCTAssertTrue(output.stdout.joined().contains("cpm-claude-api/claude-sonnet-5"))
+    }
+
+    func testRoutingClaudeModelsResolvesSpecificAPIKeyProfile() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox)
+        let configStore = AppConfigStore(paths: paths)
+        let profileID = "claude-api-11111111-1111-1111-1111-111111111111"
+        var config = AppConfig.default
+        config.port = 18_888
+        config.apiKeyProfiles = [
+            .init(
+                id: profileID,
+                provider: .claude,
+                secretReference: SecretReference.apiKeyProfile(profileID)!,
+                commandName: "claude_personal",
+                claude: .automatic
+            )
+        ]
+        try configStore.save(config)
+        let prefix = "cpm-\(profileID)"
+        let models = StubClaudeModelListing(optionsByPrefix: [
+            prefix: [
+                .init(id: "claude-opus-5", created: 500),
+                .init(id: "claude-sonnet-5", created: 400),
+                .init(id: "claude-haiku-4-5", created: 300)
+            ]
+        ])
+        let output = OutputDouble(isInteractive: false)
+        let command = CLIProxyManagerCommand(
+            secretStore: InMemorySecretStore(),
+            configStore: configStore,
+            authProfileStore: AuthProfileStore(authDirectory: paths.authDirectory),
+            output: output,
+            claudeModelClient: models
+        )
+
+        try await command.run(arguments: ["routing", "claude-models", "--api-profile", profileID])
+
+        XCTAssertEqual(models.requests.map { $0.prefix }, [prefix])
+        XCTAssertTrue(output.stdout.joined().contains("\(prefix)/claude-opus-5"))
     }
 
     func testRoutingClaudeModelsRejectsInvalidProfilesWithoutQueryingModels() async throws {

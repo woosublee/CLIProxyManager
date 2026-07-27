@@ -157,7 +157,7 @@ final class DashboardViewModel: ObservableObject {
 
         let oauth: [Configuration]
         let roundRobin: [Configuration]
-        let apiKey: Configuration
+        let apiKeys: [Configuration]
     }
 
     private struct ProxyRestartReadinessError: LocalizedError {
@@ -185,6 +185,7 @@ final class DashboardViewModel: ObservableObject {
     @Published private(set) var config: AppConfig
     @Published private(set) var availableCodexModelOptions: [CodexModelOption] = []
     @Published private(set) var availableCodexAPIModelOptions: [CodexModelOption] = []
+    @Published private(set) var availableCodexAPIModelOptionsByProvider: [ProviderRowState.ID: [CodexModelOption]] = [:]
     @Published private(set) var availableClaudeAPIModelOptions: [ClaudeModelOption] = []
     @Published private(set) var availableClaudeModelOptionsByProvider: [ProviderRowState.ID: [ClaudeModelOption]] = [:]
     @Published private(set) var codexModelLoadingState: CodexModelLoadingState = .idle
@@ -194,7 +195,9 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func preferredCodexDefaultModel(in options: [CodexModelOption]) -> String? {
-        options.first(where: { $0.id == "gpt-5.6-terra" })?.id ?? options.first?.id
+        options.first(where: {
+            $0.id.caseInsensitiveCompare("gpt-5.6-terra") == .orderedSame
+        })?.id ?? options.first?.id
     }
 
     var latestBaseCodexModel: String? {
@@ -283,6 +286,7 @@ final class DashboardViewModel: ObservableObject {
     private var authProfiles: [AuthProfile] = []
     private var oauthLoginTask: Task<Void, Never>?
     private var settingsMessageAutoClearTask: Task<Void, Never>?
+    private var configWriteProtectionMessage: String?
     private var applicationLaunchTask: Task<Void, Never>?
     private var applicationLaunchGeneration = 0
     private var lastClaudeStatus: DiagnosticStatus?
@@ -580,20 +584,36 @@ final class DashboardViewModel: ObservableObject {
         self.settingsMessageAutoClearDelayNanoseconds = settingsMessageAutoClearDelayNanoseconds
         let loadedDocument: AppConfigLoadResult
         let configLoadErrorMessage: String?
+        let configWriteProtectionMessage: String?
         if let config {
             loadedDocument = .canonical(config)
             configLoadErrorMessage = nil
+            configWriteProtectionMessage = nil
         } else {
             do {
                 loadedDocument = try configStore.loadDocument()
                 configLoadErrorMessage = nil
+                configWriteProtectionMessage = nil
             } catch {
                 loadedDocument = .canonical(.default)
                 configLoadErrorMessage = "Config could not be loaded: \(error.localizedDescription)"
+                if let storeError = error as? AppConfigStoreError,
+                   case .unsupportedSchemaVersion = storeError {
+                    configWriteProtectionMessage = "This config was created by a newer app version and is read-only here."
+                } else {
+                    configWriteProtectionMessage = nil
+                }
             }
         }
+        self.configWriteProtectionMessage = configWriteProtectionMessage
 
         var persistedConfig = Self.availableConfig(loadedDocument.config)
+        if loadedDocument.requiresCanonicalRewrite {
+            persistedConfig = Self.removingEmptyLegacyAPIKeyProfiles(
+                from: persistedConfig,
+                secretStore: secretStore
+            )
+        }
         let credentialMigrationResult: CodexCredentialMigrationResult
         if configLoadErrorMessage == nil {
             credentialMigrationResult = Self.applyPreparedCodexCredentialMigrations(
@@ -795,8 +815,7 @@ final class DashboardViewModel: ObservableObject {
         // button targets: appearance, behavior, server config, log level.
         var updatedConfig = AppConfig.default
         updatedConfig.oauthCommandProfiles = config.oauthCommandProfiles
-        updatedConfig.claudeAPI = config.claudeAPI
-        updatedConfig.codexAPI = config.codexAPI
+        updatedConfig.apiKeyProfiles = config.apiKeyProfiles
         let shouldDeleteManagementKey = config.isUsageEnabled || subscriptionUsageKeyStore.isConfigured()
         let shouldStopAPIUsageCollector = config.isUsageEnabled || hasStartedAPIUsageCollector
         do {
@@ -2342,6 +2361,10 @@ final class DashboardViewModel: ObservableObject {
         _ id: ProviderRowState.ID,
         before targetID: ProviderRowState.ID?
     ) {
+        if let configWriteProtectionMessage {
+            settingsMessage = configWriteProtectionMessage
+            return
+        }
         let movedRows = AccountOrdering.moving(providerRows, id: id, before: targetID)
         guard movedRows != providerRows else { return }
 
@@ -2753,15 +2776,20 @@ final class DashboardViewModel: ObservableObject {
             var updatedConfig = config
             if let index = updatedConfig.oauthCommandProfiles.firstIndex(where: { $0.id == provider.rawValue }) {
                 updatedConfig.oauthCommandProfiles[index].commandName = normalizedName
-            } else if provider == .claudeAPI {
-                updatedConfig.claudeAPI.commandName = normalizedName
-            } else if provider == .codexAPI {
-                updatedConfig.codexAPI.commandName = normalizedName
+            } else if let index = updatedConfig.apiKeyProfiles.firstIndex(where: { $0.id == provider.rawValue }) {
+                updatedConfig.apiKeyProfiles[index].commandName = normalizedName
             } else {
-                return .unavailable("Command profile was not found.")
+                let providerType = provider.inferredProviderType
+                let draft = AppConfig.APIKeyProfile(
+                    id: provider.rawValue,
+                    provider: providerType,
+                    secretReference: SecretReference.apiKeyProfile(provider.rawValue)
+                        ?? (providerType == .claude ? .claudeAPIKey : .codexAPIKey),
+                    commandName: normalizedName
+                )
+                updatedConfig.apiKeyProfiles.append(draft)
             }
-            let activeNames = activeFunctionNames(in: updatedConfig)
-            try ShellCommandNameValidator.validate(activeNames)
+            try ShellCommandNameValidator.validate(activeFunctionNames(in: updatedConfig))
             try shellInstaller.validateFunctionNames([normalizedName])
             return .available
         } catch {
@@ -2898,74 +2926,104 @@ final class DashboardViewModel: ObservableObject {
         try saveConfig(updatedConfig, validateShellFunctions: true)
     }
 
-    func isAPIKeyConfigured(_ key: SecretKey) -> Bool {
+    func apiKeyProfile(id: String) -> AppConfig.APIKeyProfile? {
+        if let profile = config.apiKeyProfiles.first(where: { $0.id == id }) {
+            return profile
+        }
+        guard id == "claude-api" || id == "codex-api" else { return nil }
+        let provider: AuthProfileType = id == "claude-api" ? .claude : .codex
+        let legacyProfile = AppConfig.APIKeyProfile.legacy(provider: provider)
+        return isAPIKeyConfigured(legacyProfile.secretReference) ? legacyProfile : nil
+    }
+
+    func newAPIKeyProfile(provider: AuthProfileType) -> AppConfig.APIKeyProfile {
+        .new(provider: provider)
+    }
+
+    func isAPIKeyConfigured(_ key: SecretReference) -> Bool {
         (try? secretStore.get(key).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) ?? false
     }
 
+    func isAPIKeyConfigured(profileID: String) -> Bool {
+        guard let profile = apiKeyProfile(id: profileID) else { return false }
+        return isAPIKeyConfigured(profile.secretReference)
+    }
+
     func saveClaudeAPISettings(
+        profileID: String = "claude-api",
+        secretReference: SecretReference = .claudeAPIKey,
         functionName: String,
         nickname: String = "",
         claudeRouting: ClaudeRouting? = nil,
         dangerousPermissionsEnabled: Bool,
         key: String?
     ) throws {
-        let saveSettings = {
-            var updatedConfig = self.config
-            updatedConfig.claudeAPI = AppConfig.ClaudeAPI(
-                commandName: self.normalizeCommandName(functionName),
-                claude: claudeRouting ?? updatedConfig.claudeAPI.claude,
-                nickname: nickname.trimmingCharacters(in: .whitespacesAndNewlines),
-                dangerousPermissionsEnabled: dangerousPermissionsEnabled
-            )
-            try self.saveConfig(
-                updatedConfig,
-                validateShellFunctions: true,
-                shellProfileValidationNames: [updatedConfig.claudeAPI.commandName]
-            )
-        }
-        if let key {
-            let credentialChanged = try withAPIKeyTransaction(
-                key: .claudeAPIKey,
-                replacement: key,
-                operation: saveSettings
-            )
-            if credentialChanged {
-                requestProxyConfigurationRestart(reason: .apiKey)
-                scheduleAPIUsageCollectorUpdateIfStarted()
-            }
-        } else {
-            try saveSettings()
-        }
+        let existing = apiKeyProfile(id: profileID)
+        let profile = AppConfig.APIKeyProfile(
+            id: profileID,
+            provider: .claude,
+            secretReference: existing?.secretReference ?? secretReference,
+            commandName: normalizeCommandName(functionName),
+            nickname: nickname.trimmingCharacters(in: .whitespacesAndNewlines),
+            dangerousPermissionsEnabled: dangerousPermissionsEnabled,
+            claude: claudeRouting ?? existing?.effectiveClaudeRouting ?? .automatic
+        )
+        try saveAPIKeyProfile(profile, replacementKey: key)
     }
 
     func saveCodexAPISettings(
+        profileID: String = "codex-api",
+        secretReference: SecretReference = .codexAPIKey,
         functionName: String,
         nickname: String = "",
         codex: AppConfig.Codex,
         dangerousPermissionsEnabled: Bool,
         key: String?
     ) throws {
+        let existing = apiKeyProfile(id: profileID)
+        let profile = AppConfig.APIKeyProfile(
+            id: profileID,
+            provider: .codex,
+            secretReference: existing?.secretReference ?? secretReference,
+            commandName: normalizeCommandName(functionName),
+            nickname: nickname.trimmingCharacters(in: .whitespacesAndNewlines),
+            dangerousPermissionsEnabled: dangerousPermissionsEnabled,
+            codex: CodexAPIModelOptions.normalized(codex)
+        )
+        try saveAPIKeyProfile(profile, replacementKey: key)
+    }
+
+    private func saveAPIKeyProfile(
+        _ profile: AppConfig.APIKeyProfile,
+        replacementKey: String?
+    ) throws {
+        let isNewProfile = apiKeyProfile(id: profile.id) == nil
+        if isNewProfile,
+           replacementKey == nil,
+           profile.id != "claude-api",
+           profile.id != "codex-api" {
+            throw CLIProxyManagerCommandError.prerequisite("An API key is required for a new profile.")
+        }
         let saveSettings = {
             var updatedConfig = self.config
-            updatedConfig.codexAPI = AppConfig.CodexAPI(
-                commandName: self.normalizeCommandName(functionName),
-                codex: CodexAPIModelOptions.normalized(codex),
-                nickname: nickname.trimmingCharacters(in: .whitespacesAndNewlines),
-                dangerousPermissionsEnabled: dangerousPermissionsEnabled
-            )
+            if let index = updatedConfig.apiKeyProfiles.firstIndex(where: { $0.id == profile.id }) {
+                updatedConfig.apiKeyProfiles[index] = profile
+            } else {
+                updatedConfig.apiKeyProfiles.append(profile)
+            }
             try self.saveConfig(
                 updatedConfig,
                 validateShellFunctions: true,
-                shellProfileValidationNames: [updatedConfig.codexAPI.commandName]
+                shellProfileValidationNames: [profile.commandName]
             )
         }
-        if let key {
+        if let replacementKey {
             let credentialChanged = try withAPIKeyTransaction(
-                key: .codexAPIKey,
-                replacement: key,
+                key: profile.secretReference,
+                replacement: replacementKey,
                 operation: saveSettings
             )
-            if credentialChanged {
+            if credentialChanged || isNewProfile {
                 requestProxyConfigurationRestart(reason: .apiKey)
                 scheduleAPIUsageCollectorUpdateIfStarted()
             }
@@ -2974,7 +3032,7 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
-    private func saveAPIKey(_ value: String, for key: SecretKey) throws {
+    private func saveAPIKey(_ value: String, for key: SecretReference) throws {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             throw CLIProxyManagerCommandError.emptySecret(key.rawValue)
@@ -2983,7 +3041,7 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func withAPIKeyTransaction(
-        key: SecretKey,
+        key: SecretReference,
         replacement: String?,
         operation: () throws -> Void
     ) throws -> Bool {
@@ -3185,22 +3243,28 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func removeAPIProvider(_ provider: ProviderRowState.ID) {
-        let key: SecretKey = provider == .codexAPI ? .codexAPIKey : .claudeAPIKey
+        let profile = apiKeyProfile(id: provider.rawValue)
+            ?? availableAPIKeyProfiles(in: config).first { $0.id == provider.rawValue }
+        guard let profile else {
+            settingsMessage = "API key removal failed: profile was not found."
+            return
+        }
         do {
-            let credentialChanged = try withAPIKeyTransaction(key: key, replacement: nil) {
+            _ = try withAPIKeyTransaction(
+                key: profile.secretReference,
+                replacement: nil
+            ) {
                 var updatedConfig = config
-                updatedConfig.usageOverlay.hiddenAccountIDs.removeAll { $0 == provider.rawValue }
-                if provider == .codexAPI {
-                    updatedConfig.codexAPI.commandName = ""
-                } else {
-                    updatedConfig.claudeAPI.commandName = ""
-                }
+                updatedConfig.apiKeyProfiles.removeAll { $0.id == profile.id }
+                updatedConfig.accountOrder.removeAll { $0 == profile.id }
+                updatedConfig.usageOverlay.hiddenAccountIDs.removeAll { $0 == profile.id }
                 try saveConfig(updatedConfig, validateShellFunctions: true)
             }
-            if credentialChanged {
-                requestProxyConfigurationRestart(reason: .apiKey)
-                scheduleAPIUsageCollectorUpdateIfStarted()
-            }
+            availableClaudeModelOptionsByProvider.removeValue(forKey: provider)
+            availableCodexAPIModelOptionsByProvider.removeValue(forKey: provider)
+            persistClaudeModelOptions()
+            requestProxyConfigurationRestart(reason: .apiKey)
+            scheduleAPIUsageCollectorUpdateIfStarted()
         } catch {
             settingsMessage = "API key removal failed: \(error.localizedDescription)"
         }
@@ -3390,15 +3454,53 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
-    func prepareCodexAPIModels() async {
-        guard availableCodexAPIModelOptions.isEmpty else { return }
-        await refreshCodexModels()
-        _ = try? await codexAPIModels()
+    func prepareCodexAPIModels(for provider: ProviderRowState.ID = .codexAPI) async {
+        guard availableCodexAPIModelOptionsByProvider[provider]?.isEmpty != false else { return }
+        _ = try? await refreshCodexAPIModels(for: provider)
     }
 
-    func codexAPIModels() async throws -> [CodexModelOption] {
-        let models = try await modelClient.codexModelOptions(port: config.port, modelPrefix: "cpm-codex-api")
-        availableCodexAPIModelOptions = models
+    func refreshCodexAPIModels(
+        for provider: ProviderRowState.ID = .codexAPI
+    ) async throws -> [CodexModelOption] {
+        await waitForConfigurationRestartIfNeeded()
+        guard !isServerActionInProgress else {
+            return availableCodexAPIModelOptionsByProvider[provider] ?? []
+        }
+
+        if !serverControlState.isRunning {
+            codexModelLoadingState = .startingServer
+            do {
+                guard try await prepareModelServer() else {
+                    codexModelLoadingState = .idle
+                    return availableCodexAPIModelOptionsByProvider[provider] ?? []
+                }
+            } catch {
+                codexModelLoadingState = .failed(error.localizedDescription)
+                throw error
+            }
+        }
+
+        codexModelLoadingState = .loadingModels
+        do {
+            let models = try await codexAPIModels(for: provider)
+            codexModelLoadingState = .idle
+            return models
+        } catch {
+            codexModelLoadingState = .failed(error.localizedDescription)
+            throw error
+        }
+    }
+
+    func codexAPIModels(for provider: ProviderRowState.ID = .codexAPI) async throws -> [CodexModelOption] {
+        let profile = apiKeyProfile(id: provider.rawValue)
+            ?? (provider == .codexAPI ? .legacy(provider: .codex) : nil)
+        guard let profile, profile.provider == .codex else { return [] }
+        let models = try await modelClient.codexModelOptions(
+            port: config.port,
+            modelPrefix: profile.modelPrefix
+        )
+        availableCodexAPIModelOptionsByProvider[provider] = models
+        if provider == .codexAPI { availableCodexAPIModelOptions = models }
         return models
     }
 
@@ -3413,30 +3515,27 @@ final class DashboardViewModel: ObservableObject {
 
     private func restoreClaudeModelOptions() {
         let cached = claudeModelOptionsCache.load()
-        availableClaudeAPIModelOptions = cached[ProviderRowState.ID.claudeAPI.rawValue] ?? []
         availableClaudeModelOptionsByProvider = Dictionary(
-            uniqueKeysWithValues: cached.compactMap { key, value in
-                guard key != ProviderRowState.ID.claudeAPI.rawValue else { return nil }
-                return (ProviderRowState.ID(rawValue: key), value)
+            uniqueKeysWithValues: cached.map { key, value in
+                (ProviderRowState.ID(rawValue: key), value)
             }
         )
+        availableClaudeAPIModelOptions = availableClaudeModelOptionsByProvider[.claudeAPI] ?? []
     }
 
     private func persistClaudeModelOptions() {
-        var cached = Dictionary(
+        let cached = Dictionary(
             uniqueKeysWithValues: availableClaudeModelOptionsByProvider.map { ($0.key.rawValue, $0.value) }
         )
-        if !availableClaudeAPIModelOptions.isEmpty {
-            cached[ProviderRowState.ID.claudeAPI.rawValue] = availableClaudeAPIModelOptions
-        }
         try? claudeModelOptionsCache.save(cached)
     }
 
     func prepareClaudeModels(for provider: ProviderRowState.ID) async {
-        if provider == .claudeAPI {
-            guard availableClaudeAPIModelOptions.isEmpty,
+        if let profile = apiKeyProfile(id: provider.rawValue), profile.provider == .claude {
+            guard availableClaudeModelOptionsByProvider[provider]?.isEmpty != false,
+                  isAPIKeyConfigured(profile.secretReference),
                   (try? await prepareModelServer()) == true else { return }
-            _ = try? await claudeAPIModels()
+            _ = try? await claudeAPIModels(for: provider)
             return
         }
 
@@ -3448,9 +3547,16 @@ final class DashboardViewModel: ObservableObject {
         _ = try? await claudeModels(for: provider)
     }
 
-    func claudeAPIModels() async throws -> [ClaudeModelOption] {
-        let models = try await modelClient.claudeModelOptions(port: config.port, modelPrefix: "cpm-claude-api")
-        availableClaudeAPIModelOptions = models
+    func claudeAPIModels(for provider: ProviderRowState.ID = .claudeAPI) async throws -> [ClaudeModelOption] {
+        let profile = apiKeyProfile(id: provider.rawValue)
+            ?? (provider == .claudeAPI ? .legacy(provider: .claude) : nil)
+        guard let profile, profile.provider == .claude else { return [] }
+        let models = try await modelClient.claudeModelOptions(
+            port: config.port,
+            modelPrefix: profile.modelPrefix
+        )
+        availableClaudeModelOptionsByProvider[provider] = models
+        if provider == .claudeAPI { availableClaudeAPIModelOptions = models }
         persistClaudeModelOptions()
         return models
     }
@@ -3538,6 +3644,56 @@ final class DashboardViewModel: ObservableObject {
         name.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private func availableAPIKeyProfiles(in config: AppConfig) -> [AppConfig.APIKeyProfile] {
+        var profiles = config.apiKeyProfiles
+        for provider in [AuthProfileType.claude, .codex] {
+            let legacyProfile = AppConfig.APIKeyProfile.legacy(provider: provider)
+            guard !profiles.contains(where: { $0.id == legacyProfile.id }),
+                  isAPIKeyConfigured(legacyProfile.secretReference) else {
+                continue
+            }
+            profiles.append(legacyProfile)
+        }
+        return profiles
+    }
+
+    private static func removingEmptyLegacyAPIKeyProfiles(
+        from config: AppConfig,
+        secretStore: any SecretStore
+    ) -> AppConfig {
+        var config = config
+        config.apiKeyProfiles.removeAll { profile in
+            guard profile.id == "claude-api" || profile.id == "codex-api",
+                  isDefaultLegacyAPIKeyProfile(profile) else {
+                return false
+            }
+            do {
+                return try secretStore.get(profile.secretReference)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .isEmpty
+            } catch SecretStoreError.missingSecret {
+                return true
+            } catch {
+                return false
+            }
+        }
+        return config
+    }
+
+    private static func isDefaultLegacyAPIKeyProfile(_ profile: AppConfig.APIKeyProfile) -> Bool {
+        guard profile.commandName.isEmpty,
+              profile.nickname.isEmpty,
+              !profile.dangerousPermissionsEnabled else {
+            return false
+        }
+        switch profile.provider {
+        case .claude:
+            return profile.effectiveClaudeRouting == .automatic
+        case .codex:
+            return profile.effectiveCodex == .default
+        }
+    }
+
     static func availableConfig(_ config: AppConfig) -> AppConfig {
         var config = config
         config.showNotifications = false
@@ -3612,6 +3768,7 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func applyCodexCredentialMigrationsIfNeeded() {
+        guard configWriteProtectionMessage == nil else { return }
         let result = Self.applyPreparedCodexCredentialMigrations(
             to: config,
             authProfileStore: authProfileStore,
@@ -3838,6 +3995,7 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func reconcileConfigWithAuthProfiles() {
+        guard configWriteProtectionMessage == nil else { return }
         let result = AppConfigMigration.reconcile(
             loadResult: .canonical(config),
             authProfiles: authProfiles
@@ -3924,10 +4082,14 @@ final class DashboardViewModel: ObservableObject {
             guard profile.provider == .codex, profile.isEnabled else { return nil }
             return .init(profile.codex ?? .default)
         }
+        let apiKeys = config.apiKeyProfiles.compactMap { profile -> CodexFastConfigurationInput.Configuration? in
+            guard profile.provider == .codex else { return nil }
+            return .init(profile.effectiveCodex)
+        }
         return CodexFastConfigurationInput(
             oauth: oauth,
             roundRobin: roundRobin,
-            apiKey: .init(config.codexAPI.codex)
+            apiKeys: apiKeys
         )
     }
 
@@ -3950,8 +4112,36 @@ final class DashboardViewModel: ObservableObject {
                 codex: configuration.codex
             )
         }
-        snapshotConfig.codexAPI.codex = input.apiKey.codex
+        snapshotConfig.apiKeyProfiles = input.apiKeys.enumerated().map { index, configuration in
+            let id = "fast-snapshot-api-\(index)"
+            return AppConfig.APIKeyProfile(
+                id: id,
+                provider: .codex,
+                secretReference: SecretReference.apiKeyProfile(id)!,
+                codex: configuration.codex
+            )
+        }
         return try CodexFastConfiguration(config: snapshotConfig)
+    }
+
+    private func validateAPIKeyProfiles(_ profiles: [AppConfig.APIKeyProfile]) throws {
+        var profileIDs: Set<String> = []
+        var secretReferences: Set<SecretReference> = []
+        for profile in profiles {
+            guard profileIDs.insert(profile.id).inserted else {
+                throw CLIProxyManagerCommandError.prerequisite("Duplicate API key profile ID: \(profile.id)")
+            }
+            guard secretReferences.insert(profile.secretReference).inserted else {
+                throw CLIProxyManagerCommandError.prerequisite(
+                    "API key profiles must use separate secret references."
+                )
+            }
+            guard profile.hasValidIdentity else {
+                throw CLIProxyManagerCommandError.prerequisite(
+                    "API key profile `\(profile.id)` has an invalid identity or secret reference."
+                )
+            }
+        }
     }
 
     private func saveConfig(
@@ -3960,10 +4150,14 @@ final class DashboardViewModel: ObservableObject {
         shellProfileValidationNames: [String]? = nil,
         preservingUnavailableRoundRobinProfiles: Bool = false
     ) throws {
+        if let configWriteProtectionMessage {
+            throw CLIProxyManagerCommandError.prerequisite(configWriteProtectionMessage)
+        }
         let persistedConfig = preservingUnavailableRoundRobinProfiles
             ? updatedConfig
             : removingUnavailableRoundRobinProfiles(from: updatedConfig)
         var updatedConfig = Self.persistedConfig(persistedConfig)
+        try validateAPIKeyProfiles(updatedConfig.apiKeyProfiles)
         _ = try CodexFastConfiguration(config: updatedConfig)
         let oldFastInput = codexFastConfigurationInput(config: config)
         let newFastInput = codexFastConfigurationInput(config: updatedConfig)
@@ -4026,6 +4220,9 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func savePrivacyOnlyConfig(_ updatedConfig: AppConfig) throws {
+        if let configWriteProtectionMessage {
+            throw CLIProxyManagerCommandError.prerequisite(configWriteProtectionMessage)
+        }
         let availableConfig = Self.persistedConfig(updatedConfig)
         let oldConfig = config
         let oldCards = cards
@@ -4095,11 +4292,14 @@ final class DashboardViewModel: ObservableObject {
     private func enabledShellFunctions(in config: AppConfig) -> AutomaticShellInstallService.EnabledFunctions {
         let enabledProfiles = renderableOAuthCommandProfiles(in: config)
         let enabledRoundRobinProfiles = renderableRoundRobinProfiles(in: config)
+        let apiKeyProfileIDs = Set(config.apiKeyProfiles.compactMap { profile in
+            let commandName = profile.commandName.trimmingCharacters(in: .whitespacesAndNewlines)
+            return commandName.isEmpty ? nil : profile.id
+        })
         return AutomaticShellInstallService.EnabledFunctions(
             claudeOAuth: enabledProfiles.contains { $0.provider == .claude } || enabledRoundRobinProfiles.contains { $0.provider == .claude },
             codex: enabledProfiles.contains { $0.provider == .codex } || enabledRoundRobinProfiles.contains { $0.provider == .codex },
-            claudeAPI: !config.claudeAPI.commandName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-            codexAPI: !config.codexAPI.commandName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            apiKeyProfileIDs: apiKeyProfileIDs
         )
     }
 
@@ -4109,10 +4309,9 @@ final class DashboardViewModel: ObservableObject {
         let roundRobinNames = config.roundRobinProfiles
             .filter(\.isEnabled)
             .map { normalizeCommandName($0.commandName) }
-        let apiNames = [
-            isAPIKeyConfigured(.claudeAPIKey) ? normalizeCommandName(config.claudeAPI.commandName) : "",
-            isAPIKeyConfigured(.codexAPIKey) ? normalizeCommandName(config.codexAPI.commandName) : ""
-        ]
+        let apiNames = config.apiKeyProfiles.map { profile in
+            normalizeCommandName(profile.commandName)
+        }
         return (oauthNames + roundRobinNames + apiNames).filter { !$0.isEmpty }
     }
 
@@ -4242,27 +4441,25 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private var apiUsageCollectorConfiguration: APIUsageCollectorConfiguration {
-        var providers: Set<APIUsageProvider> = []
-        if isAPIKeyConfigured(.claudeAPIKey) { providers.insert(.claude) }
-        if isAPIKeyConfigured(.codexAPIKey) { providers.insert(.openAI) }
+        let profiles = availableAPIKeyProfiles(in: config).compactMap { profile -> APIUsageProfileDescriptor? in
+            guard isAPIKeyConfigured(profile.secretReference) else { return nil }
+            return APIUsageProfileDescriptor(
+                profileID: profile.id,
+                provider: profile.provider == .claude ? .claude : .openAI,
+                modelPrefix: profile.modelPrefix
+            )
+        }
         return APIUsageCollectorConfiguration(
             usageEnabled: config.isUsageEnabled,
             proxyReady: serverStatus.severity == .ready,
             port: config.port,
-            enabledProviders: providers,
+            profiles: profiles,
             reportingTimeZoneID: TimeZone.current.identifier
         )
     }
 
     private var enabledAPIUsageProfileIDs: Set<String> {
-        var profileIDs: Set<String> = []
-        if isAPIKeyConfigured(.claudeAPIKey) {
-            profileIDs.insert(ProviderRowState.ID.claudeAPI.rawValue)
-        }
-        if isAPIKeyConfigured(.codexAPIKey) {
-            profileIDs.insert(ProviderRowState.ID.codexAPI.rawValue)
-        }
-        return profileIDs
+        Set(apiUsageCollectorConfiguration.profiles.map(\.profileID))
     }
 
     private var defaultSubscriptionUsageState: AccountSubscriptionUsageState {
@@ -4305,26 +4502,25 @@ final class DashboardViewModel: ObservableObject {
             )
         }
 
-        if isAPIKeyConfigured(.claudeAPIKey) {
+        for profile in availableAPIKeyProfiles(in: config) {
+            let id = ProviderRowState.ID(rawValue: profile.id)
+            let configured = isAPIKeyConfigured(profile.secretReference)
             rows.append(ProviderRowState(
-                id: .claudeAPI, providerType: .claude, name: "Claude API Key", nickname: config.claudeAPI.nickname,
-                functionName: config.claudeAPI.commandName, connectionTitle: "Configured",
-                connectionDetail: "CLIProxyAPI",
-                isConnected: true, accountDetailHidden: true,
-                usageState: .apiCost(apiCostUsageStates[ProviderRowState.ID.claudeAPI.rawValue] ?? defaultAPICostUsageState),
-                showsUsage: true,
-                showsInUsageOverlay: showsInUsageOverlay(.claudeAPI)
-            ))
-        }
-        if isAPIKeyConfigured(.codexAPIKey) {
-            rows.append(ProviderRowState(
-                id: .codexAPI, providerType: .codex, name: "OpenAI API Key", nickname: config.codexAPI.nickname,
-                functionName: config.codexAPI.commandName, connectionTitle: "Configured",
-                connectionDetail: "CLIProxyAPI", isConnected: true,
+                id: id,
+                providerType: profile.provider,
+                credentialKind: .apiKey,
+                authProfileID: profile.id,
+                commandProfileID: profile.id,
+                name: profile.provider == .claude ? "Claude API Key" : "OpenAI API Key",
+                nickname: profile.nickname,
+                functionName: profile.commandName,
+                connectionTitle: configured ? "Configured" : "API key missing",
+                connectionDetail: configured ? "CLIProxyAPI" : "Open settings to add the API key.",
+                isConnected: configured,
                 accountDetailHidden: true,
-                usageState: .apiCost(apiCostUsageStates[ProviderRowState.ID.codexAPI.rawValue] ?? defaultAPICostUsageState),
+                usageState: .apiCost(apiCostUsageStates[profile.id] ?? defaultAPICostUsageState),
                 showsUsage: true,
-                showsInUsageOverlay: showsInUsageOverlay(.codexAPI)
+                showsInUsageOverlay: showsInUsageOverlay(id)
             ))
         }
         let orderedRows = AccountOrdering.orderedRows(rows, storedIDs: config.accountOrder)
@@ -4336,14 +4532,13 @@ final class DashboardViewModel: ObservableObject {
         let functionNames = (
             config.oauthCommandProfiles.map(\.commandName)
                 + config.roundRobinProfiles.map(\.commandName)
-                + [config.claudeAPI.commandName, config.codexAPI.commandName]
+                + config.apiKeyProfiles.map(\.commandName)
         )
         .map(normalizeCommandName)
         .filter { !$0.isEmpty }
         let dangerousPermissionsEnabled = config.oauthCommandProfiles.contains { $0.dangerousPermissionsEnabled }
             || config.roundRobinProfiles.contains { $0.dangerousPermissionsEnabled }
-            || config.claudeAPI.dangerousPermissionsEnabled
-            || config.codexAPI.dangerousPermissionsEnabled
+            || config.apiKeyProfiles.contains { $0.dangerousPermissionsEnabled }
         optionRows = [
             DashboardOptionRow(id: "port", title: "Port", value: "\(config.port)", detail: "App-managed CLIProxyAPI server"),
             DashboardOptionRow(id: "functions", title: "Shell Functions", value: functionNames.joined(separator: " / "), detail: "Terminal commands"),

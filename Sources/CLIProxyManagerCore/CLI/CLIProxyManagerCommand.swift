@@ -19,9 +19,9 @@ public enum CLIProxyManagerCommandError: Error, Equatable, CustomStringConvertib
               cpm update check [app | proxy | all]
               cpm update stage [app | proxy | all]
               cpm update apply [app | proxy | all] [--yes]
-              cpm secret get|set|delete <claude-api-key|codex-api-key>
+              cpm secret get|set|delete <api-key-profile-id|claude-api-key|codex-api-key>
               cpm routing next <round-robin-profile-id>
-              cpm routing claude-models <command-profile-id|--api|--legacy>
+              cpm routing claude-models <command-profile-id|--api|--api-profile profile-id>
               cpm quota [--json]
               cpm quota key status [--json] | set --stdin | delete
             """
@@ -148,9 +148,16 @@ public struct CLIProxyManagerCommand: Sendable {
             try await runRoutingNext(profileID: arguments[2])
             return
         }
-        if arguments.count == 3, arguments[0] == "routing", arguments[1] == "claude-models" {
-            try await runClaudeModelsRouting(target: arguments[2])
-            return
+        if arguments[0] == "routing", arguments.count >= 2, arguments[1] == "claude-models" {
+            if arguments.count == 4, arguments[2] == "--api-profile" {
+                try await runClaudeModelsRouting(apiProfileID: arguments[3])
+                return
+            }
+            if arguments.count == 3 {
+                try await runClaudeModelsRouting(target: arguments[2])
+                return
+            }
+            throw CLIProxyManagerCommandError.usage
         }
 
         switch arguments.first {
@@ -646,8 +653,22 @@ public struct CLIProxyManagerCommand: Sendable {
     // MARK: - Legacy commands
 
     private func runSecret(arguments: [String]) throws {
-        guard let key = SecretKey(rawValue: arguments[2]) else {
-            throw CLIProxyManagerCommandError.usage
+        let target = arguments[2]
+        let key: SecretReference
+        let legacyProvider: AuthProfileType?
+        if target == SecretReference.claudeAPIKey.rawValue {
+            key = .claudeAPIKey
+            legacyProvider = .claude
+        } else if target == SecretReference.codexAPIKey.rawValue {
+            key = .codexAPIKey
+            legacyProvider = .codex
+        } else {
+            legacyProvider = nil
+            let config = try configStore.load()
+            guard let profile = config.apiKeyProfiles.first(where: { $0.id == target }) else {
+                throw CLIProxyManagerCommandError.prerequisite("API key profile `\(target)` was not found.")
+            }
+            key = profile.secretReference
         }
         switch arguments[1] {
         case "get":
@@ -657,7 +678,30 @@ public struct CLIProxyManagerCommand: Sendable {
             guard !value.isEmpty else {
                 throw CLIProxyManagerCommandError.emptySecret(key.rawValue)
             }
-            try secretStore.set(value, for: key)
+            let previousValue: String?
+            do {
+                previousValue = try secretStore.get(key)
+            } catch SecretStoreError.missingSecret {
+                previousValue = nil
+            }
+            do {
+                try secretStore.set(value, for: key)
+                if let legacyProvider {
+                    var config = try configStore.load()
+                    let legacyProfile = AppConfig.APIKeyProfile.legacy(provider: legacyProvider)
+                    if !config.apiKeyProfiles.contains(where: { $0.id == legacyProfile.id }) {
+                        config.apiKeyProfiles.append(legacyProfile)
+                        try configStore.save(config)
+                    }
+                }
+            } catch {
+                if let previousValue {
+                    try? secretStore.set(previousValue, for: key)
+                } else {
+                    try? secretStore.delete(key)
+                }
+                throw error
+            }
             output.writeStderr("Restart CLIProxyAPI with `cpm restart` to apply the API key change.\n")
         case "delete":
             try secretStore.delete(key)
@@ -682,17 +726,27 @@ public struct CLIProxyManagerCommand: Sendable {
         output.writeStdout(assignments + "\n")
     }
 
-    private func runClaudeModelsRouting(target: String) async throws {
+    private func runClaudeModelsRouting(
+        target: String? = nil,
+        apiProfileID: String? = nil
+    ) async throws {
         let config = try configStore.load()
         let routing: ClaudeRouting
         let prefix: String
 
-        if target == "--api" {
-            prefix = "cpm-claude-api"
-            routing = config.claudeAPI.claude
+        if let apiProfileID = apiProfileID ?? (target == "--api" ? "claude-api" : nil) {
+            guard let profile = config.apiKeyProfiles.first(where: { $0.id == apiProfileID }) else {
+                throw CLIProxyManagerCommandError.prerequisite("API key profile `\(apiProfileID)` was not found.")
+            }
+            guard profile.provider == .claude else {
+                throw CLIProxyManagerCommandError.prerequisite("API key profile `\(apiProfileID)` is not a Claude profile.")
+            }
+            prefix = profile.modelPrefix
+            routing = profile.effectiveClaudeRouting
         } else {
-            guard let profile = config.oauthCommandProfiles.first(where: { $0.id == target }) else {
-                throw CLIProxyManagerCommandError.prerequisite("Claude command profile `\(target)` was not found.")
+            guard let target,
+                  let profile = config.oauthCommandProfiles.first(where: { $0.id == target }) else {
+                throw CLIProxyManagerCommandError.prerequisite("Claude command profile `\(target ?? "")` was not found.")
             }
             guard profile.provider == .claude else {
                 throw CLIProxyManagerCommandError.prerequisite("Command profile `\(target)` is not a Claude OAuth profile.")

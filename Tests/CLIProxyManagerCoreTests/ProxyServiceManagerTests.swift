@@ -224,6 +224,29 @@ final class ProxyServiceManagerTests: XCTestCase {
         XCTAssertFalse(yaml.contains("gpt-5.6-terra-fast"))
     }
 
+    func testStartReadsConfiguredLegacyCodexAPIKeyOnlyOnce() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let callCounter = ProviderCallCounter()
+        let manager = ProxyServiceManager(
+            paths: paths,
+            launcher: FakeProcessLauncher(),
+            codexAPIKeyProvider: {
+                callCounter.increment()
+                return "codex-key"
+            },
+            appConfigProvider: { .default }
+        )
+
+        try await manager.start(port: 8317)
+
+        let yaml = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
+        XCTAssertEqual(callCounter.value, 1)
+        XCTAssertTrue(yaml.contains("codex-key"))
+        XCTAssertTrue(yaml.contains("prefix: \"cpm-codex-api\""))
+    }
+
     func testStartKeepsNoFastCodexAPIYAMLByteCompatibleWithMainRenderer() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
@@ -857,6 +880,89 @@ final class ProxyServiceManagerTests: XCTestCase {
             binaryPath: "/tmp/managed/cliproxyapi",
             configPath: "/tmp/managed/config.yaml"
         ))
+    }
+
+    func testPrepareRendersMultipleAPIKeyProfilesPerProvider() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let claudeID = "claude-api-11111111-1111-1111-1111-111111111111"
+        let codexID = "codex-api-22222222-2222-2222-2222-222222222222"
+        let claudeReference = try XCTUnwrap(SecretReference.apiKeyProfile(claudeID))
+        let codexReference = try XCTUnwrap(SecretReference.apiKeyProfile(codexID))
+        var config = AppConfig.default
+        config.apiKeyProfiles = [
+            .legacy(provider: .claude),
+            .init(
+                id: claudeID,
+                provider: .claude,
+                secretReference: claudeReference,
+                commandName: "claude_personal"
+            ),
+            .init(
+                id: codexID,
+                provider: .codex,
+                secretReference: codexReference,
+                commandName: "codex_work",
+                codex: .default
+            )
+        ]
+        let keys: [SecretReference: String] = [
+            .claudeAPIKey: "legacy-claude-key",
+            claudeReference: "personal-claude-key",
+            codexReference: "work-codex-key"
+        ]
+        let preparedConfig = config
+        let manager = ProxyServiceManager(
+            paths: paths,
+            launcher: FakeProcessLauncher(),
+            apiKeyProvider: { keys[$0] },
+            appConfigProvider: { preparedConfig }
+        )
+
+        try manager.prepare(port: 8317)
+
+        let yaml = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
+        XCTAssertEqual(yaml.components(separatedBy: "base-url: \"https://api.anthropic.com\"").count - 1, 2)
+        XCTAssertTrue(yaml.contains("prefix: \"cpm-claude-api\""))
+        XCTAssertTrue(yaml.contains("prefix: \"cpm-\(claudeID)\""))
+        XCTAssertTrue(yaml.contains("prefix: \"cpm-\(codexID)\""))
+        XCTAssertTrue(yaml.contains("personal-claude-key"))
+        XCTAssertTrue(yaml.contains("work-codex-key"))
+    }
+
+    func testPrepareSkipsUnreadableAPIKeyProfileWithoutDisablingHealthyProfiles() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let healthyID = "claude-api-11111111-1111-1111-1111-111111111111"
+        let unreadableID = "claude-api-22222222-2222-2222-2222-222222222222"
+        let healthyReference = try XCTUnwrap(SecretReference.apiKeyProfile(healthyID))
+        let unreadableReference = try XCTUnwrap(SecretReference.apiKeyProfile(unreadableID))
+        var config = AppConfig.default
+        config.apiKeyProfiles = [
+            .init(id: healthyID, provider: .claude, secretReference: healthyReference),
+            .init(id: unreadableID, provider: .claude, secretReference: unreadableReference)
+        ]
+        let preparedConfig = config
+        let manager = ProxyServiceManager(
+            paths: paths,
+            launcher: FakeProcessLauncher(),
+            apiKeyProvider: { reference in
+                if reference == unreadableReference {
+                    throw SecretStoreError.readFailed(reference.rawValue)
+                }
+                return reference == healthyReference ? "healthy-key" : nil
+            },
+            appConfigProvider: { preparedConfig }
+        )
+
+        try manager.prepare(port: 8317)
+
+        let yaml = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
+        XCTAssertTrue(yaml.contains("prefix: \"cpm-\(healthyID)\""))
+        XCTAssertTrue(yaml.contains("healthy-key"))
+        XCTAssertFalse(yaml.contains("prefix: \"cpm-\(unreadableID)\""))
     }
 
     private func makeSandbox() throws -> URL {

@@ -4,8 +4,26 @@ public struct APIUsageCollectorConfiguration: Equatable, Sendable {
     public let usageEnabled: Bool
     public let proxyReady: Bool
     public let port: Int
-    public let enabledProviders: Set<APIUsageProvider>
+    public let profiles: [APIUsageProfileDescriptor]
     public let reportingTimeZoneID: String
+
+    public var enabledProviders: Set<APIUsageProvider> {
+        Set(profiles.map(\.provider))
+    }
+
+    public init(
+        usageEnabled: Bool,
+        proxyReady: Bool,
+        port: Int,
+        profiles: [APIUsageProfileDescriptor],
+        reportingTimeZoneID: String
+    ) {
+        self.usageEnabled = usageEnabled
+        self.proxyReady = proxyReady
+        self.port = port
+        self.profiles = profiles
+        self.reportingTimeZoneID = reportingTimeZoneID
+    }
 
     public init(
         usageEnabled: Bool,
@@ -14,11 +32,15 @@ public struct APIUsageCollectorConfiguration: Equatable, Sendable {
         enabledProviders: Set<APIUsageProvider>,
         reportingTimeZoneID: String
     ) {
-        self.usageEnabled = usageEnabled
-        self.proxyReady = proxyReady
-        self.port = port
-        self.enabledProviders = enabledProviders
-        self.reportingTimeZoneID = reportingTimeZoneID
+        self.init(
+            usageEnabled: usageEnabled,
+            proxyReady: proxyReady,
+            port: port,
+            profiles: enabledProviders.map { provider in
+                provider == .claude ? .legacyClaude : .legacyOpenAI
+            },
+            reportingTimeZoneID: reportingTimeZoneID
+        )
     }
 }
 
@@ -812,7 +834,9 @@ public actor APIUsageCollector: APIUsageCollecting {
                 }
 
                 let records = batch.records
-                let mutations = records.compactMap(makeMutation)
+                let mutations = records.compactMap { record in
+                    makeMutation(record, profiles: configuration.profiles)
+                }
                 do {
                     try await ledgerStore.merge(mutations)
                 } catch {
@@ -1031,8 +1055,11 @@ public actor APIUsageCollector: APIUsageCollecting {
         finishReload(generation: generation)
     }
 
-    private func makeMutation(_ record: APIUsageQueueRecord) -> APIUsageLedgerMutation? {
-        switch mapper.classify(record) {
+    private func makeMutation(
+        _ record: APIUsageQueueRecord,
+        profiles: [APIUsageProfileDescriptor]
+    ) -> APIUsageLedgerMutation? {
+        switch mapper.classify(record, profiles: profiles) {
         case .ignored:
             return nil
         case let .issue(issue):
@@ -1088,9 +1115,10 @@ public actor APIUsageCollector: APIUsageCollecting {
     ) -> APIUsageCollectionReport {
         APIUsageCollectionReport(
             identity: identity,
-            statesByProfileID: Dictionary(uniqueKeysWithValues: configuration.enabledProviders.map {
-                ($0.profileID, APICostUsageState.disabled)
-            }),
+            statesByProfileID: Dictionary(
+                configuration.profiles.map { ($0.profileID, APICostUsageState.disabled) },
+                uniquingKeysWith: { first, _ in first }
+            ),
             collectedAt: at
         )
     }
@@ -1115,7 +1143,7 @@ public actor APIUsageCollector: APIUsageCollecting {
         return APIUsageCollectionReport(
             identity: identity,
             statesByProfileID: estimator.states(
-                for: profiles(configuration),
+                for: configuration.profiles,
                 ledger: ledger,
                 now: at
             ),
@@ -1258,21 +1286,14 @@ public actor APIUsageCollector: APIUsageCollecting {
         }
     }
 
-    private func profiles(
-        _ configuration: APIUsageCollectorConfiguration
-    ) -> [APIUsageProvider: String] {
-        Dictionary(uniqueKeysWithValues: configuration.enabledProviders.map {
-            ($0, $0.profileID)
-        })
-    }
-
     private func states(
         configuration: APIUsageCollectorConfiguration,
         makeState: () -> APICostUsageState
     ) -> [String: APICostUsageState] {
-        Dictionary(uniqueKeysWithValues: configuration.enabledProviders.map {
-            ($0.profileID, makeState())
-        })
+        Dictionary(
+            configuration.profiles.map { ($0.profileID, makeState()) },
+            uniquingKeysWith: { first, _ in first }
+        )
     }
 
     private func ordered(_ issues: [APICostIssue]) -> [APICostIssue] {

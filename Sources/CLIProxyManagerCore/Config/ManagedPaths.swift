@@ -19,8 +19,8 @@ public struct ManagedPaths: Equatable, Sendable {
         rootDirectory.appendingPathComponent("api-keys", isDirectory: true)
     }
 
-    public func apiKeyFile(for key: SecretKey) -> URL {
-        apiKeysDirectory.appendingPathComponent("\(key.rawValue).json")
+    public func apiKeyFile(for reference: SecretReference) -> URL {
+        apiKeysDirectory.appendingPathComponent("\(reference.rawValue).json")
     }
 
     public var apiUsageDirectory: URL {

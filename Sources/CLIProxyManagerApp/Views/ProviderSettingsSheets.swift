@@ -34,19 +34,63 @@ enum CodexAPIModelOptions {
             .map { CodexModelOption(id: $0) }
     }
 
+    static let newProfileModels: [CodexModelOption] = [
+        CodexModelOption(
+            id: "gpt-5.6-sol",
+            supportedReasoning: [.low, .medium, .high, .xhigh, .max],
+            defaultReasoning: .low
+        ),
+        CodexModelOption(
+            id: "gpt-5.6-terra",
+            supportedReasoning: [.low, .medium, .high, .xhigh, .max],
+            defaultReasoning: .medium
+        ),
+        CodexModelOption(
+            id: "gpt-5.6-luna",
+            supportedReasoning: [.low, .medium, .high, .xhigh, .max],
+            defaultReasoning: .medium
+        ),
+        CodexModelOption(
+            id: "gpt-5.5",
+            supportedReasoning: [.low, .medium, .high, .xhigh],
+            defaultReasoning: .medium
+        ),
+        CodexModelOption(
+            id: "gpt-5.4",
+            supportedReasoning: [.low, .medium, .high, .xhigh],
+            defaultReasoning: .medium
+        )
+    ]
+
     static func baseModels(from models: [String]) -> [String] {
         var seen = Set<String>()
         return models.compactMap { model in
-            let unprefixed = model.split(separator: "/", omittingEmptySubsequences: false).last.map(String.init) ?? model
-            let baseModel = unprefixed.replacingOccurrences(
-                of: #"\((?:auto|low|medium|high|xhigh|max)\)$"#,
-                with: "",
-                options: .regularExpression
-            ).trimmingCharacters(in: .whitespacesAndNewlines)
-            let canonicalModel = CodexFastMode.canonicalModel(from: baseModel)
-            guard !canonicalModel.isEmpty, seen.insert(canonicalModel).inserted else { return nil }
+            let baseModel = CodexFastMode.canonicalModel(from: model)
+            let components = baseModel.split(separator: "/", omittingEmptySubsequences: false)
+            let unprefixed: String
+            if components.count > 1, components[0].lowercased().hasPrefix("cpm-") {
+                unprefixed = components.dropFirst().joined(separator: "/")
+            } else {
+                unprefixed = baseModel
+            }
+            let canonicalModel = unprefixed.trimmingCharacters(in: .whitespacesAndNewlines)
+            let lookupID = canonicalModel.lowercased()
+            guard !canonicalModel.isEmpty, seen.insert(lookupID).inserted else { return nil }
             return canonicalModel
         }
+    }
+
+    static func initialCodex(
+        _ codex: AppConfig.Codex,
+        isNewProfile: Bool,
+        defaultModel: String?
+    ) -> AppConfig.Codex {
+        var codex = normalized(codex)
+        guard isNewProfile, let defaultModel else { return codex }
+        codex.opus.model = defaultModel
+        codex.sonnet.model = defaultModel
+        codex.haiku.model = defaultModel
+        return codex
     }
 
     static func normalized(_ codex: AppConfig.Codex) -> AppConfig.Codex {
@@ -64,9 +108,16 @@ enum CodexAPIModelOptions {
     }
 }
 
-enum CodexAPIInitialDefaults {
-    static func shouldApply(isConfigured: Bool, didApply: Bool) -> Bool {
-        !isConfigured && !didApply
+enum CodexAPIModelDiscovery {
+    static func shouldReloadOnAppear(isNewProfile: Bool) -> Bool {
+        !isNewProfile
+    }
+
+    static func modelsAfterRefresh(
+        current: [CodexModelOption],
+        refreshed: [CodexModelOption]
+    ) -> [CodexModelOption] {
+        refreshed.isEmpty ? current : refreshed
     }
 }
 
@@ -362,25 +413,27 @@ private struct CommandNameField: View {
 
 private struct SheetFooter: View {
     let removeLabel: String
-    let onRemove: () -> Void
+    let onRemove: (() -> Void)?
     let onCancel: () -> Void
     let onSave: () -> Void
     var saveDisabled: Bool = false
 
     var body: some View {
         HStack {
-            Button(action: onRemove) {
-                HStack(spacing: 5) {
-                    Image(systemName: "trash")
-                    Text(removeLabel)
+            if let onRemove {
+                Button(action: onRemove) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "trash")
+                        Text(removeLabel)
+                    }
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(BrandPalette.statusError)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
                 }
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(BrandPalette.statusError)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
             Spacer()
             Button("Cancel", action: onCancel)
                 .buttonStyle(.bordered)
@@ -995,27 +1048,32 @@ struct ClaudeAPIProviderSettingsSheet: View {
     @State private var apiKey = ""
     @State private var saveErrorMessage: String?
     @State private var commandNameCheckState: CommandNameCheckState = .checking
+    let profileID: ProviderRowState.ID
     let isConfigured: Bool
+    let isNewProfile: Bool
     let refreshModels: () async throws -> [ClaudeModelOption]
     let checkCommandName: (String) async -> CommandNameAvailability
     let save: (String, String, ClaudeRouting, Bool, String?) throws -> Void
     let remove: () -> Void
 
     init(
-        config: AppConfig,
+        profile: AppConfig.APIKeyProfile,
         isConfigured: Bool,
+        isNewProfile: Bool,
         initialModels: [ClaudeModelOption] = [],
         refreshModels: @escaping () async throws -> [ClaudeModelOption],
         checkCommandName: @escaping (String) async -> CommandNameAvailability,
         save: @escaping (String, String, ClaudeRouting, Bool, String?) throws -> Void,
         remove: @escaping () -> Void
     ) {
-        _functionName = State(initialValue: config.claudeAPI.commandName)
-        _nickname = State(initialValue: config.claudeAPI.nickname)
-        _claudeRouting = State(initialValue: config.claudeAPI.claude)
+        _functionName = State(initialValue: profile.commandName)
+        _nickname = State(initialValue: profile.nickname)
+        _claudeRouting = State(initialValue: profile.effectiveClaudeRouting)
         _scopedModels = State(initialValue: initialModels)
-        _dangerousPermissionsEnabled = State(initialValue: config.claudeAPI.dangerousPermissionsEnabled)
+        _dangerousPermissionsEnabled = State(initialValue: profile.dangerousPermissionsEnabled)
+        profileID = ProviderRowState.ID(rawValue: profile.id)
         self.isConfigured = isConfigured
+        self.isNewProfile = isNewProfile
         self.refreshModels = refreshModels
         self.checkCommandName = checkCommandName
         self.save = save
@@ -1024,7 +1082,7 @@ struct ClaudeAPIProviderSettingsSheet: View {
 
     var body: some View {
         AccountSheetChrome(
-            providerID: .claudeAPI,
+            providerID: profileID,
             providerType: .claude,
             title: "Claude API Key",
             width: 460,
@@ -1109,8 +1167,8 @@ struct ClaudeAPIProviderSettingsSheet: View {
             }
         } footer: {
             SheetFooter(
-                removeLabel: "Remove key",
-                onRemove: { remove(); dismiss() },
+                removeLabel: "Remove profile",
+                onRemove: isNewProfile ? nil : { remove(); dismiss() },
                 onCancel: { dismiss() },
                 onSave: {
                     do {
@@ -1127,7 +1185,7 @@ struct ClaudeAPIProviderSettingsSheet: View {
             )
         }
         .task {
-            if scopedModels.isEmpty {
+            if !isNewProfile, scopedModels.isEmpty {
                 await reloadModels()
             }
         }
@@ -1155,8 +1213,8 @@ struct ClaudeAPIProviderSettingsSheet: View {
     }
 }
 
-func codexAPIInitialNickname(isConfigured: Bool, savedNickname: String) -> String {
-    isConfigured ? savedNickname : ""
+func codexAPIInitialNickname(isNewProfile: Bool, savedNickname: String) -> String {
+    isNewProfile ? "" : savedNickname
 }
 
 struct CodexAPIProviderSettingsSheet: View {
@@ -1169,11 +1227,13 @@ struct CodexAPIProviderSettingsSheet: View {
     @State private var dangerousPermissionsEnabled: Bool
     @State private var scopedAvailableModels: [CodexModelOption]
     @State private var isReloading = false
-    @State private var didApplyInitialDefaults = false
     @State private var apiKey = ""
     @State private var saveErrorMessage: String?
     @State private var commandNameCheckState: CommandNameCheckState = .checking
+    let profileID: ProviderRowState.ID
     let isConfigured: Bool
+    let isNewProfile: Bool
+    let availableModels: [CodexModelOption]
     let modelLoadingState: CodexModelLoadingState
     let refreshModels: () async throws -> [CodexModelOption]
     let preferredModel: ([CodexModelOption]) -> String?
@@ -1182,8 +1242,9 @@ struct CodexAPIProviderSettingsSheet: View {
     let remove: () -> Void
 
     init(
-        config: AppConfig,
+        profile: AppConfig.APIKeyProfile,
         isConfigured: Bool,
+        isNewProfile: Bool,
         availableModels: [CodexModelOption],
         modelLoadingState: CodexModelLoadingState,
         refreshModels: @escaping () async throws -> [CodexModelOption],
@@ -1192,22 +1253,30 @@ struct CodexAPIProviderSettingsSheet: View {
         save: @escaping (String, String, AppConfig.Codex, Bool, String?) throws -> Void,
         remove: @escaping () -> Void
     ) {
-        let normalizedCodex = CodexAPIModelOptions.normalized(config.codexAPI.codex)
+        let normalizedCodex = CodexAPIModelOptions.normalized(profile.effectiveCodex)
         let normalizedModels = CodexAPIModelOptions.initialModels(
             codex: normalizedCodex,
             availableModels: availableModels
         )
-        _functionName = State(initialValue: config.codexAPI.commandName)
+        let initialCodex = CodexAPIModelOptions.initialCodex(
+            normalizedCodex,
+            isNewProfile: isNewProfile,
+            defaultModel: preferredModel(normalizedModels)
+        )
+        _functionName = State(initialValue: profile.commandName)
         _nickname = State(initialValue: codexAPIInitialNickname(
-            isConfigured: isConfigured,
-            savedNickname: config.codexAPI.nickname
+            isNewProfile: isNewProfile,
+            savedNickname: profile.nickname
         ))
-        _opus = State(initialValue: normalizedCodex.opus)
-        _sonnet = State(initialValue: normalizedCodex.sonnet)
-        _haiku = State(initialValue: normalizedCodex.haiku)
-        _dangerousPermissionsEnabled = State(initialValue: config.codexAPI.dangerousPermissionsEnabled)
+        _opus = State(initialValue: initialCodex.opus)
+        _sonnet = State(initialValue: initialCodex.sonnet)
+        _haiku = State(initialValue: initialCodex.haiku)
+        _dangerousPermissionsEnabled = State(initialValue: profile.dangerousPermissionsEnabled)
         _scopedAvailableModels = State(initialValue: normalizedModels)
+        profileID = ProviderRowState.ID(rawValue: profile.id)
         self.isConfigured = isConfigured
+        self.isNewProfile = isNewProfile
+        self.availableModels = availableModels
         self.modelLoadingState = modelLoadingState
         self.refreshModels = refreshModels
         self.preferredModel = preferredModel
@@ -1217,7 +1286,7 @@ struct CodexAPIProviderSettingsSheet: View {
     }
 
     var body: some View {
-        AccountSheetChrome(providerID: .codexAPI, providerType: .codex, title: "OpenAI API Key", width: ProviderSettingsSheetMetrics.codexWidth, minHeight: ProviderSettingsSheetMetrics.codexHeight, onClose: { dismiss() }) {
+        AccountSheetChrome(providerID: profileID, providerType: .codex, title: "OpenAI API Key", width: ProviderSettingsSheetMetrics.codexWidth, minHeight: ProviderSettingsSheetMetrics.codexHeight, onClose: { dismiss() }) {
             Text(isConfigured ? "API key configured" : "Add an OpenAI API key")
                 .font(.system(size: 12.5, weight: .medium))
                 .foregroundStyle(isConfigured ? BrandPalette.statusRunning : .secondary)
@@ -1262,11 +1331,14 @@ struct CodexAPIProviderSettingsSheet: View {
                         .font(.system(size: 11))
                     }
                     .buttonStyle(.borderless)
-                    .disabled(CodexProviderModelLoadingPresentation.isRefreshDisabled(modelLoadingState: modelLoadingState, isReloading: isReloading))
+                    .disabled(isNewProfile || CodexProviderModelLoadingPresentation.isRefreshDisabled(modelLoadingState: modelLoadingState, isReloading: isReloading))
                 }
-                Text(CodexProviderModelLoadingPresentation.message(modelLoadingState: modelLoadingState, isReloading: isReloading) ?? "Map each Claude model tier to a GPT model, reasoning, and context window.")
+                Text(isNewProfile
+                    ? "Model capabilities are verified after saving this API key."
+                    : CodexProviderModelLoadingPresentation.message(modelLoadingState: modelLoadingState, isReloading: isReloading)
+                        ?? "Map each Claude model tier to a GPT model, reasoning, and context window.")
                     .font(.system(size: 11.5))
-                    .foregroundStyle(CodexProviderModelLoadingPresentation.isError(modelLoadingState: modelLoadingState, isReloading: isReloading) ? BrandPalette.statusError : .secondary)
+                    .foregroundStyle(!isNewProfile && CodexProviderModelLoadingPresentation.isError(modelLoadingState: modelLoadingState, isReloading: isReloading) ? BrandPalette.statusError : .secondary)
                 GroupCard {
                     CodexRoleRoutingFields(opus: $opus, sonnet: $sonnet, haiku: $haiku, availableModels: scopedAvailableModels)
                 }
@@ -1291,8 +1363,8 @@ struct CodexAPIProviderSettingsSheet: View {
             }
         } footer: {
             SheetFooter(
-                removeLabel: "Remove key",
-                onRemove: { remove(); dismiss() },
+                removeLabel: "Remove profile",
+                onRemove: isNewProfile ? nil : { remove(); dismiss() },
                 onCancel: { dismiss() },
                 onSave: {
                     do {
@@ -1319,8 +1391,14 @@ struct CodexAPIProviderSettingsSheet: View {
             )
         }
         .task {
-            await reloadModels()
-            applyInitialDefaultsIfNeeded()
+            if CodexAPIModelDiscovery.shouldReloadOnAppear(isNewProfile: isNewProfile) {
+                await reloadModels()
+            }
+        }
+        .onChange(of: availableModels) { _, models in
+            guard !isNewProfile, !models.isEmpty else { return }
+            scopedAvailableModels = models
+            applyDefaultModel(from: models)
         }
         .task(id: functionName) {
             commandNameCheckState = .checking
@@ -1338,25 +1416,15 @@ struct CodexAPIProviderSettingsSheet: View {
         isReloading = true
         defer { isReloading = false }
         do {
-            scopedAvailableModels = try await refreshModels()
-            applyDefaultModel(from: scopedAvailableModels)
-            if !isConfigured {
-                applyInitialDefaultsIfNeeded()
-            }
+            let models = CodexAPIModelDiscovery.modelsAfterRefresh(
+                current: scopedAvailableModels,
+                refreshed: try await refreshModels()
+            )
+            scopedAvailableModels = models
+            applyDefaultModel(from: models)
         } catch {
-            // Keep the current API-key-scoped options; OAuth/global models are not valid fallbacks.
+            // Keep the current options when model discovery is unavailable.
         }
-    }
-
-    private func applyInitialDefaultsIfNeeded() {
-        guard CodexAPIInitialDefaults.shouldApply(
-            isConfigured: isConfigured,
-            didApply: didApplyInitialDefaults
-        ), let defaultModel = preferredModel(scopedAvailableModels) else { return }
-        opus.model = defaultModel
-        sonnet.model = defaultModel
-        haiku.model = defaultModel
-        didApplyInitialDefaults = true
     }
 
     private func applyDefaultModel(from models: [CodexModelOption]) {

@@ -102,6 +102,35 @@ final class CodexFastModeTests: XCTestCase {
         ])
     }
 
+    func testAPIKeyFastModelsRemainScopedByProfileID() throws {
+        let firstID = "codex-api-11111111-1111-1111-1111-111111111111"
+        let secondID = "codex-api-22222222-2222-2222-2222-222222222222"
+        var config = AppConfig.default
+        config.apiKeyProfiles = [
+            .init(
+                id: firstID,
+                provider: .codex,
+                secretReference: SecretReference.apiKeyProfile(firstID)!,
+                codex: codex(opus: "gpt-5.6-sol", sonnet: "gpt-5.5", haiku: "gpt-5.5", fastOpus: true)
+            ),
+            .init(
+                id: secondID,
+                provider: .codex,
+                secretReference: SecretReference.apiKeyProfile(secondID)!,
+                codex: codex(opus: "gpt-5.6-terra", sonnet: "gpt-5.5", haiku: "gpt-5.5", fastOpus: true)
+            )
+        ]
+
+        let snapshot = try CodexFastConfiguration(
+            config: config,
+            includedAPIKeyProfileIDs: [firstID, secondID]
+        )
+
+        XCTAssertEqual(snapshot.apiKeyCanonicalModelsByProfileID[firstID], ["gpt-5.6-sol"])
+        XCTAssertEqual(snapshot.apiKeyCanonicalModelsByProfileID[secondID], ["gpt-5.6-terra"])
+        XCTAssertEqual(snapshot.apiKeyCanonicalModels, ["gpt-5.6-sol", "gpt-5.6-terra"])
+    }
+
     func testAPIKeyModelsCanBeExcludedWhenNoAPIKeyIsConfigured() throws {
         var config = AppConfig.default
         config.codexAPI.codex.opus.fastModeEnabled = true

@@ -14,8 +14,8 @@ CLIProxyManager is a macOS menu bar app for managing multiple Claude and Codex O
 
 ## Highlights
 
-- Add and manage Claude/Codex OAuth accounts and Claude/OpenAI API keys in one place.
-- Configure each account's command, nickname, enabled state, order, detail privacy, and Usage HUD visibility.
+- Add and manage Claude/Codex OAuth accounts and multiple Claude/OpenAI API key profiles per provider in one place.
+- Configure commands, nicknames, ordering, Usage HUD visibility, and authentication-specific settings per OAuth account or API key profile.
 - Choose Direct or CLIProxyAPI connections for Claude OAuth and configure per-account Claude model mappings.
 - Configure GPT model, reasoning, detected context window, and Fast mode per Opus, Sonnet, and Haiku role for Codex OAuth and OpenAI API keys.
 - Create round-robin commands that rotate selected OAuth accounts between new CLI sessions while keeping one account fixed inside each session.
@@ -41,8 +41,8 @@ Only use release builds downloaded directly from GitHub Releases.
 
 ## Quick start
 
-1. In the app, select **Add Provider** and add a Claude/Codex OAuth subscription or a Claude/OpenAI API key.
-2. In each account's Settings, choose a nickname and command, such as `claude-work` or `codex-personal`.
+1. In the app, select **Add Provider** and add a Claude/Codex OAuth subscription or a Claude/OpenAI API key profile. You can add multiple API key profiles for the same provider.
+2. In each account or API key profile's Settings, choose a nickname and command, such as `claude-work` or `codex-personal`.
 3. Open a new Terminal window, or run:
 
    ```zsh
@@ -61,7 +61,8 @@ Only use release builds downloaded directly from GitHub Releases.
 - Reorder accounts from the main window with the drag handle or move commands. The same order is used in the menu bar and Usage HUD.
 - Disable and re-enable OAuth accounts, blur account details, or exclude individual accounts from the Usage HUD.
 - Claude OAuth can use a **Direct** or **CLIProxyAPI** connection. Direct follows Claude Code's current model policy, while CLIProxyAPI uses per-account model mappings.
-- Codex OAuth and OpenAI API keys can select a GPT model and reasoning effort for each Opus, Sonnet, and Haiku role. Supported models can enable Fast mode, and the detected context window is applied to Claude Code auto-compaction.
+- Each Claude or OpenAI API key profile has its own command, nickname, model routing, permission settings, and unique proxy prefix.
+- Codex OAuth and each OpenAI API key profile can select a GPT model and reasoning effort for each Opus, Sonnet, and Haiku role. Supported models can enable Fast mode, and the detected context window is applied to Claude Code auto-compaction.
 - Create provider-specific round-robin commands under **Settings → General → Routing**. Select at least two accounts to rotate the account used for each new CLI session; the chosen account stays fixed for that session.
 
 ## Usage HUD
@@ -71,7 +72,7 @@ Use **Settings → Usage** to configure menu bar usage and the separate Usage HU
 - Adjust window opacity and always-on-top behavior, and show or hide the HUD from the menu bar.
 - Use the Usage HUD button on each account card to choose which accounts appear. The selection is shared by expanded and compact views and restored after relaunch.
 - OAuth accounts show usage percentages and reset times for the `5h`, `7d`, or `1mo` periods reported by the provider API.
-- Claude and OpenAI API keys aggregate local CLIProxyAPI usage records into Day/Mon token counts, request counts, and estimated cost. The cost is an estimate based on collected usage and the app's price catalog, not a provider invoice.
+- Each Claude and OpenAI API key profile uses its unique routing prefix to aggregate local CLIProxyAPI usage records separately into Day/Mon token counts, request counts, and estimated cost. The cost is an estimate based on collected usage and the app's price catalog, not a provider invoice.
 - Use the compact/expand control in the HUD header to switch between the 300pt-wide expanded view and the 108pt-wide compact view.
 - Compact view shows each account's avatar, name, and period percentages or Day/Mon estimated cost in a vertical layout. Loading, unavailable, disabled, and stale states show `—` with a status indicator.
 - The selected HUD mode and account list are restored after relaunch.
@@ -144,7 +145,7 @@ Follow the instructions in [Installation and macOS security warning](#installati
 
 ## Security
 
-CLIProxyManager stores OAuth profiles and preferences under `~/.cliproxy-manager`. API keys are stored as plaintext files under `~/.cliproxy-manager/api-keys/`. The app applies `0700` permissions to the directory and `0600` permissions to each key file, but anyone who can access your macOS account can read them. Do not copy, commit, or share this directory.
+CLIProxyManager stores OAuth profiles and preferences under `~/.cliproxy-manager`. The current release stores the actual key for each API key profile in a separate plaintext file under `~/.cliproxy-manager/api-keys/` and does not provide a setting to switch API keys to macOS Keychain. Keys are not written to `config.json` or generated shell functions. The app applies `0700` permissions to the directory and `0600` permissions to each key and lock file, but anyone who can access your macOS account can read them. Do not copy, commit, or share this directory.
 
 ## License
 
