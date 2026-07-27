@@ -154,7 +154,7 @@ struct MenuBarStatusView: View {
         } else {
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(snapshot.connectedProviders) { provider in
-                    MenuBarAccountRow(provider: provider)
+                    MenuBarAccountRow(provider: provider, now: refreshAgeReferenceDate)
                 }
             }
         }
@@ -175,10 +175,18 @@ struct MenuBarStatusView: View {
 
 private struct MenuBarAccountRow: View {
     let provider: MenuBarConnectedProvider
+    let now: Date
 
     var body: some View {
         HStack(alignment: .top, spacing: 9) {
-            ProviderAvatar(providerID: provider.id, size: 22)
+            CodexResetCreditAvatar(
+                providerID: provider.id,
+                providerType: provider.providerType,
+                accountName: provider.menuBarDisplayName,
+                size: 22,
+                snapshot: provider.showsUsage ? provider.resetCreditsSnapshot : nil,
+                now: now
+            )
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 5) {
                     Text(provider.menuBarDisplayName)

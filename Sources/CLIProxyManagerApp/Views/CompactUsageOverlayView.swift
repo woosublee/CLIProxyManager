@@ -5,6 +5,7 @@ struct CompactUsageOverlayView: View {
     let providers: [MenuBarConnectedProvider]
     let emptyMessage: String
     let maximumAccountHeight: CGFloat
+    var now: Date = .now
     var onMeasurementChange: (CGFloat) -> Void = { _ in }
     @State private var measurementState = CompactUsageMeasurementState()
 
@@ -95,29 +96,37 @@ struct CompactUsageOverlayView: View {
             if index > 0 {
                 CompactUsageSeparator()
             }
-            CompactUsageAccountView(provider: provider)
+            CompactUsageAccountView(provider: provider, now: now)
         }
     }
 }
 
 private struct CompactUsageAccountView: View {
     let provider: MenuBarConnectedProvider
+    let now: Date
 
     var body: some View {
         let presentation = compactUsagePresentation(for: provider.usageState)
         VStack(spacing: 7) {
             VStack(spacing: 4) {
-                ProviderAvatar(providerID: provider.id, size: 26)
-                    .overlay(alignment: .trailing) {
-                        if let indicator = presentation.headerIndicator {
-                            CompactUsageIndicatorView(indicator: indicator)
-                                .frame(
-                                    width: UsageWarningLayout.iconFrameSize.width,
-                                    height: UsageWarningLayout.iconFrameSize.height
-                                )
-                                .offset(x: UsageWarningLayout.compactAvatarTrailingOffset)
-                        }
+                CodexResetCreditAvatar(
+                    providerID: provider.id,
+                    providerType: provider.providerType,
+                    accountName: provider.usageOverlayDisplayName,
+                    size: 26,
+                    snapshot: provider.resetCreditsSnapshot,
+                    now: now
+                )
+                .overlay(alignment: .bottomTrailing) {
+                    if let indicator = presentation.headerIndicator {
+                        CompactUsageIndicatorView(indicator: indicator)
+                            .frame(
+                                width: UsageWarningLayout.iconFrameSize.width,
+                                height: UsageWarningLayout.iconFrameSize.height
+                            )
+                            .offset(UsageWarningLayout.compactAvatarBottomTrailingOffset)
                     }
+                }
                 Text(provider.usageOverlayDisplayName)
                     .font(.system(size: 10, weight: .semibold))
                     .lineLimit(1)

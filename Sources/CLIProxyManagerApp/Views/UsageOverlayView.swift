@@ -47,13 +47,15 @@ struct UsageOverlayView: View {
                     ExpandedUsageOverlayContent(
                         providers: accountPresentation.providers,
                         emptyMessage: accountPresentation.emptyMessage ?? "No connected accounts",
-                        refreshStatus: refreshStatus
+                        refreshStatus: refreshStatus,
+                        now: refreshStatusReferenceDate
                     )
                 case .compact:
                     CompactUsageOverlayView(
                         providers: accountPresentation.providers,
                         emptyMessage: accountPresentation.emptyMessage ?? "No connected accounts",
                         maximumAccountHeight: presentationState.compactAccountMaximumHeight,
+                        now: refreshStatusReferenceDate,
                         onMeasurementChange: recordCompactAccountHeight
                     )
                 }
@@ -106,6 +108,7 @@ struct UsageOverlayView: View {
                 emptyMessage: presentationState.presentedAccountPresentation.emptyMessage
                     ?? "No connected accounts",
                 maximumAccountHeight: presentationState.compactAccountMaximumHeight,
+                now: refreshStatusReferenceDate,
                 onMeasurementChange: recordCompactAccountHeight
             )
         }
@@ -220,6 +223,7 @@ private struct ExpandedUsageOverlayContent: View {
     let providers: [MenuBarConnectedProvider]
     let emptyMessage: String
     let refreshStatus: String
+    let now: Date
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -244,7 +248,7 @@ private struct ExpandedUsageOverlayContent: View {
             } else {
                 VStack(alignment: .leading, spacing: 14) {
                     ForEach(providers) { provider in
-                        ExpandedUsageOverlayAccountView(provider: provider)
+                        ExpandedUsageOverlayAccountView(provider: provider, now: now)
                     }
                 }
             }
@@ -288,11 +292,19 @@ func expandedUsageContentPresentation(
 
 private struct ExpandedUsageOverlayAccountView: View {
     let provider: MenuBarConnectedProvider
+    let now: Date
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 6) {
-                ProviderAvatar(providerID: provider.id, size: 20)
+                CodexResetCreditAvatar(
+                    providerID: provider.id,
+                    providerType: provider.providerType,
+                    accountName: provider.usageOverlayDisplayName,
+                    size: 20,
+                    snapshot: provider.resetCreditsSnapshot,
+                    now: now
+                )
                 Text(provider.usageOverlayDisplayName)
                     .font(.system(size: 12.5, weight: .semibold))
                 if let warningMessage = providerUsageWarningMessage(for: provider.usageState) {
