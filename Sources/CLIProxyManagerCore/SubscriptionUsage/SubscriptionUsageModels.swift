@@ -147,6 +147,12 @@ public protocol SubscriptionQuotaFetching: Sendable {
         profiles: [AuthProfile],
         resetCreditsProfileIDs: Set<String>
     ) async -> SubscriptionUsageReport
+    func fetchUsage(
+        port: Int,
+        profiles: [AuthProfile],
+        usageProfileIDs: Set<String>,
+        resetCreditsProfileIDs: Set<String>
+    ) async -> SubscriptionUsageReport
 }
 
 public extension SubscriptionQuotaFetching {
@@ -156,6 +162,19 @@ public extension SubscriptionQuotaFetching {
         resetCreditsProfileIDs: Set<String>
     ) async -> SubscriptionUsageReport {
         await fetchUsage(port: port, profiles: profiles)
+    }
+
+    func fetchUsage(
+        port: Int,
+        profiles: [AuthProfile],
+        usageProfileIDs: Set<String>,
+        resetCreditsProfileIDs: Set<String>
+    ) async -> SubscriptionUsageReport {
+        await fetchUsage(
+            port: port,
+            profiles: profiles,
+            resetCreditsProfileIDs: resetCreditsProfileIDs
+        )
     }
 }
 

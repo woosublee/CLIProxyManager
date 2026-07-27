@@ -1156,8 +1156,7 @@ final class DashboardViewModel: ObservableObject {
         let requestedProfileIDs = Set(usageProfiles.map(\.id)).union(resetCreditsProfileIDs)
         let profiles = enabledProfiles.filter { requestedProfileIDs.contains($0.id) }
         guard !profiles.isEmpty else {
-            subscriptionUsagePollingTask?.cancel()
-            subscriptionUsagePollingTask = nil
+            scheduleSubscriptionUsagePollingIfNeeded()
             return
         }
         for profileID in resetCreditsProfileIDs {
@@ -1182,6 +1181,7 @@ final class DashboardViewModel: ObservableObject {
             let report = await quotaClient.fetchUsage(
                 port: port,
                 profiles: profiles,
+                usageProfileIDs: Set(usageProfiles.map(\.id)),
                 resetCreditsProfileIDs: resetCreditsProfileIDs
             )
             guard !Task.isCancelled,
@@ -1303,7 +1303,8 @@ final class DashboardViewModel: ObservableObject {
             return
         }
 
-        let enabledProfileIDs = Set(authProfiles.filter(isSubscriptionUsageEnabled(for:)).map(\.id))
+        let enabledProfiles = authProfiles.filter(isSubscriptionUsageEnabled(for:))
+        let enabledProfileIDs = Set(enabledProfiles.map(\.id))
         let hasRefreshableAccount = subscriptionUsageStates.contains { profileID, state in
             guard enabledProfileIDs.contains(profileID) else { return false }
             switch state {
@@ -1315,25 +1316,44 @@ final class DashboardViewModel: ObservableObject {
                 return false
             }
         }
-        guard hasRefreshableAccount else { return }
 
-        let hasRetriableFailure = subscriptionUsageStates.contains { profileID, state in
-            guard enabledProfileIDs.contains(profileID) else { return false }
-            if case let .stale(_, issue) = state {
-                return !issue.stopsPolling
+        let usageDelay: UInt64?
+        if hasRefreshableAccount {
+            let hasRetriableFailure = subscriptionUsageStates.contains { profileID, state in
+                guard enabledProfileIDs.contains(profileID) else { return false }
+                if case let .stale(_, issue) = state {
+                    return !issue.stopsPolling
+                }
+                if case let .unavailable(issue) = state {
+                    return !issue.stopsPolling
+                }
+                return false
             }
-            if case let .unavailable(issue) = state {
-                return !issue.stopsPolling
+            if hasRetriableFailure {
+                usageDelay = subscriptionUsageRetryDelayNanoseconds
+                subscriptionUsageRetryDelayNanoseconds = min(subscriptionUsageRetryDelayNanoseconds * 2, 900_000_000_000)
+            } else {
+                usageDelay = 300_000_000_000
+                subscriptionUsageRetryDelayNanoseconds = 60_000_000_000
             }
-            return false
-        }
-        let delay: UInt64
-        if hasRetriableFailure {
-            delay = subscriptionUsageRetryDelayNanoseconds
-            subscriptionUsageRetryDelayNanoseconds = min(subscriptionUsageRetryDelayNanoseconds * 2, 900_000_000_000)
         } else {
-            delay = 300_000_000_000
-            subscriptionUsageRetryDelayNanoseconds = 60_000_000_000
+            usageDelay = nil
+        }
+
+        let resetCreditsDelay = nextCodexResetCreditsRefreshDelayNanoseconds(
+            for: enabledProfiles,
+            now: codexResetCreditsNow()
+        )
+        let delay: UInt64
+        switch (usageDelay, resetCreditsDelay) {
+        case let (usage?, resetCredits?):
+            delay = min(usage, resetCredits)
+        case let (usage?, nil):
+            delay = usage
+        case let (nil, resetCredits?):
+            delay = resetCredits
+        case (nil, nil):
+            return
         }
 
         let sleep = subscriptionUsageSleep
@@ -1345,6 +1365,24 @@ final class DashboardViewModel: ObservableObject {
             }
             await self?.refreshSubscriptionUsage()
         }
+    }
+
+    private func nextCodexResetCreditsRefreshDelayNanoseconds(
+        for profiles: [AuthProfile],
+        now: Date
+    ) -> UInt64? {
+        let remainingIntervals = profiles.compactMap { profile -> TimeInterval? in
+            guard profile.type == .codex else { return nil }
+            let reference = codexResetCreditsLastAttemptAt[profile.id]
+                ?? codexResetCreditsSnapshots[profile.id]?.fetchedAt
+            guard let reference else { return 0 }
+            return max(
+                0,
+                Self.codexResetCreditsRefreshInterval - now.timeIntervalSince(reference)
+            )
+        }
+        guard let remaining = remainingIntervals.min() else { return nil }
+        return UInt64(ceil(remaining * 1_000_000_000))
     }
 
     /// Called once on app launch. Auto-starts the server if the user opted in.

@@ -189,6 +189,47 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         XCTAssertFalse(String(decoding: resetRequest, as: UTF8.self).contains("management-secret"))
     }
 
+    func testResetOnlyCodexProfileSkipsUsageEndpointAndUsageState() async throws {
+        let transport = StubSubscriptionUsageTransport(responses: [
+            .success(.init(data: Data(#"{"files":[{"name":"codex.json","provider":"codex","auth_index":"codex-index","status":"ready","disabled":false}]}"#.utf8), statusCode: 200)),
+            .success(.init(data: Data(#"{"status_code":200,"body":"{\"available_count\":1,\"credits\":[{\"title\":\"Full reset\",\"status\":\"available\"}]}"}"#.utf8), statusCode: 200))
+        ])
+        let client = CLIProxyAPISubscriptionQuotaClient(
+            keyStore: StubManagementKeyStore(key: "management-secret"),
+            transport: transport
+        )
+        let profile = AuthProfile(
+            fileName: "codex.json",
+            type: .codex,
+            email: "codex@example.com",
+            accountID: "acct_example",
+            expired: nil,
+            disabled: false
+        )
+
+        let report = await client.fetchUsage(
+            port: 18_317,
+            profiles: [profile],
+            usageProfileIDs: [],
+            resetCreditsProfileIDs: [profile.id]
+        )
+
+        XCTAssertNil(report.statesByProfileID[profile.id])
+        guard case .available? = report.resetCreditsOutcomesByProfileID[profile.id] else {
+            return XCTFail("Expected reset credits to be available")
+        }
+        XCTAssertEqual(transport.requests.count, 2)
+        let proxyURLs = try transport.requests.compactMap { request -> String? in
+            guard let body = request.httpBody,
+                  let json = try JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+                return nil
+            }
+            return json["url"] as? String
+        }
+        XCTAssertEqual(proxyURLs, ["https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"])
+        XCTAssertFalse(proxyURLs.contains("https://chatgpt.com/backend-api/wham/usage"))
+    }
+
     func testUnselectedCodexProfileDoesNotCallResetCreditEndpoint() async {
         let transport = StubSubscriptionUsageTransport(responses: [
             .success(.init(data: Data(#"{"files":[{"name":"codex.json","provider":"codex","auth_index":"codex-index","status":"ready","disabled":false}]}"#.utf8), statusCode: 200)),

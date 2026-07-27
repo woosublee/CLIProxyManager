@@ -4946,16 +4946,74 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         await viewModel.refreshSubscriptionUsage()
 
         let requestedProfileIDs = await quota.requestedProfileIDs()
+        let requestedUsageProfileIDSets = await quota.requestedUsageProfileIDSets()
         let requestedResetCreditProfileIDSets = await quota.requestedResetCreditProfileIDSets()
         let pollingDelays = await sleeper.delays()
         XCTAssertEqual(
             requestedProfileIDs,
             [[codex.id, claude.id], [claude.id], [codex.id, claude.id]]
         )
+        XCTAssertEqual(
+            requestedUsageProfileIDSets,
+            [[codex.id, claude.id], [claude.id], [claude.id]]
+        )
         XCTAssertEqual(requestedResetCreditProfileIDSets, [[codex.id], [], [codex.id]])
         XCTAssertEqual(viewModel.subscriptionUsageStates[codex.id], .unavailable(.schemaMismatch))
         XCTAssertEqual(viewModel.codexResetCreditsSnapshots[codex.id], resetSnapshot)
-        XCTAssertEqual(pollingDelays, [300_000_000_000, 300_000_000_000, 300_000_000_000])
+        XCTAssertEqual(pollingDelays, [300_000_000_000, 1_000_000_000, 300_000_000_000])
+    }
+
+    func testTerminalCodexOnlySchedulesResetCreditWakeAndUsesResetOnlyRequest() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let codex = AuthProfile(
+            fileName: "codex.json",
+            type: .codex,
+            email: "codex@example.com",
+            accountID: "acct_example",
+            expired: nil,
+            disabled: false
+        )
+        let clock = MutableDateProvider(Date(timeIntervalSince1970: 100))
+        let quota = RecordingSubscriptionQuotaClient(reports: [
+            SubscriptionUsageReport(
+                statesByProfileID: [codex.id: .unavailable(.schemaMismatch)],
+                resetCreditsOutcomesByProfileID: [codex.id: .unavailable(.transientFailure)],
+                fetchedAt: Date(timeIntervalSince1970: 100)
+            ),
+            SubscriptionUsageReport(
+                statesByProfileID: [codex.id: availableUsageState(for: codex)],
+                resetCreditsOutcomesByProfileID: [codex.id: .unavailable(.transientFailure)],
+                fetchedAt: Date(timeIntervalSince1970: 100 + 10_800)
+            )
+        ])
+        let sleeper = SubscriptionUsageSleepGate()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            profiles: [codex],
+            quotaClient: quota,
+            codexResetCreditsNow: { clock.now() },
+            subscriptionUsageSleep: { delay in try await sleeper.sleep(delay) }
+        )
+        viewModel.serverStatus = readyStatus()
+
+        await viewModel.refreshSubscriptionUsage()
+        await sleeper.waitForSleeps(expectedCount: 1)
+        clock.set(Date(timeIntervalSince1970: 100 + 10_800))
+        await sleeper.resumeNext()
+        await waitForUsageFetches(quota, expectedCount: 2)
+        await sleeper.waitForSleeps(expectedCount: 2)
+
+        let requestedUsageProfileIDSets = await quota.requestedUsageProfileIDSets()
+        let requestedResetCreditProfileIDSets = await quota.requestedResetCreditProfileIDSets()
+        let delays = await sleeper.delays()
+        XCTAssertEqual(requestedUsageProfileIDSets, [[codex.id], []])
+        XCTAssertEqual(requestedResetCreditProfileIDSets, [[codex.id], [codex.id]])
+        XCTAssertEqual(viewModel.subscriptionUsageStates[codex.id], .unavailable(.schemaMismatch))
+        XCTAssertEqual(delays, [10_800_000_000_000, 10_800_000_000_000])
     }
 
     func testReloadUsageAlwaysRequestsActiveCodexResetCredits() async {
@@ -6806,6 +6864,14 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTFail("Expected subscription usage fetch.")
     }
 
+    private func waitForUsageFetches(_ quotaClient: RecordingSubscriptionQuotaClient, expectedCount: Int) async {
+        for _ in 0..<100 {
+            if await quotaClient.fetchCallCount() >= expectedCount { return }
+            await Task.yield()
+        }
+        XCTFail("Expected subscription usage fetch.")
+    }
+
     private func waitForUsageSleeps(_ sleeper: SubscriptionUsageSleepRecorder, expectedCount: Int) async {
         for _ in 0..<100 {
             if await sleeper.delays().count >= expectedCount { return }
@@ -7739,6 +7805,7 @@ private actor RecordingSubscriptionQuotaClient: SubscriptionQuotaFetching {
     private var reports: [SubscriptionUsageReport]
     private var callCount = 0
     private var profileIDs: [[String]] = []
+    private var usageProfileIDSets: [Set<String>] = []
     private var resetCreditProfileIDSets: [Set<String>] = []
 
     init(reports: [SubscriptionUsageReport]) {
@@ -7754,14 +7821,30 @@ private actor RecordingSubscriptionQuotaClient: SubscriptionQuotaFetching {
         profiles: [AuthProfile],
         resetCreditsProfileIDs: Set<String>
     ) async -> SubscriptionUsageReport {
+        await fetchUsage(
+            port: port,
+            profiles: profiles,
+            usageProfileIDs: Set(profiles.map(\.id)),
+            resetCreditsProfileIDs: resetCreditsProfileIDs
+        )
+    }
+
+    func fetchUsage(
+        port: Int,
+        profiles: [AuthProfile],
+        usageProfileIDs: Set<String>,
+        resetCreditsProfileIDs: Set<String>
+    ) async -> SubscriptionUsageReport {
         callCount += 1
         profileIDs.append(profiles.map(\.id))
+        usageProfileIDSets.append(usageProfileIDs)
         resetCreditProfileIDSets.append(resetCreditsProfileIDs)
         return reports.removeFirst()
     }
 
     func fetchCallCount() -> Int { callCount }
     func requestedProfileIDs() -> [[String]] { profileIDs }
+    func requestedUsageProfileIDSets() -> [Set<String>] { usageProfileIDSets }
     func requestedResetCreditProfileIDSets() -> [Set<String>] { resetCreditProfileIDSets }
 }
 
@@ -7770,6 +7853,7 @@ private actor SuspendedSubscriptionQuotaClient: SubscriptionQuotaFetching {
     private var continuations: [CheckedContinuation<SubscriptionUsageReport, Never>] = []
     private var callCount = 0
     private var profileIDs: [[String]] = []
+    private var usageProfileIDSets: [Set<String>] = []
     private var resetCreditProfileIDSets: [Set<String>] = []
 
     init(reportsBeforeSuspension: [SubscriptionUsageReport] = []) {
@@ -7785,8 +7869,23 @@ private actor SuspendedSubscriptionQuotaClient: SubscriptionQuotaFetching {
         profiles: [AuthProfile],
         resetCreditsProfileIDs: Set<String>
     ) async -> SubscriptionUsageReport {
+        await fetchUsage(
+            port: port,
+            profiles: profiles,
+            usageProfileIDs: Set(profiles.map(\.id)),
+            resetCreditsProfileIDs: resetCreditsProfileIDs
+        )
+    }
+
+    func fetchUsage(
+        port: Int,
+        profiles: [AuthProfile],
+        usageProfileIDs: Set<String>,
+        resetCreditsProfileIDs: Set<String>
+    ) async -> SubscriptionUsageReport {
         callCount += 1
         profileIDs.append(profiles.map(\.id))
+        usageProfileIDSets.append(usageProfileIDs)
         resetCreditProfileIDSets.append(resetCreditsProfileIDs)
         if !reportsBeforeSuspension.isEmpty {
             return reportsBeforeSuspension.removeFirst()
@@ -7798,6 +7897,7 @@ private actor SuspendedSubscriptionQuotaClient: SubscriptionQuotaFetching {
 
     func fetchCallCount() -> Int { callCount }
     func requestedProfileIDs() -> [[String]] { profileIDs }
+    func requestedUsageProfileIDSets() -> [Set<String>] { usageProfileIDSets }
     func requestedResetCreditProfileIDSets() -> [Set<String>] { resetCreditProfileIDSets }
 
     func resolveAll(with report: SubscriptionUsageReport) {
@@ -7818,6 +7918,57 @@ private actor SubscriptionUsageSleepRecorder {
     }
 
     func delays() -> [UInt64] { recordedDelays }
+}
+
+private final class SubscriptionUsageSleepGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedDelays: [UInt64] = []
+    private var continuations: [CheckedContinuation<Void, Never>] = []
+
+    func sleep(_ delay: UInt64) async throws {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                let shouldResume = lock.withLock {
+                    recordedDelays.append(delay)
+                    if Task.isCancelled { return true }
+                    continuations.append(continuation)
+                    return false
+                }
+                if shouldResume { continuation.resume() }
+            }
+        } onCancel: {
+            self.resumeAll()
+        }
+        try Task.checkCancellation()
+    }
+
+    func waitForSleeps(expectedCount: Int) async {
+        for _ in 0..<100 {
+            if lock.withLock({ recordedDelays.count >= expectedCount }) { return }
+            await Task.yield()
+        }
+        XCTFail("Expected subscription usage polling sleep.")
+    }
+
+    func resumeNext() async {
+        let continuation = lock.withLock {
+            continuations.isEmpty ? nil : continuations.removeFirst()
+        }
+        continuation?.resume()
+    }
+
+    func delays() async -> [UInt64] {
+        lock.withLock { recordedDelays }
+    }
+
+    private func resumeAll() {
+        let pending = lock.withLock {
+            let pending = continuations
+            continuations.removeAll()
+            return pending
+        }
+        pending.forEach { $0.resume() }
+    }
 }
 
 private final class MutableDateProvider: @unchecked Sendable {

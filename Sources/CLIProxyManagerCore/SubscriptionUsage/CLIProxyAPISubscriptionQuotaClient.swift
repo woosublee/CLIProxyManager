@@ -35,12 +35,27 @@ public struct CLIProxyAPISubscriptionQuotaClient: SubscriptionQuotaFetching {
         profiles: [AuthProfile],
         resetCreditsProfileIDs: Set<String>
     ) async -> SubscriptionUsageReport {
+        await fetchUsage(
+            port: port,
+            profiles: profiles,
+            usageProfileIDs: Set(profiles.map(\.id)),
+            resetCreditsProfileIDs: resetCreditsProfileIDs
+        )
+    }
+
+    public func fetchUsage(
+        port: Int,
+        profiles: [AuthProfile],
+        usageProfileIDs: Set<String>,
+        resetCreditsProfileIDs: Set<String>
+    ) async -> SubscriptionUsageReport {
         let fetchedAt = now()
+        let usageProfiles = profiles.filter { usageProfileIDs.contains($0.id) }
         guard (1...65_535).contains(port) else {
-            return report(for: profiles, state: .unavailable(.proxyUnavailable), fetchedAt: fetchedAt)
+            return report(for: usageProfiles, state: .unavailable(.proxyUnavailable), fetchedAt: fetchedAt)
         }
         guard keyStore.isConfigured(), let managementKey = try? keyStore.managementKey() else {
-            return report(for: profiles, state: .managementKeyNotConfigured, fetchedAt: fetchedAt)
+            return report(for: usageProfiles, state: .managementKeyNotConfigured, fetchedAt: fetchedAt)
         }
 
         let baseURL = URL(string: "http://127.0.0.1:\(port)/v0/management")!
@@ -53,54 +68,86 @@ public struct CLIProxyAPISubscriptionQuotaClient: SubscriptionQuotaFetching {
                 body: nil
             )
         } catch {
-            return report(for: profiles, state: .unavailable(.proxyUnavailable), fetchedAt: fetchedAt)
+            return report(for: usageProfiles, state: .unavailable(.proxyUnavailable), fetchedAt: fetchedAt)
         }
         guard (200..<300).contains(authFilesResponse.statusCode) else {
-            return report(for: profiles, state: .unavailable(issue(forManagementStatus: authFilesResponse.statusCode)), fetchedAt: fetchedAt)
+            return report(for: usageProfiles, state: .unavailable(issue(forManagementStatus: authFilesResponse.statusCode)), fetchedAt: fetchedAt)
         }
 
         let credentialRecords: [ManagedCredential]
         do {
             credentialRecords = try decodeCredentialRecords(authFilesResponse.data)
         } catch {
-            return report(for: profiles, state: .unavailable(.schemaMismatch), fetchedAt: fetchedAt)
+            return report(for: usageProfiles, state: .unavailable(.schemaMismatch), fetchedAt: fetchedAt)
         }
 
         var states: [String: AccountSubscriptionUsageState] = [:]
         var resetCreditOutcomes: [String: CodexResetCreditsRefreshOutcome] = [:]
         for profile in profiles {
+            let requestsUsage = usageProfileIDs.contains(profile.id)
+            let requestsResetCredits = profile.type == .codex
+                && resetCreditsProfileIDs.contains(profile.id)
+            guard requestsUsage || requestsResetCredits else { continue }
+
             if profile.disabled {
-                states[profile.id] = .unavailable(.credentialDisabled)
+                if requestsUsage {
+                    states[profile.id] = .unavailable(.credentialDisabled)
+                }
+                if requestsResetCredits {
+                    resetCreditOutcomes[profile.id] = .unavailable(.credentialRejected)
+                }
                 continue
             }
             guard let credential = credentialRecords.first(where: {
                 $0.name == profile.fileName && $0.provider == profile.type.rawValue
             }) else {
-                states[profile.id] = .unavailable(.authFileNotMatched)
+                if requestsUsage {
+                    states[profile.id] = .unavailable(.authFileNotMatched)
+                }
+                if requestsResetCredits {
+                    resetCreditOutcomes[profile.id] = .unavailable(.credentialRejected)
+                }
                 continue
             }
             if credential.disabled || credential.status == "disabled" {
-                states[profile.id] = .unavailable(.credentialDisabled)
+                if requestsUsage {
+                    states[profile.id] = .unavailable(.credentialDisabled)
+                }
+                if requestsResetCredits {
+                    resetCreditOutcomes[profile.id] = .unavailable(.credentialRejected)
+                }
                 continue
             }
             if credential.status == "expired" {
-                states[profile.id] = .unavailable(.credentialExpired)
+                if requestsUsage {
+                    states[profile.id] = .unavailable(.credentialExpired)
+                }
+                if requestsResetCredits {
+                    resetCreditOutcomes[profile.id] = .unavailable(.credentialRejected)
+                }
                 continue
             }
             guard !credential.authIndex.isEmpty else {
-                states[profile.id] = .unavailable(.authFileNotMatched)
+                if requestsUsage {
+                    states[profile.id] = .unavailable(.authFileNotMatched)
+                }
+                if requestsResetCredits {
+                    resetCreditOutcomes[profile.id] = .unavailable(.credentialRejected)
+                }
                 continue
             }
 
-            states[profile.id] = await fetchUsage(
-                for: profile,
-                credential: credential,
-                managementBaseURL: baseURL,
-                managementKey: managementKey,
-                fetchedAt: fetchedAt
-            )
+            if requestsUsage {
+                states[profile.id] = await fetchUsage(
+                    for: profile,
+                    credential: credential,
+                    managementBaseURL: baseURL,
+                    managementKey: managementKey,
+                    fetchedAt: fetchedAt
+                )
+            }
 
-            if profile.type == .codex, resetCreditsProfileIDs.contains(profile.id) {
+            if requestsResetCredits {
                 resetCreditOutcomes[profile.id] = await fetchResetCredits(
                     for: profile,
                     credential: credential,
