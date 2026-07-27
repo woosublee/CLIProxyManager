@@ -471,16 +471,18 @@ struct DashboardView: View {
                 }
             )
         case .codex:
+            let initialModels = isNewProfile
+                ? CodexAPIModelOptions.newProfileModels
+                : viewModel.availableCodexAPIModelOptionsByProvider[providerID] ?? []
             CodexAPIProviderSettingsSheet(
                 profile: profile,
                 isConfigured: isConfigured,
                 isNewProfile: isNewProfile,
-                availableModels: viewModel.availableCodexAPIModelOptionsByProvider[providerID] ?? [],
+                availableModels: initialModels,
                 modelLoadingState: viewModel.codexModelLoadingState,
                 refreshModels: {
-                    guard !isNewProfile else { return [] }
-                    await viewModel.refreshCodexModels()
-                    return try await viewModel.codexAPIModels(for: providerID)
+                    guard !isNewProfile else { return CodexAPIModelOptions.newProfileModels }
+                    return try await viewModel.refreshCodexAPIModels(for: providerID)
                 },
                 preferredModel: { viewModel.preferredCodexDefaultModel(in: $0) },
                 checkCommandName: { functionName in

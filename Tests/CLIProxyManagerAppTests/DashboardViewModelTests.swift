@@ -2908,6 +2908,33 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(modelClient.prefixRequests.map(\.prefix), ["cpm-codex-api"])
     }
 
+    func testPrepareCodexAPIModelsUsesOnlyScopedDiscoveryWhenServerIsRunning() async {
+        let expected = [
+            CodexModelOption(
+                id: "gpt-5.6-sol",
+                supportedReasoning: [.low, .medium, .high, .xhigh, .max]
+            )
+        ]
+        let modelClient = StubProxyModelClient(optionsByPrefix: ["cpm-codex-api": expected])
+        let viewModel = DashboardViewModel(
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
+            modelClient: modelClient,
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
+        )
+        viewModel.serverControlState = .running
+
+        await viewModel.prepareCodexAPIModels()
+
+        XCTAssertEqual(viewModel.availableCodexAPIModelOptions, expected)
+        XCTAssertTrue(modelClient.ports.isEmpty)
+        XCTAssertEqual(modelClient.prefixRequests.map(\.prefix), ["cpm-codex-api"])
+    }
+
     func testPrepareClaudeModelsDoesNotMutateCodexLoadingStateOrModels() async {
         var config = AppConfig.default
         config.oauthCommandProfiles = [
@@ -3280,7 +3307,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.availableCodexModels, ["gpt-5.5", "gpt-5.6"])
     }
 
-    func testPreferredCodexDefaultModelUsesTerraThenFirstScopedModel() {
+    func testPreferredCodexDefaultModelUsesTerraCaseInsensitivelyThenFirstScopedModel() {
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: .default),
             shellInstaller: StubShellInstaller(),
@@ -3295,10 +3322,10 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(
             viewModel.preferredCodexDefaultModel(in: [
                 CodexModelOption(id: "gpt-5.6-sol"),
-                CodexModelOption(id: "gpt-5.6-terra"),
+                CodexModelOption(id: "GPT-5.6-TERRA"),
                 CodexModelOption(id: "gpt-5.5")
             ]),
-            "gpt-5.6-terra"
+            "GPT-5.6-TERRA"
         )
         XCTAssertEqual(
             viewModel.preferredCodexDefaultModel(in: [CodexModelOption(id: "gpt-5.5")]),

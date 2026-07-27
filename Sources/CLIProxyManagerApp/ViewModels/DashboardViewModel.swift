@@ -195,7 +195,9 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func preferredCodexDefaultModel(in options: [CodexModelOption]) -> String? {
-        options.first(where: { $0.id == "gpt-5.6-terra" })?.id ?? options.first?.id
+        options.first(where: {
+            $0.id.caseInsensitiveCompare("gpt-5.6-terra") == .orderedSame
+        })?.id ?? options.first?.id
     }
 
     var latestBaseCodexModel: String? {
@@ -2330,8 +2332,39 @@ final class DashboardViewModel: ObservableObject {
 
     func prepareCodexAPIModels(for provider: ProviderRowState.ID = .codexAPI) async {
         guard availableCodexAPIModelOptionsByProvider[provider]?.isEmpty != false else { return }
-        await refreshCodexModels()
-        _ = try? await codexAPIModels(for: provider)
+        _ = try? await refreshCodexAPIModels(for: provider)
+    }
+
+    func refreshCodexAPIModels(
+        for provider: ProviderRowState.ID = .codexAPI
+    ) async throws -> [CodexModelOption] {
+        await waitForConfigurationRestartIfNeeded()
+        guard !isServerActionInProgress else {
+            return availableCodexAPIModelOptionsByProvider[provider] ?? []
+        }
+
+        if !serverControlState.isRunning {
+            codexModelLoadingState = .startingServer
+            do {
+                guard try await prepareModelServer() else {
+                    codexModelLoadingState = .idle
+                    return availableCodexAPIModelOptionsByProvider[provider] ?? []
+                }
+            } catch {
+                codexModelLoadingState = .failed(error.localizedDescription)
+                throw error
+            }
+        }
+
+        codexModelLoadingState = .loadingModels
+        do {
+            let models = try await codexAPIModels(for: provider)
+            codexModelLoadingState = .idle
+            return models
+        } catch {
+            codexModelLoadingState = .failed(error.localizedDescription)
+            throw error
+        }
     }
 
     func codexAPIModels(for provider: ProviderRowState.ID = .codexAPI) async throws -> [CodexModelOption] {
