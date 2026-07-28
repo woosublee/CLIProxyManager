@@ -206,8 +206,8 @@ final class APICostUsagePresentationTests: XCTestCase {
             try XCTUnwrap(rows[0].tooltip.range(of: "could not be saved completely")).lowerBound
         )
         XCTAssertTrue(rows[0].tooltip.contains("Some request models are not in the bundled price catalog."))
-        XCTAssertFalse(rows[0].tooltip.contains("collection was interrupted"))
-        XCTAssertTrue(rows[1].tooltip.contains("collection was interrupted"))
+        XCTAssertFalse(rows[0].tooltip.contains(apiCostIssueMessage(.collectionGap)))
+        XCTAssertTrue(rows[1].tooltip.contains(apiCostIssueMessage(.collectionGap)))
         XCTAssertFalse(rows[1].tooltip.contains("Some request models"))
     }
 
@@ -222,16 +222,15 @@ final class APICostUsagePresentationTests: XCTestCase {
         let message = apiCostWarningMessage(snapshot: snapshot, issues: issues)
         let compact = compactUsagePresentation(for: .apiCost(.partial(snapshot, issues)))
 
-        XCTAssertTrue(message.contains("Estimated API cost may be incomplete."))
-        XCTAssertTrue(message.contains("Last successful update:"))
-        XCTAssertTrue(message.contains("Reporting timezone: Asia/Seoul."))
-        XCTAssertTrue(message.contains("Day:"))
-        XCTAssertTrue(message.contains("Month:"))
+        XCTAssertTrue(message.hasPrefix("Estimated API cost may be incomplete.\n\nIssues\n"))
+        XCTAssertTrue(message.contains("Day\n• Some request models are not in the bundled price catalog.\n• API usage could not be saved completely."))
+        XCTAssertTrue(message.contains("Month\n• Some API requests could not be included in this estimate."))
+        XCTAssertTrue(message.contains("\n\nDetails\n• Last updated:"))
+        XCTAssertTrue(message.hasSuffix("• Time zone: Asia/Seoul"))
         XCTAssertLessThan(
             try XCTUnwrap(message.range(of: "Some request models")).lowerBound,
             try XCTUnwrap(message.range(of: "could not be saved completely")).lowerBound
         )
-        XCTAssertTrue(message.contains("Month: Some requests may be missing because collection was interrupted."))
         XCTAssertEqual(compact.indicator, .warning(message: message))
     }
 
@@ -246,10 +245,10 @@ final class APICostUsagePresentationTests: XCTestCase {
         )
 
         XCTAssertEqual(message.components(separatedBy: apiCostIssueMessage(.collectionGap)).count - 1, 1)
-        XCTAssertTrue(message.contains("Day and Month: \(apiCostIssueMessage(.collectionGap))"))
-        XCTAssertTrue(message.contains("Day: \(apiCostIssueMessage(.unknownModel))"))
-        XCTAssertTrue(message.contains("Month: \(apiCostIssueMessage(.persistenceFailure))"))
-        XCTAssertTrue(message.contains("General: \(apiCostIssueMessage(.transientCollectionFailure))"))
+        XCTAssertTrue(message.contains("Day and Month\n• \(apiCostIssueMessage(.collectionGap))"))
+        XCTAssertTrue(message.contains("Day\n• \(apiCostIssueMessage(.unknownModel))"))
+        XCTAssertTrue(message.contains("Month\n• \(apiCostIssueMessage(.persistenceFailure))"))
+        XCTAssertTrue(message.contains("Collection status\n• \(apiCostIssueMessage(.transientCollectionFailure))"))
     }
 
     func testExpectedInitialAndPricingAssumptionsDoNotShowWarningIndicator() {
@@ -302,7 +301,7 @@ final class APICostUsagePresentationTests: XCTestCase {
                 "This CLIProxyAPI version does not support API usage collection.",
                 "API usage could not be collected.",
                 "Earlier usage in this period is not included.",
-                "Some requests may be missing because collection was interrupted.",
+                "Some API requests could not be included in this estimate.",
                 "Requests made while usage tracking was disabled may be missing.",
                 "Some requests use an unsupported accounting version.",
                 "Some requests did not provide complete token accounting.",
