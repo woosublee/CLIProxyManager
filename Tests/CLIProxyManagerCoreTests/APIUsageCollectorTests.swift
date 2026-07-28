@@ -280,7 +280,7 @@ final class APIUsageCollectorTests: XCTestCase {
         XCTAssertEqual(aggregateCount, 1)
     }
 
-    func testCollectorMarksGapBeforePopWhenLastDrainExceedsRetention() async {
+    func testCollectorDoesNotMarkGapWhenLastDrainExceedsRetentionWithoutLossEvidence() async {
         let ledger = RecordingLedgerStore(
             readModel: emptyReadModel(lastSuccessfulDrainAt: iso("2026-07-25T10:00:00Z"))
         )
@@ -291,17 +291,17 @@ final class APIUsageCollectorTests: XCTestCase {
             now: { iso("2026-07-25T12:00:01Z") }
         )
 
-        _ = await collector.reload(configuration: enabledConfiguration())
+        let report = await collector.reload(configuration: enabledConfiguration())
 
         let gaps = await ledger.collectionGaps()
-        let events = await ledger.eventsPrefix(2)
-        XCTAssertEqual(gaps, [
-            .init(
-                start: iso("2026-07-25T10:00:00Z"),
-                end: iso("2026-07-25T12:00:01Z")
-            )
-        ])
-        XCTAssertEqual(events, ["read", "gap"])
+        let queueCalls = await queue.callCount()
+        let successfulDrainCount = await ledger.successfulDrainCount()
+        XCTAssertTrue(gaps.isEmpty)
+        XCTAssertEqual(queueCalls, 1)
+        XCTAssertEqual(successfulDrainCount, 1)
+        XCTAssertFalse(
+            report.statesByProfileID["claude-api"]?.issues.contains(.collectionGap) ?? true
+        )
     }
 
     func testMalformedRecordInFullBatchMergesValidRecordsAndMarksDurableGap() async {

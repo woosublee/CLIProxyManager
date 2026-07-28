@@ -705,9 +705,11 @@ Time zone: Asia/Seoul.
 
 Usage 표시를 끈 동안 proxy가 실행 중이었거나 실행 여부를 확정할 수 없으면 해당 구간을 partial interval로 기록한다. proxy가 전체 구간 동안 중지되어 요청이 발생할 수 없었음이 확인되면 collection gap으로 보지 않는다.
 
-### queue retention 초과
+### queue retention과 collection gap
 
-`lastSuccessfulDrainAt` 이후 proxy가 요청을 받을 수 있는 상태에서 1시간을 넘긴 뒤 collector가 복귀하면 queue에서 이미 만료된 요청이 있을 수 있다. 정확한 누락 수는 알 수 없으므로 추측해 보정하지 않고 Day/Mon을 partial로 표시한다.
+queue retention은 collector가 drain하지 못하는 동안 record가 남아 있을 수 있는 최대 시간이다. `lastSuccessfulDrainAt` 이후 retention보다 오래 지났다는 사실만으로는 그동안 요청이 있었는지, record가 실제로 만료됐는지 알 수 없으므로 elapsed time만으로 Day/Mon을 partial로 표시하지 않는다.
+
+현재 queue endpoint는 expired/dropped record 수를 제공하지 않는다. 따라서 malformed element나 top-level schema mismatch처럼 destructive pop 이후 실제 처리 손실이 확인된 경우에만 `.collectionGap`을 기록한다. 이 정책은 정상 idle·downtime의 false positive를 피하는 대신 collector 부재 중 모든 record가 조용히 만료된 경우를 탐지하지 못할 수 있다. 향후 endpoint가 drop counter나 high-watermark를 제공하면 그 값을 손실 근거로 사용할 수 있다.
 
 ### 미계산 요청
 
@@ -826,7 +828,8 @@ API Key row의 stable ID는 기존 `ProviderRowID.claudeAPI`와 `.codexAPI`를 �
 - Usage on/off lifecycle
 - proxy ready 전환과 immediate drain
 - 30초 polling과 retry backoff
-- 1시간 retention 초과 gap 판정
+- retention 초과만으로 collection gap을 기록하지 않음
+- malformed element와 top-level schema mismatch의 durable collection gap
 - OAuth 레코드 제외
 - Claude/OpenAI singleton profile 매핑
 - failed request의 complete token 포함
@@ -882,7 +885,7 @@ API Key row의 stable ID는 기존 `ProviderRowID.claudeAPI`와 `.codexAPI`를 �
 - snapshot이 없을 때 unavailable
 - `$0.00`과 `—` 구분
 - known cost + unpriced count warning
-- tracking disabled interval과 collector gap warning
+- tracking disabled interval과 실제 queue 처리 손실 warning
 - oldest-success 기준 `UPDATED` 시각
 
 ### UI

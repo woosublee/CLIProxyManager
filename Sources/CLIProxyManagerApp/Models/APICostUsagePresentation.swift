@@ -88,7 +88,7 @@ func apiCostIssueMessage(_ issue: APICostIssue) -> String {
     case .trackingStartedMidPeriod:
         "Earlier usage in this period is not included."
     case .collectionGap:
-        "Some requests may be missing because collection was interrupted."
+        "Some API requests could not be included in this estimate."
     case .trackingWasDisabled:
         "Requests made while usage tracking was disabled may be missing."
     case .unsupportedAccountingVersion:
@@ -178,24 +178,32 @@ func apiCostWarningMessage(
     let dayIssues = orderedIssues.filter { dayIssueSet.contains($0) && !monthIssueSet.contains($0) }
     let monthIssues = orderedIssues.filter { monthIssueSet.contains($0) && !dayIssueSet.contains($0) }
     let generalIssues = orderedIssues.filter { !dayIssueSet.contains($0) && !monthIssueSet.contains($0) }
-    var parts = [
-        "Estimated API cost may be incomplete.",
-        "Last successful update: \(apiCostUpdatedAt(snapshot.updatedAt, timeZoneID: snapshot.reportingTimeZoneID)).",
-        "Reporting timezone: \(snapshot.reportingTimeZoneID)."
+    var issueLines = ["Issues"]
+    appendAPICostWarningSection("Day and Month", issues: sharedIssues, to: &issueLines)
+    appendAPICostWarningSection("Day", issues: dayIssues, to: &issueLines)
+    appendAPICostWarningSection("Month", issues: monthIssues, to: &issueLines)
+    appendAPICostWarningSection("Collection status", issues: generalIssues, to: &issueLines)
+
+    let detailLines = [
+        "Details",
+        "• Last updated: \(apiCostUpdatedAt(snapshot.updatedAt, timeZoneID: snapshot.reportingTimeZoneID))",
+        "• Time zone: \(snapshot.reportingTimeZoneID)"
     ]
-    if !sharedIssues.isEmpty {
-        parts.append("Day and Month: \(sharedIssues.map(apiCostIssueMessage).joined(separator: " "))")
-    }
-    if !dayIssues.isEmpty {
-        parts.append("Day: \(dayIssues.map(apiCostIssueMessage).joined(separator: " "))")
-    }
-    if !monthIssues.isEmpty {
-        parts.append("Month: \(monthIssues.map(apiCostIssueMessage).joined(separator: " "))")
-    }
-    if !generalIssues.isEmpty {
-        parts.append("General: \(generalIssues.map(apiCostIssueMessage).joined(separator: " "))")
-    }
-    return parts.joined(separator: " ")
+    return [
+        "Estimated API cost may be incomplete.",
+        issueLines.joined(separator: "\n"),
+        detailLines.joined(separator: "\n")
+    ].joined(separator: "\n\n")
+}
+
+private func appendAPICostWarningSection(
+    _ label: String,
+    issues: [APICostIssue],
+    to lines: inout [String]
+) {
+    guard !issues.isEmpty else { return }
+    lines.append(label)
+    lines.append(contentsOf: issues.map { "• \(apiCostIssueMessage($0))" })
 }
 
 private let oneUSCent = Decimal(sign: .plus, exponent: -2, significand: 1)

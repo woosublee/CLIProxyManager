@@ -106,7 +106,6 @@ public actor APIUsageCollector: APIUsageCollecting {
 
     private static let batchSize = 200
     private static let recordsPerPass = 2_000
-    private static let retentionSeconds: TimeInterval = 3_600
     private static let normalPollNanoseconds: UInt64 = 30_000_000_000
     private static let retryNanoseconds: [UInt64] = [
         60_000_000_000,
@@ -685,27 +684,10 @@ public actor APIUsageCollector: APIUsageCollecting {
             return .init(report: report, retryDisposition: .terminal)
         }
 
-        if let lastSuccessfulDrainAt = initializedBaseline.metadata.lastSuccessfulDrainAt,
-           drainStartedAt.timeIntervalSince(lastSuccessfulDrainAt) > Self.retentionSeconds {
-            do {
-                try await ledgerStore.markCollectionGap(
-                    from: lastSuccessfulDrainAt,
-                    to: drainStartedAt
-                )
-            } catch {
-                let report = report(
-                    configuration: configuration,
-                    identity: identity,
-                    ledger: baseline,
-                    ledgerError: error,
-                    at: drainStartedAt
-                )
-                publish(report, for: configuration)
-                return .init(report: report, retryDisposition: .terminal)
-            }
-        }
-
         var latestTimestamp: Date?
+        // The queue does not report expired or dropped records, so elapsed time alone cannot
+        // prove data loss. Persist a collection gap only when destructive pop returns data that
+        // cannot be decoded; persistence losses after decoding are tracked separately.
         let destructiveGapStart = initializedBaseline.metadata.lastSuccessfulDrainAt
             ?? initializedBaseline.metadata.trackingStartedAt
         var hasMalformedRecordGap = false
