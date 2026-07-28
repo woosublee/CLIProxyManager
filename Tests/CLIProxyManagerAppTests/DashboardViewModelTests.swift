@@ -885,6 +885,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         await viewModel.connectProvider(.codex)
         let didStartReset = await quotaClient.waitForResetRequests(expectedCount: 1)
         XCTAssertTrue(didStartReset)
+        let didScheduleUsagePolling = await sleeper.waitForDelays(expectedCount: 1)
+        XCTAssertTrue(didScheduleUsagePolling)
         let usageCountBeforeResetCompletion = await quotaClient.usageRequestCount()
         let delaysBeforeResetCompletion = await sleeper.delays()
         XCTAssertEqual(usageCountBeforeResetCompletion, 1)
@@ -902,6 +904,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             await Task.yield()
         }
 
+        let didReschedulePolling = await sleeper.waitForDelays(expectedCount: 2)
+        XCTAssertTrue(didReschedulePolling)
         XCTAssertEqual(viewModel.codexResetCreditsSnapshots[profile.id], resetSnapshot)
         XCTAssertEqual(resetCache.load()[profile.id], resetSnapshot)
         let finalUsageCount = await quotaClient.usageRequestCount()
@@ -11301,6 +11305,14 @@ private actor SubscriptionUsageSleepRecorder {
     func sleep(_ delay: UInt64) async throws {
         recordedDelays.append(delay)
         throw CancellationError()
+    }
+
+    func waitForDelays(expectedCount: Int) async -> Bool {
+        for _ in 0..<1_000 {
+            if recordedDelays.count >= expectedCount { return true }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        return recordedDelays.count >= expectedCount
     }
 
     func delays() -> [UInt64] { recordedDelays }
