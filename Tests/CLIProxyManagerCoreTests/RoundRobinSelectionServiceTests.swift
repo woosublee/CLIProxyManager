@@ -70,9 +70,9 @@ final class RoundRobinSelectionServiceTests: XCTestCase {
             ]
         )
 
-        XCTAssertTrue(output.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='codex-b/gpt-5.6-sol-fast(xhigh)'"))
-        XCTAssertTrue(output.contains("ANTHROPIC_DEFAULT_SONNET_MODEL='codex-b/gpt-5.6-sol(medium)'"))
-        XCTAssertTrue(output.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL='codex-b/gpt-5.5-fast(low)'"))
+        XCTAssertTrue(output.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='codex-b/gpt-5.6-sol-fast(xhigh)[1m]'"))
+        XCTAssertTrue(output.contains("ANTHROPIC_DEFAULT_SONNET_MODEL='codex-b/gpt-5.6-sol(medium)[1m]'"))
+        XCTAssertTrue(output.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL='codex-b/gpt-5.5-fast(low)[1m]'"))
         XCTAssertFalse(output.contains("ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"))
         XCTAssertFalse(output.contains("ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"))
         XCTAssertFalse(output.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME"))
@@ -92,9 +92,9 @@ final class RoundRobinSelectionServiceTests: XCTestCase {
                 commandName: "ccodex",
                 includedAuthProfileIDs: ["a.json", "b.json"],
                 codex: .init(
-                    opus: .init(model: "gpt-5.6-sol", reasoning: .xhigh, detectedContextWindow: 372_000),
-                    sonnet: .init(model: "gpt-5.5", reasoning: .medium, detectedContextWindow: 272_000),
-                    haiku: .init(model: "gpt-5.5", reasoning: .low, detectedContextWindow: 200_000)
+                    opus: .init(model: "gpt-5.6-sol", reasoning: .xhigh),
+                    sonnet: .init(model: "gpt-5.5", reasoning: .medium),
+                    haiku: .init(model: "gpt-5.5", reasoning: .low)
                 )
             )
         ]

@@ -91,8 +91,11 @@ enum CodexRoleRoutingOptions {
         if capability == .unsupported || (updated.model != previousModel && capability == .unknown) {
             updated.fastModeEnabled = false
         }
-        if let matchedOption = options.first(where: { $0.id == updated.model }) {
-            updated.detectedContextWindow = matchedOption.contextWindow
+        let modelChanged = updated.model != previousModel
+        if let detectedContextWindow = options.first(where: { $0.id == updated.model })?.contextWindow {
+            updated.detectedContextWindow = detectedContextWindow
+        } else if modelChanged {
+            updated.detectedContextWindow = nil
         }
         return updated
     }
