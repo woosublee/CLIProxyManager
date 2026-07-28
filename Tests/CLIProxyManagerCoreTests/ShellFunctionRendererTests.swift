@@ -228,9 +228,9 @@ final class ShellFunctionRendererTests: XCTestCase {
 
         let script = try ShellFunctionRenderer(config: config, helperCommand: "/usr/local/bin/cpm").render()
 
-        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='codex-account/gpt-5.6-sol-fast(xhigh)'"))
-        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL='codex-account/gpt-5.6-sol(medium)'"))
-        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL='codex-account/gpt-5.5-fast'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='codex-account/gpt-5.6-sol-fast(xhigh)[1m]'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL='codex-account/gpt-5.6-sol(medium)[1m]'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL='codex-account/gpt-5.5-fast[1m]'"))
         XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"))
         XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"))
         XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME"))
@@ -250,12 +250,26 @@ final class ShellFunctionRendererTests: XCTestCase {
         XCTAssertTrue(script.contains("CLAUDE_CODE_AUTO_COMPACT_WINDOW='372000'"))
     }
 
+    func testLegacyCodexCommandUsesFallbackAutoCompactWindowWhenMetadataIsMissing() throws {
+        var config = configuredCommands()
+        config.oauthCommandProfiles[1].codex = .init(
+            opus: .init(model: "gpt-5.6-terra", reasoning: .xhigh),
+            sonnet: .init(model: "gpt-5.5", reasoning: .medium),
+            haiku: .init(model: "gpt-5.5", reasoning: .low)
+        )
+
+        let script = try ShellFunctionRenderer(config: config, helperCommand: "/usr/local/bin/cpm").render()
+
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='codex-account/gpt-5.6-terra(xhigh)[1m]'"))
+        XCTAssertTrue(script.contains("CLAUDE_CODE_AUTO_COMPACT_WINDOW='272000'"))
+    }
+
     func testLegacyCodexCommandOmitsAutoCompactWindowWhenNoRoleExtendsContext() throws {
         var config = configuredCommands()
         config.oauthCommandProfiles[1].codex = .init(
-            opus: .init(model: "gpt-5.5", reasoning: .xhigh, detectedContextWindow: 200_000),
-            sonnet: .init(model: "gpt-5.5", reasoning: .medium),
-            haiku: .init(model: "gpt-5.5", reasoning: .low)
+            opus: .init(model: "custom-model", reasoning: .xhigh, detectedContextWindow: 200_000),
+            sonnet: .init(model: "gpt-5.3-codex-spark", reasoning: .medium),
+            haiku: .init(model: "unknown-model", reasoning: .low)
         )
 
         let script = try ShellFunctionRenderer(config: config, helperCommand: "/usr/local/bin/cpm").render()
@@ -263,15 +277,15 @@ final class ShellFunctionRendererTests: XCTestCase {
         XCTAssertFalse(script.contains("CLAUDE_CODE_AUTO_COMPACT_WINDOW"))
     }
 
-    func testCodexAPICommandExportsAutoCompactWindow() throws {
+    func testCodexAPICommandExportsFallbackModelSuffixAndAutoCompactWindow() throws {
         var config = configuredCommands()
         config.codexAPI.commandName = "ccodexapi"
         config.codexAPI = .init(
             commandName: "ccodexapi",
             codex: .init(
-                opus: .init(model: "gpt-5.4", reasoning: .xhigh, detectedContextWindow: 1_050_000),
-                sonnet: .init(model: "gpt-5.5", reasoning: .medium, detectedContextWindow: 272_000),
-                haiku: .init(model: "gpt-5.5", reasoning: .low, detectedContextWindow: 200_000)
+                opus: .init(model: "gpt-5.6-sol", reasoning: .xhigh),
+                sonnet: .init(model: "gpt-5.6-terra", reasoning: .medium),
+                haiku: .init(model: "gpt-5.6-terra", reasoning: .low)
             )
         )
 
@@ -282,7 +296,9 @@ final class ShellFunctionRendererTests: XCTestCase {
         ).render()
 
         let function = renderedFunction(named: config.codexAPI.commandName, in: script)
-        XCTAssertTrue(function.contains("CLAUDE_CODE_AUTO_COMPACT_WINDOW='272000'"))
+        XCTAssertTrue(function.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='cpm-codex-api/gpt-5.6-sol(xhigh)[1m]'"))
+        XCTAssertTrue(function.contains("ANTHROPIC_DEFAULT_SONNET_MODEL='cpm-codex-api/gpt-5.6-terra(medium)[1m]'"))
+        XCTAssertTrue(function.contains("CLAUDE_CODE_AUTO_COMPACT_WINDOW='372000'"))
     }
 
     func testOAuthCommandProfileExportsAutoCompactWindow() throws {
@@ -396,7 +412,7 @@ final class ShellFunctionRendererTests: XCTestCase {
         XCTAssertTrue(script.contains("ccodex() {"))
         XCTAssertTrue(script.contains("routing claude-models 'claude'"))
         XCTAssertFalse(script.contains("routing claude-models '--legacy'"))
-        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='codex-account/gpt-5.6-terra(xhigh)'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='codex-account/gpt-5.6-terra(xhigh)[1m]'"))
     }
 
     func testRenderIncludesEnabledRoundRobinFunction() throws {
@@ -467,9 +483,9 @@ final class ShellFunctionRendererTests: XCTestCase {
             helperCommand: "/usr/local/bin/cliproxy-manager"
         ).render()
 
-        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='codex-account/gpt-5.5(xhigh)'"))
-        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL='codex-account/gpt-5.5(medium)'"))
-        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL='codex-account/gpt-5.5'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='codex-account/gpt-5.5(xhigh)[1m]'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL='codex-account/gpt-5.5(medium)[1m]'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL='codex-account/gpt-5.5[1m]'"))
         XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"))
         XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"))
         XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME"))
@@ -636,8 +652,8 @@ final class ShellFunctionRendererTests: XCTestCase {
 
         let script = try ShellFunctionRenderer(config: config, helperCommand: "/usr/local/bin/cpm").render()
 
-        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='codex-work/gpt-5.6-sol-fast(xhigh)'"))
-        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL='codex-work/gpt-5.5(medium)'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='codex-work/gpt-5.6-sol-fast(xhigh)[1m]'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL='codex-work/gpt-5.5(medium)[1m]'"))
         XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"))
         XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"))
         XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME"))
@@ -668,9 +684,9 @@ final class ShellFunctionRendererTests: XCTestCase {
             enabledFunctions: .init(claudeOAuth: false, codex: false, claudeAPI: false, codexAPI: true)
         ).render()
 
-        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='cpm-codex-api/gpt-5.6-terra-fast(max)'"))
-        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL='cpm-codex-api/gpt-5.6-sol(medium)'"))
-        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL='cpm-codex-api/gpt-5.5'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL='cpm-codex-api/gpt-5.6-terra-fast(max)[1m]'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL='cpm-codex-api/gpt-5.6-sol(medium)[1m]'"))
+        XCTAssertTrue(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL='cpm-codex-api/gpt-5.5[1m]'"))
         XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"))
         XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"))
         XCTAssertFalse(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME"))

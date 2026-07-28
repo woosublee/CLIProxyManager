@@ -150,7 +150,8 @@ final class CLIProxyManagerCommandTests: XCTestCase {
 
         XCTAssertEqual(output.stdout.count, 1)
         XCTAssertTrue(output.stdout[0].hasSuffix("\n"))
-        XCTAssertTrue(output.stdout[0].contains("ANTHROPIC_DEFAULT_OPUS_MODEL='codex-a/gpt-5.6-terra(xhigh)'"))
+        XCTAssertTrue(output.stdout[0].contains("ANTHROPIC_DEFAULT_OPUS_MODEL='codex-a/gpt-5.6-terra(xhigh)[1m]'"))
+        XCTAssertTrue(output.stdout[0].contains("CLAUDE_CODE_AUTO_COMPACT_WINDOW='372000'"))
         XCTAssertTrue(output.stdout[0].contains("CLIPROXY_ROUND_ROBIN_PROFILE='codex-a.json'"))
     }
 

@@ -87,7 +87,7 @@ struct CodexRoleRoutingFields: View {
                 .pickerStyle(.menu)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                Text(CodexRoleRoutingOptions.contextWindowDisplay(role.wrappedValue.detectedContextWindow))
+                Text(CodexRoleRoutingOptions.contextWindowDisplay(role.wrappedValue.effectiveContextWindow))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)

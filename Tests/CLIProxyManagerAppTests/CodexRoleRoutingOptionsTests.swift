@@ -207,24 +207,38 @@ final class CodexRoleRoutingOptionsTests: XCTestCase {
         XCTAssertEqual(normalized.detectedContextWindow, 372_000)
     }
 
-    func testNormalizedRolePreservesDetectedContextWindowWhenModelUnknown() {
+    func testNormalizedRoleClearsDetectedContextWindowWhenModelChangesToUnknown() {
         let role = AppConfig.CodexRole(model: "gpt-5.5", reasoning: .auto, detectedContextWindow: 372_000)
 
         let normalized = CodexRoleRoutingOptions.normalizedRole(role, model: "missing-model", options: options)
 
+        XCTAssertNil(normalized.detectedContextWindow)
+    }
+
+    func testNormalizedRolePreservesLastSuccessfulContextWhenSameModelMetadataIsMissing() {
+        let role = AppConfig.CodexRole(model: "gpt-5.6-sol", reasoning: .auto, detectedContextWindow: 372_000)
+
+        let normalized = CodexRoleRoutingOptions.normalizedRole(role, model: "gpt-5.6-sol", options: options)
+
         XCTAssertEqual(normalized.detectedContextWindow, 372_000)
     }
 
-    func testNormalizedRoleClearsDetectedContextWindowWhenOptionHasNoValue() {
+    func testNormalizedRoleClearsDetectedContextWindowWhenNewModelOptionHasNoValue() {
         let role = AppConfig.CodexRole(model: "gpt-5.5", reasoning: .auto, detectedContextWindow: 372_000)
 
         let normalized = CodexRoleRoutingOptions.normalizedRole(role, model: "gpt-5.6-sol", options: options)
 
         XCTAssertNil(normalized.detectedContextWindow)
+        XCTAssertEqual(normalized.effectiveContextWindow, 372_000)
     }
 
-    func testContextWindowDisplayAbbreviatesLargeValues() {
-        XCTAssertEqual(CodexRoleRoutingOptions.contextWindowDisplay(372_000), "372K")
+    func testContextWindowDisplayAbbreviatesEffectiveContextValues() {
+        let terra = AppConfig.CodexRole(model: "gpt-5.6-terra", reasoning: .medium)
+
+        XCTAssertEqual(
+            CodexRoleRoutingOptions.contextWindowDisplay(terra.effectiveContextWindow),
+            "372K"
+        )
         XCTAssertEqual(CodexRoleRoutingOptions.contextWindowDisplay(1_050_000), "1.05M")
     }
 

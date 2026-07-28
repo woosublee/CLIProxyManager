@@ -88,7 +88,7 @@ final class AppConfigTests: XCTestCase {
     func testCodexReasoningMaxRendersAndRoundTrips() throws {
         let role = AppConfig.CodexRole(model: "gpt-5.6-sol", reasoning: .max)
 
-        XCTAssertEqual(role.modelIdentifier, "gpt-5.6-sol(max)")
+        XCTAssertEqual(role.modelIdentifier, "gpt-5.6-sol(max)[1m]")
 
         let encoded = try JSONEncoder().encode(role)
         let decoded = try JSONDecoder().decode(AppConfig.CodexRole.self, from: encoded)
@@ -110,30 +110,51 @@ final class AppConfigTests: XCTestCase {
             fastModeEnabled: true
         )
 
-        XCTAssertEqual(role.modelIdentifier, "gpt-5.6-sol-fast(max)")
+        XCTAssertEqual(role.modelIdentifier, "gpt-5.6-sol-fast(max)[1m]")
         XCTAssertEqual(
             try JSONDecoder().decode(AppConfig.CodexRole.self, from: JSONEncoder().encode(role)),
             role
         )
     }
 
-    func testCodexRoleModelIdentifierAppendsOneMillionSuffixForExtendedContext() {
-        let role = AppConfig.CodexRole(
+    func testCodexRoleModelIdentifierAppendsOneMillionSuffixFromDetectedOrFallbackContext() {
+        let detected = AppConfig.CodexRole(
             model: "gpt-5.6-sol",
             reasoning: .xhigh,
             detectedContextWindow: 372_000,
             fastModeEnabled: true
         )
+        let fallback = AppConfig.CodexRole(
+            model: "gpt-5.6-terra",
+            reasoning: .medium
+        )
 
-        XCTAssertEqual(role.modelIdentifier, "gpt-5.6-sol-fast(xhigh)[1m]")
+        XCTAssertEqual(detected.modelIdentifier, "gpt-5.6-sol-fast(xhigh)[1m]")
+        XCTAssertEqual(fallback.modelIdentifier, "gpt-5.6-terra(medium)[1m]")
     }
 
-    func testCodexRoleModelIdentifierOmitsSuffixAtOrBelowStandardContext() {
+    func testCodexRoleModelIdentifierUsesFallbackAcrossExtendedModelSizes() {
+        let cases = [
+            ("gpt-5.5", 272_000),
+            ("gpt-5.4-mini", 400_000),
+            ("gpt-5.4", 1_050_000)
+        ]
+
+        for (model, contextWindow) in cases {
+            let role = AppConfig.CodexRole(model: model, reasoning: .medium)
+            XCTAssertEqual(role.effectiveContextWindow, contextWindow)
+            XCTAssertEqual(role.modelIdentifier, "\(model)(medium)[1m]")
+        }
+    }
+
+    func testCodexRoleModelIdentifierOmitsSuffixAtOrBelowStandardContextOrWhenUnknown() {
         let atStandard = AppConfig.CodexRole(model: "gpt-5.5", reasoning: .medium, detectedContextWindow: 200_000)
-        let unknown = AppConfig.CodexRole(model: "gpt-5.5", reasoning: .medium, detectedContextWindow: nil)
+        let belowStandard = AppConfig.CodexRole(model: "gpt-5.3-codex-spark", reasoning: .medium)
+        let unknown = AppConfig.CodexRole(model: "custom-model", reasoning: .medium)
 
         XCTAssertEqual(atStandard.modelIdentifier, "gpt-5.5(medium)")
-        XCTAssertEqual(unknown.modelIdentifier, "gpt-5.5(medium)")
+        XCTAssertEqual(belowStandard.modelIdentifier, "gpt-5.3-codex-spark(medium)")
+        XCTAssertEqual(unknown.modelIdentifier, "custom-model(medium)")
     }
 
     func testCodexRoleDetectedContextWindowRoundTrips() throws {

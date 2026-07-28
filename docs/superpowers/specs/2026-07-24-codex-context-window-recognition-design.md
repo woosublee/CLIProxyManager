@@ -9,9 +9,11 @@
 | 모델 | context_window |
 | --- | --- |
 | gpt-5.6-sol / terra / luna | 372,000 |
-| gpt-5.5 | 272,000 |
-| gpt-5.4 | 1,050,000 (라이브 조회 기준) |
+| gpt-5.5 / codex-auto-review | 272,000 |
+| gpt-image-1.5 / gpt-image-2 | 272,000 |
+| gpt-5.4 | 1,050,000 (scoped registry 기준) |
 | gpt-5.4-mini | 400,000 |
+| gpt-5.3-codex-spark | 128,000 |
 
 이 불일치 때문에 Claude Code의 auto-compact가 실제 모델 한계보다 훨씬 이르게(200K 기준) 발생해 가용 컨텍스트를 낭비하거나, 향후 `[1m]` suffix만 붙이는 경우 1M 기준으로 늦게 발생해 실제 provider 한계를 넘겨 잘림/오류가 날 수 있다.
 
@@ -51,9 +53,12 @@ CodexRoleRoutingOptions.normalizedRole  ← 자동 감지·정규화 (사용자 
         ▼
 AppConfig.CodexRole.detectedContextWindow (Int?, 기존 CodexContextWindow enum 대체)
         │
+        ▼
+CodexContextWindowPolicy (metadata 우선 → bundled registry fallback → nil)
+        │
         ├─→ CodexRole.modelIdentifier → ">200_000이면 [1m]" 자동 추가
         └─→ ShellFunctionRenderer / RoundRobinSelectionService
-              → CLAUDE_CODE_AUTO_COMPACT_WINDOW export
+              → 실제 최대 값 기준 CLAUDE_CODE_AUTO_COMPACT_WINDOW export
 ```
 
 ## 데이터 모델
@@ -70,7 +75,7 @@ public struct CodexModelOption: Equatable, Sendable {
 }
 ```
 
-`ProxyModelClient`가 이미 파싱하는 `CodexClientModelsResponse.Model`에 `context_window` 필드를 추가로 디코드해 채운다. metadata에 필드가 없거나 요청이 실패하면 `nil`(미확인) — 미확인 모델은 절대 확장 context로 취급하지 않는다. Fast mode의 `supportsFastMode` fallback allowlist와 달리, context window에는 fallback을 두지 않는다(실측 숫자가 필요하므로 추측 불가).
+`ProxyModelClient`가 이미 파싱하는 `CodexClientModelsResponse.Model`에 `context_window` 필드를 추가로 디코드해 채운다. metadata에 필드가 없거나 요청이 실패하면 option의 값은 `nil`(미확인)로 유지한다. 최종 출력에서는 이 raw metadata만 직접 사용하지 않고 아래의 공통 effective-context 정책을 적용한다.
 
 ### `AppConfig.CodexRole`
 
@@ -84,29 +89,62 @@ public struct CodexRole: Codable, Equatable, Sendable {
 ```
 
 - `CodexContextWindow` enum(`auto`/`context200k`/`context400k`/`context1m`)은 완전히 삭제한다.
-- 과거 JSON의 `contextWindow` 키(문자열)는 디코드 시 그냥 무시한다. 원래도 아무 효과가 없었으므로 마이그레이션 손실이 없다. 새 값은 `nil`에서 시작해 모델 목록이 로드되는 시점에 정규화된다.
+- 과거 JSON의 `contextWindow` 키(문자열)는 디코드 시 그냥 무시한다. 원래도 아무 효과가 없었으므로 마이그레이션 손실이 없다.
 - `>200_000`이면 확장 context로 판단한다(정확히 200,000은 표준 취급 — Claude Code 기본 200K와 동일하므로 override 불필요).
+
+### Effective context 정책
+
+`CodexContextWindowPolicy`가 model identifier, auto-compact export, 설정 UI에서 공통으로 사용할 값을 결정한다.
+
+1. CLIProxyAPI metadata에서 성공적으로 감지한 `detectedContextWindow`가 있으면 해당 값을 **모델의 실제 최대 context**로 우선 사용한다.
+2. metadata가 없을 때만 현재 번들 CLIProxyAPI의 scoped Codex registry와 일치하는 fallback을 사용한다.
+3. registry에 없는 미래 모델·custom model은 추측하지 않고 `nil`로 유지한다.
+
+| 모델 | 안전 fallback |
+| --- | ---: |
+| gpt-5.6-sol / terra / luna | 372,000 |
+| gpt-5.5 / codex-auto-review | 272,000 |
+| gpt-image-1.5 / gpt-image-2 | 272,000 |
+| gpt-5.4 | 1,050,000 |
+| gpt-5.4-mini | 400,000 |
+| gpt-5.3-codex-spark | 128,000 |
+
+Fallback은 metadata 장애나 아직 저장되지 않은 기존 설정을 복구하기 위한 안전망이지 registry를 대체하는 값이 아니다. metadata가 fallback과 다르면 metadata가 항상 우선한다. model lookup 시 routing prefix, reasoning suffix, managed `-fast` alias, `[1m]` suffix를 제거해 동일한 canonical model로 해석한다.
 
 ## 정규화
 
 `CodexRoleRoutingOptions.normalizedRole`(기존 model/reasoning/fastModeEnabled 정규화와 같은 호출 지점, 같은 타이밍)에 추가:
 
 ```swift
-updated.detectedContextWindow = options.first(where: { $0.id == updated.model })?.contextWindow
+let modelChanged = updated.model != previousModel
+if let detected = matchingOption?.contextWindow {
+    updated.detectedContextWindow = detected
+} else if modelChanged {
+    updated.detectedContextWindow = nil
+}
 ```
 
 - 사용자가 조작할 수 있는 토글이 없다. capability가 확인되면 즉시, 조용히 반영된다.
-- capability 조회가 실패하거나 옵션 목록에 해당 모델이 없으면 **기존 값을 유지**한다(Fast mode와 동일 정책 — 네트워크 오류로 인한 값 요동 방지).
-- 이 정규화는 기존에 model/reasoning/fastMode 정규화가 이미 일어나는 모든 지점(모델 변경 시, `.task(id: availableModels)`, 모델 새로고침 버튼, 초기 기본값 적용 시)에서 자동으로 함께 일어난다. 별도의 백그라운드 재조정 작업은 추가하지 않는다.
+- 같은 모델에서 metadata 조회가 일시적으로 실패하면 **직전 성공 값을 유지**한다. 네트워크 오류로 `[1m]`과 auto-compact 값이 요동치지 않는다.
+- 다른 모델로 변경했는데 새 metadata가 없으면 이전 모델의 값을 승계하지 않고 raw detected 값을 `nil`로 초기화한다. 알려진 새 모델은 공통 fallback으로만 해석한다.
+- round-robin 공통 옵션은 모든 provider가 context 값을 보고한 경우에만 그 최솟값을 authoritative intersection으로 저장한다. 하나라도 누락되면 `nil`로 두며, 알려진 모델에만 공통 fallback이 적용된다.
+- 이 정규화는 기존에 model/reasoning/fastMode 정규화가 이미 일어나는 모든 지점(모델 변경 시, `.task(id: availableModels)`, 모델 새로고침 버튼, 초기 기본값 적용 시)에서 자동으로 함께 일어난다. 별도의 config schema migration은 추가하지 않는다.
 
 ## 모델 식별자 생성
 
 `AppConfig.CodexRole.modelIdentifier`:
 
 ```swift
+public var effectiveContextWindow: Int? {
+    CodexContextWindowPolicy.effectiveContextWindow(
+        model: model,
+        detectedContextWindow: detectedContextWindow
+    )
+}
+
 public var modelIdentifier: String {
     let base = CodexFastMode.modelIdentifier(model: model, reasoning: reasoning, fastModeEnabled: fastModeEnabled)
-    guard let detectedContextWindow, detectedContextWindow > 200_000 else { return base }
+    guard let effectiveContextWindow, effectiveContextWindow > 200_000 else { return base }
     return base + "[1m]"
 }
 ```
@@ -123,7 +161,7 @@ public var modelIdentifier: String {
 enum CodexContextWindowExport {
     static func autoCompactWindow(for codex: AppConfig.Codex) -> Int? {
         [codex.opus, codex.sonnet, codex.haiku]
-            .compactMap { $0.detectedContextWindow }
+            .compactMap { $0.effectiveContextWindow }
             .filter { $0 > 200_000 }
             .min()
     }
@@ -131,7 +169,9 @@ enum CodexContextWindowExport {
 ```
 
 - 세 역할 모두 확장 context가 없으면 `nil` → export 생략, Claude Code 기본값(200K) 그대로 사용.
-- 하나 이상 있으면 그중 **최솟값**을 사용한다. 세션 중 역할을 전환해도 실제 한계를 넘기지 않는 것을 우선한다(같은 모델을 세 역할에 매핑하는 것이 일반적이라 실제로는 대부분 오차가 없다).
+- 각 역할에는 metadata 또는 fallback으로 확인한 **모델의 실제 최대 context 값**을 사용한다.
+- 하나 이상 있으면 그중 **최솟값**을 사용한다. `CLAUDE_CODE_AUTO_COMPACT_WINDOW`는 명령 하나에 공통으로 적용되므로, 세션 중 역할을 전환해도 어느 모델의 실제 최대 한계도 넘지 않게 한다.
+- `[1m]`은 Claude Code가 custom model을 200K로 제한하지 않게 할 뿐이고, auto-compact 값은 1M이 아니라 위에서 계산한 실제 provider 한계로 유지한다.
 
 ### 적용 지점
 
@@ -150,7 +190,7 @@ enum CodexContextWindowExport {
 `CodexRoleRoutingFields`의 "Context" 열:
 
 - 기존 `Picker(auto/200k/400k/1m)`를 제거하고 읽기 전용 라벨로 교체한다.
-- 감지된 실제 값이 있으면 그 값을 축약 표기(예: `372K`, `1.05M`)로 표시한다.
+- metadata 또는 안전 fallback으로 확인한 effective context 값을 축약 표기(예: `372K`, `1.05M`)로 표시한다.
 - 미확인이거나 200K 이하면 `—`로 표시한다.
 - 헤더 텍스트("Context")와 컬럼 폭은 기존 그대로 재사용한다(레이아웃 변경 없음).
 - `CodexProviderSettingsSheet`·`CodexAPIProviderSettingsSheet` 양쪽에 공용 컴포넌트를 통해 자동 반영된다. 별도 작업 불필요.
@@ -158,9 +198,10 @@ enum CodexContextWindowExport {
 
 ## 오류 처리
 
-- CLIProxyAPI metadata 조회 실패 → `detectedContextWindow`는 직전 성공 값을 유지. `[1m]`/`AUTO_COMPACT_WINDOW` 상태가 네트워크 오류로 요동치지 않는다.
+- CLIProxyAPI metadata 조회 실패 → 같은 모델의 `detectedContextWindow`는 직전 성공 값을 유지하고, 저장값이 없는 알려진 모델은 bundled registry fallback을 사용한다. `[1m]`/`AUTO_COMPACT_WINDOW` 상태가 네트워크 오류로 요동치지 않는다.
 - 기존 저장 파일의 `contextWindow` 키(문자열: auto/200k/400k/1m) → 디코드 시 조용히 무시한다. 원래 효과가 없었으므로 사용자에게 손실을 알릴 필요가 없다.
-- 모델을 소형 모델로 변경해 `detectedContextWindow`가 200,000 이하로 갱신되면 → 다음 저장 시 `[1m]`이 자동으로 제거되고, `AUTO_COMPACT_WINDOW` export도 재계산되어 자동으로 빠진다.
+- 모델을 변경하면 이전 모델의 raw detected 값은 승계하지 않는다. 새 모델이 200,000 이하로 감지되거나 fallback도 200,000 이하이면 `[1m]`이 자동으로 제거되고, `AUTO_COMPACT_WINDOW` export도 재계산되어 자동으로 빠진다.
+- unknown/custom model은 metadata가 없는 한 확장 context로 추측하지 않는다.
 - `CLAUDE_CODE_AUTO_COMPACT_WINDOW`를 붙이는 순간 Claude Code의 상태줄 사용률(%) 표시는 `[1m]`이 붙은 만큼 1M 분모로 계산되어 실제보다 낮게 보일 수 있다(§비목표에서 다룬 알려진 한계). 이는 버그가 아니라 Claude Code 자체의 설계이며, 이번 변경으로 해결하지 않는다.
 
 ## 번들 CLIProxyAPI 바이너리 업데이트
@@ -175,26 +216,27 @@ enum CodexContextWindowExport {
 - metadata 응답의 `context_window` 필드 파싱.
 - 필드가 없는 경우 `contextWindow == nil`.
 
-### `AppConfigTests`
+### `AppConfigTests` / `CodexContextWindowPolicyTests`
 - `detectedContextWindow`의 encode/decode round-trip.
 - 구버전 JSON의 `contextWindow`(문자열) 키가 존재해도 디코드가 성공하고 `detectedContextWindow == nil`로 시작하는지.
-
-### `CodexFastModeTests`(또는 신규 `CodexRoleModelIdentifierTests`)
-- `detectedContextWindow`가 `nil`이거나 `<=200_000`이면 `[1m]`이 붙지 않음.
-- `>200_000`이면 `[1m]`이 붙고, fast alias·reasoning과의 순서가 `model-fast(reasoning)[1m]`인지.
-- fastModeEnabled와 detectedContextWindow가 동시에 활성화된 조합.
+- 전체 fallback model matrix와 routing prefix·fast alias·reasoning·`[1m]` canonicalization.
+- metadata가 fallback과 다르면 metadata가 우선하는지.
+- nil metadata인 알려진 272K·372K·400K·1.05M 모델에 `[1m]`이 붙고, 128K 및 unknown/custom model에는 붙지 않는지.
 
 ### `CodexRoleRoutingOptionsTests`
 - 모델 변경 시 `detectedContextWindow`가 새 옵션의 `contextWindow`로 정규화되는지.
-- capability 조회 실패(옵션 목록에 모델이 없음) 시 기존 `detectedContextWindow` 값이 유지되는지.
+- 같은 모델의 metadata가 일시적으로 `nil`이면 직전 성공 값을 유지하는지.
+- 다른 모델로 변경할 때 이전 모델의 stale 값을 제거하는지.
+- UI Context 표시가 effective context를 사용하는지.
 
 ### `ShellFunctionRendererTests`
-- 세 역할 중 하나 이상 확장 context가 있으면 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`가 최솟값으로 생성되는지.
+- 세 역할 중 하나 이상 확장 context가 있으면 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`가 실제 최대 값들의 최솟값으로 생성되는지.
 - 세 역할 모두 확장 context가 없으면 해당 줄이 전혀 생성되지 않는지.
-- legacy Codex, OAuth command profile, Codex API Key 각 경로에서 동일하게 검증.
+- metadata가 없는 legacy Codex, OAuth command profile, Codex API Key 각 경로에서도 fallback `[1m]`과 실제 최대 context가 동일하게 생성되는지.
 
-### `RoundRobinSelectionServiceTests`
+### `RoundRobinSelectionServiceTests` / `DashboardViewModelTests`
 - round-robin codex 프로필에서도 `[1m]`과 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`가 동일하게 반영되는지.
+- 모든 provider가 context를 보고하면 최솟값으로 병합하고, 하나라도 누락된 custom model은 authoritative context로 오인하지 않는지.
 
 ## 실제 검증(개발 빌드)
 
@@ -210,7 +252,7 @@ enum CodexContextWindowExport {
 ## 성공 기준
 
 - Codex 역할에 매핑된 GPT 모델의 실제 context window가 CLIProxyManager에 의해 자동으로 감지되고, 사용자 개입 없이 Claude Code 셸 함수에 반영된다.
-- 확장 context 모델에서 `[1m]` suffix와 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`가 정확한 감지값으로 설정되어, auto-compact가 실제 모델 한계에 맞게 동작한다.
+- 확장 context 모델에서 `[1m]` suffix와 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`가 metadata 또는 안전 fallback으로 확인한 실제 최대 값으로 설정되어, auto-compact가 실제 모델 한계에 맞게 동작한다.
 - 확장 context가 없는 모델에서는 기존 Claude Code 기본 동작(200K)이 그대로 유지된다.
 - 기존 설정 파일 decode와 개발 빌드 검증이 모두 통과한다.
 - 번들 CLIProxyAPI가 7.2.97로 갱신되어도 기존 테스트가 회귀 없이 통과한다.

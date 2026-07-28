@@ -3597,11 +3597,19 @@ final class DashboardViewModel: ObservableObject {
                 } else {
                     defaultReasoning = supported.isEmpty ? .auto : nil
                 }
+                let contextWindow: Int?
+                if let currentContextWindow = current.contextWindow,
+                   let otherContextWindow = other.contextWindow {
+                    contextWindow = min(currentContextWindow, otherContextWindow)
+                } else {
+                    contextWindow = nil
+                }
                 return CodexModelOption(
                     id: current.id,
                     supportedReasoning: supported,
                     defaultReasoning: defaultReasoning,
-                    supportsFastMode: current.supportsFastMode && other.supportsFastMode
+                    supportsFastMode: current.supportsFastMode && other.supportsFastMode,
+                    contextWindow: contextWindow
                 )
             }
         }

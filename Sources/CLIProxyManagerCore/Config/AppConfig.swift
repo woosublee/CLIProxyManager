@@ -102,13 +102,23 @@ public struct AppConfig: Codable, Equatable, Sendable {
             fastModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .fastModeEnabled) ?? false
         }
 
+        public var effectiveContextWindow: Int? {
+            CodexContextWindowPolicy.effectiveContextWindow(
+                model: model,
+                detectedContextWindow: detectedContextWindow
+            )
+        }
+
         public var modelIdentifier: String {
             let base = CodexFastMode.modelIdentifier(
                 model: model,
                 reasoning: reasoning,
                 fastModeEnabled: fastModeEnabled
             )
-            guard let detectedContextWindow, detectedContextWindow > 200_000 else { return base }
+            guard let effectiveContextWindow,
+                  effectiveContextWindow > CodexContextWindowPolicy.standardContextWindow else {
+                return base
+            }
             return base + "[1m]"
         }
     }
