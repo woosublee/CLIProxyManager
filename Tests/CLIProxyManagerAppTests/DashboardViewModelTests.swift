@@ -6122,6 +6122,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         XCTAssertEqual(reconciler.callCount, 1)
         XCTAssertEqual(proxyService.restartPorts, [config.port])
+        XCTAssertTrue(proxyService.reconcilePorts.isEmpty)
         XCTAssertTrue(proxyService.ports.isEmpty)
     }
 
@@ -6143,6 +6144,54 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         XCTAssertEqual(reconciler.callCount, 1)
         XCTAssertTrue(proxyService.restartPorts.isEmpty)
+        XCTAssertEqual(proxyService.reconcilePorts, [config.port])
+    }
+
+    func testStartApplicationReconcilesLegacyRunningProxyConfiguration() async {
+        let config = AppConfig.default
+        let proxyService = StubProxyServiceStarter(reconcileResult: true)
+        let reconciler = BundledProxyReconcilerDouble(
+            result: .unchanged(version: CLIProxyAPIVersion("7.2.91")!)
+        )
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(),
+            proxyService: proxyService,
+            bundledProxyReconciler: reconciler
+        )
+
+        await viewModel.startApplication()
+
+        XCTAssertEqual(proxyService.reconcilePorts, [config.port])
+        XCTAssertTrue(proxyService.restartPorts.isEmpty)
+        XCTAssertTrue(proxyService.ports.isEmpty)
+    }
+
+    func testStartApplicationReportsLocalOnlyReconciliationFailureWithRecoveryAction() async {
+        let config = AppConfig.default
+        let proxyService = StubProxyServiceStarter(
+            reconcileError: ProxyServiceError.restartFailed(
+                stage: .processLaunch,
+                rollbackSucceeded: true
+            )
+        )
+        let reconciler = BundledProxyReconcilerDouble(
+            result: .unchanged(version: CLIProxyAPIVersion("7.2.91")!)
+        )
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(),
+            proxyService: proxyService,
+            bundledProxyReconciler: reconciler
+        )
+
+        await viewModel.startApplication()
+
+        XCTAssertEqual(proxyService.reconcilePorts, [config.port])
+        XCTAssertTrue(viewModel.settingsMessage?.contains("Local-only proxy configuration could not be applied") == true)
+        XCTAssertTrue(viewModel.settingsMessage?.contains("Retry Restart Server") == true)
     }
 
     func testStartApplicationDoesNotRestartStoppedServerAfterBundledBinaryChanges() async {
@@ -6172,6 +6221,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         XCTAssertEqual(reconciler.callCount, 1)
         XCTAssertTrue(proxyService.restartPorts.isEmpty)
+        XCTAssertEqual(proxyService.reconcilePorts, [config.port])
         XCTAssertTrue(proxyService.ports.isEmpty)
     }
 
@@ -6191,6 +6241,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         XCTAssertEqual(reconciler.callCount, 1)
         XCTAssertTrue(proxyService.restartPorts.isEmpty)
+        XCTAssertEqual(proxyService.reconcilePorts, [config.port])
         XCTAssertTrue(viewModel.settingsMessage?.contains("Bundled CLIProxyAPI update failed") == true)
     }
 
@@ -12278,9 +12329,12 @@ private final class StubProxyServiceStarter: ProxyServiceControlling, @unchecked
     private let suspendedRestartCount: Int
     private let startDelayNanoseconds: UInt64
     private let stopDelayNanoseconds: UInt64
+    private let reconcileResult: Bool
+    private let reconcileError: Error?
     private let lock = NSLock()
     private var _ports: [Int] = []
     private var _restartPorts: [Int] = []
+    private var _reconcilePorts: [Int] = []
     private var _stopCount = 0
     private var releasedRestarts: Set<Int> = []
 
@@ -12296,13 +12350,19 @@ private final class StubProxyServiceStarter: ProxyServiceControlling, @unchecked
         lock.withLock { _stopCount }
     }
 
+    var reconcilePorts: [Int] {
+        lock.withLock { _reconcilePorts }
+    }
+
     init(
         error: Error? = nil,
         restartError: Error? = nil,
         restartErrors: [Error?] = [],
         suspendedRestartCount: Int = 0,
         startDelayNanoseconds: UInt64 = 0,
-        stopDelayNanoseconds: UInt64 = 0
+        stopDelayNanoseconds: UInt64 = 0,
+        reconcileResult: Bool = false,
+        reconcileError: Error? = nil
     ) {
         self.error = error
         self.restartError = restartError
@@ -12310,6 +12370,8 @@ private final class StubProxyServiceStarter: ProxyServiceControlling, @unchecked
         self.suspendedRestartCount = suspendedRestartCount
         self.startDelayNanoseconds = startDelayNanoseconds
         self.stopDelayNanoseconds = stopDelayNanoseconds
+        self.reconcileResult = reconcileResult
+        self.reconcileError = reconcileError
     }
 
     func start(port: Int) async throws {
@@ -12354,6 +12416,12 @@ private final class StubProxyServiceStarter: ProxyServiceControlling, @unchecked
             code: 1,
             userInfo: [NSLocalizedDescriptionKey: "Restart \(invocation) was not released by its test."]
         )
+    }
+
+    func reconcileConfiguration(port: Int) async throws -> Bool {
+        lock.withLock { _reconcilePorts.append(port) }
+        if let reconcileError { throw reconcileError }
+        return reconcileResult
     }
 
     func restart(port: Int) async throws {

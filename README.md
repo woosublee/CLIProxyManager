@@ -65,6 +65,12 @@ GitHub Releases에서 직접 내려받은 배포본만 사용하세요.
 - Codex OAuth와 각 OpenAI API Key profile은 Opus·Sonnet·Haiku 역할마다 GPT model과 reasoning을 선택할 수 있습니다. 지원 모델에서는 Fast mode를 켤 수 있으며, 감지된 context window는 Claude Code auto-compaction에 반영됩니다.
 - **Settings → General → Routing**에서 provider별 round-robin 명령어를 만들 수 있습니다. 최소 2개 계정을 선택하면 새 CLI session마다 다음 계정으로 순환하고, 선택된 계정은 해당 session 동안 고정됩니다.
 
+## 로컬 서버 네트워크 정책
+
+CLIProxyManager가 관리하는 CLIProxyAPI는 `127.0.0.1`에만 bind됩니다. 같은 Mac의 앱과 터미널에서는 사용할 수 있지만, 같은 Wi-Fi·LAN·VPN에 연결된 다른 장치에서는 직접 접속할 수 없습니다. LAN 또는 원격 접근은 현재 지원하지 않습니다.
+
+기본 포트는 Release 앱에서 `18317`, Development build에서 `18318`이며 **Settings → Server**에서 변경할 수 있습니다. 예를 들어 Release 기본 endpoint는 `http://127.0.0.1:18317`입니다.
+
 ## 사용량 HUD
 
 **Settings → Usage**에서 메뉴바 사용량과 별도 Usage HUD 표시를 각각 설정할 수 있습니다.
@@ -137,7 +143,7 @@ source ~/.zshrc
 
 ### 로컬 서버에 연결할 수 없음
 
-앱에서 서버 상태를 확인하고, 필요하면 서버를 중지한 뒤 다시 시작하세요. 계속 문제가 있으면 **Advanced** 설정에서 로그를 확인합니다.
+앱에서 서버 상태와 **Settings → Server**의 port를 확인하고, 필요하면 서버를 중지한 뒤 다시 시작하세요. CLIProxyAPI는 local-only이므로 반드시 같은 Mac에서 `http://127.0.0.1:<설정된 port>`로 연결해야 합니다. 다른 장치의 LAN IP나 `0.0.0.0`으로는 접속할 수 없습니다. 계속 문제가 있으면 **Advanced** 설정에서 로그를 확인합니다.
 
 ### 앱이 처음 실행되지 않음
 

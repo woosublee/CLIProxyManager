@@ -65,6 +65,12 @@ Only use release builds downloaded directly from GitHub Releases.
 - Codex OAuth and each OpenAI API key profile can select a GPT model and reasoning effort for each Opus, Sonnet, and Haiku role. Supported models can enable Fast mode, and the detected context window is applied to Claude Code auto-compaction.
 - Create provider-specific round-robin commands under **Settings → General → Routing**. Select at least two accounts to rotate the account used for each new CLI session; the chosen account stays fixed for that session.
 
+## Local server network policy
+
+CLIProxyAPI instances managed by CLIProxyManager bind only to `127.0.0.1`. Apps and terminals on the same Mac can use the proxy, but other devices on the same Wi-Fi, LAN, or VPN cannot connect directly. LAN and remote access are not currently supported.
+
+The default port is `18317` in release builds and `18318` in development builds, and it can be changed under **Settings → Server**. For example, the default release endpoint is `http://127.0.0.1:18317`.
+
 ## Usage HUD
 
 Use **Settings → Usage** to configure menu bar usage and the separate Usage HUD independently.
@@ -137,7 +143,7 @@ Also make sure the command name in the account Settings is not empty.
 
 ### The local server is unavailable
 
-Check the server status in the app. Stop and start the server if necessary; if the problem persists, inspect logs in **Advanced** settings.
+Check the server status and the port under **Settings → Server**, then stop and start the server if necessary. CLIProxyAPI is local-only, so connect from the same Mac using `http://127.0.0.1:<configured port>`. Connections through another device's LAN IP or `0.0.0.0` are not supported. If the problem persists, inspect logs in **Advanced** settings.
 
 ### The app will not open
 

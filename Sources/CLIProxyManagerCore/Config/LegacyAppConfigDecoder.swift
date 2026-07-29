@@ -221,7 +221,7 @@ enum LegacyAppConfigDecoder {
             oauthCommandProfiles = try c.decodeIfPresent([AppConfig.OAuthCommandProfile].self, forKey: .oauthCommandProfiles) ?? []
             roundRobinProfiles = try c.decodeIfPresent([AppConfig.RoundRobinProfile].self, forKey: .roundRobinProfiles) ?? []
             accountOrder = try c.decodeIfPresent([String].self, forKey: .accountOrder) ?? []
-            bindAddress = try c.decodeIfPresent(String.self, forKey: .bindAddress) ?? "127.0.0.1"
+            bindAddress = try c.decodeIfPresent(String.self, forKey: .bindAddress) ?? ProxyNetworkPolicy.loopbackHost
             autostartServer = try c.decodeIfPresent(Bool.self, forKey: .autostartServer) ?? false
             logLevel = try c.decodeIfPresent(LogLevel.self, forKey: .logLevel) ?? .info
         }
@@ -291,7 +291,7 @@ enum LegacyAppConfigDecoder {
             oauthCommandProfiles = try container.decodeIfPresent([AppConfig.OAuthCommandProfile].self, forKey: .oauthCommandProfiles) ?? []
             roundRobinProfiles = try container.decodeIfPresent([AppConfig.RoundRobinProfile].self, forKey: .roundRobinProfiles) ?? []
             accountOrder = try container.decodeIfPresent([String].self, forKey: .accountOrder) ?? []
-            bindAddress = try container.decodeIfPresent(String.self, forKey: .bindAddress) ?? "127.0.0.1"
+            bindAddress = try container.decodeIfPresent(String.self, forKey: .bindAddress) ?? ProxyNetworkPolicy.loopbackHost
             autostartServer = try container.decodeIfPresent(Bool.self, forKey: .autostartServer) ?? false
             logLevel = try container.decodeIfPresent(LogLevel.self, forKey: .logLevel) ?? .info
         }

@@ -24,6 +24,28 @@ final class SettingsNavigationTests: XCTestCase {
         )
     }
 
+    func testServerSettingsExposeOnlyLocalPortAndAutostartControls() throws {
+        let repository = repositoryRoot()
+        let source = try String(
+            contentsOf: repository.appendingPathComponent("Sources/CLIProxyManagerApp/Views/GeneralSettingsView.swift"),
+            encoding: .utf8
+        )
+        let viewModelSource = try String(
+            contentsOf: repository.appendingPathComponent("Sources/CLIProxyManagerApp/ViewModels/DashboardViewModel.swift"),
+            encoding: .utf8
+        )
+        let serverStart = try XCTUnwrap(source.range(of: "struct ServerSettingsView: View")?.lowerBound)
+        let serverEnd = try XCTUnwrap(source.range(of: "struct AdvancedSettingsView: View")?.lowerBound)
+        let serverSource = String(source[serverStart..<serverEnd])
+
+        XCTAssertTrue(serverSource.contains("Listen port"))
+        XCTAssertTrue(serverSource.contains("Start server on launch"))
+        XCTAssertFalse(serverSource.contains("Bind address"))
+        XCTAssertFalse(serverSource.contains("0.0.0.0"))
+        XCTAssertFalse(serverSource.contains("LAN"))
+        XCTAssertFalse(viewModelSource.contains("saveBindAddress"))
+    }
+
     func testUsageSettingsCopyCoversSubscriptionAndEstimatedCost() {
         XCTAssertEqual(UsageSettingsCopy.menuBarLabel, "Show usage")
         XCTAssertTrue(UsageSettingsCopy.menuBarDescription.contains("estimated API cost"))

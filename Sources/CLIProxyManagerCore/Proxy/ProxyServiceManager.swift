@@ -37,9 +37,20 @@ public struct ProcessLauncher: ProcessLaunching {
         return DetachedProcess(pid: pid, label: label, launchctl: launchctl, processExists: processExists)
     }
 
+    static let managedPortLabelPrefix = "com.cliproxymanager.port."
+
+    static func label(forPort port: Int) -> String {
+        "\(managedPortLabelPrefix)\(port)"
+    }
+
+    static func port(fromManagedLabel label: String) -> Int? {
+        guard label.hasPrefix(managedPortLabelPrefix) else { return nil }
+        return Int(label.dropFirst(managedPortLabelPrefix.count))
+    }
+
     private static func label(for arguments: [String]) -> String {
         if let configPath = configPath(from: arguments), let port = port(fromConfigAtPath: configPath) {
-            return "com.cliproxymanager.port.\(port)"
+            return label(forPort: port)
         }
         return "com.cliproxymanager.runtime.\(UUID().uuidString)"
     }
@@ -97,6 +108,11 @@ protocol LaunchctlManaging: Sendable {
     func submit(label: String, executable: String, arguments: [String]) throws
     func lookupPID(label: String) throws -> pid_t
     func labels(matchingPID pid: pid_t) throws -> [String]
+    func runningLabels(prefix: String) throws -> [String]
+}
+
+extension LaunchctlManaging {
+    func runningLabels(prefix: String) throws -> [String] { [] }
 }
 
 struct LaunchctlRunner: LaunchctlManaging {
@@ -126,13 +142,20 @@ struct LaunchctlRunner: LaunchctlManaging {
     func lookupPID(label: String) throws -> pid_t {
         var lastError = ""
         for _ in 0..<20 {
-            let result = try commandRunner.run(["list", label])
+            let result: LaunchctlCommandResult
+            do {
+                result = try commandRunner.run(["list", label])
+            } catch {
+                try? remove(label: label)
+                throw error
+            }
             lastError = result.stderr
             if result.exitStatus == 0, let pid = Self.pid(fromLaunchctlListOutput: result.stdout) {
                 return pid
             }
             sleep(0.05)
         }
+        try? remove(label: label)
         let suffix = lastError.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : ": \(lastError.trimmingCharacters(in: .whitespacesAndNewlines))"
         throw NSError(domain: NSPOSIXErrorDomain, code: 0, userInfo: [
             NSLocalizedDescriptionKey: "launchctl spawned job did not report a PID for \(label)\(suffix)"
@@ -143,6 +166,12 @@ struct LaunchctlRunner: LaunchctlManaging {
         let result = try commandRunner.run(["list"])
         try check(result, operation: "list")
         return Self.labels(fromLaunchctlListOutput: result.stdout, matchingPID: pid)
+    }
+
+    func runningLabels(prefix: String) throws -> [String] {
+        let result = try commandRunner.run(["list"])
+        try check(result, operation: "list")
+        return Self.runningLabels(fromLaunchctlListOutput: result.stdout, prefix: prefix)
     }
 
     private func check(_ result: LaunchctlCommandResult, operation: String) throws {
@@ -174,6 +203,17 @@ struct LaunchctlRunner: LaunchctlManaging {
             let columns = line.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
             guard columns.count == 3, pid_t(columns[0]) == pid else { return nil }
             return String(columns[2])
+        }
+    }
+
+    private static func runningLabels(fromLaunchctlListOutput text: String, prefix: String) -> [String] {
+        text.split(whereSeparator: { $0 == "\n" }).compactMap { line in
+            let columns = line.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
+            guard columns.count == 3,
+                  let pid = pid_t(columns[0]),
+                  pid > 0 else { return nil }
+            let label = String(columns[2])
+            return label.hasPrefix(prefix) ? label : nil
         }
     }
 }
@@ -225,11 +265,39 @@ final class DetachedProcess: ManagedProxyProcess, @unchecked Sendable {
     }
 }
 
-public enum ProxyServiceError: Error, Equatable {
+public enum ProxyRestartFailureStage: String, Equatable, Sendable {
+    case configActivation = "activate the generated local-only configuration"
+    case processLaunch = "launch CLIProxyAPI with the generated local-only configuration"
+}
+
+public enum ProxyServiceError: LocalizedError, Equatable {
     case invalidPort(Int)
     case missingBinary(String)
     case writeFailed(String)
     case launchFailed(String)
+    case configurationChangeRequiresRestart
+    case restartFailed(stage: ProxyRestartFailureStage, rollbackSucceeded: Bool)
+
+    public var errorDescription: String? {
+        switch self {
+        case .invalidPort(let port):
+            "Port \(port) is outside the supported range. Choose a port between 1 and 65535."
+        case .missingBinary:
+            "CLIProxyAPI is unavailable. Reinstall the app or restore the bundled proxy, then retry."
+        case .writeFailed:
+            "The local-only proxy configuration could not be prepared. The existing server was left unchanged. Retry the operation."
+        case .launchFailed:
+            "CLIProxyAPI could not be started with the local-only configuration. Check the configured port and retry Start Server."
+        case .configurationChangeRequiresRestart:
+            "The running proxy must be restarted before account login can update its local-only configuration. Restart Server, then retry login."
+        case let .restartFailed(stage, rollbackSucceeded):
+            if rollbackSucceeded {
+                "Failed to \(stage.rawValue). The previous proxy configuration was restored and remains available. Retry Restart Server."
+            } else {
+                "Failed to \(stage.rawValue), and the previous server could not be restored. The proxy is stopped; retry Start Server after checking the configured port."
+            }
+        }
+    }
 }
 
 extension ProxyServiceManager: ProxyServiceControlling {}
@@ -248,6 +316,8 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
     private let legacyCodexAPIKeyProvider: (@Sendable () -> String?)?
     private let apiKeyProvider: @Sendable (SecretReference) throws -> String?
     private let appConfigProvider: @Sendable () throws -> AppConfig
+    private let rollbackReadinessProvider: (@Sendable (Int) -> Bool)?
+    private let inspectLaunchctlJobs: Bool
     private let processState = LockedProcessState()
     private let lifecycleLock = NSLock()
 
@@ -262,7 +332,8 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         claudeAPIKeyProvider: (@Sendable () -> String?)? = nil,
         codexAPIKeyProvider: (@Sendable () -> String?)? = nil,
         apiKeyProvider: (@Sendable (SecretReference) throws -> String?)? = nil,
-        appConfigProvider: (@Sendable () throws -> AppConfig)? = nil
+        appConfigProvider: (@Sendable () throws -> AppConfig)? = nil,
+        rollbackReadinessProvider: (@Sendable (Int) -> Bool)? = nil
     ) {
         self.init(
             paths: paths,
@@ -278,7 +349,9 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
             claudeAPIKeyProvider: claudeAPIKeyProvider,
             codexAPIKeyProvider: codexAPIKeyProvider,
             apiKeyProvider: apiKeyProvider,
-            appConfigProvider: appConfigProvider ?? { try AppConfigStore(paths: paths).load() }
+            appConfigProvider: appConfigProvider ?? { try AppConfigStore(paths: paths).load() },
+            rollbackReadinessProvider: rollbackReadinessProvider,
+            inspectLaunchctlJobs: launcher is ProcessLauncher
         )
     }
 
@@ -294,7 +367,9 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         claudeAPIKeyProvider: (@Sendable () -> String?)? = nil,
         codexAPIKeyProvider: (@Sendable () -> String?)? = nil,
         apiKeyProvider: (@Sendable (SecretReference) throws -> String?)? = nil,
-        appConfigProvider: (@Sendable () throws -> AppConfig)? = nil
+        appConfigProvider: (@Sendable () throws -> AppConfig)? = nil,
+        rollbackReadinessProvider: (@Sendable (Int) -> Bool)? = nil,
+        inspectLaunchctlJobs: Bool = true
     ) {
         self.paths = paths
         self.bundledBinaryURL = bundledBinaryURL
@@ -324,6 +399,8 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
             }
         }
         self.appConfigProvider = appConfigProvider ?? { try AppConfigStore(paths: paths).load() }
+        self.rollbackReadinessProvider = rollbackReadinessProvider
+        self.inspectLaunchctlJobs = inspectLaunchctlJobs
     }
 
     public func prepare(port: Int) throws {
@@ -346,43 +423,154 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
 
     public func restart(port: Int) async throws {
         try lifecycleLock.withLock {
-            stopLocked(waitUntilExit: true)
-            try startLocked(port: port)
+            _ = try reconcileConfigurationLocked(port: port, forceRestart: true)
         }
+    }
+
+    public func reconcileConfiguration(port: Int) async throws -> Bool {
+        try lifecycleLock.withLock {
+            try reconcileConfigurationLocked(port: port, forceRestart: false)
+        }
+    }
+
+    private struct ProxyConfigSnapshot {
+        let data: Data?
+        let port: Int?
+    }
+
+    private struct StagedProxyConfig {
+        let url: URL
+        let data: Data
     }
 
     private func prepareLocked(port: Int) throws {
         guard isValidPort(port) else {
             throw ProxyServiceError.invalidPort(port)
         }
+        let staged = try stageConfiguration(port: port)
+        defer { try? fileManager.removeItem(at: staged.url) }
+        try validateConfigTarget()
+        let snapshot = currentConfigSnapshot()
+        guard snapshot.data != staged.data else { return }
+        let candidatePorts = [snapshot.port, port].compactMap { $0 }
+        guard try managedListeningPorts(candidates: candidatePorts).isEmpty else {
+            throw ProxyServiceError.configurationChangeRequiresRestart
+        }
+        try activate(staged)
+    }
 
+    private func startLocked(port: Int) throws {
+        if processState.port != nil {
+            _ = try reconcileConfigurationLocked(port: port, forceRestart: true)
+            return
+        }
+        _ = try reconcileConfigurationLocked(port: port, forceRestart: false)
+        if !(try managedListeningPorts(candidates: [port])).isEmpty {
+            return
+        }
+        try launchLocked(port: port)
+    }
+
+    @discardableResult
+    private func reconcileConfigurationLocked(port: Int, forceRestart: Bool) throws -> Bool {
+        guard isValidPort(port) else {
+            throw ProxyServiceError.invalidPort(port)
+        }
+
+        let staged = try stageConfiguration(port: port)
+        defer { try? fileManager.removeItem(at: staged.url) }
+        try validateConfigTarget()
+        let snapshot = currentConfigSnapshot()
+        let configChanged = snapshot.data != staged.data
+        let candidatePorts = [snapshot.port, port].compactMap { $0 }
+        let runningPorts = try managedListeningPorts(candidates: candidatePorts)
+        let requiresRestartForAdoptedProcess = processState.port == nil && !runningPorts.isEmpty
+
+        guard configChanged || forceRestart || requiresRestartForAdoptedProcess else { return false }
+        guard !runningPorts.isEmpty else {
+            if configChanged {
+                try activate(staged)
+            }
+            if forceRestart {
+                try launchLocked(port: port)
+                return true
+            }
+            return false
+        }
+
+        let rollbackPort = runningPorts.first ?? snapshot.port ?? port
+        stopManagedProcessesLocked(onPorts: runningPorts)
+        do {
+            if configChanged {
+                try activate(staged)
+            }
+        } catch {
+            let rollbackSucceeded = restore(snapshot: snapshot, relaunchPort: rollbackPort)
+            throw ProxyServiceError.restartFailed(
+                stage: .configActivation,
+                rollbackSucceeded: rollbackSucceeded
+            )
+        }
+
+        do {
+            try launchLocked(port: port)
+            return true
+        } catch {
+            let rollbackSucceeded = restore(snapshot: snapshot, relaunchPort: rollbackPort)
+            throw ProxyServiceError.restartFailed(
+                stage: .processLaunch,
+                rollbackSucceeded: rollbackSucceeded
+            )
+        }
+    }
+
+    private func stageConfiguration(port: Int) throws -> StagedProxyConfig {
         do {
             try installBundledBinaryIfNeeded()
             try fileManager.createDirectory(at: paths.authDirectory, withIntermediateDirectories: true)
-            let temporaryConfigURL = paths.clipProxyConfigFile
+            let url = paths.clipProxyConfigFile
                 .deletingLastPathComponent()
                 .appendingPathComponent(".config-\(UUID().uuidString).yaml")
-            let configData = Data(try config(for: port).utf8)
+            let data = Data(try config(for: port).utf8)
             guard fileManager.createFile(
-                atPath: temporaryConfigURL.path,
-                contents: configData,
+                atPath: url.path,
+                contents: data,
                 attributes: [.posixPermissions: 0o600]
             ) else {
                 throw ProxyServiceError.writeFailed("Failed to create proxy config")
             }
-            defer { try? fileManager.removeItem(at: temporaryConfigURL) }
+            return StagedProxyConfig(url: url, data: data)
+        } catch let error as ProxyServiceError {
+            throw error
+        } catch {
+            throw ProxyServiceError.writeFailed(error.localizedDescription)
+        }
+    }
+
+    private func validateConfigTarget() throws {
+        var isDirectory: ObjCBool = false
+        let exists = fileManager.fileExists(atPath: paths.clipProxyConfigFile.path, isDirectory: &isDirectory)
+        if exists && isDirectory.boolValue {
+            throw ProxyServiceError.writeFailed("Proxy config path is a directory")
+        }
+    }
+
+    private func currentConfigSnapshot() -> ProxyConfigSnapshot {
+        let data = try? Data(contentsOf: paths.clipProxyConfigFile)
+        return ProxyConfigSnapshot(data: data, port: data.flatMap(portFromConfigData))
+    }
+
+    private func activate(_ staged: StagedProxyConfig) throws {
+        do {
             var isDirectory: ObjCBool = false
-            let hasExistingConfig = fileManager.fileExists(
-                atPath: paths.clipProxyConfigFile.path,
-                isDirectory: &isDirectory
-            )
-            if hasExistingConfig && isDirectory.boolValue {
+            let exists = fileManager.fileExists(atPath: paths.clipProxyConfigFile.path, isDirectory: &isDirectory)
+            if exists && isDirectory.boolValue {
                 throw ProxyServiceError.writeFailed("Proxy config path is a directory")
             }
-            if hasExistingConfig {
-                _ = try fileManager.replaceItemAt(paths.clipProxyConfigFile, withItemAt: temporaryConfigURL)
+            if exists {
+                _ = try fileManager.replaceItemAt(paths.clipProxyConfigFile, withItemAt: staged.url)
             } else {
-                try fileManager.moveItem(at: temporaryConfigURL, to: paths.clipProxyConfigFile)
+                try fileManager.moveItem(at: staged.url, to: paths.clipProxyConfigFile)
             }
         } catch let error as ProxyServiceError {
             throw error
@@ -391,58 +579,124 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         }
     }
 
-    private func startLocked(port: Int) throws {
-        try prepareLocked(port: port)
-
-        terminateTrackedLocked(waitUntilExit: true)
-
-        // If a cliproxyapi instance is already serving on the configured port (e.g. from a
-        // previous app run), adopt it instead of fighting for the port.
-        if isCliproxyapiListening(onPort: port) {
-            return
+    private func restore(snapshot: ProxyConfigSnapshot, relaunchPort: Int) -> Bool {
+        guard let data = snapshot.data,
+              isExplicitLoopbackConfig(data) else {
+            return false
         }
+        do {
+            let url = paths.clipProxyConfigFile
+                .deletingLastPathComponent()
+                .appendingPathComponent(".config-rollback-\(UUID().uuidString).yaml")
+            guard fileManager.createFile(
+                atPath: url.path,
+                contents: data,
+                attributes: [.posixPermissions: 0o600]
+            ) else { return false }
+            defer { try? fileManager.removeItem(at: url) }
+            try activate(StagedProxyConfig(url: url, data: data))
 
+            if !(try managedListeningPorts(candidates: [relaunchPort])).isEmpty {
+                return true
+            }
+            try launchLocked(port: relaunchPort)
+            guard waitForManagedListener(onPort: relaunchPort) else {
+                stopManagedProcessesLocked(onPorts: [relaunchPort])
+                return false
+            }
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func launchLocked(port: Int) throws {
         do {
             let process = try launcher.launch(paths.clipProxyBinary.path, ["--config", paths.clipProxyConfigFile.path])
-            processState.set(process)
+            processState.set(process, port: port)
         } catch {
             throw ProxyServiceError.launchFailed(error.localizedDescription)
         }
     }
 
     private func stopLocked(waitUntilExit: Bool = false) {
+        let candidatePorts = [processState.port, readPortFromConfig()].compactMap { $0 }
+        let runningPorts = (try? managedListeningPorts(candidates: candidatePorts)) ?? candidatePorts
         terminateTrackedLocked(waitUntilExit: waitUntilExit)
+        for port in runningPorts {
+            removeManagedLaunchdJob(onPort: port)
+            killOrphanCliproxyapi(onPort: port)
+        }
+    }
 
-        // Sweep up any cliproxyapi (tracked or adopted) still listening on the configured port.
-        if let port = readPortFromConfig() {
+    private func stopManagedProcessesLocked(onPorts ports: [Int]) {
+        terminateTrackedLocked(waitUntilExit: true)
+        for port in ports {
+            removeManagedLaunchdJob(onPort: port)
             killOrphanCliproxyapi(onPort: port)
         }
     }
 
     private func terminateTrackedLocked(waitUntilExit: Bool) {
-        guard let process = processState.clear() else { return }
-        process.terminate()
+        guard let tracked = processState.clear() else { return }
+        tracked.process.terminate()
         if waitUntilExit {
-            process.waitUntilExit()
+            tracked.process.waitUntilExit()
         } else {
             Task.detached(priority: .utility) {
-                process.waitUntilExit()
+                tracked.process.waitUntilExit()
             }
         }
     }
 
+    private func managedListeningPorts(candidates: [Int]) throws -> [Int] {
+        var ports: Set<Int> = []
+        if let trackedPort = processState.port {
+            ports.insert(trackedPort)
+        }
+        if inspectLaunchctlJobs {
+            for label in try launchctl.runningLabels(prefix: ProcessLauncher.managedPortLabelPrefix) {
+                guard let port = ProcessLauncher.port(fromManagedLabel: label), isValidPort(port) else { continue }
+                ports.insert(port)
+            }
+        }
+        for port in candidates where !ports.contains(port) {
+            if try managedListenerDetected(onPort: port) {
+                ports.insert(port)
+            }
+        }
+        return ports.sorted()
+    }
+
+    private func managedListenerDetected(onPort port: Int) throws -> Bool {
+        switch probePIDListening(onPort: port) {
+        case .notListening:
+            return false
+        case .unavailable:
+            throw ProxyServiceError.writeFailed("Could not inspect the proxy listener on port \(port)")
+        case .listening(let pid):
+            guard let command = processCommand(pid: pid) else {
+                throw ProxyServiceError.writeFailed("Could not inspect the process listening on port \(port)")
+            }
+            return Self.isManagedCliproxyapiCommand(
+                command,
+                binaryPath: paths.clipProxyBinary.path,
+                configPath: paths.clipProxyConfigFile.path
+            )
+        }
+    }
+
     private func isCliproxyapiListening(onPort port: Int) -> Bool {
-        guard let pid = pidListening(onPort: port),
-              let command = processCommand(pid: pid) else { return false }
-        return Self.isManagedCliproxyapiCommand(
-            command,
-            binaryPath: paths.clipProxyBinary.path,
-            configPath: paths.clipProxyConfigFile.path
-        )
+        (try? managedListenerDetected(onPort: port)) == true
     }
 
     private func readPortFromConfig() -> Int? {
-        guard let yaml = try? String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8) else { return nil }
+        guard let data = try? Data(contentsOf: paths.clipProxyConfigFile) else { return nil }
+        return portFromConfigData(data)
+    }
+
+    private func portFromConfigData(_ data: Data) -> Int? {
+        guard let yaml = String(data: data, encoding: .utf8) else { return nil }
         for line in yaml.split(whereSeparator: { $0 == "\n" || $0 == "\r" }) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.hasPrefix("port:") {
@@ -451,6 +705,26 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
             }
         }
         return nil
+    }
+
+    private func isExplicitLoopbackConfig(_ data: Data) -> Bool {
+        guard let yaml = String(data: data, encoding: .utf8) else { return false }
+        let hosts = yaml.split(whereSeparator: { $0 == "\n" || $0 == "\r" }).compactMap { line -> String? in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return trimmed.hasPrefix("host:") ? trimmed : nil
+        }
+        return hosts == ["host: \"\(ProxyNetworkPolicy.loopbackHost)\""]
+    }
+
+    private func waitForManagedListener(onPort port: Int) -> Bool {
+        if let rollbackReadinessProvider {
+            return rollbackReadinessProvider(port)
+        }
+        for _ in 0..<20 {
+            if isCliproxyapiListening(onPort: port) { return true }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        return false
     }
 
     private func killOrphanCliproxyapi(onPort port: Int) {
@@ -471,6 +745,10 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         _ = kill(pid, SIGKILL)
     }
 
+    private func removeManagedLaunchdJob(onPort port: Int) {
+        try? launchctl.remove(label: ProcessLauncher.label(forPort: port))
+    }
+
     private func removeLaunchdJobs(forPID pid: pid_t) {
         guard let labels = try? launchctl.labels(matchingPID: pid) else { return }
         for label in labels where label.hasPrefix("com.cliproxymanager.") {
@@ -478,7 +756,13 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         }
     }
 
-    private func pidListening(onPort port: Int) -> pid_t? {
+    private enum ListenerPIDProbe {
+        case listening(pid_t)
+        case notListening
+        case unavailable
+    }
+
+    private func probePIDListening(onPort port: Int) -> ListenerPIDProbe {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
         task.arguments = ["-nP", "-ti", "tcp:\(port)", "-sTCP:LISTEN"]
@@ -489,12 +773,25 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
             try task.run()
             task.waitUntilExit()
         } catch {
-            return nil
+            return .unavailable
         }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        guard let raw = String(data: data, encoding: .utf8) else { return nil }
+        guard let raw = String(data: data, encoding: .utf8) else { return .unavailable }
         let first = raw.split(whereSeparator: { $0.isNewline }).first.map(String.init) ?? ""
-        return pid_t(first.trimmingCharacters(in: .whitespaces))
+        if task.terminationStatus == 0,
+           let pid = pid_t(first.trimmingCharacters(in: .whitespaces)),
+           pid > 0 {
+            return .listening(pid)
+        }
+        if task.terminationStatus == 1, first.isEmpty {
+            return .notListening
+        }
+        return .unavailable
+    }
+
+    private func pidListening(onPort port: Int) -> pid_t? {
+        guard case .listening(let pid) = probePIDListening(onPort: port) else { return nil }
+        return pid
     }
 
     private func processCommand(pid: pid_t) -> String? {
@@ -669,6 +966,7 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
 
         guard !fastConfiguration.allAliases.isEmpty else {
             let baseConfiguration = """
+            host: \(yamlDoubleQuoted(ProxyNetworkPolicy.loopbackHost))
             port: \(port)
             auth-dir: \(yamlDoubleQuoted(paths.authDirectory.path))
             logging-to-file: true
@@ -689,6 +987,7 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
 
         var sections = [
             """
+            host: \(yamlDoubleQuoted(ProxyNetworkPolicy.loopbackHost))
             port: \(port)
             auth-dir: \(yamlDoubleQuoted(paths.authDirectory.path))
             logging-to-file: true
@@ -775,18 +1074,29 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
 }
 
 private final class LockedProcessState: @unchecked Sendable {
-    private let lock = NSLock()
-    private var process: (any ManagedProxyProcess)?
-
-    func set(_ process: any ManagedProxyProcess) {
-        lock.withLock { self.process = process }
+    struct TrackedProcess {
+        let process: any ManagedProxyProcess
+        let port: Int
     }
 
-    func clear() -> (any ManagedProxyProcess)? {
+    private let lock = NSLock()
+    private var trackedProcess: TrackedProcess?
+
+    var port: Int? {
+        lock.withLock { trackedProcess?.port }
+    }
+
+    func set(_ process: any ManagedProxyProcess, port: Int) {
         lock.withLock {
-            let process = self.process
-            self.process = nil
-            return process
+            trackedProcess = TrackedProcess(process: process, port: port)
+        }
+    }
+
+    func clear() -> TrackedProcess? {
+        lock.withLock {
+            let trackedProcess = self.trackedProcess
+            self.trackedProcess = nil
+            return trackedProcess
         }
     }
 }

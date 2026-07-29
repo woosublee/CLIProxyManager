@@ -3,6 +3,26 @@ import XCTest
 @testable import CLIProxyManagerApp
 
 final class AppConfigMigrationTests: XCTestCase {
+    func testReconcilePersistsNormalizedLoopbackBindAddress() {
+        let config = AppConfig(
+            port: 18_317,
+            startAtLogin: false,
+            showDockIcon: true,
+            showMenuBarIcon: true,
+            bindAddress: "0.0.0.0"
+        )
+        let loaded = AppConfigLoadResult(
+            config: config,
+            legacyOAuthDefaults: nil,
+            requiresCanonicalRewrite: true
+        )
+
+        let result = AppConfigMigration.reconcile(loadResult: loaded, authProfiles: [])
+
+        XCTAssertEqual(result.config.bindAddress, ProxyNetworkPolicy.loopbackHost)
+        XCTAssertTrue(result.shouldPersist)
+    }
+
     func testReconcilePrunesProfilesWithoutAuthFilesAndRewritesConfig() {
         var config = AppConfig.default
         config.oauthCommandProfiles = [

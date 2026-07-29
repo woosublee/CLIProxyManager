@@ -4,6 +4,11 @@ public protocol ProxyServiceControlling: Sendable {
     func start(port: Int) async throws
     func stop() async throws
     func restart(port: Int) async throws
+    func reconcileConfiguration(port: Int) async throws -> Bool
+}
+
+public extension ProxyServiceControlling {
+    func reconcileConfiguration(port: Int) async throws -> Bool { false }
 }
 
 public protocol ProxyHealthChecking: Sendable {

@@ -227,6 +227,71 @@ final class AppConfigStoreTests: XCTestCase {
         }
     }
 
+    func testCurrentConfigNormalizesBindAddressAndRequestsOneCanonicalRewrite() throws {
+        let fixtures: [(name: String, value: String?, shouldRewrite: Bool)] = [
+            ("missing", nil, true),
+            ("loopback", ProxyNetworkPolicy.loopbackHost, false),
+            ("wildcard", "0.0.0.0", true),
+            ("blank", "   ", true),
+            ("hostname", "proxy.local", true),
+            ("ipv6-wildcard", "::", true)
+        ]
+
+        for fixture in fixtures {
+            let sandbox = try makeSandbox()
+            let store = AppConfigStore(paths: ManagedPaths(rootDirectory: sandbox))
+            var object: [String: Any] = [
+                "schemaVersion": AppConfig.currentSchemaVersion,
+                "port": 18_317
+            ]
+            object["bindAddress"] = fixture.value
+            let data = try JSONSerialization.data(withJSONObject: object)
+            try data.write(to: store.paths.configFile)
+
+            let loaded = try store.loadDocument()
+
+            XCTAssertEqual(loaded.config.bindAddress, ProxyNetworkPolicy.loopbackHost, fixture.name)
+            XCTAssertEqual(loaded.requiresCanonicalRewrite, fixture.shouldRewrite, fixture.name)
+
+            try store.save(loaded.config)
+            let reloaded = try store.loadDocument()
+            XCTAssertEqual(reloaded.config.bindAddress, ProxyNetworkPolicy.loopbackHost, fixture.name)
+            XCTAssertFalse(reloaded.requiresCanonicalRewrite, fixture.name)
+        }
+    }
+
+    func testVersion2WildcardBindAddressMigratesToLoopback() throws {
+        let sandbox = try makeSandbox()
+        let store = AppConfigStore(paths: ManagedPaths(rootDirectory: sandbox))
+        try #"{"schemaVersion":2,"port":18317,"bindAddress":"0.0.0.0"}"#.write(
+            to: store.paths.configFile,
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let loaded = try store.loadDocument()
+
+        XCTAssertEqual(loaded.config.bindAddress, ProxyNetworkPolicy.loopbackHost)
+        XCTAssertTrue(loaded.requiresCanonicalRewrite)
+        try store.save(loaded.config)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: store.paths.configFile)) as? [String: Any]
+        )
+        XCTAssertEqual(object["bindAddress"] as? String, ProxyNetworkPolicy.loopbackHost)
+    }
+
+    func testAppConfigInitializerDoesNotAllowWildcardBindAddress() {
+        let config = AppConfig(
+            port: 18_317,
+            startAtLogin: false,
+            showDockIcon: true,
+            showMenuBarIcon: true,
+            bindAddress: "0.0.0.0"
+        )
+
+        XCTAssertEqual(config.bindAddress, ProxyNetworkPolicy.loopbackHost)
+    }
+
     func testStoreRejectsFutureSchemaVersion() throws {
         let sandbox = try makeSandbox()
         let store = AppConfigStore(paths: ManagedPaths(rootDirectory: sandbox))
