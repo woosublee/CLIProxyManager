@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+
+release_fail() {
+  printf 'ERROR: %s\n' "$*" >&2
+  return 1
+}
+
+release_repo_root() {
+  local script_path="$1"
+  cd "$(dirname "$script_path")/.." && pwd
+}
+
+release_atomic_replace() {
+  local staged="$1"
+  local destination="$2"
+  mv -f "$staged" "$destination"
+}
+
+release_load_identity() {
+  local repo_root="$1"
+  local metadata="$repo_root/release/version.json"
+  local metadata_xml key_count version_type build_type
+
+  metadata_xml="$(mktemp /tmp/cliproxymanager-version.XXXXXX.xml)" || return 1
+  if ! plutil -convert xml1 -o "$metadata_xml" "$metadata" >/dev/null; then
+    rm -f "$metadata_xml"
+    release_fail 'release/version.json must be valid JSON'
+    return 1
+  fi
+
+  if [[ "$(xmllint --xpath 'name(/plist/*[1])' "$metadata_xml" 2>/dev/null)" != 'dict' ]]; then
+    rm -f "$metadata_xml"
+    release_fail 'release/version.json root must be an object'
+    return 1
+  fi
+
+  key_count="$(xmllint --xpath 'count(/plist/dict/key)' "$metadata_xml")"
+  if [[ "$key_count" != '2' ]] ||
+     [[ "$(xmllint --xpath 'count(/plist/dict/key[text()="version"])' "$metadata_xml")" != '1' ]] ||
+     [[ "$(xmllint --xpath 'count(/plist/dict/key[text()="build"])' "$metadata_xml")" != '1' ]]; then
+    rm -f "$metadata_xml"
+    release_fail 'release/version.json must contain exactly version and build'
+    return 1
+  fi
+  rm -f "$metadata_xml"
+
+  version_type="$(plutil -type version "$metadata" 2>/dev/null || true)"
+  build_type="$(plutil -type build "$metadata" 2>/dev/null || true)"
+  [[ "$version_type" == 'string' ]] || release_fail 'version must be a JSON string' || return 1
+  [[ "$build_type" != 'string' ]] || release_fail 'build must be a JSON integer' || return 1
+
+  RELEASE_VERSION="$(plutil -extract version raw "$metadata")"
+  RELEASE_BUILD="$(plutil -extract build raw "$metadata")"
+  [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+    release_fail 'version must use stable SemVer x.y.z without whitespace, prerelease, or build metadata' || return 1
+  [[ "$RELEASE_BUILD" =~ ^[1-9][0-9]*$ ]] ||
+    release_fail 'build must be a positive integer' || return 1
+
+  RELEASE_CHANNEL="${ARTIFACT_CHANNEL:-official}"
+  case "$RELEASE_CHANNEL" in
+    official)
+      [[ -z "${DEVELOPMENT_VERSION:-}" ]] || release_fail 'DEVELOPMENT_VERSION is only valid for development artifacts' || return 1
+      [[ -z "${DEVELOPMENT_BUILD_NUMBER:-}" ]] || release_fail 'DEVELOPMENT_BUILD_NUMBER is only valid for development artifacts' || return 1
+      RELEASE_TAG="v$RELEASE_VERSION"
+      RELEASE_DMG_NAME="CLIProxyManager-$RELEASE_VERSION.dmg"
+      ;;
+    development)
+      [[ -n "${DEVELOPMENT_VERSION:-}" ]] || release_fail 'DEVELOPMENT_VERSION is required for development artifacts' || return 1
+      [[ -n "${DEVELOPMENT_BUILD_NUMBER:-}" ]] || release_fail 'DEVELOPMENT_BUILD_NUMBER is required for development artifacts' || return 1
+      [[ "$DEVELOPMENT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || release_fail 'development version must use stable SemVer x.y.z' || return 1
+      [[ "$DEVELOPMENT_BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]] || release_fail 'development build must be a positive integer' || return 1
+      RELEASE_VERSION="$DEVELOPMENT_VERSION"
+      RELEASE_BUILD="$DEVELOPMENT_BUILD_NUMBER"
+      RELEASE_TAG=''
+      RELEASE_DMG_NAME="CLIProxyManager-$RELEASE_VERSION-development.dmg"
+      ;;
+    *)
+      release_fail 'ARTIFACT_CHANNEL must be official or development'
+      return 1
+      ;;
+  esac
+
+  RELEASE_DMG_PATH="build/$RELEASE_DMG_NAME"
+  RELEASE_APPCAST_PATH='build/appcast.xml'
+}
