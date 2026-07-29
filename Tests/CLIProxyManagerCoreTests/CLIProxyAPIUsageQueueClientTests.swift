@@ -35,7 +35,7 @@ final class CLIProxyAPIUsageQueueClientTests: XCTestCase {
             transport: transport
         )
 
-        let batch = try await client.popUsage(port: 18_317, count: 200)
+        let batch = try await client.popUsage(port: 28_317, count: 200)
 
         XCTAssertEqual(batch.records.count, 1)
         XCTAssertEqual(batch.malformedRecordCount, 0)
@@ -44,7 +44,7 @@ final class CLIProxyAPIUsageQueueClientTests: XCTestCase {
         XCTAssertTrue(batch.records[0].hasAuthIndex)
         XCTAssertEqual(batch.records[0].tokenBreakdown.input.cacheWriteTokens, 1)
         let request = try XCTUnwrap(transport.requests.first)
-        XCTAssertEqual(request.url?.absoluteString, "http://127.0.0.1:18317/v0/management/usage-queue?count=200")
+        XCTAssertEqual(request.url?.absoluteString, "http://127.0.0.1:28317/v0/management/usage-queue?count=200")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer management-key")
         let decodedLabels = Set(Mirror(reflecting: batch.records[0]).children.compactMap(\.label))
         XCTAssertTrue(decodedLabels.isDisjoint(with: ["apiKey", "requestID", "authIndex", "fail", "responseHeaders"]))
@@ -57,7 +57,7 @@ final class CLIProxyAPIUsageQueueClientTests: XCTestCase {
             transport: StubManagementTransport(data: body, statusCode: 200)
         )
 
-        let batch = try await client.popUsage(port: 18_317, count: 200)
+        let batch = try await client.popUsage(port: 28_317, count: 200)
 
         XCTAssertEqual(batch.records.count, 2)
         XCTAssertEqual(batch.malformedRecordCount, 1)
@@ -74,7 +74,7 @@ final class CLIProxyAPIUsageQueueClientTests: XCTestCase {
             )
         )
 
-        let batch = try await malformedOnly.popUsage(port: 18_317, count: 200)
+        let batch = try await malformedOnly.popUsage(port: 28_317, count: 200)
         XCTAssertEqual(batch.records, [])
         XCTAssertEqual(batch.malformedRecordCount, 1)
         XCTAssertEqual(batch.totalRecordCount, 1)
@@ -84,7 +84,7 @@ final class CLIProxyAPIUsageQueueClientTests: XCTestCase {
             transport: StubManagementTransport(data: Data(#"{"api_key":"sk-secret"}"#.utf8), statusCode: 200)
         )
         do {
-            _ = try await invalidTopLevel.popUsage(port: 18_317, count: 200)
+            _ = try await invalidTopLevel.popUsage(port: 28_317, count: 200)
             XCTFail("Expected schema mismatch")
         } catch {
             XCTAssertEqual(error as? APIUsageQueueClientError, .schemaMismatch)
@@ -97,7 +97,7 @@ final class CLIProxyAPIUsageQueueClientTests: XCTestCase {
             let transport = StubManagementTransport(data: Data(#"{"error":"sk-secret"}"#.utf8), statusCode: status)
             let client = CLIProxyAPIUsageQueueClient(keyStore: StubManagementKeyProvider(key: "key"), transport: transport)
             do {
-                _ = try await client.popUsage(port: 18_317, count: 200)
+                _ = try await client.popUsage(port: 28_317, count: 200)
                 XCTFail("Expected \(expected)")
             } catch {
                 XCTAssertEqual(error as? APIUsageQueueClientError, expected)
@@ -110,14 +110,14 @@ final class CLIProxyAPIUsageQueueClientTests: XCTestCase {
         let transport = StubManagementTransport(data: Data("[]".utf8), statusCode: 200)
         let missingKeyClient = CLIProxyAPIUsageQueueClient(keyStore: StubManagementKeyProvider(key: ""), transport: transport)
         do {
-            _ = try await missingKeyClient.popUsage(port: 18_317, count: 200)
+            _ = try await missingKeyClient.popUsage(port: 28_317, count: 200)
             XCTFail("Expected missing key")
         } catch {
             XCTAssertEqual(error as? APIUsageQueueClientError, .managementKeyNotConfigured)
         }
 
         let client = CLIProxyAPIUsageQueueClient(keyStore: StubManagementKeyProvider(key: "key"), transport: transport)
-        for (port, count, expected) in [(0, 200, .invalidPort), (18_317, 0, .invalidCount)] as [(Int, Int, APIUsageQueueClientError)] {
+        for (port, count, expected) in [(0, 200, .invalidPort), (28_317, 0, .invalidCount)] as [(Int, Int, APIUsageQueueClientError)] {
             do {
                 _ = try await client.popUsage(port: port, count: count)
                 XCTFail("Expected \(expected)")

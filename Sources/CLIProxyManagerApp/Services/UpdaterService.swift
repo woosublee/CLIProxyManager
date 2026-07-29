@@ -1,3 +1,4 @@
+import CLIProxyManagerCore
 import Combine
 import Foundation
 import Sparkle
@@ -9,14 +10,17 @@ struct UpdateSettingsCopy {
 }
 
 @MainActor
-final class UpdaterService: ObservableObject {
-    private let updaterController: SPUStandardUpdaterController
+final class UpdaterService: NSObject, ObservableObject, SPUUpdaterDelegate {
+    private var updaterController: SPUStandardUpdaterController!
+    private let appLogger: any AppLogging
     private var updaterObservationCancellables: Set<AnyCancellable> = []
 
-    init() {
-        self.updaterController = SPUStandardUpdaterController(
+    init(appLogger: any AppLogging = DisabledAppLogger()) {
+        self.appLogger = appLogger
+        super.init()
+        updaterController = SPUStandardUpdaterController(
             startingUpdater: true,
-            updaterDelegate: nil,
+            updaterDelegate: self,
             userDriverDelegate: nil
         )
 
@@ -36,7 +40,28 @@ final class UpdaterService: ObservableObject {
     }
 
     func checkForUpdates() {
+        appLogger.record(.update(target: .app, action: .check, result: .started))
         updaterController.checkForUpdates(nil)
+    }
+
+    func updater(
+        _: SPUUpdater,
+        didFinishUpdateCycleFor _: SPUUpdateCheck,
+        error: Error?
+    ) {
+        appLogger.record(.update(
+            target: .app,
+            action: .check,
+            result: error == nil ? .succeeded : .failed(.network)
+        ))
+    }
+
+    func updater(_: SPUUpdater, didFindValidUpdate _: SUAppcastItem) {
+        appLogger.record(.update(target: .app, action: .download, result: .started))
+    }
+
+    func updater(_: SPUUpdater, failedToDownloadUpdate _: SUAppcastItem, error _: Error) {
+        appLogger.record(.update(target: .app, action: .download, result: .failed(.network)))
     }
 
     private func bridgeUpdaterChangesToSwiftUI() {

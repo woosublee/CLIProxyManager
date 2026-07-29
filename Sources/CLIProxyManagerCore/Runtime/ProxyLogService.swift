@@ -23,6 +23,10 @@ public struct ProxyLogService: ProxyLogServicing, Sendable {
         self.follower = follower
     }
 
+    public func selectedLogFile() throws -> URL {
+        try selectLogFile()
+    }
+
     public func readLastLines(_ lineCount: Int) throws -> ProxyLogSnapshot {
         let fileURL = try selectLogFile()
         let text = try String(contentsOf: fileURL, encoding: .utf8)

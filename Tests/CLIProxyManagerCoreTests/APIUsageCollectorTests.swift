@@ -87,7 +87,7 @@ final class APIUsageCollectorTests: XCTestCase {
         let configuration = APIUsageCollectorConfiguration(
             usageEnabled: false,
             proxyReady: true,
-            port: 18_317,
+            port: 28_317,
             profiles: [profile, profile],
             reportingTimeZoneID: "UTC"
         )
@@ -106,7 +106,7 @@ final class APIUsageCollectorTests: XCTestCase {
         let configuration = APIUsageCollectorConfiguration(
             usageEnabled: true,
             proxyReady: true,
-            port: 18_317,
+            port: 28_317,
             profiles: [profile, profile],
             reportingTimeZoneID: "UTC"
         )
@@ -548,7 +548,7 @@ final class APIUsageCollectorTests: XCTestCase {
             .restore(configuration: .init(
                 usageEnabled: false,
                 proxyReady: true,
-                port: 18_317,
+                port: 28_317,
                 enabledProviders: [.claude],
                 reportingTimeZoneID: "UTC"
             ))
@@ -729,7 +729,7 @@ final class APIUsageCollectorTests: XCTestCase {
         let firstConfiguration = APIUsageCollectorConfiguration(
             usageEnabled: true,
             proxyReady: true,
-            port: 18_317,
+            port: 28_317,
             enabledProviders: [.claude],
             reportingTimeZoneID: "Asia/Seoul"
         )
@@ -772,7 +772,7 @@ final class APIUsageCollectorTests: XCTestCase {
         let firstConfiguration = APIUsageCollectorConfiguration(
             usageEnabled: true,
             proxyReady: true,
-            port: 18_317,
+            port: 28_317,
             enabledProviders: [.claude],
             reportingTimeZoneID: "Asia/Seoul"
         )
@@ -962,7 +962,7 @@ final class APIUsageCollectorTests: XCTestCase {
         _ = await collector.update(configuration: .init(
             usageEnabled: false,
             proxyReady: true,
-            port: 18_317,
+            port: 28_317,
             enabledProviders: [.claude],
             reportingTimeZoneID: "UTC"
         ))
@@ -987,7 +987,7 @@ final class APIUsageCollectorTests: XCTestCase {
         let configuration = APIUsageCollectorConfiguration(
             usageEnabled: true,
             proxyReady: true,
-            port: 18_317,
+            port: 28_317,
             enabledProviders: [],
             reportingTimeZoneID: "UTC"
         )
@@ -1010,7 +1010,7 @@ final class APIUsageCollectorTests: XCTestCase {
         let notReady = APIUsageCollectorConfiguration(
             usageEnabled: true,
             proxyReady: false,
-            port: 18_317,
+            port: 28_317,
             enabledProviders: [.claude],
             reportingTimeZoneID: "UTC"
         )
@@ -1055,7 +1055,7 @@ final class APIUsageCollectorTests: XCTestCase {
         _ = await updated
 
         let ports = await queue.requestedPorts()
-        XCTAssertEqual(ports, [18_317, 19_001])
+        XCTAssertEqual(ports, [28_317, 19_001])
         try? await collector.stop(reason: .applicationTermination, at: Date())
     }
 
@@ -1070,7 +1070,7 @@ final class APIUsageCollectorTests: XCTestCase {
         let disabledConfiguration = APIUsageCollectorConfiguration(
             usageEnabled: false,
             proxyReady: true,
-            port: 18_317,
+            port: 28_317,
             enabledProviders: [.claude],
             reportingTimeZoneID: "UTC"
         )
@@ -1128,7 +1128,7 @@ final class APIUsageCollectorTests: XCTestCase {
         await stopTask.value
 
         let ports = await queue.requestedPorts()
-        XCTAssertEqual(ports, [18_317])
+        XCTAssertEqual(ports, [28_317])
         let events = await ledger.allEvents()
         XCTAssertNil(events.lastIndex(of: "successfulDrain"))
         XCTAssertEqual(events.last, "flush")
@@ -1231,7 +1231,7 @@ final class APIUsageCollectorTests: XCTestCase {
         let expected = await collector.restore(configuration: .init(
             usageEnabled: false,
             proxyReady: false,
-            port: 18_317,
+            port: 28_317,
             enabledProviders: [.claude],
             reportingTimeZoneID: "UTC"
         ))
@@ -1628,7 +1628,7 @@ private func enabledConfiguration() -> APIUsageCollectorConfiguration {
     .init(
         usageEnabled: true,
         proxyReady: true,
-        port: 18_317,
+        port: 28_317,
         enabledProviders: [.claude],
         reportingTimeZoneID: "UTC"
     )

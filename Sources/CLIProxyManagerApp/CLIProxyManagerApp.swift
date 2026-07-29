@@ -1,3 +1,4 @@
+import CLIProxyManagerCore
 import SwiftUI
 
 @main
@@ -12,8 +13,9 @@ struct CLIProxyManagerApp: App {
 
     init() {
         let config = LaunchAppearanceBootstrapper().applySavedDockVisibility()
-        let viewModel = DashboardViewModel(config: config)
-        let cliProxyAPIUpdateService = CLIProxyAPIUpdateService()
+        let appLogger = AppLogger(minimumLevel: config.runtimeLogConfiguration.appMinimumLevel)
+        let viewModel = DashboardViewModel(config: config, appLogger: appLogger)
+        let cliProxyAPIUpdateService = CLIProxyAPIUpdateService(appLogger: appLogger)
         _viewModel = StateObject(wrappedValue: viewModel)
         _cliProxyAPIUpdateService = StateObject(wrappedValue: cliProxyAPIUpdateService)
         _usageOverlayWindowController = StateObject(
@@ -40,7 +42,7 @@ struct CLIProxyManagerApp: App {
             }
         )
         _quitCoordinator = StateObject(wrappedValue: quitCoordinator)
-        _updaterService = StateObject(wrappedValue: UpdaterService())
+        _updaterService = StateObject(wrappedValue: UpdaterService(appLogger: appLogger))
         applicationDelegate.quitCoordinator = quitCoordinator
     }
 

@@ -5,23 +5,50 @@ import XCTest
 final class ProxyServiceManagerTests: XCTestCase {
     func testExplicitLoopbackConfigAcceptsOnlyOneTopLevelLoopbackHost() {
         let valid = [
-            "host: \"127.0.0.1\"\nport: 18317\n",
-            "host: '127.0.0.1'\nport: 18317\n",
-            "host: 127.0.0.1\nport: 18317\n"
+            "host: \"127.0.0.1\"\nport: 28317\n",
+            "host: '127.0.0.1'\nport: 28317\n",
+            "host: 127.0.0.1\nport: 28317\n"
         ]
         for yaml in valid {
             XCTAssertTrue(ProxyServiceManager.isExplicitLoopbackConfig(Data(yaml.utf8)), yaml)
         }
 
         let invalid = [
-            "host: \"0.0.0.0\"\nport: 18317\n",
-            "server:\n  host: \"127.0.0.1\"\nport: 18317\n",
-            "host: \"127.0.0.1\"\nhost: \"127.0.0.1\"\nport: 18317\n",
-            "host: \"127.0.0.1\nport: 18317\n"
+            "host: \"0.0.0.0\"\nport: 28317\n",
+            "server:\n  host: \"127.0.0.1\"\nport: 28317\n",
+            "host: \"127.0.0.1\"\nhost: \"127.0.0.1\"\nport: 28317\n",
+            "host: \"127.0.0.1\nport: 28317\n"
         ]
         for yaml in invalid {
             XCTAssertFalse(ProxyServiceManager.isExplicitLoopbackConfig(Data(yaml.utf8)), yaml)
         }
+    }
+
+    func testFakeLauncherDisablesAllSystemRuntimeInspection() {
+        let fakeLauncher = FakeProcessLauncher()
+        let sequencedLauncher = SequencedProcessLauncher(outcomes: [])
+
+        XCTAssertFalse(ProxyServiceManager.shouldInspectSystemRuntime(using: fakeLauncher))
+        XCTAssertFalse(ProxyServiceManager.shouldInspectSystemRuntime(using: sequencedLauncher))
+        XCTAssertTrue(ProxyServiceManager.defaultLaunchctlManager(using: fakeLauncher) is DisabledLaunchctlManager)
+        XCTAssertTrue(ProxyServiceManager.defaultLaunchctlManager(using: sequencedLauncher) is DisabledLaunchctlManager)
+    }
+
+    func testStopWithFakeLauncherCannotRemoveLaunchdJobs() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let launchctl = RunningLabelsLaunchctl(labels: ["com.cliproxymanager.port.28317"])
+        let manager = ProxyServiceManager(
+            paths: paths,
+            launcher: FakeProcessLauncher(),
+            launchctl: launchctl,
+            inspectLaunchctlJobs: true,
+            inspectSystemProcesses: false
+        )
+
+        try await manager.stop()
+
+        XCTAssertTrue(launchctl.removedLabels.isEmpty)
     }
 
     func testManagedPathsExposeAppManagedAuthDirectory() throws {
@@ -94,6 +121,29 @@ final class ProxyServiceManagerTests: XCTestCase {
                 arguments: ["--config", paths.clipProxyConfigFile.path]
             )
         ])
+    }
+
+    func testStartMapsDebugLogLevelToSingleProxyDebugKey() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let config: AppConfig = {
+            var config = AppConfig.default
+            config.logLevel = .debug
+            return config
+        }()
+        let manager = ProxyServiceManager(
+            paths: paths,
+            launcher: FakeProcessLauncher(),
+            appConfigProvider: { config }
+        )
+
+        try await manager.start(port: 18_318)
+
+        let yaml = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
+        XCTAssertTrue(yaml.contains("debug: true"))
+        XCTAssertEqual(yaml.components(separatedBy: "debug:").count - 1, 1)
+        XCTAssertFalse(yaml.contains("debug: false"))
     }
 
     func testStartEnablesUsageQueueOnlyWhenUsageAndAPIKeyAreBothPresent() async throws {
@@ -669,7 +719,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         let launcher = FakeProcessLauncher(process: process)
         let manager = ProxyServiceManager(paths: paths, launcher: launcher)
 
-        try await manager.start(port: 18_317)
+        try await manager.start(port: 28_317)
         try await manager.stop()
 
         XCTAssertEqual(process.terminateCallCount, 1)
@@ -727,11 +777,12 @@ final class ProxyServiceManagerTests: XCTestCase {
         try await seedManager.stop()
         let canonical = try Data(contentsOf: paths.clipProxyConfigFile)
         let launchctl = RunningLabelsLaunchctl(labels: ["com.cliproxymanager.port.8317"])
-        let launcher = FakeProcessLauncher()
+        let launcher = FakeProcessLauncher(usesManagedLaunchdJobs: true)
         let manager = ProxyServiceManager(
             paths: paths,
             launcher: launcher,
-            launchctl: launchctl
+            launchctl: launchctl,
+            inspectSystemProcesses: false
         )
 
         let restarted = try await manager.reconcileConfiguration(port: 8317)
@@ -1146,11 +1197,12 @@ final class ProxyServiceManagerTests: XCTestCase {
         let launchctl = RunningLabelsLaunchctl(labels: ["com.cliproxymanager.port.8317"])
         let manager = ProxyServiceManager(
             paths: paths,
-            launcher: FakeProcessLauncher(),
-            launchctl: launchctl
+            launcher: FakeProcessLauncher(usesManagedLaunchdJobs: true),
+            launchctl: launchctl,
+            inspectSystemProcesses: false
         )
 
-        XCTAssertThrowsError(try manager.prepare(port: 18_317)) { error in
+        XCTAssertThrowsError(try manager.prepare(port: 28_317)) { error in
             XCTAssertEqual(error as? ProxyServiceError, .configurationChangeRequiresRestart)
         }
         XCTAssertEqual(
@@ -1169,21 +1221,22 @@ final class ProxyServiceManagerTests: XCTestCase {
             encoding: .utf8
         )
         let launchctl = RunningLabelsLaunchctl(labels: ["com.cliproxymanager.port.8317"])
-        let launcher = FakeProcessLauncher()
+        let launcher = FakeProcessLauncher(usesManagedLaunchdJobs: true)
         let manager = ProxyServiceManager(
             paths: paths,
             launcher: launcher,
-            launchctl: launchctl
+            launchctl: launchctl,
+            inspectSystemProcesses: false
         )
 
-        let restarted = try await manager.reconcileConfiguration(port: 18_317)
+        let restarted = try await manager.reconcileConfiguration(port: 28_317)
 
         XCTAssertTrue(restarted)
         XCTAssertTrue(launchctl.removedLabels.contains("com.cliproxymanager.port.8317"))
         XCTAssertEqual(launcher.invocations.count, 1)
         let config = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
         XCTAssertTrue(config.contains("host: \"127.0.0.1\""))
-        XCTAssertTrue(config.contains("port: 18317"))
+        XCTAssertTrue(config.contains("port: 28317"))
     }
 
     func testPrepareLeavesConfigUnchangedWhenManagedRuntimeInspectionFails() throws {
@@ -1195,8 +1248,9 @@ final class ProxyServiceManagerTests: XCTestCase {
         let launchctl = RunningLabelsLaunchctl(error: CocoaError(.fileReadUnknown))
         let manager = ProxyServiceManager(
             paths: paths,
-            launcher: FakeProcessLauncher(),
-            launchctl: launchctl
+            launcher: FakeProcessLauncher(usesManagedLaunchdJobs: true),
+            launchctl: launchctl,
+            inspectSystemProcesses: false
         )
 
         XCTAssertThrowsError(try manager.prepare(port: 8317))
@@ -1538,7 +1592,7 @@ private final class SequencedProcessLauncher: ProcessLaunching, @unchecked Senda
 }
 
 private final class FakeProcessLauncher: ProcessLaunching, @unchecked Sendable {
-    let usesManagedLaunchdJobs = false
+    let usesManagedLaunchdJobs: Bool
     struct Invocation: Equatable {
         let executable: String
         let arguments: [String]
@@ -1557,14 +1611,22 @@ private final class FakeProcessLauncher: ProcessLaunching, @unchecked Sendable {
     init(
         error: Error? = nil,
         process: any ManagedProxyProcess = ManagedProxyProcessDouble(),
-        events: ProxyLifecycleEventLog? = nil
+        events: ProxyLifecycleEventLog? = nil,
+        usesManagedLaunchdJobs: Bool = false
     ) {
+        self.usesManagedLaunchdJobs = usesManagedLaunchdJobs
         self.error = error
         self.events = events
         self.processes = [process]
     }
 
-    init(error: Error? = nil, processes: [any ManagedProxyProcess], events: ProxyLifecycleEventLog? = nil) {
+    init(
+        error: Error? = nil,
+        processes: [any ManagedProxyProcess],
+        events: ProxyLifecycleEventLog? = nil,
+        usesManagedLaunchdJobs: Bool = false
+    ) {
+        self.usesManagedLaunchdJobs = usesManagedLaunchdJobs
         self.error = error
         self.events = events
         self.processes = processes

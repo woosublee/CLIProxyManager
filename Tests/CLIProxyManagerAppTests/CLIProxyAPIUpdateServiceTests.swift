@@ -267,6 +267,40 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         XCTAssertNil(state.lastDeferredVersion)
     }
 
+    func testUpdateOperationsRecordTypedLifecycleEvents() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let logger = UpdateRecordingAppLogger()
+        let release = release("7.2.42")
+        let downloader = StubUpdateDownloading(result: CLIProxyAPIBinaryVerificationResult(
+            binaryURL: sandbox.appendingPathComponent("verified/cliproxyapi"),
+            manifest: manifest("7.2.42"),
+            temporaryDirectory: sandbox.appendingPathComponent("verified")
+        ))
+        try writeExecutable("#!/bin/sh\n", to: downloader.result!.binaryURL)
+        let store = StubUpdateBinaryStore(
+            currentVersion: "7.2.41",
+            currentAfterApply: "7.2.42"
+        )
+        let service = CLIProxyAPIUpdateService(
+            paths: paths,
+            checker: StubUpdateChecking(release: release),
+            downloader: downloader,
+            store: store,
+            now: { Date() },
+            appLogger: logger
+        )
+
+        await service.checkNow()
+        await service.downloadAvailableUpdate()
+        try service.applyPendingNow()
+
+        XCTAssertTrue(logger.events.contains(.update(target: .proxy, action: .check, result: .started)))
+        XCTAssertTrue(logger.events.contains(.update(target: .proxy, action: .check, result: .succeeded)))
+        XCTAssertTrue(logger.events.contains(.update(target: .proxy, action: .download, result: .succeeded)))
+        XCTAssertTrue(logger.events.contains(.update(target: .proxy, action: .apply, result: .succeeded)))
+    }
+
     func testApplyPendingNowCallsStore() throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
@@ -314,6 +348,24 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
     private func writeExecutable(_ text: String, to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data(text.utf8).write(to: url)
+    }
+}
+
+private final class UpdateRecordingAppLogger: AppLogging, @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedEvents: [AppLogEvent] = []
+    private var level = LogLevel.info
+
+    var minimumLevel: LogLevel { lock.withLock { level } }
+    var diagnostics: AppLogDiagnostics { .unavailable(reason: .notConfigured) }
+    var events: [AppLogEvent] { lock.withLock { recordedEvents } }
+
+    func configure(minimumLevel: LogLevel) {
+        lock.withLock { level = minimumLevel }
+    }
+
+    func record(_ event: AppLogEvent) {
+        lock.withLock { recordedEvents.append(event) }
     }
 }
 

@@ -82,6 +82,7 @@ final class CLIProxyAPIUpdateService: ObservableObject {
     private let bundledManifestURL: URL?
     private let now: @Sendable () -> Date
     private let fileManager: FileManager
+    private let appLogger: any AppLogging
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
@@ -92,7 +93,8 @@ final class CLIProxyAPIUpdateService: ObservableObject {
         store: (any CLIProxyAPIUpdateBinaryStoring)? = nil,
         bundledManifestURL: URL? = BundledProxyBinary.manifestURL(),
         now: @escaping @Sendable () -> Date = { Date() },
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        appLogger: any AppLogging = DisabledAppLogger()
     ) {
         self.paths = paths
         self.checker = checker
@@ -102,6 +104,7 @@ final class CLIProxyAPIUpdateService: ObservableObject {
         self.bundledManifestURL = bundledManifestURL
         self.now = now
         self.fileManager = fileManager
+        self.appLogger = appLogger
         self.encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         refreshStoredStatus()
     }
@@ -130,6 +133,7 @@ final class CLIProxyAPIUpdateService: ObservableObject {
 
     func downloadAvailableUpdate() async {
         guard let release = availableUpdate, !isUpdating else { return }
+        appLogger.record(.update(target: .proxy, action: .download, result: .started))
         isUpdating = true
         state = .downloading
         defer { isUpdating = false }
@@ -145,14 +149,23 @@ final class CLIProxyAPIUpdateService: ObservableObject {
             updateState.lastAvailableVersion = nil
             saveState(reconciled(updateState, currentVersion: try? store.validatedCurrentVersion(bundledManifestURL: bundledManifestURL)))
             state = .pending
+            appLogger.record(.update(target: .proxy, action: .download, result: .succeeded))
+            appLogger.record(.debug(.updatePending))
         } catch {
+            appLogger.record(.update(target: .proxy, action: .download, result: .failed(.updateVerification)))
             recordFailure(error)
         }
     }
 
     func applyPendingNow() throws {
+        appLogger.record(.update(target: .proxy, action: .apply, result: .started))
         refreshStoredStatus()
-        try store.applyPending()
+        do {
+            try store.applyPending()
+        } catch {
+            appLogger.record(.update(target: .proxy, action: .apply, result: .failed(.fileSystem)))
+            throw error
+        }
         pendingUpdate = nil
         availableUpdate = nil
         let current = try? store.validatedCurrentVersion(bundledManifestURL: bundledManifestURL)
@@ -164,6 +177,7 @@ final class CLIProxyAPIUpdateService: ObservableObject {
         saveState(updateState)
         refreshStoredStatus()
         state = .idle
+        appLogger.record(.update(target: .proxy, action: .apply, result: .succeeded))
     }
 
     @discardableResult
@@ -190,9 +204,18 @@ final class CLIProxyAPIUpdateService: ObservableObject {
 
     private func check(suppressDeferredVersion: Bool) async -> CLIProxyAPIAutomaticCheckResult {
         guard !isChecking else { return .none }
+        appLogger.record(.update(target: .proxy, action: .check, result: .started))
         isChecking = true
         state = .checking
-        defer { isChecking = false }
+        var checkFailed = false
+        defer {
+            isChecking = false
+            appLogger.record(.update(
+                target: .proxy,
+                action: .check,
+                result: checkFailed ? .failed(.network) : .succeeded
+            ))
+        }
         do {
             let release = try await checker.latestRelease()
             var updateState = loadState()
@@ -225,6 +248,7 @@ final class CLIProxyAPIUpdateService: ObservableObject {
             state = .updateAvailable
             return .availableUpdate
         } catch {
+            checkFailed = true
             recordFailure(error)
             return .none
         }

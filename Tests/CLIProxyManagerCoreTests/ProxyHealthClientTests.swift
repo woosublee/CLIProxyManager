@@ -24,9 +24,9 @@ final class ProxyHealthClientTests: XCTestCase {
         let httpClient = StubHTTPClient(result: .success(Data("{}".utf8)))
         let client = ProxyHealthClient(httpClient: httpClient)
 
-        _ = await client.status(port: 18_317)
+        _ = await client.status(port: 28_317)
 
-        XCTAssertEqual(httpClient.requests.first?.url, URL(string: "http://127.0.0.1:18317/v1/models")!)
+        XCTAssertEqual(httpClient.requests.first?.url, URL(string: "http://127.0.0.1:28317/v1/models")!)
         XCTAssertEqual(httpClient.requests.first?.headers["Authorization"], "Bearer sk-dummy")
     }
 
@@ -51,7 +51,7 @@ final class ProxyHealthClientTests: XCTestCase {
         let httpClient = StubHTTPClient(result: .failure(HTTPClientError.badStatus(401)))
         let client = ProxyHealthClient(httpClient: httpClient)
 
-        let status = await client.status(port: 18_317)
+        let status = await client.status(port: 28_317)
 
         XCTAssertEqual(
             status,

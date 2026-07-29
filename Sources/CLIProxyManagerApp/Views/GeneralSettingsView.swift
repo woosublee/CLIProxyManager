@@ -163,11 +163,12 @@ struct AdvancedSettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsGroup(title: "Advanced") {
-                SettingsRow(label: "Log level", description: "Verbosity for in-app logs and the diagnostics file.") {
+                SettingsRow(
+                    label: "Log level",
+                    description: "Info records lifecycle and failure summaries. Debug adds technical context without logging private content."
+                ) {
                     SettingsSegmentedPicker<LogLevel>(
                         options: [
-                            (value: .error, label: "Error"),
-                            (value: .warn, label: "Warn"),
                             (value: .info, label: "Info"),
                             (value: .debug, label: "Debug")
                         ],
@@ -179,9 +180,15 @@ struct AdvancedSettingsView: View {
                         )
                     )
                 }
-                SettingsRow(label: "Diagnostics", description: "Reveal log file in Finder for troubleshooting.") {
+                SettingsRow(label: "App log", description: "CLIProxyManager lifecycle, settings, server, and update events.") {
                     Button("Reveal") {
-                        viewModel.revealLogsInFinder()
+                        viewModel.revealAppLogInFinder()
+                    }
+                    .controlSize(.small)
+                }
+                SettingsRow(label: "Proxy log", description: "CLIProxyAPI runtime and upstream request diagnostics; also available through cpm logs.") {
+                    Button("Reveal") {
+                        viewModel.revealProxyLogInFinder()
                     }
                     .controlSize(.small)
                 }

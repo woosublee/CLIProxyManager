@@ -8,9 +8,9 @@ final class OAuthLoginServiceTests: XCTestCase {
         let paths = ManagedPaths(rootDirectory: URL(fileURLWithPath: "/tmp/managed"))
         let service = OAuthLoginService(paths: paths, runtimePreparer: runtime, runner: runner)
 
-        try await service.login(provider: .claude, port: 18_317)
+        try await service.login(provider: .claude, port: 28_317)
 
-        XCTAssertEqual(runtime.ports, [18_317])
+        XCTAssertEqual(runtime.ports, [28_317])
         XCTAssertEqual(runner.invocations, [
             StubProcessRunner.Invocation(
                 executable: "/tmp/managed/cliproxyapi/cliproxyapi",
@@ -25,7 +25,7 @@ final class OAuthLoginServiceTests: XCTestCase {
         let paths = ManagedPaths(rootDirectory: URL(fileURLWithPath: "/tmp/managed"))
         let service = OAuthLoginService(paths: paths, runtimePreparer: runtime, runner: runner)
 
-        try await service.login(provider: .codex, port: 18_317)
+        try await service.login(provider: .codex, port: 28_317)
 
         XCTAssertEqual(runner.invocations.first?.arguments, ["--config", "/tmp/managed/cliproxyapi/config.yaml", "-codex-login"])
     }
@@ -38,7 +38,7 @@ final class OAuthLoginServiceTests: XCTestCase {
         )
 
         do {
-            try await service.login(provider: .codex, port: 18_317)
+            try await service.login(provider: .codex, port: 28_317)
             XCTFail("Expected login failure")
         } catch let error as OAuthLoginError {
             XCTAssertEqual(error, .failed(provider: .codex, exitCode: 2, message: "oauth failed"))
@@ -53,7 +53,7 @@ final class OAuthLoginServiceTests: XCTestCase {
         )
 
         let task = Task {
-            try await service.login(provider: .claude, port: 18_317)
+            try await service.login(provider: .claude, port: 28_317)
         }
         try await Task.sleep(nanoseconds: 50_000_000)
         task.cancel()

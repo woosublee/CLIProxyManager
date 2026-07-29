@@ -49,6 +49,27 @@ final class SettingsNavigationTests: XCTestCase {
         XCTAssertFalse(viewModelSource.contains("saveBindAddress"))
     }
 
+    func testAdvancedSettingsExposeOnlyInfoDebugAndSeparateDiagnostics() throws {
+        let source = try String(
+            contentsOf: repositoryRoot().appendingPathComponent(
+                "Sources/CLIProxyManagerApp/Views/GeneralSettingsView.swift"
+            ),
+            encoding: .utf8
+        )
+        let advancedStart = try XCTUnwrap(source.range(of: "struct AdvancedSettingsView: View")?.lowerBound)
+        let advancedSource = String(source[advancedStart...])
+
+        XCTAssertTrue(advancedSource.contains("(value: .info, label: \"Info\")"))
+        XCTAssertTrue(advancedSource.contains("(value: .debug, label: \"Debug\")"))
+        XCTAssertFalse(advancedSource.contains("value: .error"))
+        XCTAssertFalse(advancedSource.contains("value: .warn"))
+        XCTAssertTrue(advancedSource.contains("SettingsRow(label: \"App log\""))
+        XCTAssertTrue(advancedSource.contains("SettingsRow(label: \"Proxy log\""))
+        XCTAssertTrue(advancedSource.contains("revealAppLogInFinder"))
+        XCTAssertTrue(advancedSource.contains("revealProxyLogInFinder"))
+        XCTAssertTrue(advancedSource.contains("without logging private content"))
+    }
+
     func testUsageSettingsCopyCoversSubscriptionAndEstimatedCost() {
         XCTAssertEqual(UsageSettingsCopy.menuBarLabel, "Show usage")
         XCTAssertTrue(UsageSettingsCopy.menuBarDescription.contains("estimated API cost"))
@@ -167,7 +188,7 @@ final class GeneralServerControlSnapshotTests: XCTestCase {
         let snapshot = GeneralServerControlSnapshot(status: DiagnosticStatus(
             severity: .ready,
             title: "CLIProxyAPI Running",
-            message: "Models are available on port 18317."
+            message: "Models are available on port 28317."
         ))
 
         XCTAssertEqual(snapshot.actionTitle, "Stop Server")

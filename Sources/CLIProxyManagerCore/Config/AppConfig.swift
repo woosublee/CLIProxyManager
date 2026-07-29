@@ -7,10 +7,43 @@ public enum AppearanceMode: String, Codable, CaseIterable, Sendable {
 }
 
 public enum LogLevel: String, Codable, CaseIterable, Sendable {
-    case error
-    case warn
     case info
     case debug
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        self = Self.normalized(try? container.decode(String.self))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+
+    public static func normalized(_ rawValue: String?) -> LogLevel {
+        rawValue == LogLevel.debug.rawValue ? .debug : .info
+    }
+
+    public static func requiresCanonicalRewrite(_ rawValue: String?) -> Bool {
+        rawValue != normalized(rawValue).rawValue
+    }
+
+    public var displayName: String {
+        switch self {
+        case .info: "Info"
+        case .debug: "Debug"
+        }
+    }
+}
+
+public struct RuntimeLogConfiguration: Equatable, Sendable {
+    public let appMinimumLevel: LogLevel
+    public let proxyDebugEnabled: Bool
+
+    public init(logLevel: LogLevel) {
+        appMinimumLevel = logLevel
+        proxyDebugEnabled = logLevel == .debug
+    }
 }
 
 public struct AppConfig: Codable, Equatable, Sendable {
@@ -507,6 +540,10 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var roundRobinEnabled: Bool
     public var logLevel: LogLevel
 
+    public var runtimeLogConfiguration: RuntimeLogConfiguration {
+        RuntimeLogConfiguration(logLevel: logLevel)
+    }
+
     public var claudeAPI: ClaudeAPI {
         get {
             guard let profile = apiKeyProfiles.first(where: { $0.id == "claude-api" && $0.provider == .claude }) else {
@@ -855,10 +892,13 @@ public struct AppConfig: Codable, Equatable, Sendable {
         }
     }
 
+    public static let releaseDefaultPort = 18_317
+    public static let developmentDefaultPort = 18_318
+
     #if DEBUG
-    private static let defaultPort = 18_318
+    private static let defaultPort = developmentDefaultPort
     #else
-    private static let defaultPort = 18_317
+    private static let defaultPort = releaseDefaultPort
     #endif
 
     public static let `default` = AppConfig(

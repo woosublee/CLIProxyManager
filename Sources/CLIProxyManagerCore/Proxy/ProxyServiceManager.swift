@@ -116,6 +116,14 @@ protocol LaunchctlManaging: Sendable {
     func runningLabels(prefix: String) throws -> [String]
 }
 
+struct DisabledLaunchctlManager: LaunchctlManaging {
+    func remove(label _: String) throws {}
+    func submit(label _: String, executable _: String, arguments _: [String]) throws {}
+    func lookupPID(label _: String) throws -> pid_t { 0 }
+    func labels(matchingPID _: pid_t) throws -> [String] { [] }
+    func runningLabels(prefix _: String) throws -> [String] { [] }
+}
+
 extension LaunchctlManaging {
     func runningLabels(prefix: String) throws -> [String] { [] }
 }
@@ -326,6 +334,8 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
     private let appConfigProvider: @Sendable () throws -> AppConfig
     private let rollbackReadinessProvider: (@Sendable (Int) -> Bool)?
     private let inspectLaunchctlJobs: Bool
+    private let inspectSystemProcesses: Bool
+    private let allowsSystemRuntimeMutation: Bool
     private let processState = LockedProcessState()
     private let lifecycleLock = NSLock()
 
@@ -343,12 +353,13 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         appConfigProvider: (@Sendable () throws -> AppConfig)? = nil,
         rollbackReadinessProvider: (@Sendable (Int) -> Bool)? = nil
     ) {
+        let managesSystemRuntime = Self.shouldInspectSystemRuntime(using: launcher)
         self.init(
             paths: paths,
             bundledBinaryURL: bundledBinaryURL,
             bundledManifestURL: bundledManifestURL,
             launcher: launcher,
-            launchctl: LaunchctlRunner(),
+            launchctl: Self.defaultLaunchctlManager(using: launcher),
             fileManager: fileManager,
             managementKeyProvider: managementKeyProvider ?? { try? SubscriptionUsageManagementKeyFileStore(paths: paths).managementKey() },
             usageEnabledProvider: usageEnabledProvider ?? {
@@ -359,7 +370,8 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
             apiKeyProvider: apiKeyProvider,
             appConfigProvider: appConfigProvider ?? { try AppConfigStore(paths: paths).load() },
             rollbackReadinessProvider: rollbackReadinessProvider,
-            inspectLaunchctlJobs: launcher.usesManagedLaunchdJobs
+            inspectLaunchctlJobs: managesSystemRuntime,
+            inspectSystemProcesses: managesSystemRuntime
         )
     }
 
@@ -377,7 +389,8 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         apiKeyProvider: (@Sendable (SecretReference) throws -> String?)? = nil,
         appConfigProvider: (@Sendable () throws -> AppConfig)? = nil,
         rollbackReadinessProvider: (@Sendable (Int) -> Bool)? = nil,
-        inspectLaunchctlJobs: Bool = true
+        inspectLaunchctlJobs: Bool = true,
+        inspectSystemProcesses: Bool? = nil
     ) {
         self.paths = paths
         self.bundledBinaryURL = bundledBinaryURL
@@ -409,6 +422,16 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         self.appConfigProvider = appConfigProvider ?? { try AppConfigStore(paths: paths).load() }
         self.rollbackReadinessProvider = rollbackReadinessProvider
         self.inspectLaunchctlJobs = inspectLaunchctlJobs
+        self.inspectSystemProcesses = inspectSystemProcesses ?? launcher.usesManagedLaunchdJobs
+        self.allowsSystemRuntimeMutation = launcher.usesManagedLaunchdJobs
+    }
+
+    static func shouldInspectSystemRuntime(using launcher: any ProcessLaunching) -> Bool {
+        launcher.usesManagedLaunchdJobs
+    }
+
+    static func defaultLaunchctlManager(using launcher: any ProcessLaunching) -> any LaunchctlManaging {
+        shouldInspectSystemRuntime(using: launcher) ? LaunchctlRunner() : DisabledLaunchctlManager()
     }
 
     public func prepare(port: Int) throws {
@@ -632,16 +655,24 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         let runningPorts = (try? managedListeningPorts(candidates: candidatePorts)) ?? candidatePorts
         terminateTrackedLocked(waitUntilExit: waitUntilExit)
         for port in runningPorts {
-            removeManagedLaunchdJob(onPort: port)
-            killOrphanCliproxyapi(onPort: port)
+            if allowsSystemRuntimeMutation && inspectLaunchctlJobs {
+                removeManagedLaunchdJob(onPort: port)
+            }
+            if allowsSystemRuntimeMutation && inspectSystemProcesses {
+                killOrphanCliproxyapi(onPort: port)
+            }
         }
     }
 
     private func stopManagedProcessesLocked(onPorts ports: [Int]) {
         terminateTrackedLocked(waitUntilExit: true)
         for port in ports {
-            removeManagedLaunchdJob(onPort: port)
-            killOrphanCliproxyapi(onPort: port)
+            if allowsSystemRuntimeMutation && inspectLaunchctlJobs {
+                removeManagedLaunchdJob(onPort: port)
+            }
+            if allowsSystemRuntimeMutation && inspectSystemProcesses {
+                killOrphanCliproxyapi(onPort: port)
+            }
         }
     }
 
@@ -668,9 +699,11 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
                 ports.insert(port)
             }
         }
-        for port in candidates where !ports.contains(port) {
-            if try managedListenerDetected(onPort: port) {
-                ports.insert(port)
+        if inspectSystemProcesses {
+            for port in candidates where !ports.contains(port) {
+                if try managedListenerDetected(onPort: port) {
+                    ports.insert(port)
+                }
             }
         }
         return ports.sorted()
@@ -744,6 +777,7 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         if let rollbackReadinessProvider {
             return rollbackReadinessProvider(port)
         }
+        guard inspectSystemProcesses else { return false }
         for _ in 0..<20 {
             if isCliproxyapiListening(onPort: port) { return true }
             Thread.sleep(forTimeInterval: 0.05)
@@ -987,17 +1021,17 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         let payloadConfiguration = fastPayloadConfiguration(
             aliases: fastConfiguration.allAliases
         )
+        let baseConfiguration = """
+        host: \(yamlDoubleQuoted(ProxyNetworkPolicy.loopbackHost))
+        port: \(port)
+        auth-dir: \(yamlDoubleQuoted(paths.authDirectory.path))
+        logging-to-file: true
+        debug: \(appConfig.runtimeLogConfiguration.proxyDebugEnabled)
+        api-keys:
+          - sk-dummy
+        """
 
         guard !fastConfiguration.allAliases.isEmpty else {
-            let baseConfiguration = """
-            host: \(yamlDoubleQuoted(ProxyNetworkPolicy.loopbackHost))
-            port: \(port)
-            auth-dir: \(yamlDoubleQuoted(paths.authDirectory.path))
-            logging-to-file: true
-            debug: false
-            api-keys:
-              - sk-dummy
-            """
             guard !managementAndUsageQueueConfiguration.isEmpty || !claudeAPIConfiguration.isEmpty || !codexAPIConfiguration.isEmpty else {
                 return baseConfiguration + "\n\n"
             }
@@ -1009,17 +1043,7 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
             """
         }
 
-        var sections = [
-            """
-            host: \(yamlDoubleQuoted(ProxyNetworkPolicy.loopbackHost))
-            port: \(port)
-            auth-dir: \(yamlDoubleQuoted(paths.authDirectory.path))
-            logging-to-file: true
-            debug: false
-            api-keys:
-              - sk-dummy
-            """
-        ]
+        var sections = [baseConfiguration]
         sections.append(contentsOf: [
             managementConfiguration,
             usageQueueConfiguration,

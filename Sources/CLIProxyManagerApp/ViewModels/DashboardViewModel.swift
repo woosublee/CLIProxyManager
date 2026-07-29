@@ -122,6 +122,7 @@ final class DashboardViewModel: ObservableObject {
         case apiKey
         case configuration
         case fastMode
+        case logLevel
     }
 
     private struct CodexFastConfigurationInput: Equatable {
@@ -280,6 +281,7 @@ final class DashboardViewModel: ObservableObject {
     private let claudeModelOptionsCache: any ClaudeModelOptionsCaching
     private let cpmInstallationService: any CPMInstallationManaging
     private let secretStore: any SecretStore
+    private let appLogger: any AppLogging
     private let subscriptionUsageSleep: @Sendable (UInt64) async throws -> Void
     private let serverStatusRetryDelayNanoseconds: UInt64
     private let settingsMessageAutoClearDelayNanoseconds: UInt64
@@ -292,6 +294,7 @@ final class DashboardViewModel: ObservableObject {
     private var lastClaudeStatus: DiagnosticStatus?
     private var lastCodexStatus: DiagnosticStatus?
     private var lastPersistedConfig: AppConfig
+    private var appliedProxyLogLevel: LogLevel = .info
     private enum SubscriptionUsagePollingWakeReason: Equatable {
         case usage
         case resetCredits
@@ -396,8 +399,29 @@ final class DashboardViewModel: ObservableObject {
         let generation: Int
         let reasons: Set<ProxyConfigurationRestartReason>
         let message: String
+        let requestedLogLevel: LogLevel?
+        let appliedProxyLogLevel: LogLevel?
+
+        init(
+            generation: Int,
+            reasons: Set<ProxyConfigurationRestartReason>,
+            message: String,
+            requestedLogLevel: LogLevel? = nil,
+            appliedProxyLogLevel: LogLevel? = nil
+        ) {
+            self.generation = generation
+            self.reasons = reasons
+            self.message = message
+            self.requestedLogLevel = requestedLogLevel
+            self.appliedProxyLogLevel = appliedProxyLogLevel
+        }
 
         var ownedSettingsMessage: String? {
+            if reasons.contains(.logLevel),
+               let requestedLogLevel,
+               let appliedProxyLogLevel {
+                return "Log level was saved as \(requestedLogLevel.displayName). App logging now uses \(requestedLogLevel.displayName), but CLIProxyAPI remains at \(appliedProxyLogLevel.displayName) because restart failed: \(message) Use Restart Server to retry."
+            }
             guard reasons.contains(.fastMode) else { return nil }
             return "Fast mode settings were saved, but CLIProxyAPI could not restart: \(message)"
         }
@@ -546,6 +570,7 @@ final class DashboardViewModel: ObservableObject {
         claudeModelOptionsCache: any ClaudeModelOptionsCaching = ClaudeModelOptionsCacheFileStore(),
         cpmInstallationService: (any CPMInstallationManaging)? = nil,
         secretStore: any SecretStore = FileSecretStore(),
+        appLogger: any AppLogging = DisabledAppLogger(),
         subscriptionUsageSleep: @escaping @Sendable (UInt64) async throws -> Void = { delay in
             try await Task.sleep(nanoseconds: delay)
         },
@@ -579,6 +604,7 @@ final class DashboardViewModel: ObservableObject {
         self.cpmInstallationService = resolvedCPMInstallationService
         self.cpmInstallationStatus = resolvedCPMInstallationService.status()
         self.secretStore = secretStore
+        self.appLogger = appLogger
         self.subscriptionUsageSleep = subscriptionUsageSleep
         self.serverStatusRetryDelayNanoseconds = serverStatusRetryDelayNanoseconds
         self.settingsMessageAutoClearDelayNanoseconds = settingsMessageAutoClearDelayNanoseconds
@@ -662,6 +688,8 @@ final class DashboardViewModel: ObservableObject {
         }
         self.lastPersistedConfig = persistedConfig
         self.config = initialConfig
+        appliedProxyLogLevel = initialConfig.logLevel
+        appLogger.configure(minimumLevel: initialConfig.runtimeLogConfiguration.appMinimumLevel)
         cards = ProfileCard.makeDefaultCards(config: initialConfig)
         serverStatus = DiagnosticStatus(
             severity: .warning,
@@ -790,16 +818,40 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func saveLogLevel(_ level: LogLevel) throws {
+        guard config.logLevel != level else { return }
         var updatedConfig = config
         updatedConfig.logLevel = level
         try saveConfig(updatedConfig)
+        appLogger.configure(minimumLevel: updatedConfig.runtimeLogConfiguration.appMinimumLevel)
+        requestProxyConfigurationRestart(reason: .logLevel)
     }
 
-    func revealLogsInFinder() {
+    func revealAppLogInFinder() {
         #if canImport(AppKit)
-        let url = ManagedPaths().proxyLogsDirectory
-        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        NSWorkspace.shared.open(url)
+        switch appLogger.diagnostics {
+        case .available(let fileURL):
+            do {
+                let validatedURL = try AppLogFileStore.validatedExistingLogFile(at: fileURL)
+                NSWorkspace.shared.activateFileViewerSelecting([validatedURL])
+            } catch {
+                settingsMessage = "App log is unavailable because the file is missing or unsafe. App and proxy operation continue with unified logging; restart the app after fixing the managed logs path."
+            }
+        case .degraded(_, let reason):
+            settingsMessage = "App log is unavailable (\(reason.rawValue)). App and proxy operation continue with unified logging; retry after fixing the managed logs path."
+        case .unavailable(let reason):
+            settingsMessage = "App log is unavailable (\(reason.rawValue)). Restart the app after fixing the managed logs path."
+        }
+        #endif
+    }
+
+    func revealProxyLogInFinder() {
+        #if canImport(AppKit)
+        do {
+            let fileURL = try ProxyLogService().selectedLogFile()
+            NSWorkspace.shared.activateFileViewerSelecting([fileURL])
+        } catch {
+            settingsMessage = "Proxy log is unavailable: \(error.localizedDescription) Start CLIProxyAPI and retry."
+        }
         #endif
     }
 
@@ -848,6 +900,7 @@ final class DashboardViewModel: ObservableObject {
         }
         appAppearanceService.apply(showDockIcon: updatedConfig.showDockIcon)
         appAppearanceService.apply(appearance: updatedConfig.appearance)
+        appLogger.configure(minimumLevel: updatedConfig.runtimeLogConfiguration.appMinimumLevel)
         settingsMessage = cleanupError.map { "Reset failed: \($0.localizedDescription)" }
             ?? "Settings reset to defaults."
         requestServerRestartAfterConfigChange()
@@ -859,6 +912,7 @@ final class DashboardViewModel: ObservableObject {
     ) -> Task<Void, Never> {
         applicationLaunchGeneration &+= 1
         let generation = applicationLaunchGeneration
+        appLogger.record(.applicationLaunch(.started))
         let task = Task { [weak self] in
             guard let self else { return }
             await self.performStartApplication(generation: generation)
@@ -875,11 +929,14 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func performStartApplication(generation: Int) async {
+        var launchResult = AppLogResult.cancelled
+        defer { appLogger.record(.applicationLaunch(launchResult)) }
         guard isCurrentApplicationLaunch(generation: generation) else { return }
         await refresh()
         guard isCurrentApplicationLaunch(generation: generation) else { return }
         let wasRunning = serverControlState.isRunning
         var attemptedReconciliationRestart = false
+        var launchWasDegraded = false
 
         var didChangeBundledBinary = false
         var bundledReconciliationErrorMessage: String?
@@ -888,6 +945,7 @@ final class DashboardViewModel: ObservableObject {
             didChangeBundledBinary = try bundledProxyReconciler.reconcile().didChangeBinary
         } catch {
             guard isCurrentApplicationLaunch(generation: generation) else { return }
+            launchWasDegraded = true
             bundledReconciliationErrorMessage = "Bundled CLIProxyAPI update failed: \(error.localizedDescription)"
             settingsMessage = bundledReconciliationErrorMessage
         }
@@ -905,6 +963,7 @@ final class DashboardViewModel: ObservableObject {
                 attemptedReconciliationRestart = try await proxyService.reconcileConfiguration(port: config.port)
             } catch {
                 attemptedReconciliationRestart = true
+                launchWasDegraded = true
                 let localOnlyMessage = "Local-only proxy configuration could not be applied: \(error.localizedDescription)"
                 settingsMessage = bundledReconciliationErrorMessage.map { "\($0) \(localOnlyMessage)" }
                     ?? localOnlyMessage
@@ -920,6 +979,7 @@ final class DashboardViewModel: ObservableObject {
         if !attemptedReconciliationRestart {
             await performAutostartIfEnabled()
         }
+        launchResult = launchWasDegraded ? .degraded(.process) : .succeeded
     }
 
     private func isCurrentApplicationLaunch(generation: Int) -> Bool {
@@ -2247,6 +2307,7 @@ final class DashboardViewModel: ObservableObject {
 
     func startServer() async {
         await performServerAction(
+            actionKind: .start,
             title: "Failed to start CLIProxyAPI",
             transitionState: .starting,
             waitForReady: true
@@ -2256,13 +2317,14 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func stopServer() async {
-        await performServerAction(title: "Failed to stop CLIProxyAPI", transitionState: .stopping) {
+        await performServerAction(actionKind: .stop, title: "Failed to stop CLIProxyAPI", transitionState: .stopping) {
             try await proxyService.stop()
         }
     }
 
     func restartServer() async {
         await performServerAction(
+            actionKind: .restart,
             title: "Failed to restart CLIProxyAPI",
             transitionState: .starting,
             waitForReady: true
@@ -3123,17 +3185,24 @@ final class DashboardViewModel: ObservableObject {
             let reasons = pendingProxyConfigurationRestartReasons
             let attemptedGeneration = configurationWork.generation
             pendingProxyConfigurationRestartReasons.removeAll()
+            appLogger.record(.server(action: .restart, result: .started, port: config.port))
             do {
                 try await restartProxyAndRefresh()
+                appLogger.record(.server(action: .restart, result: .succeeded, port: config.port))
+                appLogger.record(.debug(.proxyRestartApplied))
                 markProxyConfigurationGenerationApplied(
                     attemptedGeneration,
                     reasons: reasons
                 )
             } catch {
+                appLogger.record(.server(action: .restart, result: .failed(.process), port: config.port))
+                appLogger.record(.debug(.proxyRestartRolledBack))
                 let failure = ConfigurationRestartFailure(
                     generation: attemptedGeneration,
                     reasons: reasons,
-                    message: error.localizedDescription
+                    message: error.localizedDescription,
+                    requestedLogLevel: reasons.contains(.logLevel) ? config.logLevel : nil,
+                    appliedProxyLogLevel: reasons.contains(.logLevel) ? appliedProxyLogLevel : nil
                 )
                 let hasNewerExplicitWork = configurationWork.generation > attemptedGeneration
                     && !pendingProxyConfigurationRestartReasons.isEmpty
@@ -3170,7 +3239,9 @@ final class DashboardViewModel: ObservableObject {
         let failure = configurationWork.ownedRestartFailure ?? ConfigurationRestartFailure(
             generation: configurationWork.generation,
             reasons: pendingProxyConfigurationRestartReasons,
-            message: serverStatus.message.isEmpty ? "Could not connect to the server." : serverStatus.message
+            message: serverStatus.message.isEmpty ? "Could not connect to the server." : serverStatus.message,
+            requestedLogLevel: pendingProxyConfigurationRestartReasons.contains(.logLevel) ? config.logLevel : nil,
+            appliedProxyLogLevel: pendingProxyConfigurationRestartReasons.contains(.logLevel) ? appliedProxyLogLevel : nil
         )
         return ProxyConfigurationDrainResult(
             terminal: .failed(failure),
@@ -3237,6 +3308,9 @@ final class DashboardViewModel: ObservableObject {
         if generation >= configurationWork.lastAppliedGeneration {
             configurationWork.lastAppliedGeneration = generation
             configurationWork.lastAppliedReasons = reasons
+        }
+        if !reasons.isEmpty {
+            appliedProxyLogLevel = config.logLevel
         }
         guard let ownedFailure = configurationWork.ownedRestartFailure,
               ownedFailure.generation <= generation else {
@@ -4168,6 +4242,13 @@ final class DashboardViewModel: ObservableObject {
         if let configWriteProtectionMessage {
             throw CLIProxyManagerCommandError.prerequisite(configWriteProtectionMessage)
         }
+        appLogger.record(.configurationSave(.started))
+        var configSaveSucceeded = false
+        defer {
+            appLogger.record(.configurationSave(
+                configSaveSucceeded ? .succeeded : .failed(.configuration)
+            ))
+        }
         let persistedConfig = preservingUnavailableRoundRobinProfiles
             ? updatedConfig
             : removingUnavailableRoundRobinProfiles(from: updatedConfig)
@@ -4229,6 +4310,7 @@ final class DashboardViewModel: ObservableObject {
             throw error
         }
 
+        configSaveSucceeded = true
         if fastConfigurationChanged {
             requestProxyConfigurationRestart(reason: .fastMode)
         }
@@ -4564,6 +4646,7 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func performServerAction(
+        actionKind: AppServerAction,
         title: String,
         transitionState: ServerControlState,
         waitForReady: Bool = false,
@@ -4574,6 +4657,7 @@ final class DashboardViewModel: ObservableObject {
             _ = await waitForServerActionCompletion()
         }
         _ = await executeServerAction(
+            actionKind: actionKind,
             title: title,
             transitionState: transitionState,
             waitForReady: waitForReady,
@@ -4588,6 +4672,7 @@ final class DashboardViewModel: ObservableObject {
             _ = await waitForServerActionCompletion()
         }
         return await executeServerAction(
+            actionKind: .restart,
             title: "Failed to restart CLIProxyAPI",
             transitionState: .starting,
             waitForReady: true
@@ -4691,6 +4776,7 @@ final class DashboardViewModel: ObservableObject {
 
     @discardableResult
     private func executeServerAction(
+        actionKind: AppServerAction,
         title: String,
         transitionState: ServerControlState,
         waitForReady: Bool,
@@ -4703,12 +4789,18 @@ final class DashboardViewModel: ObservableObject {
         let configurationGenerationAppliedByAction = configurationWork.generation
         var actionSucceeded = false
         var performedConfigurationRestart = false
+        appLogger.record(.server(action: actionKind, result: .started, port: config.port))
         isServerActionInProgress = true
         serverActionWaitsForReady = waitForReady
         configurationWork.activeServerActionGeneration = actionGeneration
         proxyRuntimeCertainty = .mayBeRunning
         serverControlState = transitionState
         defer {
+            appLogger.record(.server(
+                action: actionKind,
+                result: actionSucceeded ? .succeeded : .failed(.process),
+                port: config.port
+            ))
             finishServerAction(ServerActionCompletion(
                 generation: actionGeneration,
                 terminal: serverActionTerminalResult(succeeded: actionSucceeded)
@@ -4728,6 +4820,7 @@ final class DashboardViewModel: ObservableObject {
                 }
                 proxyRuntimeCertainty = .mayBeRunning
                 serverControlState = .running
+                appliedProxyLogLevel = config.logLevel
                 if configurationWork.generation == configurationGenerationAppliedByAction {
                     pendingProxyConfigurationRestartReasons.subtract(reasonsAppliedByAction)
                 }
@@ -4818,7 +4911,9 @@ final class DashboardViewModel: ObservableObject {
                 let failure = ConfigurationRestartFailure(
                     generation: configurationGenerationAppliedByAction,
                     reasons: reasonsAppliedByAction,
-                    message: message
+                    message: message,
+                    requestedLogLevel: reasonsAppliedByAction.contains(.logLevel) ? config.logLevel : nil,
+                    appliedProxyLogLevel: reasonsAppliedByAction.contains(.logLevel) ? appliedProxyLogLevel : nil
                 )
                 configurationWork.ownedRestartFailure = failure
                 if let failureMessage = failure.ownedSettingsMessage {

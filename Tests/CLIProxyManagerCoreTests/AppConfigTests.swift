@@ -6,9 +6,9 @@ final class AppConfigTests: XCTestCase {
         let config = AppConfig.default
 
         #if DEBUG
-        XCTAssertEqual(config.port, 18_318)
+        XCTAssertEqual(config.port, AppConfig.developmentDefaultPort)
         #else
-        XCTAssertEqual(config.port, 18_317)
+        XCTAssertEqual(config.port, AppConfig.releaseDefaultPort)
         #endif
         XCTAssertEqual(config.schemaVersion, AppConfig.currentSchemaVersion)
         XCTAssertEqual(config.claudeAPI.commandName, "")
@@ -41,7 +41,7 @@ final class AppConfigTests: XCTestCase {
     func testDecodedConfigDefaultsMissingAccountOrderToEmpty() throws {
         let data = Data(#"""
         {
-          "port": 18317,
+          "port": 28317,
           "commands": { "cc": "", "ccapi": "", "ccodex": "" },
           "ccapi": {},
           "ccodex": {
@@ -271,7 +271,7 @@ final class AppConfigTests: XCTestCase {
     func testDecodedConfigPreservesSavedCommandNamesAndClaudeAPIModel() throws {
         let data = Data(#"""
         {
-          "port": 18317,
+          "port": 28317,
           "commands": { "cc": "savedcc", "ccapi": "savedapi", "ccodex": "savedcodex" },
           "ccapi": { "model": "claude-opus-4-7" },
           "ccodex": {
@@ -308,7 +308,7 @@ final class AppConfigTests: XCTestCase {
     func testLegacyClaudeAPIFieldsDecodeWithoutPersistingModelOrConnectionMode() throws {
         let data = Data(#"""
         {
-          "port": 18317,
+          "port": 28317,
           "commands": { "cc": "", "ccapi": "savedapi", "ccodex": "" },
           "ccapi": {
             "model": "claude-sonnet-4-6",
@@ -353,7 +353,7 @@ final class AppConfigTests: XCTestCase {
 
         let legacy = try JSONDecoder().decode(AppConfig.self, from: Data(#"""
         {
-          "port": 18317,
+          "port": 28317,
           "commands": { "cc": "", "ccapi": "", "ccodex": "" },
           "ccapi": {},
           "ccodex": {
@@ -374,7 +374,7 @@ final class AppConfigTests: XCTestCase {
     func testMalformedWrappedCodexAPISettingsFailDecodingInsteadOfResettingToDefaults() {
         let data = Data(#"""
         {
-          "port": 18317,
+          "port": 28317,
           "commands": { "cc": "", "ccapi": "", "ccodex": "" },
           "ccapi": {},
           "ccodex": {
@@ -427,7 +427,7 @@ final class AppConfigTests: XCTestCase {
     func testDecodedConfigDefaultsMissingAccountPrivacyToHidden() throws {
         let data = Data(#"""
         {
-          "port": 18317,
+          "port": 28317,
           "commands": { "cc": "cc", "ccapi": "ccapi", "ccodex": "ccodex" },
           "ccapi": { "model": "claude-opus-4-7" },
           "ccodex": {
@@ -451,7 +451,7 @@ final class AppConfigTests: XCTestCase {
     func testDecodedConfigDefaultsMissingCodexPrivacyFieldToHidden() throws {
         let data = Data(#"""
         {
-          "port": 18317,
+          "port": 28317,
           "commands": { "cc": "cc", "ccapi": "ccapi", "ccodex": "ccodex" },
           "ccapi": { "model": "claude-opus-4-7" },
           "ccodex": {
@@ -476,7 +476,7 @@ final class AppConfigTests: XCTestCase {
     func testDecodedConfigDefaultsMissingClaudePrivacyFieldToHidden() throws {
         let data = Data(#"""
         {
-          "port": 18317,
+          "port": 28317,
           "commands": { "cc": "cc", "ccapi": "ccapi", "ccodex": "ccodex" },
           "ccapi": { "model": "claude-opus-4-7" },
           "ccodex": {
@@ -501,7 +501,7 @@ final class AppConfigTests: XCTestCase {
     func testDecodedConfigPreservesAccountPrivacy() throws {
         let data = Data(#"""
         {
-          "port": 18317,
+          "port": 28317,
           "commands": { "cc": "cc", "ccapi": "ccapi", "ccodex": "ccodex" },
           "ccapi": { "model": "claude-opus-4-7" },
           "ccodex": {
@@ -526,7 +526,7 @@ final class AppConfigTests: XCTestCase {
     func testDecodedConfigCannotEnableUnavailableFeatures() throws {
         let data = Data(#"""
         {
-          "port": 18317,
+          "port": 28317,
           "commands": { "cc": "cc", "ccapi": "customapi", "ccodex": "ccodex" },
           "ccapi": { "model": "claude-opus-4-7" },
           "ccodex": {
@@ -553,7 +553,7 @@ final class AppConfigTests: XCTestCase {
     func testRoundRobinProfilesDecodeAndEncodeRoundTrip() throws {
         let data = Data(#"""
         {
-          "port": 18317,
+          "port": 28317,
           "commands": { "cc": "cc", "ccapi": "ccapi", "ccodex": "ccodex" },
           "ccapi": { "model": "claude-opus-4-8" },
           "ccodex": {
@@ -612,7 +612,7 @@ final class AppConfigTests: XCTestCase {
     func testMissingRoundRobinProfilesDecodesToEmptyArray() throws {
         let data = Data(#"""
         {
-          "port": 18317,
+          "port": 28317,
           "commands": { "cc": "cc", "ccapi": "ccapi", "ccodex": "ccodex" },
           "ccapi": { "model": "claude-opus-4-8" },
           "ccodex": {
@@ -635,7 +635,7 @@ final class AppConfigTests: XCTestCase {
     func testRoundRobinProfileDefaultsWhenOptionalFieldsAreMissing() throws {
         let data = Data(#"""
         {
-          "port": 18317,
+          "port": 28317,
           "commands": { "cc": "cc", "ccapi": "ccapi", "ccodex": "ccodex" },
           "ccapi": { "model": "claude-opus-4-8" },
           "ccodex": {
@@ -670,7 +670,7 @@ final class AppConfigTests: XCTestCase {
     func testOAuthCommandProfilesDecodeAndEncodeRoundTrip() throws {
         let data = Data(#"""
         {
-          "port": 18317,
+          "port": 28317,
           "commands": { "cc": "cc", "ccapi": "ccapi", "ccodex": "ccodex" },
           "ccapi": { "model": "claude-opus-4-8" },
           "ccodex": {
@@ -738,7 +738,7 @@ final class AppConfigTests: XCTestCase {
     func testMissingOAuthCommandProfilesDecodesToEmptyArray() throws {
         let data = Data(#"""
         {
-          "port": 18317,
+          "port": 28317,
           "commands": { "cc": "cc", "ccapi": "ccapi", "ccodex": "ccodex" },
           "ccapi": { "model": "claude-opus-4-7" },
           "ccodex": {
@@ -790,7 +790,9 @@ final class AppConfigTests: XCTestCase {
             paths.subscriptionUsageSnapshotCacheFile,
             root.appendingPathComponent("subscription-usage-snapshots.json")
         )
-        XCTAssertEqual(paths.logsDirectory, root.appendingPathComponent("logs"))
+        XCTAssertEqual(paths.logsDirectory, root.appendingPathComponent("logs", isDirectory: true))
+        XCTAssertEqual(paths.appLogFile, root.appendingPathComponent("logs/app.log"))
+        XCTAssertEqual(paths.rotatedAppLogFile, root.appendingPathComponent("logs/app.log.1"))
         XCTAssertEqual(paths.clipProxyDirectory, root.appendingPathComponent("cliproxyapi"))
         XCTAssertEqual(
             paths.clipProxyConfigFile,
@@ -954,13 +956,13 @@ final class AppConfigTests: XCTestCase {
     }
 
     func testVersion3DecodeRejectsDuplicateAPIKeyProfileIdentity() {
-        let json = #"{"schemaVersion":3,"port":18317,"apiKeyProfiles":[{"id":"claude-api","provider":"claude","secretReference":"claude-api-key","commandName":"first","nickname":"","dangerousPermissionsEnabled":false,"claude":{"opus":"automatic","sonnet":"automatic","haiku":"automatic"}},{"id":"claude-api","provider":"claude","secretReference":"claude-api-key","commandName":"second","nickname":"","dangerousPermissionsEnabled":false,"claude":{"opus":"automatic","sonnet":"automatic","haiku":"automatic"}}]}"#
+        let json = #"{"schemaVersion":3,"port":28317,"apiKeyProfiles":[{"id":"claude-api","provider":"claude","secretReference":"claude-api-key","commandName":"first","nickname":"","dangerousPermissionsEnabled":false,"claude":{"opus":"automatic","sonnet":"automatic","haiku":"automatic"}},{"id":"claude-api","provider":"claude","secretReference":"claude-api-key","commandName":"second","nickname":"","dangerousPermissionsEnabled":false,"claude":{"opus":"automatic","sonnet":"automatic","haiku":"automatic"}}]}"#
 
         XCTAssertThrowsError(try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8)))
     }
 
     func testVersion3DecodeRejectsSecretReferenceThatDoesNotBelongToProfileIdentity() {
-        let json = #"{"schemaVersion":3,"port":18317,"apiKeyProfiles":[{"id":"claude-api","provider":"claude","secretReference":"codex-api-key","commandName":"claude","nickname":"","dangerousPermissionsEnabled":false,"claude":{"opus":"automatic","sonnet":"automatic","haiku":"automatic"}}]}"#
+        let json = #"{"schemaVersion":3,"port":28317,"apiKeyProfiles":[{"id":"claude-api","provider":"claude","secretReference":"codex-api-key","commandName":"claude","nickname":"","dangerousPermissionsEnabled":false,"claude":{"opus":"automatic","sonnet":"automatic","haiku":"automatic"}}]}"#
 
         XCTAssertThrowsError(try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8)))
     }
@@ -981,7 +983,7 @@ final class AppConfigTests: XCTestCase {
     private func decodeConfig(subscriptionUsageJSON: String, usageOverlayJSON: String) throws -> AppConfig {
         let json = """
         {
-          "port": 18317,
+          "port": 28317,
           "commands": {"cc":"","ccapi":"","ccodex":""},
           "ccapi": {"model":"claude-opus-4-8"},
           "ccodex": {
