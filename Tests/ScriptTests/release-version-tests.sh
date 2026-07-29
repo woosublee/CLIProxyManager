@@ -105,9 +105,15 @@ write_metadata '{"version":"0.2.0","build":-1}'
 assert_failure_contains 'build must be a positive integer' "$resolver" validate
 
 write_metadata '{"version":"0.2.0","build":7.5}'
-assert_failure_contains 'build must be a positive integer' "$resolver" validate
+assert_failure_contains 'build must be a JSON integer' "$resolver" validate
 
 write_metadata '{"version":"0.2.0","build":"7"}'
+assert_failure_contains 'build must be a JSON integer' "$resolver" validate
+
+write_metadata '{"version":"0.2.0","build":true}'
+assert_failure_contains 'build must be a JSON integer' "$resolver" validate
+
+write_metadata '{"version":"0.2.0","build":[]}'
 assert_failure_contains 'build must be a JSON integer' "$resolver" validate
 
 write_metadata '{"version":"0.2.0","build":7}'

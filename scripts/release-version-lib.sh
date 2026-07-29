@@ -47,7 +47,7 @@ release_load_identity() {
   version_type="$(plutil -type version "$metadata" 2>/dev/null || true)"
   build_type="$(plutil -type build "$metadata" 2>/dev/null || true)"
   [[ "$version_type" == 'string' ]] || release_fail 'version must be a JSON string' || return 1
-  [[ "$build_type" != 'string' ]] || release_fail 'build must be a JSON integer' || return 1
+  [[ "$build_type" == 'integer' ]] || release_fail 'build must be a JSON integer' || return 1
 
   RELEASE_VERSION="$(plutil -extract version raw "$metadata")"
   RELEASE_BUILD="$(plutil -extract build raw "$metadata")"
