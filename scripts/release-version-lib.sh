@@ -16,6 +16,10 @@ release_atomic_replace() {
   mv -f "$staged" "$destination"
 }
 
+release_plutil() {
+  printf '%s\n' "${PLUTIL:-/usr/bin/plutil}"
+}
+
 release_load_identity() {
   local repo_root="$1"
   local metadata="$repo_root/release/version.json"

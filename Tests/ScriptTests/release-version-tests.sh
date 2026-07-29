@@ -139,4 +139,56 @@ assert_failure_contains 'ARTIFACT_CHANNEL must be official or development' \
 assert_failure_contains 'DEVELOPMENT_VERSION is only valid for development artifacts' \
   env DEVELOPMENT_VERSION=0.2.0 "$resolver" validate
 
+sync_repo="$sandbox/sync-repo"
+new_repo "$sync_repo"
+cp "$REPO_ROOT/scripts/sync-release-version.sh" "$sync_repo/scripts/sync-release-version.sh"
+chmod +x "$sync_repo/scripts/sync-release-version.sh"
+cat > "$sync_repo/release/version.json" <<'JSON'
+{"version":"0.2.0","build":7}
+JSON
+cat > "$sync_repo/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleShortVersionString</key><string>0.1.0</string>
+  <key>CFBundleVersion</key><string>1</string>
+</dict>
+</plist>
+PLIST
+
+assert_failure_contains 'Info.plist version mismatch: expected 0.2.0, actual 0.1.0' \
+  "$sync_repo/scripts/sync-release-version.sh" --check
+assert_failure_contains 'Run scripts/sync-release-version.sh to update the generated mirror' \
+  "$sync_repo/scripts/sync-release-version.sh" --check
+
+before_mode="$(stat -f '%Lp' "$sync_repo/Info.plist")"
+"$sync_repo/scripts/sync-release-version.sh"
+[[ "$(plutil -extract CFBundleShortVersionString raw "$sync_repo/Info.plist")" == '0.2.0' ]] || fail "sync should update version"
+[[ "$(plutil -extract CFBundleVersion raw "$sync_repo/Info.plist")" == '7' ]] || fail "sync should update build"
+[[ "$(stat -f '%Lp' "$sync_repo/Info.plist")" == "$before_mode" ]] || fail "sync should preserve file mode"
+"$sync_repo/scripts/sync-release-version.sh" --check
+
+checksum_before="$(shasum -a 256 "$sync_repo/Info.plist" | cut -d' ' -f1)"
+fake_plutil="$sandbox/fail-plutil"
+cat > "$fake_plutil" <<'SH'
+#!/usr/bin/env bash
+exit 42
+SH
+chmod +x "$fake_plutil"
+assert_failure_contains 'Unable to update the Info.plist mirror' \
+  env PLUTIL="$fake_plutil" "$sync_repo/scripts/sync-release-version.sh"
+checksum_after="$(shasum -a 256 "$sync_repo/Info.plist" | cut -d' ' -f1)"
+[[ "$checksum_before" == "$checksum_after" ]] || fail "failed sync must preserve the original plist"
+
+makefile="$REPO_ROOT/Makefile"
+! grep -Eq '^VERSION[[:space:]]*\?=' "$makefile" || fail "Makefile must not own VERSION"
+! grep -Eq '^BUILD_NUMBER[[:space:]]*\?=' "$makefile" || fail "Makefile must not own BUILD_NUMBER"
+[[ "$(make -s -C "$REPO_ROOT" print-app-version)" == '0.1.32' ]] || fail "Makefile version must delegate to resolver"
+[[ "$(make -s -C "$REPO_ROOT" print-build-number)" == '35' ]] || fail "Makefile build must delegate to resolver"
+[[ "$(make -s -C "$REPO_ROOT" print-build-tag)" == 'v0.1.32' ]] || fail "Makefile tag must delegate to resolver"
+assert_failure_contains 'VERSION is derived from release/version.json' make -s -C "$REPO_ROOT" VERSION=9.9.9 print-app-version
+assert_failure_contains 'BUILD_NUMBER is derived from release/version.json' make -s -C "$REPO_ROOT" BUILD_NUMBER=999 print-build-number
+[[ "$(make -s -C "$REPO_ROOT" ARTIFACT_CHANNEL=development DEVELOPMENT_VERSION=0.2.0 DEVELOPMENT_BUILD_NUMBER=9001 print-app-version)" == '0.2.0' ]] || fail "development version should be explicit"
+
 printf 'release version resolver tests passed\n'
