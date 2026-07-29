@@ -25,8 +25,17 @@ final class RuntimeTestSafetyTests: XCTestCase {
             "Tests/CLIProxyManagerCoreTests/ProxyServiceManagerTests.swift"
         )
         let source = try String(contentsOf: fileURL, encoding: .utf8)
+        let constructorMarker = "LaunchctlRunner" + "("
+        let requiredArgument = "commandRunner:"
 
-        XCTAssertFalse(source.contains("LaunchctlRunner" + "()"))
+        for line in source.split(separator: "\n", omittingEmptySubsequences: false) {
+            guard line.contains(constructorMarker) else { continue }
+            XCTAssertTrue(
+                line.contains(requiredArgument),
+                "LaunchctlRunner must always be constructed with an injected commandRunner in tests, " +
+                    "otherwise it falls back to the real launchctl process runner: \(line)"
+            )
+        }
     }
 
     private func swiftFiles(in directory: URL) throws -> [URL] {

@@ -33,6 +33,7 @@ public enum AppUpdateTarget: String, Equatable, Sendable {
 
 public enum AppUpdateAction: String, Equatable, Sendable {
     case check
+    case discover
     case download
     case stage
     case apply

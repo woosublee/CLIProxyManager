@@ -137,9 +137,22 @@ final class CLIProxyAPIUpdateService: ObservableObject {
         isUpdating = true
         state = .downloading
         defer { isUpdating = false }
+
+        let result: CLIProxyAPIBinaryVerificationResult
         do {
-            let result = try await downloader.downloadAndVerify(release)
-            defer { downloader.cleanup(result) }
+            result = try await downloader.downloadAndVerify(release)
+        } catch {
+            appLogger.record(.update(
+                target: .proxy,
+                action: .download,
+                result: .failed(Self.downloadFailureKind(for: error))
+            ))
+            recordFailure(error)
+            return
+        }
+
+        defer { downloader.cleanup(result) }
+        do {
             try store.savePending(binaryURL: result.binaryURL, manifest: result.manifest)
             pendingUpdate = result.manifest
             availableUpdate = nil
@@ -152,8 +165,19 @@ final class CLIProxyAPIUpdateService: ObservableObject {
             appLogger.record(.update(target: .proxy, action: .download, result: .succeeded))
             appLogger.record(.debug(.updatePending))
         } catch {
-            appLogger.record(.update(target: .proxy, action: .download, result: .failed(.updateVerification)))
+            appLogger.record(.update(target: .proxy, action: .download, result: .failed(.fileSystem)))
             recordFailure(error)
+        }
+    }
+
+    private static func downloadFailureKind(for error: Error) -> AppLogFailureKind {
+        switch error {
+        case is HTTPClientError, is URLError:
+            return .network
+        case is CLIProxyAPIArchiveVerifierError:
+            return .updateVerification
+        default:
+            return .updateVerification
         }
     }
 

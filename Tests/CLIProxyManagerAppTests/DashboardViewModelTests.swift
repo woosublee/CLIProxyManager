@@ -4456,7 +4456,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
 
         XCTAssertEqual(
             viewModel.settingsMessage,
-            "Log level was saved as Debug. App logging now uses Debug, but CLIProxyAPI remains at Info because restart failed: Restart failed Use Restart Server to retry."
+            "Log level was saved as Debug. App logging now uses Debug, but CLIProxyAPI remains at Info because restart failed: Restart failed. Use Restart Server to retry."
         )
         XCTAssertEqual(viewModel.config.logLevel, .debug)
         XCTAssertEqual(logger.minimumLevel, .debug)

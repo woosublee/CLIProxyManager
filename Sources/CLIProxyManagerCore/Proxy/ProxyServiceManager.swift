@@ -654,18 +654,15 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         let candidatePorts = [processState.port, readPortFromConfig()].compactMap { $0 }
         let runningPorts = (try? managedListeningPorts(candidates: candidatePorts)) ?? candidatePorts
         terminateTrackedLocked(waitUntilExit: waitUntilExit)
-        for port in runningPorts {
-            if allowsSystemRuntimeMutation && inspectLaunchctlJobs {
-                removeManagedLaunchdJob(onPort: port)
-            }
-            if allowsSystemRuntimeMutation && inspectSystemProcesses {
-                killOrphanCliproxyapi(onPort: port)
-            }
-        }
+        cleanupManagedProcessesLocked(onPorts: runningPorts)
     }
 
     private func stopManagedProcessesLocked(onPorts ports: [Int]) {
         terminateTrackedLocked(waitUntilExit: true)
+        cleanupManagedProcessesLocked(onPorts: ports)
+    }
+
+    private func cleanupManagedProcessesLocked(onPorts ports: [Int]) {
         for port in ports {
             if allowsSystemRuntimeMutation && inspectLaunchctlJobs {
                 removeManagedLaunchdJob(onPort: port)

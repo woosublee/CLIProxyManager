@@ -420,7 +420,7 @@ final class DashboardViewModel: ObservableObject {
             if reasons.contains(.logLevel),
                let requestedLogLevel,
                let appliedProxyLogLevel {
-                return "Log level was saved as \(requestedLogLevel.displayName). App logging now uses \(requestedLogLevel.displayName), but CLIProxyAPI remains at \(appliedProxyLogLevel.displayName) because restart failed: \(message) Use Restart Server to retry."
+                return "Log level was saved as \(requestedLogLevel.displayName). App logging now uses \(requestedLogLevel.displayName), but CLIProxyAPI remains at \(appliedProxyLogLevel.displayName) because restart failed: \(message). Use Restart Server to retry."
             }
             guard reasons.contains(.fastMode) else { return nil }
             return "Fast mode settings were saved, but CLIProxyAPI could not restart: \(message)"

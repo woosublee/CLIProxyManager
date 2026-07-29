@@ -52,16 +52,38 @@ final class UpdaterService: NSObject, ObservableObject, SPUUpdaterDelegate {
         appLogger.record(.update(
             target: .app,
             action: .check,
-            result: error == nil ? .succeeded : .failed(.network)
+            result: Self.updateCheckResult(for: error)
         ))
     }
 
     func updater(_: SPUUpdater, didFindValidUpdate _: SUAppcastItem) {
+        appLogger.record(.update(target: .app, action: .discover, result: .succeeded))
+    }
+
+    func updater(
+        _: SPUUpdater,
+        willDownloadUpdate _: SUAppcastItem,
+        with _: NSMutableURLRequest
+    ) {
         appLogger.record(.update(target: .app, action: .download, result: .started))
+    }
+
+    func updater(_: SPUUpdater, didDownloadUpdate _: SUAppcastItem) {
+        appLogger.record(.update(target: .app, action: .download, result: .succeeded))
     }
 
     func updater(_: SPUUpdater, failedToDownloadUpdate _: SUAppcastItem, error _: Error) {
         appLogger.record(.update(target: .app, action: .download, result: .failed(.network)))
+    }
+
+    nonisolated static func updateCheckResult(for error: Error?) -> AppLogResult {
+        guard let error else { return .succeeded }
+        let nsError = error as NSError
+        if nsError.domain == SUSparkleErrorDomain,
+           nsError.code == Int(SUError.noUpdateError.rawValue) {
+            return .succeeded
+        }
+        return .failed(.network)
     }
 
     private func bridgeUpdaterChangesToSwiftUI() {
