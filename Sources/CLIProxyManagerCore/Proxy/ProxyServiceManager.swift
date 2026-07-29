@@ -8,7 +8,12 @@ public protocol ManagedProxyProcess: Sendable {
 extension Process: ManagedProxyProcess {}
 
 public protocol ProcessLaunching: Sendable {
+    var usesManagedLaunchdJobs: Bool { get }
     func launch(_ executable: String, _ arguments: [String]) throws -> any ManagedProxyProcess
+}
+
+public extension ProcessLaunching {
+    var usesManagedLaunchdJobs: Bool { true }
 }
 
 public protocol ProxyRuntimePreparing: Sendable {
@@ -275,6 +280,7 @@ public enum ProxyServiceError: LocalizedError, Equatable {
     case missingBinary(String)
     case writeFailed(String)
     case launchFailed(String)
+    case listenerInspectionFailed(port: Int, detail: String)
     case configurationChangeRequiresRestart
     case restartFailed(stage: ProxyRestartFailureStage, rollbackSucceeded: Bool)
 
@@ -288,6 +294,8 @@ public enum ProxyServiceError: LocalizedError, Equatable {
             "The local-only proxy configuration could not be prepared. The existing server was left unchanged. Retry the operation."
         case .launchFailed:
             "CLIProxyAPI could not be started with the local-only configuration. Check the configured port and retry Start Server."
+        case let .listenerInspectionFailed(port, detail):
+            "The proxy listener on port \(port) could not be inspected, so its configuration was left unchanged. Retry the operation or check Diagnostics. Details: \(detail)"
         case .configurationChangeRequiresRestart:
             "The running proxy must be restarted before account login can update its local-only configuration. Restart Server, then retry login."
         case let .restartFailed(stage, rollbackSucceeded):
@@ -351,7 +359,7 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
             apiKeyProvider: apiKeyProvider,
             appConfigProvider: appConfigProvider ?? { try AppConfigStore(paths: paths).load() },
             rollbackReadinessProvider: rollbackReadinessProvider,
-            inspectLaunchctlJobs: launcher is ProcessLauncher
+            inspectLaunchctlJobs: launcher.usesManagedLaunchdJobs
         )
     }
 
@@ -581,7 +589,7 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
 
     private func restore(snapshot: ProxyConfigSnapshot, relaunchPort: Int) -> Bool {
         guard let data = snapshot.data,
-              isExplicitLoopbackConfig(data) else {
+              Self.isExplicitLoopbackConfig(data) else {
             return false
         }
         do {
@@ -673,10 +681,16 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         case .notListening:
             return false
         case .unavailable:
-            throw ProxyServiceError.writeFailed("Could not inspect the proxy listener on port \(port)")
+            throw ProxyServiceError.listenerInspectionFailed(
+                port: port,
+                detail: "The listener probe did not return a usable result."
+            )
         case .listening(let pid):
             guard let command = processCommand(pid: pid) else {
-                throw ProxyServiceError.writeFailed("Could not inspect the process listening on port \(port)")
+                throw ProxyServiceError.listenerInspectionFailed(
+                    port: port,
+                    detail: "The listening process command could not be read."
+                )
             }
             return Self.isManagedCliproxyapiCommand(
                 command,
@@ -707,13 +721,23 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         return nil
     }
 
-    private func isExplicitLoopbackConfig(_ data: Data) -> Bool {
+    static func isExplicitLoopbackConfig(_ data: Data) -> Bool {
         guard let yaml = String(data: data, encoding: .utf8) else { return false }
-        let hosts = yaml.split(whereSeparator: { $0 == "\n" || $0 == "\r" }).compactMap { line -> String? in
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            return trimmed.hasPrefix("host:") ? trimmed : nil
+        let hosts = yaml.split(whereSeparator: { $0 == "\n" || $0 == "\r" }).compactMap { rawLine -> String? in
+            guard rawLine.first.map({ !$0.isWhitespace }) == true else { return nil }
+            let line = String(rawLine)
+            guard line.hasPrefix("host:") else { return nil }
+            var value = line.dropFirst("host:".count).trimmingCharacters(in: .whitespaces)
+            if value.count >= 2,
+               let first = value.first,
+               let last = value.last,
+               (first == "\"" && last == "\"") || (first == "'" && last == "'") {
+                value.removeFirst()
+                value.removeLast()
+            }
+            return value
         }
-        return hosts == ["host: \"\(ProxyNetworkPolicy.loopbackHost)\""]
+        return hosts == [ProxyNetworkPolicy.loopbackHost]
     }
 
     private func waitForManagedListener(onPort port: Int) -> Bool {

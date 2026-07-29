@@ -501,6 +501,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var oauthCommandProfiles: [OAuthCommandProfile]
     public var roundRobinProfiles: [RoundRobinProfile]
     public var accountOrder: [String]
+    /// Legacy serialization compatibility only. New values are always forced to loopback.
     public private(set) var bindAddress: String
     public var autostartServer: Bool
     public var roundRobinEnabled: Bool

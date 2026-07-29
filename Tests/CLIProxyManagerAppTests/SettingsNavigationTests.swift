@@ -36,6 +36,9 @@ final class SettingsNavigationTests: XCTestCase {
         )
         let serverStart = try XCTUnwrap(source.range(of: "struct ServerSettingsView: View")?.lowerBound)
         let serverEnd = try XCTUnwrap(source.range(of: "struct AdvancedSettingsView: View")?.lowerBound)
+        guard serverStart < serverEnd else {
+            return XCTFail("ServerSettingsView must be declared before AdvancedSettingsView for source inspection.")
+        }
         let serverSource = String(source[serverStart..<serverEnd])
 
         XCTAssertTrue(serverSource.contains("Listen port"))

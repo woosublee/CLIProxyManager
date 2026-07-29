@@ -3,6 +3,27 @@ import XCTest
 @testable import CLIProxyManagerCore
 
 final class ProxyServiceManagerTests: XCTestCase {
+    func testExplicitLoopbackConfigAcceptsOnlyOneTopLevelLoopbackHost() {
+        let valid = [
+            "host: \"127.0.0.1\"\nport: 18317\n",
+            "host: '127.0.0.1'\nport: 18317\n",
+            "host: 127.0.0.1\nport: 18317\n"
+        ]
+        for yaml in valid {
+            XCTAssertTrue(ProxyServiceManager.isExplicitLoopbackConfig(Data(yaml.utf8)), yaml)
+        }
+
+        let invalid = [
+            "host: \"0.0.0.0\"\nport: 18317\n",
+            "server:\n  host: \"127.0.0.1\"\nport: 18317\n",
+            "host: \"127.0.0.1\"\nhost: \"127.0.0.1\"\nport: 18317\n",
+            "host: \"127.0.0.1\nport: 18317\n"
+        ]
+        for yaml in invalid {
+            XCTAssertFalse(ProxyServiceManager.isExplicitLoopbackConfig(Data(yaml.utf8)), yaml)
+        }
+    }
+
     func testManagedPathsExposeAppManagedAuthDirectory() throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
@@ -1476,6 +1497,7 @@ private final class AppConfigProviderDouble: @unchecked Sendable {
 }
 
 private final class SequencedProcessLauncher: ProcessLaunching, @unchecked Sendable {
+    let usesManagedLaunchdJobs = false
     enum Outcome {
         case process(any ManagedProxyProcess)
         case failure(Error)
@@ -1496,6 +1518,15 @@ private final class SequencedProcessLauncher: ProcessLaunching, @unchecked Senda
     func launch(_ executable: String, _ arguments: [String]) throws -> any ManagedProxyProcess {
         try lock.withLock {
             storedInvocations.append(.init(executable: executable, arguments: arguments))
+            guard !outcomes.isEmpty else {
+                throw NSError(
+                    domain: "SequencedProcessLauncher",
+                    code: 1,
+                    userInfo: [
+                        NSLocalizedDescriptionKey: "Unexpected launch #\(storedInvocations.count); no outcome was provided."
+                    ]
+                )
+            }
             switch outcomes.removeFirst() {
             case .process(let process):
                 return process
@@ -1507,6 +1538,7 @@ private final class SequencedProcessLauncher: ProcessLaunching, @unchecked Senda
 }
 
 private final class FakeProcessLauncher: ProcessLaunching, @unchecked Sendable {
+    let usesManagedLaunchdJobs = false
     struct Invocation: Equatable {
         let executable: String
         let arguments: [String]

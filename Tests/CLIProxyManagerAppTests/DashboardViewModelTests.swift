@@ -6148,7 +6148,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     }
 
     func testStartApplicationReconcilesLegacyRunningProxyConfiguration() async {
-        let config = AppConfig.default
+        var config = AppConfig.default
+        config.autostartServer = true
         let proxyService = StubProxyServiceStarter(reconcileResult: true)
         let reconciler = BundledProxyReconcilerDouble(
             result: .unchanged(version: CLIProxyAPIVersion("7.2.91")!)

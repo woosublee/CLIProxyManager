@@ -8,6 +8,8 @@ public protocol ProxyServiceControlling: Sendable {
 }
 
 public extension ProxyServiceControlling {
+    // Preserves source compatibility for test doubles; runtime implementations must override
+    // this method or local-only reconciliation is intentionally reported as not performed.
     func reconcileConfiguration(port: Int) async throws -> Bool { false }
 }
 
