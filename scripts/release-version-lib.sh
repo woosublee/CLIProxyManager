@@ -87,3 +87,38 @@ release_load_identity() {
   RELEASE_DMG_PATH="build/$RELEASE_DMG_NAME"
   RELEASE_APPCAST_PATH='build/appcast.xml'
 }
+
+release_read_appcast_identity() {
+  local appcast="$1"
+  local xml="${XMLLINT:-/usr/bin/xmllint}"
+  local item_version enclosure_version item_build enclosure_build enclosure_url
+
+  "$xml" --noout "$appcast" >/dev/null 2>&1 || release_fail 'appcast.xml must be valid XML' || return 1
+  item_build="$($xml --xpath 'string((//*[local-name()="item"]/*[local-name()="version"])[1])' "$appcast" 2>/dev/null)" ||
+    release_fail 'Unable to read build from appcast.xml' || return 1
+  item_version="$($xml --xpath 'string((//*[local-name()="item"]/*[local-name()="shortVersionString"])[1])' "$appcast" 2>/dev/null)" ||
+    release_fail 'Unable to read version from appcast.xml' || return 1
+  enclosure_build="$($xml --xpath 'string((//*[local-name()="item"]/*[local-name()="enclosure"])[1]/@*[local-name()="version"])' "$appcast" 2>/dev/null)" ||
+    release_fail 'Unable to read enclosure build from appcast.xml' || return 1
+  enclosure_version="$($xml --xpath 'string((//*[local-name()="item"]/*[local-name()="enclosure"])[1]/@*[local-name()="shortVersionString"])' "$appcast" 2>/dev/null)" ||
+    release_fail 'Unable to read enclosure version from appcast.xml' || return 1
+  enclosure_url="$($xml --xpath 'string((//*[local-name()="item"]/*[local-name()="enclosure"])[1]/@url)' "$appcast" 2>/dev/null)" ||
+    release_fail 'Unable to read enclosure URL from appcast.xml' || return 1
+
+  [[ "$item_build" =~ ^[1-9][0-9]*$ ]] || release_fail 'appcast build must be a positive integer' || return 1
+  [[ "$item_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || release_fail 'appcast version must use stable SemVer x.y.z' || return 1
+  [[ "$item_build" == "$enclosure_build" ]] || release_fail 'appcast build mismatch between item and enclosure' || return 1
+  [[ "$item_version" == "$enclosure_version" ]] || release_fail 'appcast version mismatch between item and enclosure' || return 1
+
+  case "$enclosure_url" in
+    */releases/download/v[0-9]*/*) ;;
+    *) release_fail 'appcast enclosure URL must identify a GitHub release tag and DMG' || return 1 ;;
+  esac
+
+  APPCAST_BUILD="$item_build"
+  APPCAST_VERSION="$item_version"
+  APPCAST_TAG="$(printf '%s' "$enclosure_url" | sed -E 's#^.*/releases/download/([^/]+)/.*$#\1#')"
+  APPCAST_DMG_NAME="$(basename "$enclosure_url")"
+  [[ "$APPCAST_TAG" == "v$APPCAST_VERSION" ]] || release_fail 'appcast tag must match appcast version' || return 1
+  [[ "$APPCAST_DMG_NAME" == "CLIProxyManager-$APPCAST_VERSION.dmg" ]] || release_fail 'appcast DMG filename must match appcast version' || return 1
+}

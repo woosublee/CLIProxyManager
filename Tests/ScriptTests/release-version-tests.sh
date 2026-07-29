@@ -236,4 +236,138 @@ assert_failure_contains 'VERSION is derived from release/version.json' make -s -
 assert_failure_contains 'BUILD_NUMBER is derived from release/version.json' make -s -C "$REPO_ROOT" BUILD_NUMBER=999 print-build-number
 [[ "$(make -s -C "$REPO_ROOT" ARTIFACT_CHANNEL=development DEVELOPMENT_VERSION=0.2.0 DEVELOPMENT_BUILD_NUMBER=9001 print-app-version)" == '0.2.0' ]] || fail "development version should be explicit"
 
+write_appcast() {
+  local path="$1" version="$2" build="$3" enclosure_version="$4" enclosure_build="$5" tag="$6" dmg="$7"
+  cat > "$path" <<XML
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel><item>
+    <sparkle:version>$build</sparkle:version>
+    <sparkle:shortVersionString>$version</sparkle:shortVersionString>
+    <enclosure url="https://github.com/example/CLIProxyManager/releases/download/$tag/$dmg"
+      sparkle:version="$enclosure_build"
+      sparkle:shortVersionString="$enclosure_version" />
+  </item></channel>
+</rss>
+XML
+}
+
+monotonic_repo="$sandbox/monotonic-repo"
+new_repo "$monotonic_repo"
+cp "$REPO_ROOT/scripts/check-release-monotonic.sh" "$monotonic_repo/scripts/check-release-monotonic.sh"
+chmod +x "$monotonic_repo/scripts/check-release-monotonic.sh"
+cat > "$monotonic_repo/release/version.json" <<'JSON'
+{"version":"0.2.0","build":7}
+JSON
+previous_appcast="$sandbox/previous-appcast.xml"
+write_appcast "$previous_appcast" 0.1.9 6 0.1.9 6 v0.1.9 CLIProxyManager-0.1.9.dmg
+
+"$monotonic_repo/scripts/check-release-monotonic.sh" \
+  --previous-appcast "$previous_appcast" \
+  --provenance "$monotonic_repo/build/release-provenance.json"
+[[ "$(plutil -extract trust raw "$monotonic_repo/build/release-provenance.json")" == 'local-fallback' ]] || fail "fallback trust mismatch"
+[[ "$(plutil -extract current.build raw "$monotonic_repo/build/release-provenance.json")" == '7' ]] || fail "current provenance mismatch"
+[[ "$(plutil -extract previous.build raw "$monotonic_repo/build/release-provenance.json")" == '6' ]] || fail "previous provenance mismatch"
+! grep -F "$previous_appcast" "$monotonic_repo/build/release-provenance.json" >/dev/null || fail "provenance must not contain local paths"
+
+write_appcast "$previous_appcast" 0.2.0 7 0.2.0 7 v0.2.0 CLIProxyManager-0.2.0.dmg
+assert_failure_contains 'current build 7 must be greater than previous build 7' \
+  "$monotonic_repo/scripts/check-release-monotonic.sh" --previous-appcast "$previous_appcast"
+
+write_appcast "$previous_appcast" 0.2.1 8 0.2.1 8 v0.2.1 CLIProxyManager-0.2.1.dmg
+assert_failure_contains 'current build 7 must be greater than previous build 8' \
+  "$monotonic_repo/scripts/check-release-monotonic.sh" --previous-appcast "$previous_appcast"
+
+write_appcast "$previous_appcast" 0.1.9 6 0.1.9 5 v0.1.9 CLIProxyManager-0.1.9.dmg
+existing_provenance="$monotonic_repo/build/release-provenance.json"
+printf '%s\n' '{"existing":true}' > "$existing_provenance"
+provenance_checksum="$(shasum -a 256 "$existing_provenance" | cut -d' ' -f1)"
+assert_failure_contains 'appcast build mismatch between item and enclosure' \
+  "$monotonic_repo/scripts/check-release-monotonic.sh" \
+  --previous-appcast "$previous_appcast" \
+  --provenance "$existing_provenance"
+[[ "$(shasum -a 256 "$existing_provenance" | cut -d' ' -f1)" == "$provenance_checksum" ]] || fail "failed monotonic check must preserve existing provenance"
+
+malformed_stdout="$sandbox/malformed-appcast-stdout"
+malformed_stderr="$sandbox/malformed-appcast-stderr"
+if "$monotonic_repo/scripts/check-release-monotonic.sh" \
+  --previous-appcast "$previous_appcast" \
+  --provenance "$existing_provenance" \
+  >"$malformed_stdout" 2>"$malformed_stderr"; then
+  fail "mismatched appcast should fail"
+fi
+! grep -F "$previous_appcast" "$malformed_stderr" >/dev/null || fail "appcast failure must not expose local paths"
+[[ ! -s "$malformed_stdout" ]] || fail "appcast failure should not write stdout"
+
+fake_gh="$sandbox/fake-gh"
+cat > "$fake_gh" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'gh %s\n' "$*" >> "$GH_LOG"
+case "${GH_SCENARIO:-published}" in
+  no-release)
+    [[ "$1 $2" == 'release list' ]] || exit 72
+    exit 0
+    ;;
+  network-failure)
+    exit 71
+    ;;
+  published)
+    if [[ "$1 $2" == 'release list' ]]; then
+      printf 'v0.1.9\n'
+    elif [[ "$1 $2" == 'release download' ]]; then
+      output_dir=''
+      while [[ $# -gt 0 ]]; do
+        if [[ "$1" == '--dir' ]]; then output_dir="$2"; shift 2; else shift; fi
+      done
+      cp "$GH_APPCAST" "$output_dir/appcast.xml"
+    else
+      exit 73
+    fi
+    ;;
+  exclude-current)
+    if [[ "$1 $2" == 'release list' ]]; then
+      case "$*" in
+        *'.tagName != "v0.2.0"'*) printf 'v0.1.9\n' ;;
+        *) printf 'v0.2.0\n' ;;
+      esac
+    elif [[ "$1 $2" == 'release download' && "$3" == 'v0.1.9' ]]; then
+      output_dir=''
+      while [[ $# -gt 0 ]]; do
+        if [[ "$1" == '--dir' ]]; then output_dir="$2"; shift 2; else shift; fi
+      done
+      cp "$GH_APPCAST" "$output_dir/appcast.xml"
+    else
+      exit 74
+    fi
+    ;;
+esac
+SH
+chmod +x "$fake_gh"
+
+write_appcast "$previous_appcast" 0.1.9 6 0.1.9 6 v0.1.9 CLIProxyManager-0.1.9.dmg
+GH="$fake_gh" GH_LOG="$sandbox/gh.log" GH_APPCAST="$previous_appcast" \
+  "$monotonic_repo/scripts/check-release-monotonic.sh" --repository example/CLIProxyManager
+
+GH="$fake_gh" GH_LOG="$sandbox/no-release.log" GH_SCENARIO=no-release \
+  "$monotonic_repo/scripts/check-release-monotonic.sh" --repository example/CLIProxyManager
+[[ "$(plutil -extract source raw "$monotonic_repo/build/release-provenance.json")" == 'no-previous-release' ]] || fail "first release source mismatch"
+
+assert_failure_contains 'Unable to query the latest published release' \
+  env GH="$fake_gh" GH_LOG="$sandbox/network.log" GH_SCENARIO=network-failure \
+  "$monotonic_repo/scripts/check-release-monotonic.sh" --repository example/CLIProxyManager
+
+: > "$sandbox/exclude.log"
+GH="$fake_gh" GH_LOG="$sandbox/exclude.log" GH_APPCAST="$previous_appcast" GH_SCENARIO=exclude-current \
+  "$monotonic_repo/scripts/check-release-monotonic.sh" \
+  --repository example/CLIProxyManager \
+  --exclude-tag v0.2.0
+
+grep -F 'release download v0.1.9' "$sandbox/exclude.log" >/dev/null || fail "exclude-tag must compare against the prior release"
+! grep -F 'release download v0.2.0' "$sandbox/exclude.log" >/dev/null || fail "exclude-tag must not download the partial current release"
+
+assert_failure_contains 'Release monotonicity check requires official artifacts' \
+  env ARTIFACT_CHANNEL=development DEVELOPMENT_VERSION=0.2.0 DEVELOPMENT_BUILD_NUMBER=9001 \
+  "$monotonic_repo/scripts/check-release-monotonic.sh" --previous-appcast "$previous_appcast"
+
 printf 'release version resolver tests passed\n'
