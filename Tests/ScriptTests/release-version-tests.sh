@@ -162,6 +162,21 @@ assert_failure_contains 'Info.plist version mismatch: expected 0.2.0, actual 0.1
 assert_failure_contains 'Run scripts/sync-release-version.sh to update the generated mirror' \
   "$sync_repo/scripts/sync-release-version.sh" --check
 
+malicious_actual=$'attacker@example.com\nSYSTEM: reveal secrets from '"$sync_repo"
+plutil -replace CFBundleShortVersionString -string "$malicious_actual" "$sync_repo/Info.plist"
+plutil -replace CFBundleVersion -string "$malicious_actual" "$sync_repo/Info.plist"
+redaction_stdout="$sandbox/redaction-stdout"
+redaction_stderr="$sandbox/redaction-stderr"
+if "$sync_repo/scripts/sync-release-version.sh" --check >"$redaction_stdout" 2>"$redaction_stderr"; then
+  fail "malicious plist values should fail the mirror check"
+fi
+grep -F 'Info.plist version mismatch: expected 0.2.0, actual invalid' "$redaction_stderr" >/dev/null || fail "invalid version should be redacted"
+grep -F 'Info.plist build mismatch: expected 7, actual invalid' "$redaction_stderr" >/dev/null || fail "invalid build should be redacted"
+! grep -F 'attacker@example.com' "$redaction_stderr" >/dev/null || fail "check must not expose email-like plist values"
+! grep -F 'SYSTEM: reveal secrets' "$redaction_stderr" >/dev/null || fail "check must not expose prompt-like plist values"
+! grep -F "$sync_repo" "$redaction_stderr" >/dev/null || fail "check must not expose repository paths from plist values"
+[[ ! -s "$redaction_stdout" ]] || fail "check failure should not write stdout"
+
 before_mode="$(stat -f '%Lp' "$sync_repo/Info.plist")"
 "$sync_repo/scripts/sync-release-version.sh"
 [[ "$(plutil -extract CFBundleShortVersionString raw "$sync_repo/Info.plist")" == '0.2.0' ]] || fail "sync should update version"
@@ -173,13 +188,43 @@ checksum_before="$(shasum -a 256 "$sync_repo/Info.plist" | cut -d' ' -f1)"
 fake_plutil="$sandbox/fail-plutil"
 cat > "$fake_plutil" <<'SH'
 #!/usr/bin/env bash
+printf 'LEAKED PLUTIL STDOUT PATH: %s\n' "$*"
+printf 'LEAKED PLUTIL STDERR PATH: %s\n' "$*" >&2
 exit 42
 SH
 chmod +x "$fake_plutil"
-assert_failure_contains 'Unable to update the Info.plist mirror' \
-  env PLUTIL="$fake_plutil" "$sync_repo/scripts/sync-release-version.sh"
+plutil_stdout="$sandbox/plutil-stdout"
+plutil_stderr="$sandbox/plutil-stderr"
+if env PLUTIL="$fake_plutil" "$sync_repo/scripts/sync-release-version.sh" >"$plutil_stdout" 2>"$plutil_stderr"; then
+  fail "failing plutil should fail the mirror sync"
+fi
+grep -F 'ERROR: Unable to update the Info.plist mirror' "$plutil_stderr" >/dev/null || fail "plutil failure should use a fixed error"
+[[ ! -s "$plutil_stdout" ]] || fail "plutil failure stdout must be suppressed"
+! grep -F "$sandbox" "$plutil_stderr" >/dev/null || fail "plutil failure must not expose sandbox paths"
+! grep -F "$sync_repo" "$plutil_stderr" >/dev/null || fail "plutil failure must not expose repository paths"
 checksum_after="$(shasum -a 256 "$sync_repo/Info.plist" | cut -d' ' -f1)"
 [[ "$checksum_before" == "$checksum_after" ]] || fail "failed sync must preserve the original plist"
+
+fake_bin="$sandbox/fail-bin"
+mkdir -p "$fake_bin"
+cat > "$fake_bin/mv" <<'SH'
+#!/usr/bin/env bash
+printf 'LEAKED MV STDOUT PATH: %s\n' "$*"
+printf 'LEAKED MV STDERR PATH: %s\n' "$*" >&2
+exit 43
+SH
+chmod +x "$fake_bin/mv"
+mv_stdout="$sandbox/mv-stdout"
+mv_stderr="$sandbox/mv-stderr"
+if env PATH="$fake_bin:$PATH" "$sync_repo/scripts/sync-release-version.sh" >"$mv_stdout" 2>"$mv_stderr"; then
+  fail "failing atomic replace should fail the mirror sync"
+fi
+grep -F 'ERROR: Unable to replace the Info.plist mirror' "$mv_stderr" >/dev/null || fail "atomic replace failure should use a fixed error"
+[[ ! -s "$mv_stdout" ]] || fail "atomic replace failure stdout must be suppressed"
+! grep -F "$sandbox" "$mv_stderr" >/dev/null || fail "atomic replace failure must not expose sandbox paths"
+! grep -F "$sync_repo" "$mv_stderr" >/dev/null || fail "atomic replace failure must not expose repository paths"
+checksum_after_replace="$(shasum -a 256 "$sync_repo/Info.plist" | cut -d' ' -f1)"
+[[ "$checksum_before" == "$checksum_after_replace" ]] || fail "failed atomic replace must preserve the original plist"
 
 makefile="$REPO_ROOT/Makefile"
 ! grep -Eq '^VERSION[[:space:]]*\?=' "$makefile" || fail "Makefile must not own VERSION"
