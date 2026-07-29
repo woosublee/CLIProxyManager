@@ -7,10 +7,10 @@ final class ProxyModelClientTests: XCTestCase {
         let httpClient = StubHTTPClient(result: .success(data))
         let client = ProxyModelClient(httpClient: httpClient)
 
-        let models = try await client.models(port: 18_317)
+        let models = try await client.models(port: 28_317)
 
         XCTAssertEqual(models, ["gpt-5.5(xhigh)", "gpt-5.5(medium)"])
-        XCTAssertEqual(httpClient.requests.first?.url, URL(string: "http://127.0.0.1:18317/v1/models")!)
+        XCTAssertEqual(httpClient.requests.first?.url, URL(string: "http://127.0.0.1:28317/v1/models")!)
         XCTAssertEqual(httpClient.requests.first?.headers["Authorization"], "Bearer sk-dummy")
     }
 
@@ -19,7 +19,7 @@ final class ProxyModelClientTests: XCTestCase {
         let httpClient = StubHTTPClient(result: .success(data))
         let client = ProxyModelClient(httpClient: httpClient)
 
-        let models = try await client.baseModels(port: 18_317)
+        let models = try await client.baseModels(port: 28_317)
 
         XCTAssertEqual(models, ["gpt-5.5", "gpt-5.6"])
     }
@@ -29,7 +29,7 @@ final class ProxyModelClientTests: XCTestCase {
         let httpClient = StubHTTPClient(result: .success(data))
         let client = ProxyModelClient(httpClient: httpClient)
 
-        let models = try await client.baseModels(port: 18_317)
+        let models = try await client.baseModels(port: 28_317)
 
         XCTAssertEqual(models, ["codex-work/gpt-5.5"])
     }
@@ -51,7 +51,7 @@ final class ProxyModelClientTests: XCTestCase {
         let httpClient = StubHTTPClient(result: .success(data))
         let client = ProxyModelClient(httpClient: httpClient)
 
-        let models = try await client.codexBaseModels(port: 18_317)
+        let models = try await client.codexBaseModels(port: 28_317)
 
         XCTAssertEqual(models, ["gpt-5.5", "codex-auto-review"])
     }
@@ -72,7 +72,7 @@ final class ProxyModelClientTests: XCTestCase {
         let httpClient = StubHTTPClient(result: .success(data))
         let client = ProxyModelClient(httpClient: httpClient)
 
-        let models = try await client.codexBaseModels(port: 18_317)
+        let models = try await client.codexBaseModels(port: 28_317)
 
         XCTAssertEqual(models, ["gpt-image-2", "codex-auto-review"])
     }
@@ -92,7 +92,7 @@ final class ProxyModelClientTests: XCTestCase {
         let httpClient = StubHTTPClient(result: .success(data))
         let client = ProxyModelClient(httpClient: httpClient)
 
-        let models = try await client.codexBaseModels(port: 18_317)
+        let models = try await client.codexBaseModels(port: 28_317)
 
         XCTAssertEqual(models, ["codex-work/gpt-5.5", "codex-personal/gpt-5.5", "codex-work/gpt-5.6"])
     }
@@ -112,7 +112,7 @@ final class ProxyModelClientTests: XCTestCase {
         let httpClient = StubHTTPClient(result: .success(data))
         let client = ProxyModelClient(httpClient: httpClient)
 
-        let models = try await client.codexBaseModels(port: 18_317, modelPrefix: "codex-work")
+        let models = try await client.codexBaseModels(port: 28_317, modelPrefix: "codex-work")
 
         XCTAssertEqual(models, ["gpt-5.6", "gpt-5.5"])
     }
@@ -132,7 +132,7 @@ final class ProxyModelClientTests: XCTestCase {
         let httpClient = StubHTTPClient(result: .success(data))
         let client = ProxyModelClient(httpClient: httpClient)
 
-        let models = try await client.codexBaseModels(port: 18_317, modelPrefix: "codex-work")
+        let models = try await client.codexBaseModels(port: 28_317, modelPrefix: "codex-work")
 
         XCTAssertEqual(models, ["gpt-5.6", "gpt-5.5"])
     }
@@ -151,7 +151,7 @@ final class ProxyModelClientTests: XCTestCase {
         let httpClient = StubHTTPClient(result: .success(data))
         let client = ProxyModelClient(httpClient: httpClient)
 
-        let models = try await client.codexBaseModels(port: 18_317)
+        let models = try await client.codexBaseModels(port: 28_317)
 
         XCTAssertEqual(models, ["openai/gpt-5.5"])
     }
@@ -170,7 +170,7 @@ final class ProxyModelClientTests: XCTestCase {
         let httpClient = StubHTTPClient(result: .success(data))
         let client = ProxyModelClient(httpClient: httpClient)
 
-        let models = try await client.models(port: 18_317)
+        let models = try await client.models(port: 28_317)
 
         XCTAssertEqual(models, ["gpt-5.5", "claude-sonnet-4-6"])
     }
@@ -181,15 +181,15 @@ final class ProxyModelClientTests: XCTestCase {
         let httpClient = StubHTTPClient(results: [.success(regular), .success(metadata)])
         let client = ProxyModelClient(httpClient: httpClient)
 
-        let models = try await client.codexModelOptions(port: 18_317, modelPrefix: "cpm-codex-api")
+        let models = try await client.codexModelOptions(port: 28_317, modelPrefix: "cpm-codex-api")
 
         XCTAssertEqual(models, [
             CodexModelOption(id: "gpt-5.6-sol", supportedReasoning: [.low, .medium, .high, .xhigh, .max], defaultReasoning: .low),
             CodexModelOption(id: "gpt-5.5", supportedReasoning: [.low, .medium, .high, .xhigh], defaultReasoning: .medium)
         ])
         XCTAssertEqual(httpClient.requests.map(\.url.absoluteString), [
-            "http://127.0.0.1:18317/v1/models",
-            "http://127.0.0.1:18317/v1/models?client_version=0.144.0"
+            "http://127.0.0.1:28317/v1/models",
+            "http://127.0.0.1:28317/v1/models?client_version=0.144.0"
         ])
     }
 
@@ -198,7 +198,7 @@ final class ProxyModelClientTests: XCTestCase {
         let metadata = Data(#"{"models":[{"slug":"codex-work/gpt-5.6-sol","context_window":372000}]}"#.utf8)
         let client = ProxyModelClient(httpClient: StubHTTPClient(results: [.success(regular), .success(metadata)]))
 
-        let models = try await client.codexModelOptions(port: 18_317, modelPrefix: "codex-work")
+        let models = try await client.codexModelOptions(port: 28_317, modelPrefix: "codex-work")
 
         XCTAssertEqual(models, [CodexModelOption(id: "gpt-5.6-sol", supportsFastMode: true, contextWindow: 372_000)])
     }
@@ -208,7 +208,7 @@ final class ProxyModelClientTests: XCTestCase {
         let metadata = Data(#"{"models":[{"slug":"codex-work/custom-model"}]}"#.utf8)
         let client = ProxyModelClient(httpClient: StubHTTPClient(results: [.success(regular), .success(metadata)]))
 
-        let models = try await client.codexModelOptions(port: 18_317, modelPrefix: "codex-work")
+        let models = try await client.codexModelOptions(port: 28_317, modelPrefix: "codex-work")
 
         XCTAssertNil(models.first?.contextWindow)
     }
@@ -221,7 +221,7 @@ final class ProxyModelClientTests: XCTestCase {
         ])
         let client = ProxyModelClient(httpClient: httpClient)
 
-        let models = try await client.codexModelOptions(port: 18_317, modelPrefix: "cpm-codex-api")
+        let models = try await client.codexModelOptions(port: 28_317, modelPrefix: "cpm-codex-api")
 
         XCTAssertEqual(models, [CodexModelOption(id: "custom-gpt", supportedReasoning: [], defaultReasoning: nil)])
     }
@@ -231,7 +231,7 @@ final class ProxyModelClientTests: XCTestCase {
         let metadata = Data(#"{"models":[{"slug":"codex-work/gpt-5.5","default_reasoning_level":"future","supported_reasoning_levels":[{"effort":"medium"},{"effort":"future"}]},{"slug":"codex-work/metadata-only","supported_reasoning_levels":[{"effort":"high"}]}]}"#.utf8)
         let client = ProxyModelClient(httpClient: StubHTTPClient(results: [.success(regular), .success(metadata)]))
 
-        let models = try await client.codexModelOptions(port: 18_317, modelPrefix: "codex-work")
+        let models = try await client.codexModelOptions(port: 28_317, modelPrefix: "codex-work")
 
         XCTAssertEqual(models, [CodexModelOption(id: "gpt-5.5", supportedReasoning: [.medium], defaultReasoning: nil)])
     }
@@ -241,7 +241,7 @@ final class ProxyModelClientTests: XCTestCase {
         let metadata = Data(#"{"models":[{"slug":"codex-work/custom-fast-model","service_tiers":[{"id":"priority","name":"Fast"}],"additional_speed_tiers":["fast"]}]}"#.utf8)
         let client = ProxyModelClient(httpClient: StubHTTPClient(results: [.success(regular), .success(metadata)]))
 
-        let models = try await client.codexModelOptions(port: 18_317, modelPrefix: "codex-work")
+        let models = try await client.codexModelOptions(port: 28_317, modelPrefix: "codex-work")
 
         XCTAssertEqual(models, [CodexModelOption(id: "custom-fast-model", supportsFastMode: true)])
     }
@@ -251,7 +251,7 @@ final class ProxyModelClientTests: XCTestCase {
         let metadata = Data(#"{"models":[]}"#.utf8)
         let client = ProxyModelClient(httpClient: StubHTTPClient(results: [.success(regular), .success(metadata)]))
 
-        let models = try await client.codexModelOptions(port: 18_317, modelPrefix: "codex-work")
+        let models = try await client.codexModelOptions(port: 28_317, modelPrefix: "codex-work")
 
         XCTAssertEqual(models.map(\.id), ["gpt-5.6-sol", "gpt-5.4-mini", "custom-model"])
         XCTAssertEqual(models.map(\.supportsFastMode), [true, false, false])
@@ -262,7 +262,7 @@ final class ProxyModelClientTests: XCTestCase {
         let metadata = Data(#"{"models":[]}"#.utf8)
         let client = ProxyModelClient(httpClient: StubHTTPClient(results: [.success(regular), .success(metadata)]))
 
-        let models = try await client.codexModelOptions(port: 18_317)
+        let models = try await client.codexModelOptions(port: 28_317)
 
         XCTAssertEqual(models.map(\.id), ["codex-work/gpt-5.6-sol", "codex-work/gpt-5.4-mini", "codex-work/custom-model"])
         XCTAssertEqual(models.map(\.supportsFastMode), [true, false, false])
@@ -273,7 +273,7 @@ final class ProxyModelClientTests: XCTestCase {
         let metadata = Data(#"{"models":[]}"#.utf8)
         let client = ProxyModelClient(httpClient: StubHTTPClient(results: [.success(regular), .success(metadata)]))
 
-        let models = try await client.codexModelOptions(port: 18_317, modelPrefix: "codex-work")
+        let models = try await client.codexModelOptions(port: 28_317, modelPrefix: "codex-work")
 
         XCTAssertEqual(models, [CodexModelOption(id: "gpt-5.6-sol", supportsFastMode: true)])
     }
@@ -283,7 +283,7 @@ final class ProxyModelClientTests: XCTestCase {
         let metadata = Data(#"{"models":[{"slug":"codex-work/gpt-5.6-sol-fast","supported_reasoning_levels":[{"effort":"low"}],"additional_speed_tiers":["fast"]},{"slug":"codex-work/gpt-5.6-sol","supported_reasoning_levels":[{"effort":"xhigh"}]}]}"#.utf8)
         let client = ProxyModelClient(httpClient: StubHTTPClient(results: [.success(regular), .success(metadata)]))
 
-        let models = try await client.codexModelOptions(port: 18_317, modelPrefix: "codex-work")
+        let models = try await client.codexModelOptions(port: 28_317, modelPrefix: "codex-work")
 
         XCTAssertEqual(models, [
             CodexModelOption(id: "gpt-5.6-sol", supportedReasoning: [.xhigh], defaultReasoning: nil, supportsFastMode: true)
@@ -295,7 +295,7 @@ final class ProxyModelClientTests: XCTestCase {
         let metadata = Data(#"{"models":[{"slug":"CODEX-WORK/gpt-5.6-sol","supported_reasoning_levels":[{"effort":"high"}]}]}"#.utf8)
         let client = ProxyModelClient(httpClient: StubHTTPClient(results: [.success(regular), .success(metadata)]))
 
-        let models = try await client.codexModelOptions(port: 18_317, modelPrefix: "codex-work")
+        let models = try await client.codexModelOptions(port: 28_317, modelPrefix: "codex-work")
 
         XCTAssertEqual(models, [
             CodexModelOption(id: "GPT-5.6-Sol", supportedReasoning: [.high], defaultReasoning: nil, supportsFastMode: true)
@@ -331,7 +331,7 @@ final class ProxyModelClientTests: XCTestCase {
         """#.utf8)
         let client = ProxyModelClient(httpClient: StubHTTPClient(result: .success(data)))
 
-        let options = try await client.claudeModelOptions(port: 18_317, modelPrefix: " claude-work ")
+        let options = try await client.claudeModelOptions(port: 28_317, modelPrefix: " claude-work ")
 
         XCTAssertEqual(options, [
             ClaudeModelOption(id: "claude-opus-4-8", family: .opus, created: 500),
@@ -345,7 +345,7 @@ final class ProxyModelClientTests: XCTestCase {
         let data = Data(#"{"data":[{"id":"claude-work/claude-opus-4-8","created":500},{"id":"claude-work/claude-opus-4-8","created":100}]}"#.utf8)
         let client = ProxyModelClient(httpClient: StubHTTPClient(result: .success(data)))
 
-        let options = try await client.claudeModelOptions(port: 18_317, modelPrefix: "claude-work")
+        let options = try await client.claudeModelOptions(port: 28_317, modelPrefix: "claude-work")
 
         XCTAssertEqual(options, [ClaudeModelOption(id: "claude-opus-4-8", family: .opus, created: 500)])
     }
@@ -355,7 +355,7 @@ final class ProxyModelClientTests: XCTestCase {
         let client = ProxyModelClient(httpClient: httpClient)
 
         do {
-            _ = try await client.claudeModelOptions(port: 18_317, modelPrefix: "   ")
+            _ = try await client.claudeModelOptions(port: 28_317, modelPrefix: "   ")
             XCTFail("Expected empty model prefix error")
         } catch {
             XCTAssertEqual(error as? ClaudeModelDiscoveryError, .emptyModelPrefix)

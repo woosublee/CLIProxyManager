@@ -65,7 +65,7 @@ final class UsageOverlayAccountPresentationTests: XCTestCase {
             serverStatus: DiagnosticStatus(severity: .ready, title: "Running", message: "Ready"),
             serverControlState: .running,
             providerRows: rows,
-            port: 18_317
+            port: 28_317
         )
     }
 

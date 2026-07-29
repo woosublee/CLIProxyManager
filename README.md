@@ -129,6 +129,16 @@ cpm update stage all
 cpm update apply all --yes
 ```
 
+## 로그와 진단
+
+**Settings → Advanced**의 Log level은 Info와 Debug 두 단계입니다.
+
+- **Info**는 앱 시작, 설정 저장, CLIProxyAPI 시작·중지·재시작, 앱·proxy 업데이트 결과와 실패 요약을 기록합니다.
+- **Debug**는 민감하지 않은 추가 기술 문맥을 기록하고 CLIProxyAPI YAML의 `debug: true`를 적용합니다. API key, OAuth token, management key, email, prompt, raw request/response는 Debug에서도 기록하지 않습니다.
+- CLIProxyManager app log는 `~/.cliproxy-manager/logs/app.log`(Development build는 `~/.cliproxy-manager/dev/logs/app.log`)에 저장됩니다. 파일은 `0600`, 디렉터리는 `0700` 권한을 사용하고 1 MiB에서 `app.log.1`로 회전합니다.
+- CLIProxyAPI proxy log는 `~/.cliproxy-manager/auth/logs/`에 별도로 저장되며 `cpm logs`는 계속 이 proxy log만 표시합니다.
+- app log 파일을 안전하게 만들거나 쓸 수 없으면 앱과 proxy는 중단되지 않고 macOS unified logging으로 계속 기록합니다. Advanced의 **App log**가 unavailable을 표시하면 managed logs 경로의 symlink·파일 권한을 수정한 뒤 앱을 재시작하세요.
+
 ## 문제 해결
 
 ### 터미널에서 명령어를 찾을 수 없음

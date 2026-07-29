@@ -14,7 +14,7 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         )
         let profile = AuthProfile(fileName: "claude-work.json", type: .claude, email: nil, accountID: nil, expired: nil, disabled: false)
 
-        let report = await client.fetchUsage(port: 18_317, profiles: [profile])
+        let report = await client.fetchUsage(port: 28_317, profiles: [profile])
 
         guard case let .available(snapshot)? = report.statesByProfileID[profile.id] else {
             return XCTFail("Expected available Claude snapshot")
@@ -23,8 +23,8 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         XCTAssertEqual(snapshot.windows.map(\.usedPercent), [52.5, 31])
         XCTAssertEqual(snapshot.windows.first?.resetAt, Date(timeIntervalSince1970: 1_783_693_800.123))
         XCTAssertEqual(transport.requests.map { $0.url?.absoluteString }, [
-            "http://127.0.0.1:18317/v0/management/auth-files",
-            "http://127.0.0.1:18317/v0/management/api-call"
+            "http://127.0.0.1:28317/v0/management/auth-files",
+            "http://127.0.0.1:28317/v0/management/api-call"
         ])
         XCTAssertEqual(transport.requests.first?.value(forHTTPHeaderField: "Authorization"), "Bearer management-secret")
         let apiCall = try XCTUnwrap(transport.requests.last?.httpBody)
@@ -47,7 +47,7 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         )
         let profile = AuthProfile(fileName: "claude.json", type: .claude, email: nil, accountID: nil, expired: nil, disabled: false)
 
-        let report = await client.fetchUsage(port: 18_317, profiles: [profile])
+        let report = await client.fetchUsage(port: 28_317, profiles: [profile])
 
         guard case let .available(snapshot)? = report.statesByProfileID[profile.id] else {
             return XCTFail("Expected available Claude snapshot")
@@ -67,7 +67,7 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         )
         let profile = AuthProfile(fileName: "claude.json", type: .claude, email: nil, accountID: nil, expired: nil, disabled: false)
 
-        let report = await client.fetchUsage(port: 18_317, profiles: [profile])
+        let report = await client.fetchUsage(port: 28_317, profiles: [profile])
 
         guard case let .available(snapshot)? = report.statesByProfileID[profile.id] else {
             return XCTFail("Expected available Claude snapshot")
@@ -87,7 +87,7 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         )
         let profile = AuthProfile(fileName: "claude.json", type: .claude, email: nil, accountID: nil, expired: nil, disabled: false)
 
-        let report = await client.fetchUsage(port: 18_317, profiles: [profile])
+        let report = await client.fetchUsage(port: 28_317, profiles: [profile])
 
         guard case let .available(snapshot)? = report.statesByProfileID[profile.id] else {
             return XCTFail("Expected available Claude snapshot")
@@ -106,7 +106,7 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         )
         let profile = AuthProfile(fileName: "codex.json", type: .codex, email: nil, accountID: nil, expired: nil, disabled: false)
 
-        let report = await client.fetchUsage(port: 18_317, profiles: [profile])
+        let report = await client.fetchUsage(port: 28_317, profiles: [profile])
 
         guard case let .available(snapshot)? = report.statesByProfileID[profile.id] else {
             return XCTFail("Expected available Codex snapshot")
@@ -126,7 +126,7 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         )
         let profile = AuthProfile(fileName: "codex.json", type: .codex, email: nil, accountID: nil, expired: nil, disabled: false)
 
-        let report = await client.fetchUsage(port: 18_317, profiles: [profile])
+        let report = await client.fetchUsage(port: 28_317, profiles: [profile])
 
         guard case let .available(snapshot)? = report.statesByProfileID[profile.id] else {
             return XCTFail("Expected available Codex snapshot")
@@ -161,7 +161,7 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         )
 
         let report = await client.fetchUsage(
-            port: 18_317,
+            port: 28_317,
             profiles: [profile],
             resetCreditsProfileIDs: [profile.id]
         )
@@ -208,7 +208,7 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         )
 
         let report = await client.fetchUsage(
-            port: 18_317,
+            port: 28_317,
             profiles: [profile],
             usageProfileIDs: [],
             resetCreditsProfileIDs: [profile.id]
@@ -273,7 +273,7 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         )
 
         let report = await client.fetchUsage(
-            port: 18_317,
+            port: 28_317,
             profiles: [profile],
             usageProfileIDs: [],
             resetCreditsProfileIDs: [profile.id]
@@ -302,7 +302,7 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         )
 
         let report = await client.fetchUsage(
-            port: 18_317,
+            port: 28_317,
             profiles: [profile],
             usageProfileIDs: [],
             resetCreditsProfileIDs: [profile.id]
@@ -331,7 +331,7 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         )
 
         let report = await client.fetchUsage(
-            port: 18_317,
+            port: 28_317,
             profiles: [profile],
             usageProfileIDs: [],
             resetCreditsProfileIDs: [profile.id]
@@ -360,7 +360,7 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         )
 
         let report = await client.fetchUsage(
-            port: 18_317,
+            port: 28_317,
             profiles: [profile],
             usageProfileIDs: [],
             resetCreditsProfileIDs: [profile.id]
@@ -389,7 +389,7 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         )
 
         let report = await client.fetchUsage(
-            port: 18_317,
+            port: 28_317,
             profiles: [profile],
             usageProfileIDs: [],
             resetCreditsProfileIDs: [profile.id]
@@ -419,7 +419,7 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         )
 
         let report = await client.fetchUsage(
-            port: 18_317,
+            port: 28_317,
             profiles: [profile],
             usageProfileIDs: [],
             resetCreditsProfileIDs: [profile.id]
@@ -449,7 +449,7 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         )
 
         let report = await client.fetchUsage(
-            port: 18_317,
+            port: 28_317,
             profiles: [profile],
             resetCreditsProfileIDs: []
         )
@@ -477,7 +477,7 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         )
 
         let report = await client.fetchUsage(
-            port: 18_317,
+            port: 28_317,
             profiles: [profile],
             resetCreditsProfileIDs: [profile.id]
         )
@@ -501,7 +501,7 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         )
         let profile = AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_example", expired: nil, disabled: false)
 
-        let report = await client.fetchUsage(port: 18_317, profiles: [profile], resetCreditsProfileIDs: [profile.id])
+        let report = await client.fetchUsage(port: 28_317, profiles: [profile], resetCreditsProfileIDs: [profile.id])
 
         XCTAssertEqual(report.statesByProfileID[profile.id], .unavailable(.transientFailure))
         guard case .available? = report.resetCreditsOutcomesByProfileID[profile.id] else {
@@ -521,7 +521,7 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         )
         let profile = AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: "acct_example", expired: nil, disabled: false)
 
-        let report = await client.fetchUsage(port: 18_317, profiles: [profile], resetCreditsProfileIDs: [profile.id])
+        let report = await client.fetchUsage(port: 28_317, profiles: [profile], resetCreditsProfileIDs: [profile.id])
 
         guard case .available? = report.statesByProfileID[profile.id] else {
             return XCTFail("Usage should remain available")
@@ -540,7 +540,7 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         )
         let profile = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
 
-        let report = await client.fetchUsage(port: 18_317, profiles: [profile], resetCreditsProfileIDs: [profile.id])
+        let report = await client.fetchUsage(port: 28_317, profiles: [profile], resetCreditsProfileIDs: [profile.id])
 
         XCTAssertTrue(report.resetCreditsOutcomesByProfileID.isEmpty)
         XCTAssertEqual(transport.requests.count, 2)
@@ -556,7 +556,7 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         )
         let profile = AuthProfile(fileName: "claude.json", type: .claude, email: nil, accountID: nil, expired: nil, disabled: false)
 
-        let report = await client.fetchUsage(port: 18_317, profiles: [profile])
+        let report = await client.fetchUsage(port: 28_317, profiles: [profile])
 
         XCTAssertEqual(report.statesByProfileID[profile.id], .unavailable(.managementKeyRejected))
     }
@@ -580,7 +580,7 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
             disabled: false
         )
 
-        let report = await client.fetchUsage(port: 18_317, profiles: [profile])
+        let report = await client.fetchUsage(port: 28_317, profiles: [profile])
 
         guard case .available? = report.statesByProfileID[profile.id] else {
             return XCTFail("Expected CLIProxyAPI to refresh the expired access token and return usage")
@@ -599,7 +599,7 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         )
         let profile = AuthProfile(fileName: "claude.json", type: .claude, email: nil, accountID: nil, expired: nil, disabled: false)
 
-        let report = await client.fetchUsage(port: 18_317, profiles: [profile])
+        let report = await client.fetchUsage(port: 28_317, profiles: [profile])
 
         XCTAssertEqual(report.statesByProfileID[profile.id], .unavailable(.credentialExpired))
     }
@@ -615,7 +615,7 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         )
         let profile = AuthProfile(fileName: "claude.json", type: .claude, email: nil, accountID: nil, expired: nil, disabled: false)
 
-        let report = await client.fetchUsage(port: 18_317, profiles: [profile])
+        let report = await client.fetchUsage(port: 28_317, profiles: [profile])
 
         guard case .available? = report.statesByProfileID[profile.id] else {
             return XCTFail("Expected provider API call to determine the current credential state")
@@ -634,7 +634,7 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         )
         let profile = AuthProfile(fileName: "claude.json", type: .claude, email: nil, accountID: nil, expired: nil, disabled: false)
 
-        let report = await client.fetchUsage(port: 18_317, profiles: [profile])
+        let report = await client.fetchUsage(port: 28_317, profiles: [profile])
 
         XCTAssertEqual(report.statesByProfileID[profile.id], .unavailable(.schemaMismatch))
     }
@@ -644,7 +644,7 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         let client = CLIProxyAPISubscriptionQuotaClient(keyStore: StubManagementKeyStore(key: nil), transport: transport)
         let profile = AuthProfile(fileName: "claude.json", type: .claude, email: nil, accountID: nil, expired: nil, disabled: false)
 
-        let report = await client.fetchUsage(port: 18_317, profiles: [profile])
+        let report = await client.fetchUsage(port: 28_317, profiles: [profile])
 
         XCTAssertEqual(report.statesByProfileID[profile.id], .managementKeyNotConfigured)
         XCTAssertTrue(transport.requests.isEmpty)
@@ -657,7 +657,7 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         let client = CLIProxyAPISubscriptionQuotaClient(keyStore: StubManagementKeyStore(key: "management-secret"), transport: transport)
         let profile = AuthProfile(fileName: "claude.json", type: .claude, email: nil, accountID: nil, expired: nil, disabled: true)
 
-        let report = await client.fetchUsage(port: 18_317, profiles: [profile])
+        let report = await client.fetchUsage(port: 28_317, profiles: [profile])
 
         XCTAssertEqual(report.statesByProfileID[profile.id], .unavailable(.credentialDisabled))
         XCTAssertEqual(transport.requests.count, 1)

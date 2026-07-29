@@ -1,3 +1,4 @@
+import CLIProxyManagerCore
 import Combine
 import Foundation
 import Sparkle
@@ -9,14 +10,17 @@ struct UpdateSettingsCopy {
 }
 
 @MainActor
-final class UpdaterService: ObservableObject {
-    private let updaterController: SPUStandardUpdaterController
+final class UpdaterService: NSObject, ObservableObject, SPUUpdaterDelegate {
+    private var updaterController: SPUStandardUpdaterController!
+    private let appLogger: any AppLogging
     private var updaterObservationCancellables: Set<AnyCancellable> = []
 
-    init() {
-        self.updaterController = SPUStandardUpdaterController(
+    init(appLogger: any AppLogging = DisabledAppLogger()) {
+        self.appLogger = appLogger
+        super.init()
+        updaterController = SPUStandardUpdaterController(
             startingUpdater: true,
-            updaterDelegate: nil,
+            updaterDelegate: self,
             userDriverDelegate: nil
         )
 
@@ -36,7 +40,50 @@ final class UpdaterService: ObservableObject {
     }
 
     func checkForUpdates() {
+        appLogger.record(.update(target: .app, action: .check, result: .started))
         updaterController.checkForUpdates(nil)
+    }
+
+    func updater(
+        _: SPUUpdater,
+        didFinishUpdateCycleFor _: SPUUpdateCheck,
+        error: Error?
+    ) {
+        appLogger.record(.update(
+            target: .app,
+            action: .check,
+            result: Self.updateCheckResult(for: error)
+        ))
+    }
+
+    func updater(_: SPUUpdater, didFindValidUpdate _: SUAppcastItem) {
+        appLogger.record(.update(target: .app, action: .discover, result: .succeeded))
+    }
+
+    func updater(
+        _: SPUUpdater,
+        willDownloadUpdate _: SUAppcastItem,
+        with _: NSMutableURLRequest
+    ) {
+        appLogger.record(.update(target: .app, action: .download, result: .started))
+    }
+
+    func updater(_: SPUUpdater, didDownloadUpdate _: SUAppcastItem) {
+        appLogger.record(.update(target: .app, action: .download, result: .succeeded))
+    }
+
+    func updater(_: SPUUpdater, failedToDownloadUpdate _: SUAppcastItem, error _: Error) {
+        appLogger.record(.update(target: .app, action: .download, result: .failed(.network)))
+    }
+
+    nonisolated static func updateCheckResult(for error: Error?) -> AppLogResult {
+        guard let error else { return .succeeded }
+        let nsError = error as NSError
+        if nsError.domain == SUSparkleErrorDomain,
+           nsError.code == Int(SUError.noUpdateError.rawValue) {
+            return .succeeded
+        }
+        return .failed(.network)
     }
 
     private func bridgeUpdaterChangesToSwiftUI() {

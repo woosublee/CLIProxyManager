@@ -54,7 +54,7 @@ final class CodexResetCreditsModelsTests: XCTestCase {
         let client = LegacySubscriptionQuotaClient()
 
         let report = await client.fetchUsage(
-            port: 18_317,
+            port: 28_317,
             profiles: [usageProfile, resetProfile],
             usageProfileIDs: [usageProfile.id],
             resetCreditsProfileIDs: [resetProfile.id]

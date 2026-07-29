@@ -4376,6 +4376,92 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertTrue(store.savedConfigs.isEmpty)
     }
 
+    func testSavingLogLevelUpdatesAppLoggerWithoutRestartWhenServerIsStopped() throws {
+        let config = AppConfig.default
+        let logger = RecordingAppLogger()
+        let proxyService = StubProxyServiceStarter()
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            appLogger: logger
+        )
+
+        try viewModel.saveLogLevel(.debug)
+
+        XCTAssertEqual(viewModel.config.logLevel, .debug)
+        XCTAssertEqual(logger.minimumLevel, .debug)
+        XCTAssertTrue(proxyService.restartPorts.isEmpty)
+    }
+
+    func testSavingLogLevelRestartsRunningProxyAndAppliesDebugLevel() async throws {
+        let config = AppConfig.default
+        let logger = RecordingAppLogger()
+        let proxyService = StubProxyServiceStarter()
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyHealthClient: ProxyHealthClient(
+                httpClient: StubHTTPClient(result: .success(Data("{}".utf8))),
+                timeout: 0.1
+            ),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            appLogger: logger,
+            serverStatusRetryDelayNanoseconds: 0
+        )
+        viewModel.serverControlState = .running
+
+        try viewModel.saveLogLevel(.debug)
+        await waitForRestart(proxyService)
+
+        XCTAssertEqual(proxyService.restartPorts, [config.port])
+        XCTAssertEqual(logger.minimumLevel, .debug)
+        XCTAssertNil(viewModel.settingsMessage)
+    }
+
+    func testLogLevelRestartFailureReportsRequestedAndAppliedLevels() async throws {
+        let config = AppConfig.default
+        let logger = RecordingAppLogger()
+        let proxyService = StubProxyServiceStarter(
+            restartError: NSError(
+                domain: "Logging",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Restart failed"]
+            )
+        )
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: proxyService,
+            claudeConnector: connectedClaudeConnector(),
+            appLogger: logger,
+            settingsMessageAutoClearDelayNanoseconds: 60_000_000_000
+        )
+        viewModel.serverControlState = .running
+
+        try viewModel.saveLogLevel(.debug)
+        await waitForRestart(proxyService)
+        for _ in 0..<100 where viewModel.settingsMessage == nil { await Task.yield() }
+
+        XCTAssertEqual(
+            viewModel.settingsMessage,
+            "Log level was saved as Debug. App logging now uses Debug, but CLIProxyAPI remains at Info because restart failed: Restart failed. Use Restart Server to retry."
+        )
+        XCTAssertEqual(viewModel.config.logLevel, .debug)
+        XCTAssertEqual(logger.minimumLevel, .debug)
+    }
+
     func testUnrelatedSaveRejectsExistingManagedAliasCollision() throws {
         var config = AppConfig.default
         config.oauthCommandProfiles = [
@@ -10126,6 +10212,32 @@ final class DashboardAccountOrderingTests: XCTestCase {
             ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: ""),
             ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: "")
         ], count: 4).flatMap { $0 }))
+    }
+}
+
+private final class RecordingAppLogger: AppLogging, @unchecked Sendable {
+    private let lock = NSLock()
+    private var configuredLevel = LogLevel.info
+    private var recordedEvents: [AppLogEvent] = []
+
+    var minimumLevel: LogLevel {
+        lock.withLock { configuredLevel }
+    }
+
+    var diagnostics: AppLogDiagnostics {
+        .unavailable(reason: .notConfigured)
+    }
+
+    var events: [AppLogEvent] {
+        lock.withLock { recordedEvents }
+    }
+
+    func configure(minimumLevel: LogLevel) {
+        lock.withLock { configuredLevel = minimumLevel }
+    }
+
+    func record(_ event: AppLogEvent) {
+        lock.withLock { recordedEvents.append(event) }
     }
 }
 

@@ -45,6 +45,19 @@ final class ProxyLogServiceTests: XCTestCase {
         XCTAssertEqual(snapshot.text, "c\nd\ne\n")
     }
 
+    func testSelectedLogFileExposesSameSafeSelectionUsedByCLI() throws {
+        let paths = try makePaths()
+        let mainLog = paths.proxyLogsDirectory.appendingPathComponent("main.log")
+        try write("line\n", to: mainLog)
+
+        XCTAssertEqual(
+            try ProxyLogService(paths: paths, follower: FollowerDouble())
+                .selectedLogFile()
+                .resolvingSymlinksInPath(),
+            mainLog.resolvingSymlinksInPath()
+        )
+    }
+
     func testFollowUsesSelectedLogFile() throws {
         let paths = try makePaths()
         try write("line\n", to: paths.proxyLogsDirectory.appendingPathComponent("main.log"))

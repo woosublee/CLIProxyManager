@@ -57,7 +57,7 @@ final class ShellFunctionRendererTests: XCTestCase {
     func testRendererDoesNotCreateLegacyOAuthFunctionsWhenProfilesAreEmpty() throws {
         let legacyJSON = #"""
         {
-          "port": 18317,
+          "port": 28317,
           "commands": {"cc":"legacy_claude","ccapi":"","ccodex":"legacy_codex"},
           "ccapi": {},
           "ccodex": {

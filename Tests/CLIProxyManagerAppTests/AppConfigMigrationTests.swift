@@ -5,7 +5,7 @@ import XCTest
 final class AppConfigMigrationTests: XCTestCase {
     func testReconcilePersistsNormalizedLoopbackBindAddress() {
         let config = AppConfig(
-            port: 18_317,
+            port: 28_317,
             startAtLogin: false,
             showDockIcon: true,
             showMenuBarIcon: true,

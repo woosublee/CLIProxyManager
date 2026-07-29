@@ -35,10 +35,12 @@ public struct AppConfigStore: @unchecked Sendable {
         let config = try JSONDecoder().decode(AppConfig.self, from: data)
         let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         let rawBindAddress = object?["bindAddress"] as? String
+        let rawLogLevel = object?["logLevel"] as? String
         return AppConfigLoadResult(
             config: config,
             legacyOAuthDefaults: nil,
             requiresCanonicalRewrite: ProxyNetworkPolicy.requiresCanonicalRewrite(rawBindAddress)
+                || LogLevel.requiresCanonicalRewrite(rawLogLevel)
         )
     }
 

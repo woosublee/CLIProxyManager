@@ -8,7 +8,7 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
             serverStatus: DiagnosticStatus(
                 severity: .ready,
                 title: "CLIProxyAPI Running",
-                message: "Models are available on port 18317."
+                message: "Models are available on port 28317."
             ),
             providers: [
                 ProviderRowState(
@@ -29,14 +29,15 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
                     connectionDetail: "codex@example.com",
                     isConnected: true
                 )
-            ]
+            ],
+            port: 28_317
         )
 
         XCTAssertEqual(snapshot.serverTitle, "CLIProxyAPI Running")
-        XCTAssertEqual(snapshot.serverDetail, "Models are available on port 18317.")
+        XCTAssertEqual(snapshot.serverDetail, "Models are available on port 28317.")
         XCTAssertTrue(snapshot.isServerRunning)
         XCTAssertEqual(snapshot.serverActionTitle, "Stop Server")
-        XCTAssertEqual(snapshot.endpointTitle, "localhost:18317")
+        XCTAssertEqual(snapshot.endpointTitle, "localhost:28317")
         XCTAssertEqual(snapshot.connectedProviders.map { $0.name }, ["Claude OAuth", "Codex OAuth"])
         XCTAssertEqual(snapshot.connectedProviders.map { $0.menuBarDisplayName }, ["Claude OAuth", "Codex OAuth"])
         XCTAssertEqual(snapshot.connectedProviders.map { $0.functionName }, ["ccm", "ccmcodex"])
@@ -633,7 +634,7 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
             serverStatus: DiagnosticStatus(
                 severity: .ready,
                 title: "CLIProxyAPI Running",
-                message: "Models are available on port 18317."
+                message: "Models are available on port 28317."
             ),
             providers: [
                 ProviderRowState(
@@ -706,17 +707,18 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
             serverStatus: DiagnosticStatus(
                 severity: .ready,
                 title: "CLIProxyAPI Running",
-                message: "Models are available on port 18317."
+                message: "Models are available on port 28317."
             ),
             serverControlState: .error("Previous failure"),
-            providers: []
+            providers: [],
+            port: 28_317
         )
 
         XCTAssertEqual(snapshot.statusLabel, "Running")
         XCTAssertEqual(snapshot.indicatorState, .running)
         XCTAssertTrue(snapshot.isServerRunning)
         XCTAssertEqual(snapshot.serverActionTitle, "Stop Server")
-        XCTAssertEqual(snapshot.endpointTitle, "localhost:18317")
+        XCTAssertEqual(snapshot.endpointTitle, "localhost:28317")
     }
 
     func testTransitionControlStateWinsOverServerStatus() {
@@ -733,7 +735,7 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
             serverStatus: DiagnosticStatus(
                 severity: .ready,
                 title: "CLIProxyAPI Running",
-                message: "Models are available on port 18317."
+                message: "Models are available on port 28317."
             ),
             serverControlState: .stopping,
             providers: []

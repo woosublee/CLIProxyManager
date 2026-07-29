@@ -1,4 +1,5 @@
 import Foundation
+import Sparkle
 import XCTest
 @testable import CLIProxyManagerApp
 
@@ -97,6 +98,33 @@ final class UpdaterConfigurationTests: XCTestCase {
             source.contains("sink { [weak self] _ in") && source.contains("self?.objectWillChange.send()"),
             "UpdaterService must notify SwiftUI when Sparkle updater KVO publishers emit."
         )
+    }
+
+    func testUpdaterServiceTreatsNoUpdateAsSuccessfulCheck() {
+        let noUpdate = NSError(
+            domain: SUSparkleErrorDomain,
+            code: Int(SUError.noUpdateError.rawValue)
+        )
+
+        XCTAssertEqual(UpdaterService.updateCheckResult(for: nil), .succeeded)
+        XCTAssertEqual(UpdaterService.updateCheckResult(for: noUpdate), .succeeded)
+        XCTAssertEqual(
+            UpdaterService.updateCheckResult(for: URLError(.notConnectedToInternet)),
+            .failed(.network)
+        )
+    }
+
+    func testUpdaterServiceRecordsDistinctSparkleDownloadLifecycleCallbacks() throws {
+        let source = try String(
+            contentsOf: repositoryRoot().appendingPathComponent("Sources/CLIProxyManagerApp/Services/UpdaterService.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains("action: .discover, result: .succeeded"))
+        XCTAssertTrue(source.contains("willDownloadUpdate"))
+        XCTAssertTrue(source.contains("action: .download, result: .started"))
+        XCTAssertTrue(source.contains("didDownloadUpdate"))
+        XCTAssertTrue(source.contains("action: .download, result: .succeeded"))
     }
 
     func testUpdateSettingsCopyMatchesExpectedStrings() {

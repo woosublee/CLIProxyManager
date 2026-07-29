@@ -60,7 +60,15 @@ public struct ManagedPaths: Equatable, Sendable {
     }
 
     public var logsDirectory: URL {
-        rootDirectory.appendingPathComponent("logs")
+        rootDirectory.appendingPathComponent("logs", isDirectory: true)
+    }
+
+    public var appLogFile: URL {
+        logsDirectory.appendingPathComponent("app.log")
+    }
+
+    public var rotatedAppLogFile: URL {
+        logsDirectory.appendingPathComponent("app.log.1")
     }
 
     public var backupsDirectory: URL {

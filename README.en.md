@@ -129,6 +129,16 @@ cpm update stage all
 cpm update apply all --yes
 ```
 
+## Logs and diagnostics
+
+The Log level under **Settings → Advanced** has two options: Info and Debug.
+
+- **Info** records app launch, settings saves, CLIProxyAPI start/stop/restart, app and proxy update results, and failure summaries.
+- **Debug** adds non-sensitive technical context and applies `debug: true` to the CLIProxyAPI YAML. API keys, OAuth tokens, management keys, email addresses, prompts, and raw request/response bodies are not logged at either level.
+- The CLIProxyManager app log is stored at `~/.cliproxy-manager/logs/app.log` (`~/.cliproxy-manager/dev/logs/app.log` for development builds). The directory uses `0700`, the file uses `0600`, and the log rotates to `app.log.1` at 1 MiB.
+- CLIProxyAPI proxy logs remain separate under `~/.cliproxy-manager/auth/logs/`, and `cpm logs` continues to show only these proxy logs.
+- If the app log cannot be created or written safely, the app and proxy continue running and events fall back to macOS unified logging. If **App log** is unavailable in Advanced settings, fix symlinks or permissions in the managed logs path and restart the app.
+
 ## Troubleshooting
 
 ### My terminal command is not found

@@ -6,9 +6,9 @@ final class AppConfigStoreTests: XCTestCase {
         let config = AppConfig.default
 
         #if DEBUG
-        XCTAssertEqual(config.port, 18_318)
+        XCTAssertEqual(config.port, AppConfig.developmentDefaultPort)
         #else
-        XCTAssertEqual(config.port, 18_317)
+        XCTAssertEqual(config.port, AppConfig.releaseDefaultPort)
         #endif
         XCTAssertEqual(config.schemaVersion, AppConfig.currentSchemaVersion)
         XCTAssertEqual(config.claudeAPI.commandName, "")
@@ -36,7 +36,7 @@ final class AppConfigStoreTests: XCTestCase {
     func testLegacyConfigWithoutSubscriptionUsageDefaultsToDisabled() throws {
         let legacyJSON = #"""
         {
-          "port": 18317,
+          "port": 28317,
           "commands": {"cc":"","ccapi":"","ccodex":""},
           "ccapi": {"model":"claude-opus-4-8"},
           "ccodex": {
@@ -128,7 +128,7 @@ final class AppConfigStoreTests: XCTestCase {
         let store = AppConfigStore(paths: ManagedPaths(rootDirectory: sandbox))
         let legacyJSON = #"""
         {
-          "port": 18317,
+          "port": 28317,
           "commands": {
             "cc": "claude-work",
             "ccapi": "claude-api-work",
@@ -183,7 +183,7 @@ final class AppConfigStoreTests: XCTestCase {
     func testVersion2SingletonAPISettingsDecodeAsFixedProfiles() throws {
         let sandbox = try makeSandbox()
         let store = AppConfigStore(paths: ManagedPaths(rootDirectory: sandbox))
-        let json = #"{"schemaVersion":2,"port":18317,"claudeAPI":{"commandName":"claude_work","nickname":"Work","dangerousPermissionsEnabled":true},"codexAPI":{"commandName":"codex_personal","nickname":"Personal","codex":{"opus":{"model":"gpt-5.6-terra","reasoning":"xhigh"},"sonnet":{"model":"gpt-5.6-terra","reasoning":"medium"},"haiku":{"model":"gpt-5.6-terra","reasoning":"low"}},"dangerousPermissionsEnabled":false},"startAtLogin":false,"showDockIcon":true,"showMenuBarIcon":true}"#
+        let json = #"{"schemaVersion":2,"port":28317,"claudeAPI":{"commandName":"claude_work","nickname":"Work","dangerousPermissionsEnabled":true},"codexAPI":{"commandName":"codex_personal","nickname":"Personal","codex":{"opus":{"model":"gpt-5.6-terra","reasoning":"xhigh"},"sonnet":{"model":"gpt-5.6-terra","reasoning":"medium"},"haiku":{"model":"gpt-5.6-terra","reasoning":"low"}},"dangerousPermissionsEnabled":false},"startAtLogin":false,"showDockIcon":true,"showMenuBarIcon":true}"#
         try json.write(to: store.paths.configFile, atomically: true, encoding: .utf8)
 
         let result = try store.loadDocument()
@@ -242,7 +242,8 @@ final class AppConfigStoreTests: XCTestCase {
             let store = AppConfigStore(paths: ManagedPaths(rootDirectory: sandbox))
             var object: [String: Any] = [
                 "schemaVersion": AppConfig.currentSchemaVersion,
-                "port": 18_317
+                "port": 28_317,
+                "logLevel": LogLevel.info.rawValue
             ]
             object["bindAddress"] = fixture.value
             let data = try JSONSerialization.data(withJSONObject: object)
@@ -263,7 +264,7 @@ final class AppConfigStoreTests: XCTestCase {
     func testVersion2WildcardBindAddressMigratesToLoopback() throws {
         let sandbox = try makeSandbox()
         let store = AppConfigStore(paths: ManagedPaths(rootDirectory: sandbox))
-        try #"{"schemaVersion":2,"port":18317,"bindAddress":"0.0.0.0"}"#.write(
+        try #"{"schemaVersion":2,"port":28317,"bindAddress":"0.0.0.0"}"#.write(
             to: store.paths.configFile,
             atomically: true,
             encoding: .utf8
@@ -282,7 +283,7 @@ final class AppConfigStoreTests: XCTestCase {
 
     func testAppConfigInitializerDoesNotAllowWildcardBindAddress() {
         let config = AppConfig(
-            port: 18_317,
+            port: 28_317,
             startAtLogin: false,
             showDockIcon: true,
             showMenuBarIcon: true,
@@ -292,10 +293,67 @@ final class AppConfigStoreTests: XCTestCase {
         XCTAssertEqual(config.bindAddress, ProxyNetworkPolicy.loopbackHost)
     }
 
+    func testCurrentConfigNormalizesLogLevelAndRequestsOneCanonicalRewrite() throws {
+        let fixtures: [(name: String, value: String?, expected: LogLevel, shouldRewrite: Bool)] = [
+            ("missing", nil, .info, true),
+            ("error", "error", .info, true),
+            ("warn", "warn", .info, true),
+            ("info", "info", .info, false),
+            ("debug", "debug", .debug, false),
+            ("unknown", "trace", .info, true)
+        ]
+
+        for fixture in fixtures {
+            let sandbox = try makeSandbox()
+            let store = AppConfigStore(paths: ManagedPaths(rootDirectory: sandbox))
+            var object: [String: Any] = [
+                "schemaVersion": AppConfig.currentSchemaVersion,
+                "port": 28_317,
+                "bindAddress": ProxyNetworkPolicy.loopbackHost
+            ]
+            object["logLevel"] = fixture.value
+            try JSONSerialization.data(withJSONObject: object).write(to: store.paths.configFile)
+
+            let loaded = try store.loadDocument()
+
+            XCTAssertEqual(loaded.config.logLevel, fixture.expected, fixture.name)
+            XCTAssertEqual(loaded.config.runtimeLogConfiguration.proxyDebugEnabled, fixture.expected == .debug, fixture.name)
+            XCTAssertEqual(loaded.requiresCanonicalRewrite, fixture.shouldRewrite, fixture.name)
+
+            try store.save(loaded.config)
+            let reloaded = try store.loadDocument()
+            XCTAssertEqual(reloaded.config.logLevel, fixture.expected, fixture.name)
+            XCTAssertFalse(reloaded.requiresCanonicalRewrite, fixture.name)
+        }
+    }
+
+    func testLegacyLogLevelsMigrateDeterministically() throws {
+        for (schemaVersion, rawLevel, expected) in [
+            (1, "error", LogLevel.info),
+            (1, "debug", LogLevel.debug),
+            (2, "warn", LogLevel.info),
+            (2, "future", LogLevel.info)
+        ] {
+            let sandbox = try makeSandbox()
+            let store = AppConfigStore(paths: ManagedPaths(rootDirectory: sandbox))
+            let object: [String: Any] = [
+                "schemaVersion": schemaVersion,
+                "port": 28_317,
+                "logLevel": rawLevel
+            ]
+            try JSONSerialization.data(withJSONObject: object).write(to: store.paths.configFile)
+
+            let loaded = try store.loadDocument()
+
+            XCTAssertEqual(loaded.config.logLevel, expected, "schema=\(schemaVersion), raw=\(rawLevel)")
+            XCTAssertTrue(loaded.requiresCanonicalRewrite)
+        }
+    }
+
     func testStoreRejectsFutureSchemaVersion() throws {
         let sandbox = try makeSandbox()
         let store = AppConfigStore(paths: ManagedPaths(rootDirectory: sandbox))
-        try #"{"schemaVersion":99,"port":18317}"#.write(
+        try #"{"schemaVersion":99,"port":28317}"#.write(
             to: store.paths.configFile,
             atomically: true,
             encoding: .utf8
