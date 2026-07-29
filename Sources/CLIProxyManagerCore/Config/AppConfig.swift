@@ -501,7 +501,8 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var oauthCommandProfiles: [OAuthCommandProfile]
     public var roundRobinProfiles: [RoundRobinProfile]
     public var accountOrder: [String]
-    public var bindAddress: String
+    /// Legacy serialization compatibility only. New values are always forced to loopback.
+    public private(set) var bindAddress: String
     public var autostartServer: Bool
     public var roundRobinEnabled: Bool
     public var logLevel: LogLevel
@@ -568,7 +569,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         oauthCommandProfiles: [OAuthCommandProfile] = [],
         roundRobinProfiles: [RoundRobinProfile] = [],
         accountOrder: [String] = [],
-        bindAddress: String = "127.0.0.1",
+        bindAddress: String = ProxyNetworkPolicy.loopbackHost,
         autostartServer: Bool = false,
         roundRobinEnabled: Bool = false,
         logLevel: LogLevel = .info
@@ -586,7 +587,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         self.oauthCommandProfiles = oauthCommandProfiles
         self.roundRobinProfiles = roundRobinProfiles
         self.accountOrder = accountOrder
-        self.bindAddress = bindAddress
+        self.bindAddress = ProxyNetworkPolicy.normalizedBindAddress(bindAddress)
         self.autostartServer = autostartServer
         self.roundRobinEnabled = roundRobinEnabled
         self.logLevel = logLevel
@@ -607,7 +608,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         oauthCommandProfiles: [OAuthCommandProfile] = [],
         roundRobinProfiles: [RoundRobinProfile] = [],
         accountOrder: [String] = [],
-        bindAddress: String = "127.0.0.1",
+        bindAddress: String = ProxyNetworkPolicy.loopbackHost,
         autostartServer: Bool = false,
         roundRobinEnabled: Bool = false,
         logLevel: LogLevel = .info
@@ -666,7 +667,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         oauthCommandProfiles: [OAuthCommandProfile] = [],
         roundRobinProfiles: [RoundRobinProfile] = [],
         accountOrder: [String] = [],
-        bindAddress: String = "127.0.0.1",
+        bindAddress: String = ProxyNetworkPolicy.loopbackHost,
         autostartServer: Bool = false,
         roundRobinEnabled: Bool = false,
         logLevel: LogLevel = .info
@@ -707,7 +708,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         oauthCommandProfiles: [OAuthCommandProfile] = [],
         roundRobinProfiles: [RoundRobinProfile] = [],
         accountOrder: [String] = [],
-        bindAddress: String = "127.0.0.1",
+        bindAddress: String = ProxyNetworkPolicy.loopbackHost,
         autostartServer: Bool = false,
         roundRobinEnabled: Bool = false,
         logLevel: LogLevel = .info
@@ -772,7 +773,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
             oauthCommandProfiles: try c.decodeIfPresent([OAuthCommandProfile].self, forKey: .oauthCommandProfiles) ?? [],
             roundRobinProfiles: try c.decodeIfPresent([RoundRobinProfile].self, forKey: .roundRobinProfiles) ?? [],
             accountOrder: try c.decodeIfPresent([String].self, forKey: .accountOrder) ?? [],
-            bindAddress: try c.decodeIfPresent(String.self, forKey: .bindAddress) ?? "127.0.0.1",
+            bindAddress: try c.decodeIfPresent(String.self, forKey: .bindAddress) ?? ProxyNetworkPolicy.loopbackHost,
             autostartServer: try c.decodeIfPresent(Bool.self, forKey: .autostartServer) ?? false,
             roundRobinEnabled: false,
             logLevel: try c.decodeIfPresent(LogLevel.self, forKey: .logLevel) ?? .info
@@ -800,7 +801,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         try c.encode(oauthCommandProfiles, forKey: .oauthCommandProfiles)
         try c.encode(roundRobinProfiles, forKey: .roundRobinProfiles)
         try c.encode(accountOrder, forKey: .accountOrder)
-        try c.encode(bindAddress, forKey: .bindAddress)
+        try c.encode(ProxyNetworkPolicy.loopbackHost, forKey: .bindAddress)
         try c.encode(autostartServer, forKey: .autostartServer)
         try c.encode(roundRobinEnabled, forKey: .roundRobinEnabled)
         try c.encode(logLevel, forKey: .logLevel)

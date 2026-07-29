@@ -32,7 +32,14 @@ public struct AppConfigStore: @unchecked Sendable {
         if schemaVersion < AppConfig.currentSchemaVersion {
             return try LegacyAppConfigDecoder.decode(data)
         }
-        return .canonical(try JSONDecoder().decode(AppConfig.self, from: data))
+        let config = try JSONDecoder().decode(AppConfig.self, from: data)
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let rawBindAddress = object?["bindAddress"] as? String
+        return AppConfigLoadResult(
+            config: config,
+            legacyOAuthDefaults: nil,
+            requiresCanonicalRewrite: ProxyNetworkPolicy.requiresCanonicalRewrite(rawBindAddress)
+        )
     }
 
     public func load() throws -> AppConfig {

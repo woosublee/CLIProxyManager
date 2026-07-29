@@ -135,20 +135,6 @@ struct ServerSettingsView: View {
                         }
                     )
                 }
-                SettingsRow(label: "Bind address", description: "Use 0.0.0.0 to allow access from other devices on the LAN.") {
-                    SettingsSegmentedPicker(
-                        options: [
-                            (value: "127.0.0.1", label: "127.0.0.1"),
-                            (value: "0.0.0.0", label: "0.0.0.0")
-                        ],
-                        selection: Binding(
-                            get: { viewModel.config.bindAddress },
-                            set: { newValue in
-                                viewModel.saveSetting { try viewModel.saveBindAddress(newValue) }
-                            }
-                        )
-                    )
-                }
                 SettingsRow(label: "Start server on launch", description: "Automatically begin proxying when the app opens.") {
                     Toggle("", isOn: Binding(
                         get: { viewModel.config.autostartServer },

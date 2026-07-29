@@ -4,6 +4,13 @@ public protocol ProxyServiceControlling: Sendable {
     func start(port: Int) async throws
     func stop() async throws
     func restart(port: Int) async throws
+    func reconcileConfiguration(port: Int) async throws -> Bool
+}
+
+public extension ProxyServiceControlling {
+    // Preserves source compatibility for test doubles; runtime implementations must override
+    // this method or local-only reconciliation is intentionally reported as not performed.
+    func reconcileConfiguration(port: Int) async throws -> Bool { false }
 }
 
 public protocol ProxyHealthChecking: Sendable {

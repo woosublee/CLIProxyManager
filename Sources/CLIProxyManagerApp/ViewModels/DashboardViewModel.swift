@@ -777,12 +777,6 @@ final class DashboardViewModel: ObservableObject {
         try saveConfig(updatedConfig)
     }
 
-    func saveBindAddress(_ address: String) throws {
-        var updatedConfig = config
-        updatedConfig.bindAddress = address
-        try saveConfig(updatedConfig)
-    }
-
     func saveAutostartServer(_ enabled: Bool) throws {
         var updatedConfig = config
         updatedConfig.autostartServer = enabled
@@ -887,22 +881,35 @@ final class DashboardViewModel: ObservableObject {
         let wasRunning = serverControlState.isRunning
         var attemptedReconciliationRestart = false
 
+        var didChangeBundledBinary = false
+        var bundledReconciliationErrorMessage: String?
         do {
             guard isCurrentApplicationLaunch(generation: generation) else { return }
-            let result = try bundledProxyReconciler.reconcile()
-            guard isCurrentApplicationLaunch(generation: generation) else { return }
-            if result.didChangeBinary, wasRunning {
-                attemptedReconciliationRestart = true
-                guard isCurrentApplicationLaunch(generation: generation) else { return }
-                if !(await restartServerAfterRequiredChange()),
-                   isCurrentApplicationLaunch(generation: generation) {
-                    settingsMessage = "Bundled CLIProxyAPI was installed, but the server could not be restarted: \(serverStatus.message)"
-                }
-                guard isCurrentApplicationLaunch(generation: generation) else { return }
-            }
+            didChangeBundledBinary = try bundledProxyReconciler.reconcile().didChangeBinary
         } catch {
             guard isCurrentApplicationLaunch(generation: generation) else { return }
-            settingsMessage = "Bundled CLIProxyAPI update failed: \(error.localizedDescription)"
+            bundledReconciliationErrorMessage = "Bundled CLIProxyAPI update failed: \(error.localizedDescription)"
+            settingsMessage = bundledReconciliationErrorMessage
+        }
+
+        guard isCurrentApplicationLaunch(generation: generation) else { return }
+        if didChangeBundledBinary, wasRunning {
+            attemptedReconciliationRestart = true
+            if !(await restartServerAfterRequiredChange()),
+               isCurrentApplicationLaunch(generation: generation) {
+                settingsMessage = "Bundled CLIProxyAPI was installed, but the server could not be restarted: \(serverStatus.message)"
+            }
+            guard isCurrentApplicationLaunch(generation: generation) else { return }
+        } else {
+            do {
+                attemptedReconciliationRestart = try await proxyService.reconcileConfiguration(port: config.port)
+            } catch {
+                attemptedReconciliationRestart = true
+                let localOnlyMessage = "Local-only proxy configuration could not be applied: \(error.localizedDescription)"
+                settingsMessage = bundledReconciliationErrorMessage.map { "\($0) \(localOnlyMessage)" }
+                    ?? localOnlyMessage
+            }
+            guard isCurrentApplicationLaunch(generation: generation) else { return }
         }
 
         guard isCurrentApplicationLaunch(generation: generation) else { return }
