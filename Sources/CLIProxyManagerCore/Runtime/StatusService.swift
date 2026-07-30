@@ -165,7 +165,6 @@ public struct StatusService: StatusReporting, Sendable {
     )
 
     private static func sanitizedPath(_ path: String) -> String {
-        guard path.hasPrefix("/") else { return path }
-        return URL(fileURLWithPath: path).lastPathComponent
+        path.hasPrefix("/") ? "<redacted>" : path
     }
 }

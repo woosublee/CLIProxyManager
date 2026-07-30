@@ -47,6 +47,24 @@ final class StatusServiceTests: XCTestCase {
         XCTAssertFalse(try String(decoding: JSONEncoder().encode(status), as: UTF8.self).contains("example.com"))
     }
 
+    func testStatusRedactsCustomHomeAbsolutePathsWithFixedPlaceholder() async throws {
+        let status = try await StatusService(
+            appLifecycle: AppLifecycleDouble(running: false, path: "/Volumes/Data/custom-home"),
+            proxyRuntime: ProxyRuntimeDouble(port: 8317, running: false, activeVersion: nil),
+            helperInspector: HelperInspectorDouble(
+                path: "/Volumes/Data/custom-home/bin/cpm",
+                installed: true,
+                matchesBundled: true
+            ),
+            paths: ManagedPaths(rootDirectory: URL(fileURLWithPath: "/Volumes/Data/custom-home/.cliproxy-manager"))
+        ).status()
+
+        XCTAssertEqual(status.app.path, "<redacted>")
+        XCTAssertEqual(status.helper.path, "<redacted>")
+        XCTAssertEqual(status.proxy.logsPath, "<redacted>")
+        XCTAssertFalse(try String(decoding: JSONEncoder().encode(status), as: UTF8.self).contains("custom-home"))
+    }
+
     func testStatusAggregatesAppAndProxyAndHelper() async throws {
         let status = try await StatusService(
             appLifecycle: AppLifecycleDouble(running: true),
@@ -98,9 +116,15 @@ final class StatusServiceTests: XCTestCase {
 
 private struct AppLifecycleDouble: AppLifecycleControlling {
     let running: Bool
+    let path: String?
+
+    init(running: Bool, path: String? = "/Applications/CLIProxyManager.app") {
+        self.running = running
+        self.path = path
+    }
 
     func status() async throws -> AppLifecycleStatus {
-        AppLifecycleStatus(installed: true, running: running, path: "/Applications/CLIProxyManager.app", version: "0.1.12", build: "15")
+        AppLifecycleStatus(installed: true, running: running, path: path, version: "0.1.12", build: "15")
     }
     func start() async throws -> AppLifecycleStatus { try await status() }
     func stop() async throws -> AppLifecycleStatus { try await status() }
@@ -127,11 +151,18 @@ private struct ProxyRuntimeDouble: ProxyRuntimeServicing {
 }
 
 private struct HelperInspectorDouble: HelperInspecting {
+    let path: String
     let installed: Bool
     let matchesBundled: Bool
 
+    init(path: String = "/usr/local/bin/cpm", installed: Bool, matchesBundled: Bool) {
+        self.path = path
+        self.installed = installed
+        self.matchesBundled = matchesBundled
+    }
+
     func inspect() -> HelperStatus {
-        HelperStatus(path: "/usr/local/bin/cpm", installed: installed, matchesBundled: matchesBundled)
+        HelperStatus(path: path, installed: installed, matchesBundled: matchesBundled)
     }
 }
 
