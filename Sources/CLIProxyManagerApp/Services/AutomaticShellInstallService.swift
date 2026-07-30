@@ -21,7 +21,61 @@ enum ShellFunctionInstallationError: LocalizedError, Equatable, Sendable {
 enum AutomaticShellInstallationResult: Equatable, Sendable {
     case written
     case skippedForCompatibility
+    case skippedForSupersededRequest
     case disabled
+}
+
+private final class AutomaticShellReconciliationCoordinator: @unchecked Sendable {
+    private let lock = NSLock()
+    private var latestGeneration = 0
+
+    func begin() -> AutomaticShellReconciliationRequest {
+        let generation = lock.withLock { () -> Int in
+            latestGeneration &+= 1
+            return latestGeneration
+        }
+        return AutomaticShellReconciliationRequest(coordinator: self, generation: generation)
+    }
+
+    func invalidate() {
+        lock.withLock { latestGeneration &+= 1 }
+    }
+
+    fileprivate func installIfCurrent(
+        generation: Int,
+        installer: any ShellFunctionInstalling,
+        functionScript: String,
+        functionNames: [String]
+    ) throws -> Bool {
+        try lock.withLock {
+            guard generation == latestGeneration else { return false }
+            try installer.install(functionScript: functionScript, functionNames: functionNames)
+            return true
+        }
+    }
+}
+
+struct AutomaticShellReconciliationRequest: Sendable {
+    private let coordinator: AutomaticShellReconciliationCoordinator
+    private let generation: Int
+
+    fileprivate init(coordinator: AutomaticShellReconciliationCoordinator, generation: Int) {
+        self.coordinator = coordinator
+        self.generation = generation
+    }
+
+    fileprivate func install(
+        using installer: any ShellFunctionInstalling,
+        functionScript: String,
+        functionNames: [String]
+    ) throws -> Bool {
+        try coordinator.installIfCurrent(
+            generation: generation,
+            installer: installer,
+            functionScript: functionScript,
+            functionNames: functionNames
+        )
+    }
 }
 
 struct AutomaticShellInstallService: Sendable {
@@ -50,6 +104,7 @@ struct AutomaticShellInstallService: Sendable {
     private let installer: any ShellFunctionInstalling
     private let secretStore: any SecretStore
     private let compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing
+    private let reconciliationCoordinator = AutomaticShellReconciliationCoordinator()
     private let defaultHelperCommand: String
     private let isEnabled: Bool
 
@@ -117,6 +172,52 @@ struct AutomaticShellInstallService: Sendable {
         enabledFunctions: EnabledFunctions = .allOAuth
     ) async throws {
         guard isEnabled else { return }
+        reconciliationCoordinator.invalidate()
+        try await preflight()
+        let installation = try renderedInstallation(
+            config: config,
+            helperCommand: helperCommand,
+            enabledFunctions: enabledFunctions
+        )
+        try installer.install(
+            functionScript: installation.functionScript,
+            functionNames: installation.functionNames
+        )
+    }
+
+    func beginAutomaticReconciliation() -> AutomaticShellReconciliationRequest {
+        reconciliationCoordinator.begin()
+    }
+
+    func reconcile(
+        config: AppConfig,
+        helperCommand: String? = nil,
+        enabledFunctions: EnabledFunctions = .allOAuth,
+        request: AutomaticShellReconciliationRequest? = nil
+    ) async throws -> AutomaticShellInstallationResult {
+        guard isEnabled else { return .disabled }
+        let request = request ?? beginAutomaticReconciliation()
+        do {
+            try await preflight()
+            let installation = try renderedInstallation(
+                config: config,
+                helperCommand: helperCommand,
+                enabledFunctions: enabledFunctions
+            )
+            guard try request.install(
+                using: installer,
+                functionScript: installation.functionScript,
+                functionNames: installation.functionNames
+            ) else {
+                return .skippedForSupersededRequest
+            }
+            return .written
+        } catch is ShellFunctionInstallationError {
+            return .skippedForCompatibility
+        }
+    }
+
+    private func preflight() async throws {
         let report = await compatibilityAuthorizer.report(artifacts: CompatibilityArtifacts(
             bundled: nil,
             active: nil,
@@ -125,7 +226,13 @@ struct AutomaticShellInstallService: Sendable {
         if let compatibilityError = compatibilityError(for: report) {
             throw compatibilityError
         }
+    }
 
+    private func renderedInstallation(
+        config: AppConfig,
+        helperCommand: String?,
+        enabledFunctions: EnabledFunctions
+    ) throws -> (functionScript: String, functionNames: [String]) {
         let includeClaudeOAuth = shouldIncludeOAuth(provider: .claude, config: config, enabled: enabledFunctions.claudeOAuth)
         let includeCodex = shouldIncludeOAuth(provider: .codex, config: config, enabled: enabledFunctions.codex)
         var includedAPIKeyProfileIDs: Set<String> = []
@@ -140,7 +247,7 @@ struct AutomaticShellInstallService: Sendable {
                 continue
             }
         }
-        let script = try ShellFunctionRenderer(
+        let functionScript = try ShellFunctionRenderer(
             config: config,
             helperCommand: helperCommand ?? defaultHelperCommand,
             enabledFunctions: ShellFunctionRenderer.EnabledFunctions(
@@ -153,25 +260,7 @@ struct AutomaticShellInstallService: Sendable {
         functionNames.append(contentsOf: config.apiKeyProfiles.compactMap { profile in
             includedAPIKeyProfileIDs.contains(profile.id) ? profile.commandName : nil
         })
-        try installer.install(functionScript: script, functionNames: functionNames)
-    }
-
-    func reconcile(
-        config: AppConfig,
-        helperCommand: String? = nil,
-        enabledFunctions: EnabledFunctions = .allOAuth
-    ) async throws -> AutomaticShellInstallationResult {
-        guard isEnabled else { return .disabled }
-        do {
-            try await apply(
-                config: config,
-                helperCommand: helperCommand,
-                enabledFunctions: enabledFunctions
-            )
-            return .written
-        } catch is ShellFunctionInstallationError {
-            return .skippedForCompatibility
-        }
+        return (functionScript, functionNames)
     }
 
     private func compatibilityError(for report: RuntimeCompatibilityReport) -> ShellFunctionInstallationError? {

@@ -383,6 +383,37 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
 
         XCTAssertEqual(events.events, ["preflight", "install"])
     }
+
+    func testLatestAutomaticReconciliationPreventsOlderPreflightFromOverwritingNewerFunctions() async throws {
+        let installer = StubShellInstaller()
+        let compatibilityAuthorizer = FirstPreflightDelayingCompatibilityAuthorizer()
+        let service = AutomaticShellInstallService(
+            installer: installer,
+            compatibilityAuthorizer: compatibilityAuthorizer
+        )
+        var olderConfig = AppConfig.default
+        olderConfig.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "claude",
+                provider: .claude,
+                authProfileID: "claude.json",
+                commandName: "ccold"
+            )
+        ]
+        var newerConfig = olderConfig
+        newerConfig.oauthCommandProfiles[0].commandName = "ccnew"
+
+        let olderReconciliation = Task {
+            try await service.reconcile(config: olderConfig)
+        }
+        await compatibilityAuthorizer.waitForFirstPreflight()
+
+        _ = try await service.reconcile(config: newerConfig)
+        await compatibilityAuthorizer.releaseFirstPreflight()
+        _ = try await olderReconciliation.value
+
+        XCTAssertEqual(installer.installationHistory, [["ccnew"]])
+    }
 }
 
 private final class StubConfigStore: AppConfigStoring, @unchecked Sendable {
@@ -399,10 +430,12 @@ private final class StubConfigStore: AppConfigStoring, @unchecked Sendable {
 private final class StubShellInstaller: ShellFunctionInstalling, @unchecked Sendable {
     private(set) var installedScript: String?
     private(set) var installedFunctionNames: [String] = []
+    private(set) var installationHistory: [[String]] = []
 
     func install(functionScript: String, functionNames: [String]) throws {
         installedScript = functionScript
         installedFunctionNames = functionNames
+        installationHistory.append(functionNames)
     }
 
     func isInstalled() -> Bool { installedScript != nil }
@@ -411,6 +444,7 @@ private final class StubShellInstaller: ShellFunctionInstalling, @unchecked Send
     func reset() {
         installedScript = nil
         installedFunctionNames = []
+        installationHistory = []
     }
 }
 
@@ -579,4 +613,44 @@ private final class OrderedShellInstaller: ShellFunctionInstalling, @unchecked S
     func isInstalled() -> Bool { false }
 
     func validateFunctionNames(_: [String]) throws {}
+}
+
+private actor FirstPreflightDelayingCompatibilityAuthorizer: RuntimeCompatibilityAuthorizing {
+    private var firstPreflightStarted = false
+    private var firstPreflightWaiters: [CheckedContinuation<Void, Never>] = []
+    private var firstPreflightRelease: CheckedContinuation<Void, Never>?
+    private var firstPreflightReleased = false
+    private var reportCount = 0
+
+    nonisolated func staticReport(artifacts _: CompatibilityArtifacts) -> RuntimeCompatibilityReport {
+        allowedCompatibilityReport()
+    }
+
+    func report(artifacts _: CompatibilityArtifacts) async -> RuntimeCompatibilityReport {
+        reportCount += 1
+        guard reportCount == 1 else { return allowedCompatibilityReport() }
+
+        firstPreflightStarted = true
+        let waiters = firstPreflightWaiters
+        firstPreflightWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        if !firstPreflightReleased {
+            await withCheckedContinuation { firstPreflightRelease = $0 }
+        }
+        return allowedCompatibilityReport()
+    }
+
+    nonisolated func require(_: CompatibilityAction, artifacts _: CompatibilityArtifacts) throws {}
+
+    func waitForFirstPreflight() async {
+        guard !firstPreflightStarted else { return }
+        await withCheckedContinuation { firstPreflightWaiters.append($0) }
+    }
+
+    func releaseFirstPreflight() {
+        firstPreflightReleased = true
+        let release = firstPreflightRelease
+        firstPreflightRelease = nil
+        release?.resume()
+    }
 }

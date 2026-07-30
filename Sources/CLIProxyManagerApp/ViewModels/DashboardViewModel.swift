@@ -4369,12 +4369,14 @@ final class DashboardViewModel: ObservableObject {
         }
         let shellConfig = shellInstallConfig(in: installConfig)
         let enabledFunctions = enabledShellFunctions(in: installConfig)
+        let request = automaticShellInstallService.beginAutomaticReconciliation()
         Task { [weak self] in
             guard let self else { return }
             do {
                 _ = try await automaticShellInstallService.reconcile(
                     config: shellConfig,
-                    enabledFunctions: enabledFunctions
+                    enabledFunctions: enabledFunctions,
+                    request: request
                 )
             } catch {
                 settingsMessage = "Automatic shell function installation failed. Retry the operation."
