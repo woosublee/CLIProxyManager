@@ -83,6 +83,7 @@ final class CLIProxyAPIUpdateService: ObservableObject {
     private let now: @Sendable () -> Date
     private let fileManager: FileManager
     private let appLogger: any AppLogging
+    private let compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
@@ -94,7 +95,8 @@ final class CLIProxyAPIUpdateService: ObservableObject {
         bundledManifestURL: URL? = BundledProxyBinary.manifestURL(),
         now: @escaping @Sendable () -> Date = { Date() },
         fileManager: FileManager = .default,
-        appLogger: any AppLogging = DisabledAppLogger()
+        appLogger: any AppLogging = DisabledAppLogger(),
+        compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing = RuntimeCompatibilityPreflight()
     ) {
         self.paths = paths
         self.checker = checker
@@ -105,6 +107,7 @@ final class CLIProxyAPIUpdateService: ObservableObject {
         self.now = now
         self.fileManager = fileManager
         self.appLogger = appLogger
+        self.compatibilityAuthorizer = compatibilityAuthorizer
         self.encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         refreshStoredStatus()
     }
@@ -133,6 +136,12 @@ final class CLIProxyAPIUpdateService: ObservableObject {
 
     func downloadAvailableUpdate() async {
         guard let release = availableUpdate, !isUpdating else { return }
+        do {
+            try requireCompatibility(for: .stageProxyUpdate, candidate: .explicit(release.target))
+        } catch {
+            recordFailure(error)
+            return
+        }
         appLogger.record(.update(target: .proxy, action: .download, result: .started))
         isUpdating = true
         state = .downloading
@@ -170,6 +179,34 @@ final class CLIProxyAPIUpdateService: ObservableObject {
         }
     }
 
+    private func requireCompatibility(
+        for action: CompatibilityAction,
+        candidate: RuntimeCompatibilityArtifact
+    ) throws {
+        let artifacts = CompatibilityArtifacts(bundled: nil, active: nil, pending: candidate)
+        do {
+            try compatibilityAuthorizer.require(action, artifacts: artifacts)
+        } catch {
+            throw CLIProxyManagerCommandError.prerequisite(
+                RuntimeCompatibilityBlocker(
+                    report: compatibilityAuthorizer.staticReport(artifacts: artifacts)
+                ).recoveryMessage
+            )
+        }
+    }
+
+    private func compatibilityArtifact(for manifest: CLIProxyAPIBinaryManifest) throws -> RuntimeCompatibilityArtifact {
+        guard let target = manifest.target else {
+            guard manifest.upstreamAsset == "CLIProxyAPI_\(manifest.version)_darwin_aarch64.tar.gz" else {
+                throw CLIProxyManagerCommandError.prerequisite(
+                    RuntimeCompatibilityBlocker.unsupportedArtifactTarget.recoveryMessage
+                )
+            }
+            return .legacy
+        }
+        return .explicit(target)
+    }
+
     private static func downloadFailureKind(for error: Error) -> AppLogFailureKind {
         switch error {
         case is HTTPClientError, is URLError:
@@ -182,8 +219,11 @@ final class CLIProxyAPIUpdateService: ObservableObject {
     }
 
     func applyPendingNow() throws {
-        appLogger.record(.update(target: .proxy, action: .apply, result: .started))
         refreshStoredStatus()
+        if let pendingUpdate {
+            try requireCompatibility(for: .applyProxyUpdate, candidate: try compatibilityArtifact(for: pendingUpdate))
+        }
+        appLogger.record(.update(target: .proxy, action: .apply, result: .started))
         do {
             try store.applyPending()
         } catch {
@@ -207,11 +247,12 @@ final class CLIProxyAPIUpdateService: ObservableObject {
     @discardableResult
     func schedulePendingForNextServerStart() -> Bool {
         refreshStoredStatus()
-        guard pendingUpdate != nil else {
+        guard let pendingUpdate else {
             recordFailure(CLIProxyAPIBinaryStoreError.missingPendingManifest)
             return false
         }
         do {
+            try requireCompatibility(for: .scheduleProxyUpdate, candidate: try compatibilityArtifact(for: pendingUpdate))
             try store.schedulePendingForNextStart()
             refreshStoredStatus()
             state = .pending
@@ -279,7 +320,12 @@ final class CLIProxyAPIUpdateService: ObservableObject {
     }
 
     private func recordFailure(_ error: Error) {
-        let message = error.localizedDescription
+        let message: String
+        if let error = error as? CLIProxyManagerCommandError {
+            message = error.description
+        } else {
+            message = error.localizedDescription
+        }
         lastErrorMessage = message
         var state = loadState()
         let timestamp = Self.formatDate(now())

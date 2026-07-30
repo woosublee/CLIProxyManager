@@ -1365,6 +1365,71 @@ final class ProxyServiceManagerTests: XCTestCase {
         XCTAssertFalse(yaml.contains("prefix: \"cpm-\(unreadableID)\""))
     }
 
+    func testBlockedStartDoesNotStageConfigurationOrLaunch() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let launcher = FakeProcessLauncher()
+        let manager = ProxyServiceManager(
+            paths: paths,
+            launcher: launcher,
+            compatibilityAuthorizer: CompatibilityAuthorizerDouble(blockedActions: [.startProxy])
+        )
+
+        do {
+            try await manager.start(port: 8317)
+            XCTFail("Expected compatibility block")
+        } catch let error as ProxyServiceError {
+            XCTAssertEqual(error, .compatibilityBlocked(.unsupportedArchitecture))
+        }
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.clipProxyConfigFile.path))
+        XCTAssertEqual(launcher.invocations, [])
+    }
+
+    func testBlockedRestartLeavesRunningProxyUntouched() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let launcher = FakeProcessLauncher()
+        let authorizer = CompatibilityAuthorizerDouble()
+        let manager = ProxyServiceManager(
+            paths: paths,
+            launcher: launcher,
+            compatibilityAuthorizer: authorizer
+        )
+        try await manager.start(port: 8317)
+        authorizer.blockedActions = [.restartProxy]
+
+        do {
+            try await manager.restart(port: 8317)
+            XCTFail("Expected compatibility block")
+        } catch let error as ProxyServiceError {
+            XCTAssertEqual(error, .compatibilityBlocked(.unsupportedArchitecture))
+        }
+
+        XCTAssertEqual(launcher.invocations.count, 1)
+        XCTAssertEqual(try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8).contains("port: 8317"), true)
+    }
+
+    func testBlockedOAuthPreparationLeavesConfigurationUnchanged() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let existing = "host: \"127.0.0.1\"\nport: 8317\n"
+        try existing.write(to: paths.clipProxyConfigFile, atomically: true, encoding: .utf8)
+        let manager = ProxyServiceManager(
+            paths: paths,
+            launcher: FakeProcessLauncher(),
+            compatibilityAuthorizer: CompatibilityAuthorizerDouble(blockedActions: [.prepareOAuthLogin])
+        )
+
+        XCTAssertThrowsError(try manager.prepare(port: 8317)) { error in
+            XCTAssertEqual(error as? ProxyServiceError, .compatibilityBlocked(.unsupportedArchitecture))
+        }
+        XCTAssertEqual(try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8), existing)
+    }
+
     private func makeSandbox() throws -> URL {
         let sandbox = FileManager.default.temporaryDirectory
             .appendingPathComponent("CLIProxyManagerTests")
@@ -1416,6 +1481,45 @@ final class ProxyServiceManagerTests: XCTestCase {
             value = expression()
         }
         XCTAssertEqual(value, expected, file: file, line: line)
+    }
+}
+
+private final class CompatibilityAuthorizerDouble: RuntimeCompatibilityAuthorizing, @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedBlockedActions: Set<CompatibilityAction>
+
+    var blockedActions: Set<CompatibilityAction> {
+        get { lock.withLock { storedBlockedActions } }
+        set { lock.withLock { storedBlockedActions = newValue } }
+    }
+
+    init(blockedActions: Set<CompatibilityAction> = []) {
+        storedBlockedActions = blockedActions
+    }
+
+    func staticReport(artifacts _: CompatibilityArtifacts) -> RuntimeCompatibilityReport {
+        let blocked = blockedActions
+        return RuntimeCompatibilityReport(
+            findings: blocked.isEmpty
+                ? []
+                : [.unsupportedArchitecture(expected: .arm64, actual: .x86_64)],
+            decisions: Dictionary(uniqueKeysWithValues: CompatibilityAction.allCases.map { action in
+                (action, CompatibilityDecision(
+                    action: action,
+                    disposition: blocked.contains(action) ? .blocked : .allowed
+                ))
+            })
+        )
+    }
+
+    func report(artifacts: CompatibilityArtifacts) async -> RuntimeCompatibilityReport {
+        staticReport(artifacts: artifacts)
+    }
+
+    func require(_ action: CompatibilityAction, artifacts _: CompatibilityArtifacts) throws {
+        if blockedActions.contains(action) {
+            throw RuntimeCompatibilityError.actionBlocked(action)
+        }
     }
 }
 

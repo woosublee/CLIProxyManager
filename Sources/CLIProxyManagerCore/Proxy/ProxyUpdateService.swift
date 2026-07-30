@@ -85,29 +85,34 @@ public struct ProxyUpdateService: Sendable {
     private let checker: any ProxyUpdateChecking
     private let downloader: any ProxyUpdateDownloading
     private let runtime: (any ProxyRuntimeUpdating)?
+    private let compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing
 
     public init(
         paths: ManagedPaths = ManagedPaths(),
         checker: any ProxyUpdateChecking = CLIProxyAPIReleaseClient(),
         downloader: any ProxyUpdateDownloading = ProxyUpdateDownloader(),
-        runtime: (any ProxyRuntimeUpdating)? = nil
+        runtime: (any ProxyRuntimeUpdating)? = nil,
+        compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing = RuntimeCompatibilityPreflight()
     ) {
         self.store = CLIProxyAPIBinaryStore(paths: paths)
         self.checker = checker
         self.downloader = downloader
         self.runtime = runtime ?? ProxyRuntimeService(paths: paths)
+        self.compatibilityAuthorizer = compatibilityAuthorizer
     }
 
     init(
         store: CLIProxyAPIBinaryStore,
         checker: any ProxyUpdateChecking,
         downloader: any ProxyUpdateDownloading,
-        runtime: (any ProxyRuntimeUpdating)?
+        runtime: (any ProxyRuntimeUpdating)?,
+        compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing = RuntimeCompatibilityPreflight()
     ) {
         self.store = store
         self.checker = checker
         self.downloader = downloader
         self.runtime = runtime
+        self.compatibilityAuthorizer = compatibilityAuthorizer
     }
 
     public func check() async throws -> ProxyUpdateCheckResult {
@@ -139,11 +144,54 @@ public struct ProxyUpdateService: Sendable {
         case .pending(_, let pending):
             return ProxyUpdateStageResult(version: pending.version, staged: false)
         case .available(_, let release):
+            try requireCompatibility(for: .stageProxyUpdate, candidate: .explicit(release.target))
             let verification = try await downloader.downloadAndVerify(release)
             defer { downloader.cleanup(verification) }
             try store.savePending(binaryURL: verification.binaryURL, manifest: verification.manifest)
             return ProxyUpdateStageResult(version: verification.manifest.version, staged: true)
         }
+    }
+
+    private func requireCompatibility(
+        for action: CompatibilityAction,
+        candidate: RuntimeCompatibilityArtifact
+    ) throws {
+        let artifacts: CompatibilityArtifacts
+        do {
+            artifacts = CompatibilityArtifacts(
+                bundled: nil,
+                active: try compatibilityArtifact(for: store.activeManifest()),
+                pending: candidate
+            )
+        } catch {
+            throw compatibilityBlockedError(.unsupportedArtifactTarget)
+        }
+        do {
+            try compatibilityAuthorizer.require(action, artifacts: artifacts)
+        } catch {
+            throw compatibilityBlockedError(
+                RuntimeCompatibilityBlocker(report: compatibilityAuthorizer.staticReport(artifacts: artifacts))
+            )
+        }
+    }
+
+    private func compatibilityArtifact(for manifest: CLIProxyAPIBinaryManifest?) throws -> RuntimeCompatibilityArtifact? {
+        guard let manifest else { return nil }
+        guard let target = manifest.target else {
+            guard manifest.upstreamAsset == "CLIProxyAPI_\(manifest.version)_darwin_aarch64.tar.gz" else {
+                throw CLIProxyAPIBinaryStoreError.unsupportedArtifactTarget
+            }
+            return .legacy
+        }
+        return .explicit(target)
+    }
+
+    private func compatibilityArtifact(for manifest: CLIProxyAPIBinaryManifest) throws -> RuntimeCompatibilityArtifact {
+        try compatibilityArtifact(for: Optional(manifest)) ?? .legacy
+    }
+
+    private func compatibilityBlockedError(_ blocker: RuntimeCompatibilityBlocker) -> CLIProxyManagerCommandError {
+        .prerequisite(blocker.recoveryMessage)
     }
 
     public func apply() async throws -> ProxyUpdateApplyResult {
@@ -153,6 +201,7 @@ public struct ProxyUpdateService: Sendable {
             )
         }
         let version = pending.version
+        try requireCompatibility(for: .applyProxyUpdate, candidate: compatibilityArtifact(for: pending))
         guard let runtime else {
             throw CLIProxyManagerCommandError.operation("Runtime service unavailable.")
         }

@@ -167,6 +167,32 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         XCTAssertEqual(downloader.cleanedTemporaryDirectories.map(\.path), [sandbox.appendingPathComponent("verified").path])
     }
 
+    func testBlockedDownloadDoesNotInvokeDownloaderOrStoreMutation() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let downloader = StubUpdateDownloading(result: CLIProxyAPIBinaryVerificationResult(
+            binaryURL: sandbox.appendingPathComponent("verified/cliproxyapi"),
+            manifest: manifest("7.2.42"),
+            temporaryDirectory: sandbox.appendingPathComponent("verified")
+        ))
+        let store = StubUpdateBinaryStore(currentVersion: "7.2.41")
+        let service = CLIProxyAPIUpdateService(
+            paths: paths,
+            checker: StubUpdateChecking(release: release("7.2.42")),
+            downloader: downloader,
+            store: store,
+            now: { Date() },
+            compatibilityAuthorizer: RejectingCompatibilityAuthorizer(action: .stageProxyUpdate)
+        )
+        await service.checkNow()
+
+        await service.downloadAvailableUpdate()
+
+        XCTAssertEqual(downloader.invocationCount, 0)
+        XCTAssertEqual(store.savedPendingVersions, [])
+        XCTAssertEqual(service.lastErrorMessage, RuntimeCompatibilityBlocker.unsupportedArchitecture.recoveryMessage)
+    }
+
     func testInitClearsStalePendingStateAfterAutostartPromotion() throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
@@ -200,6 +226,25 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         XCTAssertEqual(store.schedulePendingCallCount, 1)
         XCTAssertEqual(service.pendingUpdate?.version, "7.2.42")
         XCTAssertEqual(service.state, .pending)
+    }
+
+    func testBlockedScheduleDoesNotMutateStore() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let store = StubUpdateBinaryStore(currentVersion: "7.2.41", pending: manifest("7.2.42"))
+        let service = CLIProxyAPIUpdateService(
+            paths: paths,
+            checker: StubUpdateChecking(release: release("7.2.42")),
+            downloader: StubUpdateDownloading(),
+            store: store,
+            now: { Date() },
+            compatibilityAuthorizer: RejectingCompatibilityAuthorizer(action: .scheduleProxyUpdate)
+        )
+
+        XCTAssertFalse(service.schedulePendingForNextServerStart())
+
+        XCTAssertEqual(store.schedulePendingCallCount, 0)
+        XCTAssertEqual(service.lastErrorMessage, RuntimeCompatibilityBlocker.unsupportedArchitecture.recoveryMessage)
     }
 
     func testSchedulePendingForNextServerStartRecordsFailure() throws {
@@ -265,6 +310,28 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         XCTAssertNil(state.pendingVersion)
         XCTAssertNil(state.lastAvailableVersion)
         XCTAssertNil(state.lastDeferredVersion)
+    }
+
+    func testBlockedApplyDoesNotMutateStore() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let store = StubUpdateBinaryStore(currentVersion: "7.2.41", pending: manifest("7.2.42"))
+        let service = CLIProxyAPIUpdateService(
+            paths: paths,
+            checker: StubUpdateChecking(release: release("7.2.42")),
+            downloader: StubUpdateDownloading(),
+            store: store,
+            now: { Date() },
+            compatibilityAuthorizer: RejectingCompatibilityAuthorizer(action: .applyProxyUpdate)
+        )
+
+        XCTAssertThrowsError(try service.applyPendingNow()) { error in
+            XCTAssertEqual(
+                error as? CLIProxyManagerCommandError,
+                .prerequisite(RuntimeCompatibilityBlocker.unsupportedArchitecture.recoveryMessage)
+            )
+        }
+        XCTAssertEqual(store.applyPendingCallCount, 0)
     }
 
     func testUpdateOperationsRecordTypedLifecycleEvents() async throws {
@@ -427,6 +494,38 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
     }
 }
 
+private struct RejectingCompatibilityAuthorizer: RuntimeCompatibilityAuthorizing {
+    let action: CompatibilityAction?
+
+    init(action: CompatibilityAction? = nil) {
+        self.action = action
+    }
+
+    func staticReport(artifacts _: CompatibilityArtifacts) -> RuntimeCompatibilityReport {
+        RuntimeCompatibilityReport(
+            findings: action == nil
+                ? []
+                : [.unsupportedArchitecture(expected: .arm64, actual: .x86_64)],
+            decisions: Dictionary(uniqueKeysWithValues: CompatibilityAction.allCases.map { candidate in
+                (candidate, CompatibilityDecision(
+                    action: candidate,
+                    disposition: candidate == action ? .blocked : .allowed
+                ))
+            })
+        )
+    }
+
+    func report(artifacts: CompatibilityArtifacts) async -> RuntimeCompatibilityReport {
+        staticReport(artifacts: artifacts)
+    }
+
+    func require(_ action: CompatibilityAction, artifacts _: CompatibilityArtifacts) throws {
+        if action == self.action {
+            throw RuntimeCompatibilityError.actionBlocked(action)
+        }
+    }
+}
+
 private final class UpdateRecordingAppLogger: AppLogging, @unchecked Sendable {
     private let lock = NSLock()
     private var recordedEvents: [AppLogEvent] = []
@@ -474,8 +573,10 @@ private final class StubUpdateDownloading: CLIProxyAPIUpdateDownloading, @unchec
     let result: CLIProxyAPIBinaryVerificationResult?
     private let downloadError: Error
     private var _cleanedTemporaryDirectories: [URL] = []
+    private var _invocationCount = 0
 
     var cleanedTemporaryDirectories: [URL] { lock.withLock { _cleanedTemporaryDirectories } }
+    var invocationCount: Int { lock.withLock { _invocationCount } }
 
     init(result: CLIProxyAPIBinaryVerificationResult? = nil, downloadError: Error = NSError(domain: "test", code: 1)) {
         self.result = result
@@ -483,6 +584,7 @@ private final class StubUpdateDownloading: CLIProxyAPIUpdateDownloading, @unchec
     }
 
     func downloadAndVerify(_ release: CLIProxyAPIRelease) async throws -> CLIProxyAPIBinaryVerificationResult {
+        lock.withLock { _invocationCount += 1 }
         if let result { return result }
         throw downloadError
     }

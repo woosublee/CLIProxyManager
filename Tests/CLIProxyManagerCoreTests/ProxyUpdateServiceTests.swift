@@ -50,6 +50,28 @@ final class ProxyUpdateServiceTests: XCTestCase {
         XCTAssertEqual(downloader.cleanedResults.count, 1)
     }
 
+    func testBlockedStageDoesNotInvokeDownloaderOrStoreMutation() async throws {
+        let paths = try makePaths(activeVersion: "7.2.41")
+        let (binaryURL, manifest) = try makeVerificationFixture(version: "7.2.50")
+        let downloader = DownloaderDouble(result: .init(binaryURL: binaryURL, manifest: manifest))
+        let service = makeService(
+            paths: paths,
+            checker: ReleaseCheckerDouble(release: makeRelease(version: "7.2.50")),
+            downloader: downloader,
+            compatibilityAuthorizer: RejectingCompatibilityAuthorizer(action: .stageProxyUpdate)
+        )
+
+        do {
+            _ = try await service.stage()
+            XCTFail("Expected compatibility block")
+        } catch let error as CLIProxyManagerCommandError {
+            XCTAssertEqual(error, .prerequisite(RuntimeCompatibilityBlocker.unsupportedArchitecture.recoveryMessage))
+        }
+
+        XCTAssertEqual(downloader.requests, [])
+        XCTAssertNil(try CLIProxyAPIBinaryStore(paths: paths).pendingManifest())
+    }
+
     func testStageDoesNotDownloadWhenCurrentBinaryIsAlreadyNewer() async throws {
         let paths = try makePaths(activeVersion: "7.2.60")
         let downloader = DownloaderDouble(result: nil)
@@ -91,6 +113,29 @@ final class ProxyUpdateServiceTests: XCTestCase {
 
         XCTAssertEqual(runtime.restartCount, 1)
         XCTAssertEqual(result, ProxyUpdateApplyResult(version: "7.2.50", restartedProxy: true, proxyReady: true))
+    }
+
+    func testBlockedApplyLeavesPendingBinaryAndRunningProxyUntouched() async throws {
+        let paths = try makePaths(activeVersion: "7.2.41", pendingVersion: "7.2.50")
+        let runtime = ProxyRuntimeUpdateDouble(statuses: [
+            ProxyRuntimeStatus(port: 8317, running: true, health: .ready, activeVersion: "7.2.41", pendingVersion: "7.2.50")
+        ])
+        let service = makeService(
+            paths: paths,
+            runtime: runtime,
+            compatibilityAuthorizer: RejectingCompatibilityAuthorizer(action: .applyProxyUpdate)
+        )
+
+        do {
+            _ = try await service.apply()
+            XCTFail("Expected compatibility block")
+        } catch let error as CLIProxyManagerCommandError {
+            XCTAssertEqual(error, .prerequisite(RuntimeCompatibilityBlocker.unsupportedArchitecture.recoveryMessage))
+        }
+
+        XCTAssertEqual(try CLIProxyAPIBinaryStore(paths: paths).activeManifest()?.version, "7.2.41")
+        XCTAssertEqual(try CLIProxyAPIBinaryStore(paths: paths).pendingManifest()?.version, "7.2.50")
+        XCTAssertEqual(runtime.restartCount, 0)
     }
 
     func testApplyDoesNotStartProxyWhenItWasStopped() async throws {
@@ -188,18 +233,52 @@ final class ProxyUpdateServiceTests: XCTestCase {
         paths: ManagedPaths,
         checker: any ProxyUpdateChecking = ReleaseCheckerDouble(release: nil),
         downloader: any ProxyUpdateDownloading = DownloaderDouble(result: nil),
-        runtime: (any ProxyRuntimeUpdating)? = nil
+        runtime: (any ProxyRuntimeUpdating)? = nil,
+        compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing = RejectingCompatibilityAuthorizer()
     ) -> ProxyUpdateService {
         ProxyUpdateService(
             store: CLIProxyAPIBinaryStore(paths: paths),
             checker: checker,
             downloader: downloader,
-            runtime: runtime
+            runtime: runtime,
+            compatibilityAuthorizer: compatibilityAuthorizer
         )
     }
 }
 
 // MARK: - Test doubles
+
+private struct RejectingCompatibilityAuthorizer: RuntimeCompatibilityAuthorizing {
+    let action: CompatibilityAction?
+
+    init(action: CompatibilityAction? = nil) {
+        self.action = action
+    }
+
+    func staticReport(artifacts _: CompatibilityArtifacts) -> RuntimeCompatibilityReport {
+        RuntimeCompatibilityReport(
+            findings: action == nil
+                ? []
+                : [.unsupportedArchitecture(expected: .arm64, actual: .x86_64)],
+            decisions: Dictionary(uniqueKeysWithValues: CompatibilityAction.allCases.map { candidate in
+                (candidate, CompatibilityDecision(
+                    action: candidate,
+                    disposition: candidate == action ? .blocked : .allowed
+                ))
+            })
+        )
+    }
+
+    func report(artifacts: CompatibilityArtifacts) async -> RuntimeCompatibilityReport {
+        staticReport(artifacts: artifacts)
+    }
+
+    func require(_ action: CompatibilityAction, artifacts _: CompatibilityArtifacts) throws {
+        if action == self.action {
+            throw RuntimeCompatibilityError.actionBlocked(action)
+        }
+    }
+}
 
 private struct ReleaseCheckerDouble: ProxyUpdateChecking {
     let release: CLIProxyAPIRelease?
