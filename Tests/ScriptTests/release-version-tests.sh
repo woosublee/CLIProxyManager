@@ -259,6 +259,70 @@ printf '%s\n' "$canonical_dmg_dry_run" | grep -F 'release-output/CLIProxyManager
   fail "DMG path must use the permitted build directory and resolver basename"
 [[ "$(make -s -C "$REPO_ROOT" ARTIFACT_CHANNEL=development DEVELOPMENT_VERSION=0.2.0 DEVELOPMENT_BUILD_NUMBER=9001 print-app-version)" == '0.2.0' ]] || fail "development version should be explicit"
 
+development_bundle_dry_run="$(make -n -C "$REPO_ROOT" development-bundle)" ||
+  fail "development-bundle target should support a dry run"
+printf '%s\n' "$development_bundle_dry_run" | grep -F \
+  'make verify-app-structure ARTIFACT_CHANNEL=development CONFIGURATION=debug DEVELOPMENT_VERSION="0.1.32" DEVELOPMENT_BUILD_NUMBER="35"' \
+  >/dev/null || fail "development bundle must derive canonical development metadata"
+development_override_dry_run="$(
+  make -n -C "$REPO_ROOT" development-bundle \
+    DEVELOPMENT_VERSION=9.9.9 \
+    DEVELOPMENT_BUILD_NUMBER=9999
+)" || fail "development-bundle must handle caller metadata overrides"
+printf '%s\n' "$development_override_dry_run" | grep -F \
+  'make verify-app-structure ARTIFACT_CHANNEL=development CONFIGURATION=debug DEVELOPMENT_VERSION="0.1.32" DEVELOPMENT_BUILD_NUMBER="35"' \
+  >/dev/null || fail "development bundle must not accept caller metadata overrides"
+development_metadata_line="$(printf '%s\n' "$development_bundle_dry_run" | grep -n -m 1 -F 'scripts/resolve-release-version.sh validate' | cut -d: -f1)"
+development_compile_line="$(printf '%s\n' "$development_bundle_dry_run" | grep -n -m 1 -E 'swift build -c debug[[:space:]]+--product CLIProxyManager' | cut -d: -f1)"
+[[ -n "$development_metadata_line" && -n "$development_compile_line" && "$development_metadata_line" -lt "$development_compile_line" ]] ||
+  fail "development bundle must validate metadata before compilation"
+! printf '%s\n' "$development_bundle_dry_run" | grep -E '(^|[[:space:]])(sign|release-sign|dmg|verify-dmg|sign-dmg|codesign|hdiutil)([[:space:]]|$)' >/dev/null ||
+  fail "development bundle must not sign or create a DMG"
+printf '%s\n' "$development_bundle_dry_run" | grep -F \
+  'scripts/verify-app-structure.sh --app "build/CLIProxyManager.app" --version "0.1.32" --build "35" --channel "development"' \
+  >/dev/null || fail "development bundle must verify its structure with development metadata"
+
+verify_bundle_structure_dry_run="$(make -n -C "$REPO_ROOT" verify-bundle-structure)" ||
+  fail "verify-bundle-structure target should support a dry run"
+printf '%s\n' "$verify_bundle_structure_dry_run" | grep -F \
+  'make verify-app-structure ARTIFACT_CHANNEL=development CONFIGURATION=debug DEVELOPMENT_VERSION="0.1.32" DEVELOPMENT_BUILD_NUMBER="35"' \
+  >/dev/null || fail "verify-bundle-structure must reuse development bundle validation"
+
+sign_dry_run="$(make -n -C "$REPO_ROOT" sign)" || fail "sign target should support a dry run"
+sign_structure_line="$(printf '%s\n' "$sign_dry_run" | grep -n -m 1 -F 'scripts/verify-app-structure.sh --app "build/CLIProxyManager.app" --version "0.1.32" --build "35" --channel "official"' | cut -d: -f1)"
+sign_codesign_line="$(printf '%s\n' "$sign_dry_run" | grep -n -m 1 -F 'codesign --force --options runtime --sign' | cut -d: -f1)"
+[[ -n "$sign_structure_line" && -n "$sign_codesign_line" && "$sign_structure_line" -lt "$sign_codesign_line" ]] ||
+  fail "sign must validate official app structure before codesign"
+development_verify_dry_run="$(
+  make -n -C "$REPO_ROOT" verify \
+    ARTIFACT_CHANNEL=development \
+    DEVELOPMENT_VERSION=0.1.32 \
+    DEVELOPMENT_BUILD_NUMBER=35
+)" || fail "verify must support local signed development artifacts"
+printf '%s\n' "$development_verify_dry_run" | grep -F \
+  'scripts/verify-app-structure.sh --app "build/CLIProxyManager.app" --version "0.1.32" --build "35" --channel "development"' \
+  >/dev/null || fail "development verify must validate development app structure before codesign"
+printf '%s\n' "$development_verify_dry_run" | grep -F \
+  'scripts/verify-release-artifacts.sh --app "build/CLIProxyManager.app"' \
+  >/dev/null || fail "development verify must retain development release identity verification"
+
+ci_build_dry_run="$(make -n -C "$REPO_ROOT" ci-build)" ||
+  fail "ci-build target should support a dry run"
+printf '%s\n' "$ci_build_dry_run" | grep -F \
+  'make swift-build CONFIGURATION=debug SWIFT_BUILD_FLAGS="-Xswiftc -warnings-as-errors"' \
+  >/dev/null || fail "ci-build must reuse swift-build with strict debug settings"
+for product in CLIProxyManager cpm cliproxy-manager; do
+  printf '%s\n' "$ci_build_dry_run" | grep -F \
+    "swift build -c debug -Xswiftc -warnings-as-errors --product $product" \
+    >/dev/null || fail "ci-build must compile $product with warnings as errors"
+done
+ci_metadata_line="$(printf '%s\n' "$ci_build_dry_run" | grep -n -m 1 -F 'scripts/resolve-release-version.sh validate' | cut -d: -f1)"
+ci_compile_line="$(printf '%s\n' "$ci_build_dry_run" | grep -n -m 1 -F 'swift build -c debug -Xswiftc -warnings-as-errors --product CLIProxyManager' | cut -d: -f1)"
+[[ -n "$ci_metadata_line" && -n "$ci_compile_line" && "$ci_metadata_line" -lt "$ci_compile_line" ]] ||
+  fail "ci-build must validate metadata before compilation"
+! printf '%s\n' "$ci_build_dry_run" | grep -E '[[:space:]](codesign|hdiutil)[[:space:]]' >/dev/null ||
+  fail "ci-build must not sign or create a DMG"
+
 write_appcast() {
   local path="$1" version="$2" build="$3" enclosure_version="$4" enclosure_build="$5" tag="$6" dmg="$7"
   cat > "$path" <<XML
@@ -630,7 +694,21 @@ assert_failure_contains 'provenance trust mismatch: expected official or local-f
   "$verify_repo/scripts/verify-release-artifacts.sh" --provenance "$verify_repo/build/release-provenance.json" --official
 plutil -replace trust -string official "$verify_repo/build/release-provenance.json"
 plutil -remove trust "$verify_repo/build/release-provenance.json"
+fake_missing_trust_plutil="$sandbox/fake-missing-trust-plutil"
+cat > "$fake_missing_trust_plutil" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "$1" == '-extract' && "$2" == 'trust' && "$3" == 'raw' ]]; then
+  printf '%s\n' 'Could not extract value, error: No value at that key path or invalid key path: trust'
+  exit 1
+fi
+
+exec /usr/bin/plutil "$@"
+SH
+chmod +x "$fake_missing_trust_plutil"
 assert_failure_contains 'provenance trust mismatch: expected official or local-fallback, actual missing' \
+  env PLUTIL="$fake_missing_trust_plutil" \
   "$verify_repo/scripts/verify-release-artifacts.sh" --provenance "$verify_repo/build/release-provenance.json" --official
 plutil -insert trust -string official "$verify_repo/build/release-provenance.json"
 

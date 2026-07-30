@@ -1,10 +1,26 @@
 import CryptoKit
 import Foundation
 
+private final class FileManagerAccessLock: @unchecked Sendable {
+    static let shared = FileManagerAccessLock()
+
+    let value = NSLock()
+}
+
 public struct HelperInspector: HelperInspecting, Sendable {
+    private struct FileManagerStorage: @unchecked Sendable {
+        let value: FileManager
+
+        func withValue<T>(_ operation: (FileManager) -> T) -> T {
+            FileManagerAccessLock.shared.value.lock()
+            defer { FileManagerAccessLock.shared.value.unlock() }
+            return operation(value)
+        }
+    }
+
     private let helperPath: String
     private let bundledHelperURL: URL?
-    private let fileManager: FileManager
+    private let fileManager: FileManagerStorage
 
     public init(
         helperPath: String = "/usr/local/bin/cpm",
@@ -13,24 +29,26 @@ public struct HelperInspector: HelperInspecting, Sendable {
     ) {
         self.helperPath = helperPath
         self.bundledHelperURL = bundledHelperURL
-        self.fileManager = fileManager
+        self.fileManager = FileManagerStorage(value: fileManager)
     }
 
     public func inspect() -> HelperStatus {
-        var isDir: ObjCBool = false
-        let installed = fileManager.fileExists(atPath: helperPath, isDirectory: &isDir) && !isDir.boolValue
-        var matchesBundled = false
-        if installed, let bundled = bundledHelperURL {
-            var bundledIsDir: ObjCBool = false
-            let bundledExists = fileManager.fileExists(atPath: bundled.path, isDirectory: &bundledIsDir) && !bundledIsDir.boolValue
-            if bundledExists {
-                matchesBundled = filesMatch(helperPath, bundled.path)
+        fileManager.withValue { fileManager in
+            var isDir: ObjCBool = false
+            let installed = fileManager.fileExists(atPath: helperPath, isDirectory: &isDir) && !isDir.boolValue
+            var matchesBundled = false
+            if installed, let bundled = bundledHelperURL {
+                var bundledIsDir: ObjCBool = false
+                let bundledExists = fileManager.fileExists(atPath: bundled.path, isDirectory: &bundledIsDir) && !bundledIsDir.boolValue
+                if bundledExists {
+                    matchesBundled = filesMatch(helperPath, bundled.path, fileManager: fileManager)
+                }
             }
+            return HelperStatus(path: helperPath, installed: installed, matchesBundled: matchesBundled)
         }
-        return HelperStatus(path: helperPath, installed: installed, matchesBundled: matchesBundled)
     }
 
-    private func filesMatch(_ path1: String, _ path2: String) -> Bool {
+    private func filesMatch(_ path1: String, _ path2: String, fileManager: FileManager) -> Bool {
         guard
             let attr1 = try? fileManager.attributesOfItem(atPath: path1),
             let attr2 = try? fileManager.attributesOfItem(atPath: path2),

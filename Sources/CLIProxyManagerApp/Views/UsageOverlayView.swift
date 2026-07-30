@@ -83,8 +83,6 @@ struct UsageOverlayView: View {
                 style: .continuous
             )
         )
-        .gesture(WindowDragGesture())
-        .allowsWindowActivationEvents(true)
         .task { await viewModel.refresh() }
         .task {
             while !Task.isCancelled {

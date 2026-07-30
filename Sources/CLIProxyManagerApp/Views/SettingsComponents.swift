@@ -92,7 +92,7 @@ struct SettingsStepper: View {
             .multilineTextAlignment(.center)
             .frame(width: 60, height: 26)
             .onSubmit { commitText() }
-            .onChange(of: value) { _ in text = "" }
+            .onChange(of: value) { text = "" }
 
             VStack(spacing: 0) {
                 Button {

@@ -156,6 +156,55 @@ scripts/release-local.sh "$(scripts/resolve-release-version.sh tag)" \
 
 The fallback artifact records `local-fallback` trust in `release-provenance.json`. Do not run CI release and local fallback concurrently. `ALLOW_LOCAL_RELEASE_CLOBBER=1` does not replace a completed release; it resumes a verified partial publish where the same commit was tagged but release or asset upload failed.
 
+## Pull request and main CI
+
+All pull requests and pushes to `main` run read-only CI on the fixed `macos-14` runner. The workflow uses only `contents: read`; it neither consumes secrets nor accesses, creates, or uploads signing identities, certificates, or signing artifacts. These are the exact required check names:
+
+| Check | Run locally before opening a PR |
+| --- | --- |
+| `Build` | `make ci-build` |
+| `Test` | `swift test` |
+| `Script tests` | `bash scripts/run-script-tests.sh` |
+| `Package structure` | `make verify-bundle-structure` |
+
+`verify-bundle-structure` creates an unsigned development bundle only to validate package structure. It is not signed or notarized and must never be treated or shipped as a distributable release. The manual **Self-signed Release** GitHub Actions workflow remains a separate release procedure; PR/main CI does not sign or publish artifacts.
+
+### Staged ruleset rollout and recovery
+
+Apply required-check enforcement separately from the workflow, in this order:
+
+1. Merge the CI workflow first.
+2. Confirm in GitHub Actions that the first `main` run emits all four exact check names: `Build`, `Test`, `Script tests`, and `Package structure`. Capitalization and spaces must match the ruleset.
+3. Only then apply the ruleset from the repository root.
+
+   ```bash
+   gh api --method POST repos/woosublee/CLIProxyManager/rulesets \
+     --input .github/rulesets/main-ci.json
+   ```
+
+4. Verify the effective rules for `main`.
+
+   ```bash
+   gh ruleset check main --repo woosublee/CLIProxyManager
+   ```
+
+If an incorrect check name or ruleset configuration blocks merging, preserve the CI workflow and disable or delete only the `main-ci` ruleset. To disable it, find its ID and set only its enforcement to `disabled`.
+
+```bash
+RULESET_ID="$(gh api repos/woosublee/CLIProxyManager/rulesets \
+  --jq '.[] | select(.name == "main-ci") | .id')"
+gh api --method PUT "repos/woosublee/CLIProxyManager/rulesets/$RULESET_ID" \
+  --raw-field enforcement=disabled
+```
+
+If the ruleset must be removed, delete that same ID.
+
+```bash
+gh api --method DELETE "repos/woosublee/CLIProxyManager/rulesets/$RULESET_ID"
+```
+
+Then correct and verify the CI workflow's actual check names and configuration before reapplying only the ruleset through the staged sequence above.
+
 ## Logs and diagnostics
 
 The Log level under **Settings → Advanced** has two options: Info and Debug.

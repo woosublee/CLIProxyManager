@@ -156,6 +156,55 @@ scripts/release-local.sh "$(scripts/resolve-release-version.sh tag)" \
 
 Fallback artifact의 `release-provenance.json`에는 `local-fallback` trust가 기록됩니다. CI release와 local fallback을 동시에 실행하지 마세요. `ALLOW_LOCAL_RELEASE_CLOBBER=1`은 이미 성공한 release를 교체하는 옵션이 아니라, 같은 commit의 tag가 만들어진 뒤 upload만 실패한 partial publish를 재개하는 용도입니다.
 
+## Pull request 및 main CI
+
+모든 pull request와 `main` push는 고정된 `macos-14` runner에서 읽기 전용 CI를 실행합니다. 이 workflow는 `contents: read` 권한만 사용하며 secret, signing identity·certificate, signing artifact를 사용하거나 생성·업로드하지 않습니다. Required check 이름은 다음 네 개로 정확히 고정됩니다.
+
+| Check | PR 전 로컬 실행 명령 |
+| --- | --- |
+| `Build` | `make ci-build` |
+| `Test` | `swift test` |
+| `Script tests` | `bash scripts/run-script-tests.sh` |
+| `Package structure` | `make verify-bundle-structure` |
+
+`verify-bundle-structure`는 package structure 검증만을 위해 unsigned development bundle을 만듭니다. 이 bundle은 signing·notarization을 거치지 않으며 distributable release로 취급하거나 배포해서는 안 됩니다. 수동 **Self-signed Release** GitHub Actions workflow는 이 CI와 별개의 release 절차로 유지되며, PR/main CI는 artifact를 sign하거나 publish하지 않습니다.
+
+### Ruleset 단계적 적용 및 복구
+
+Required check enforcement는 workflow와 분리해 다음 순서로 적용합니다.
+
+1. CI workflow를 먼저 merge합니다.
+2. 첫 번째 `main` 실행이 `Build`, `Test`, `Script tests`, `Package structure`라는 정확한 check 이름을 모두 출력하는지 GitHub Actions에서 확인합니다. 이름의 대소문자와 공백도 ruleset과 일치해야 합니다.
+3. 확인 후 repository root에서 ruleset을 적용합니다.
+
+   ```bash
+   gh api --method POST repos/woosublee/CLIProxyManager/rulesets \
+     --input .github/rulesets/main-ci.json
+   ```
+
+4. 적용된 `main`의 effective rules를 확인합니다.
+
+   ```bash
+   gh ruleset check main --repo woosublee/CLIProxyManager
+   ```
+
+Check 이름이나 ruleset 설정이 잘못되어 merge가 막히면 CI workflow는 보존하고 `main-ci` ruleset만 비활성화하거나 삭제합니다. 비활성화하려면 ruleset ID를 확인한 뒤 enforcement만 `disabled`로 바꿉니다.
+
+```bash
+RULESET_ID="$(gh api repos/woosublee/CLIProxyManager/rulesets \
+  --jq '.[] | select(.name == "main-ci") | .id')"
+gh api --method PUT "repos/woosublee/CLIProxyManager/rulesets/$RULESET_ID" \
+  --raw-field enforcement=disabled
+```
+
+ruleset을 제거해야 하면 같은 ID로 삭제합니다.
+
+```bash
+gh api --method DELETE "repos/woosublee/CLIProxyManager/rulesets/$RULESET_ID"
+```
+
+그 후 CI workflow를 다시 실행해 실제 check 이름과 configuration을 수정·확인한 다음, 위 단계에 따라 ruleset만 다시 적용합니다.
+
 ## 로그와 진단
 
 **Settings → Advanced**의 Log level은 Info와 Debug 두 단계입니다.

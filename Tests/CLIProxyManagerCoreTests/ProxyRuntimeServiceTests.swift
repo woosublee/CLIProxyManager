@@ -57,14 +57,15 @@ final class ProxyRuntimeServiceTests: XCTestCase {
 
     func testStatusProxyFactoryReceivesNilBundleURLs() async throws {
         let paths = try makePaths(port: 8317)
-        var receivedBinaryURL: URL? = URL(fileURLWithPath: "/placeholder")
-        var receivedManifestURL: URL? = URL(fileURLWithPath: "/placeholder")
+        let receivedURLs = CapturedBundleURLs(
+            binaryURL: URL(fileURLWithPath: "/placeholder"),
+            manifestURL: URL(fileURLWithPath: "/placeholder")
+        )
         let service = ProxyRuntimeService(
             configLoader: { try AppConfigStore(paths: paths).load() },
             bundleLocator: FailingBundleLocator(),
             proxyServiceFactory: { binaryURL, manifestURL in
-                receivedBinaryURL = binaryURL
-                receivedManifestURL = manifestURL
+                receivedURLs.record(binaryURL: binaryURL, manifestURL: manifestURL)
                 return ProxyServiceDouble()
             },
             healthClient: HealthClientDouble(severity: .stopped),
@@ -73,8 +74,8 @@ final class ProxyRuntimeServiceTests: XCTestCase {
 
         _ = try await service.stop()
 
-        XCTAssertNil(receivedBinaryURL)
-        XCTAssertNil(receivedManifestURL)
+        XCTAssertNil(receivedURLs.binaryURL)
+        XCTAssertNil(receivedURLs.manifestURL)
     }
 
     // MARK: - Helpers
@@ -127,6 +128,36 @@ final class ProxyRuntimeServiceTests: XCTestCase {
 }
 
 // MARK: - Test doubles
+
+private final class CapturedBundleURLs: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _binaryURL: URL?
+    private var _manifestURL: URL?
+
+    init(binaryURL: URL?, manifestURL: URL?) {
+        _binaryURL = binaryURL
+        _manifestURL = manifestURL
+    }
+
+    var binaryURL: URL? {
+        lock.lock()
+        defer { lock.unlock() }
+        return _binaryURL
+    }
+
+    var manifestURL: URL? {
+        lock.lock()
+        defer { lock.unlock() }
+        return _manifestURL
+    }
+
+    func record(binaryURL: URL?, manifestURL: URL?) {
+        lock.lock()
+        _binaryURL = binaryURL
+        _manifestURL = manifestURL
+        lock.unlock()
+    }
+}
 
 private final class ProxyServiceDouble: ProxyServiceControlling, @unchecked Sendable {
     enum Event: Equatable {

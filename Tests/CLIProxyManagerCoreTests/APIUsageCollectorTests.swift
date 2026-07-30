@@ -1213,6 +1213,19 @@ final class APIUsageCollectorTests: XCTestCase {
         try? await collector.stop(reason: .applicationTermination, at: Date())
     }
 
+    func testDefaultCollectorRestoresDisabledConfiguration() async {
+        let collector = APIUsageCollector()
+        let report = await collector.restore(configuration: .init(
+            usageEnabled: false,
+            proxyReady: false,
+            port: 28_317,
+            enabledProviders: [.claude],
+            reportingTimeZoneID: "UTC"
+        ))
+
+        XCTAssertEqual(report.statesByProfileID["claude-api"], .disabled)
+    }
+
     func testReportsFinishReplacedSubscriberAndYieldLatestReportToNewSubscriber() async {
         let collector = APIUsageCollector(
             queueClient: RecordingQueueClient(results: []),
@@ -1227,6 +1240,36 @@ final class APIUsageCollectorTests: XCTestCase {
         let secondStream = await collector.reports()
         let firstValue = await firstNext.value
         XCTAssertNil(firstValue)
+
+        let expected = await collector.restore(configuration: .init(
+            usageEnabled: false,
+            proxyReady: false,
+            port: 28_317,
+            enabledProviders: [.claude],
+            reportingTimeZoneID: "UTC"
+        ))
+        var secondIterator = secondStream.makeAsyncIterator()
+        let streamed = await secondIterator.next()
+        XCTAssertEqual(streamed, expected)
+    }
+
+    func testReportsKeepReplacementAfterPriorSubscriberTerminates() async {
+        let collector = APIUsageCollector(
+            queueClient: RecordingQueueClient(results: []),
+            ledgerStore: RecordingLedgerStore()
+        )
+        let firstStream = await collector.reports()
+        let firstNext = Task { () -> APIUsageCollectionReport? in
+            var iterator = firstStream.makeAsyncIterator()
+            return await iterator.next()
+        }
+
+        let secondStream = await collector.reports()
+        let firstValue = await firstNext.value
+        XCTAssertNil(firstValue)
+        for _ in 0..<20 {
+            await Task.yield()
+        }
 
         let expected = await collector.restore(configuration: .init(
             usageEnabled: false,

@@ -75,9 +75,7 @@ jobs:
 
       - name: Test
         run: |
-          bash Tests/ScriptTests/release-version-tests.sh
-          bash Tests/ScriptTests/release-local-tests.sh
-          bash Tests/ScriptTests/generate-sparkle-appcast-tests.sh
+          bash scripts/run-script-tests.sh
           swift test
 
       # Required GitHub secrets:

@@ -51,7 +51,19 @@ public actor APIUsageLedgerStore: APIUsageLedgerStoring {
 
     public init(
         paths: ManagedPaths = ManagedPaths(),
-        fileManager: FileManager = .default,
+        writeDelayNanoseconds: UInt64 = 1_000_000_000,
+        sleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) }
+    ) {
+        self.paths = paths
+        self.fileManager = .default
+        self.writeDelayNanoseconds = writeDelayNanoseconds
+        self.sleep = sleep
+        self.beforeCorruptBackupMove = { _ in }
+    }
+
+    public init(
+        paths: ManagedPaths = ManagedPaths(),
+        fileManager: FileManager,
         writeDelayNanoseconds: UInt64 = 1_000_000_000,
         sleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) }
     ) {
@@ -64,7 +76,20 @@ public actor APIUsageLedgerStore: APIUsageLedgerStoring {
 
     init(
         paths: ManagedPaths = ManagedPaths(),
-        fileManager: FileManager = .default,
+        writeDelayNanoseconds: UInt64 = 1_000_000_000,
+        sleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) },
+        beforeCorruptBackupMove: @escaping @Sendable (URL) throws -> Void
+    ) {
+        self.paths = paths
+        self.fileManager = .default
+        self.writeDelayNanoseconds = writeDelayNanoseconds
+        self.sleep = sleep
+        self.beforeCorruptBackupMove = beforeCorruptBackupMove
+    }
+
+    init(
+        paths: ManagedPaths = ManagedPaths(),
+        fileManager: FileManager,
         writeDelayNanoseconds: UInt64 = 1_000_000_000,
         sleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) },
         beforeCorruptBackupMove: @escaping @Sendable (URL) throws -> Void
