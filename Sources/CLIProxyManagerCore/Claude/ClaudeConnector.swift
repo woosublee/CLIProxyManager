@@ -1,5 +1,49 @@
 import Foundation
 
+public protocol ClaudeCodeInspecting: Sendable {
+    func observeVersion() async -> ClaudeCodeObservation
+}
+
+public struct ClaudeCodeInspector: ClaudeCodeInspecting, Sendable {
+    private static let maximumVersionOutputLength = 512
+
+    private let runner: ProcessRunning
+
+    public init(runner: ProcessRunning = ProcessRunner()) {
+        self.runner = runner
+    }
+
+    public func observeVersion() async -> ClaudeCodeObservation {
+        let which = await runner.run("/usr/bin/env", ["which", "claude"])
+        guard which.exitCode == 0 else {
+            return .unavailable
+        }
+
+        let version = await runner.run("/usr/bin/env", ["claude", "--version"])
+        guard version.exitCode == 0 else {
+            return .unverified
+        }
+
+        return semanticVersion(in: version.stdout).map(ClaudeCodeObservation.version) ?? .unverified
+    }
+
+    private func semanticVersion(in output: String) -> String? {
+        let boundedOutput = String(output.prefix(Self.maximumVersionOutputLength))
+        guard let expression = try? NSRegularExpression(
+            pattern: #"(?<![0-9])([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})(?![0-9])"#
+        ) else {
+            return nil
+        }
+        let range = NSRange(boundedOutput.startIndex..., in: boundedOutput)
+        guard let match = expression.firstMatch(in: boundedOutput, range: range),
+              let versionRange = Range(match.range(at: 1), in: boundedOutput)
+        else {
+            return nil
+        }
+        return String(boundedOutput[versionRange])
+    }
+}
+
 public struct ClaudeConnector: Sendable {
     private let runner: ProcessRunning
 

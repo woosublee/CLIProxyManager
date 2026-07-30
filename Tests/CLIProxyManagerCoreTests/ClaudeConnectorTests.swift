@@ -101,6 +101,34 @@ final class ClaudeConnectorTests: XCTestCase {
         XCTAssertEqual(status.message, "Process timed out after 10.0 seconds")
     }
 
+    func testVersionInspectorReadsVersionWithoutCheckingAuth() async {
+        let runner = FakeProcessRunner(results: [
+            ProcessResult(exitCode: 0, stdout: "/usr/local/bin/claude\n", stderr: ""),
+            ProcessResult(exitCode: 0, stdout: "2.1.221 (Claude Code)\n", stderr: "")
+        ])
+        let inspector = ClaudeCodeInspector(runner: runner)
+
+        let observation = await inspector.observeVersion()
+
+        XCTAssertEqual(observation, .version("2.1.221"))
+        XCTAssertEqual(runner.calls, [
+            FakeProcessRunner.Call(executable: "/usr/bin/env", arguments: ["which", "claude"]),
+            FakeProcessRunner.Call(executable: "/usr/bin/env", arguments: ["claude", "--version"])
+        ])
+    }
+
+    func testVersionInspectorReportsUnverifiedVersionWithoutRawCommandOutput() async {
+        let runner = FakeProcessRunner(results: [
+            ProcessResult(exitCode: 0, stdout: "/usr/local/bin/claude\n", stderr: ""),
+            ProcessResult(exitCode: 1, stdout: "", stderr: "")
+        ])
+        let inspector = ClaudeCodeInspector(runner: runner)
+
+        let observation = await inspector.observeVersion()
+
+        XCTAssertEqual(observation, .unverified)
+    }
+
     func testLoginCommandUsesOfficialClaudeAuthLogin() {
         let connector = ClaudeConnector(runner: FakeProcessRunner(results: []))
 

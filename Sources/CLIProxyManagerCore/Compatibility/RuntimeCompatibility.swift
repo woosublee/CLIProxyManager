@@ -50,18 +50,23 @@ public struct RuntimeCompatibilityEnvironment: Codable, Equatable, Sendable {
 
     public let operatingSystem: OperatingSystem
     public let architecture: Architecture
+    public let isTranslated: Bool
     public let loginShell: String
 
     public init(
         operatingSystem: OperatingSystem,
         architecture: Architecture,
+        isTranslated: Bool = false,
         loginShell: String
     ) {
         self.operatingSystem = operatingSystem
         self.architecture = architecture
-        self.loginShell = loginShell
+        self.isTranslated = isTranslated
+        self.loginShell = loginShell.isEmpty ? "" : URL(fileURLWithPath: loginShell).lastPathComponent
     }
 }
+
+public typealias RuntimeEnvironmentSnapshot = RuntimeCompatibilityEnvironment
 
 public enum RuntimeCompatibilityArtifact: Codable, Equatable, Sendable {
     case explicit(CLIProxyAPIArtifactTarget)
@@ -84,10 +89,16 @@ public struct RuntimeCompatibilityArtifacts: Codable, Equatable, Sendable {
     }
 }
 
-public enum RuntimeCompatibilityClaude: Codable, Equatable, Sendable {
+public typealias CompatibilityArtifacts = RuntimeCompatibilityArtifacts
+
+public enum ClaudeCodeObservation: Codable, Equatable, Sendable {
     case notChecked
     case version(String)
+    case unavailable
+    case unverified
 }
+
+public typealias RuntimeCompatibilityClaude = ClaudeCodeObservation
 
 public enum CompatibilityFinding: Codable, Equatable, Sendable {
     case unsupportedOperatingSystem(minimumMajor: Int, actualMajor: Int)
@@ -100,6 +111,8 @@ public enum CompatibilityFinding: Codable, Equatable, Sendable {
         actual: CLIProxyAPIArtifactTarget
     )
     case unsupportedLoginShell(expectedBasename: String, actualBasename: String)
+    case unavailableClaudeCode
+    case unverifiedClaudeCode
     case unverifiedClaudeCodeVersion(expected: String, actual: String)
 }
 
@@ -223,15 +236,20 @@ public struct RuntimeCompatibilityPolicy: Equatable, Sendable {
             )
         }
 
-        if case let .version(actualVersion) = claude,
-           actualVersion != lastVerifiedClaudeCodeVersion
-        {
+        switch claude {
+        case let .version(actualVersion) where actualVersion != lastVerifiedClaudeCodeVersion:
             findings.append(
                 .unverifiedClaudeCodeVersion(
                     expected: lastVerifiedClaudeCodeVersion,
                     actual: actualVersion
                 )
             )
+        case .unavailable:
+            findings.append(.unavailableClaudeCode)
+        case .unverified:
+            findings.append(.unverifiedClaudeCode)
+        case .notChecked, .version:
+            break
         }
 
         return findings
@@ -250,7 +268,10 @@ public struct RuntimeCompatibilityPolicy: Equatable, Sendable {
         switch finding {
         case .unsupportedOperatingSystem, .unsupportedArchitecture, .unsupportedArtifactTarget:
             return true
-        case .unsupportedLoginShell, .unverifiedClaudeCodeVersion:
+        case .unsupportedLoginShell,
+             .unavailableClaudeCode,
+             .unverifiedClaudeCode,
+             .unverifiedClaudeCodeVersion:
             return false
         }
     }
