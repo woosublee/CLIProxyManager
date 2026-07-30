@@ -165,9 +165,9 @@ public struct RuntimeCompatibilityPolicy: Equatable, Sendable {
             artifacts: artifacts,
             claude: claude
         )
-        let blockingFindings = findings.filter(isBlocking)
         let hasWarnings = !findings.isEmpty
         let decisions = Dictionary(uniqueKeysWithValues: CompatibilityAction.allCases.map { action in
+            let blockingFindings = findings.filter { isBlocking($0, for: action) }
             let disposition: CompatibilityDisposition
             if allowsRecovery(action) {
                 disposition = hasWarnings ? .allowedWithWarnings : .allowed
@@ -253,6 +253,18 @@ public struct RuntimeCompatibilityPolicy: Equatable, Sendable {
         case .unsupportedLoginShell, .unverifiedClaudeCodeVersion:
             return false
         }
+    }
+
+    private func isBlocking(_ finding: CompatibilityFinding, for action: CompatibilityAction) -> Bool {
+        if isBlocking(finding) {
+            return true
+        }
+
+        if case .unsupportedLoginShell = finding {
+            return action == .installShellFunctions
+        }
+
+        return false
     }
 
     private func allowsRecovery(_ action: CompatibilityAction) -> Bool {
