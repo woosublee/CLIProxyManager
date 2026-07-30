@@ -141,6 +141,12 @@ final class UsageOverlayPlacementTests: XCTestCase {
         XCTAssertNil(LegacyUsageOverlayFrame(descriptor: descriptor))
     }
 
+    func testLegacyFrameRejectsNonFiniteValues() {
+        let descriptor = "nan 1035 108 359 -2560 0 2560 1410"
+
+        XCTAssertNil(LegacyUsageOverlayFrame(descriptor: descriptor))
+    }
+
     private func identity(
         uuid: String?,
         vendor: UInt32? = nil,

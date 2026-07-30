@@ -39,6 +39,15 @@ final class MenuBarWindowBridgeTests: XCTestCase {
         XCTAssertTrue(window.standardWindowButton(.zoomButton)?.isHidden == true)
     }
 
+    func testUsageOverlayConfiguratorAllowsBackgroundWindowDragging() {
+        let window = makeWindow(fittingHeight: 120)
+        let configurator = UsageOverlayWindowConfigurator()
+
+        configurator.configure(window: window, alwaysOnTop: false)
+
+        XCTAssertTrue(window.isMovableByWindowBackground)
+    }
+
     func testUsageOverlayConfiguratorDoesNotRestoreAutosavedFrameWhenReconfigured() {
         let defaults = UserDefaults.standard
         let autosaveKey = "NSWindow Frame usage-overlay"

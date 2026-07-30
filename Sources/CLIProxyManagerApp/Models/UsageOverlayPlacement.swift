@@ -166,7 +166,7 @@ struct LegacyUsageOverlayFrame: Equatable {
         let values = tokens.compactMap { Double($0) }
         guard tokens.count == 8,
               values.count == tokens.count,
-              values.allSatisfy(\.isFinite),
+              values.allSatisfy({ $0.isFinite }),
               values[2] > 0,
               values[3] > 0,
               values[6] > 0,
