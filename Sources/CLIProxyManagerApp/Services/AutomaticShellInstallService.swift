@@ -1,6 +1,29 @@
 import CLIProxyManagerCore
 import Foundation
 
+enum ShellFunctionInstallationError: LocalizedError, Equatable, Sendable {
+    case unsupportedLoginShell
+    case claudeCodeUnavailable
+    case runtimeIncompatible
+
+    var errorDescription: String? {
+        switch self {
+        case .unsupportedLoginShell:
+            "Shell functions require zsh as the login shell. Change the login shell to zsh, then retry."
+        case .claudeCodeUnavailable:
+            "Shell functions require the Claude executable. Install Claude Code, then retry."
+        case .runtimeIncompatible:
+            "Shell functions cannot be installed in this runtime. Use a supported runtime, then retry."
+        }
+    }
+}
+
+enum AutomaticShellInstallationResult: Equatable, Sendable {
+    case written
+    case skippedForCompatibility
+    case disabled
+}
+
 struct AutomaticShellInstallService: Sendable {
     struct EnabledFunctions: Sendable {
         var claudeOAuth: Bool
@@ -26,6 +49,7 @@ struct AutomaticShellInstallService: Sendable {
 
     private let installer: any ShellFunctionInstalling
     private let secretStore: any SecretStore
+    private let compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing
     private let defaultHelperCommand: String
     private let isEnabled: Bool
 
@@ -33,22 +57,26 @@ struct AutomaticShellInstallService: Sendable {
         installer: any ShellFunctionInstalling,
         secretStore: any SecretStore = FileSecretStore(),
         helperCommand: String = "/usr/local/bin/cliproxy-manager",
+        compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing = RuntimeCompatibilityPreflight(),
         isEnabled: Bool = true
     ) {
         self.installer = installer
         self.secretStore = secretStore
+        self.compatibilityAuthorizer = compatibilityAuthorizer
         self.defaultHelperCommand = helperCommand
         self.isEnabled = isEnabled
     }
 
     static func runtimeDefault(
         installer: any ShellFunctionInstalling,
-        secretStore: any SecretStore = FileSecretStore()
+        secretStore: any SecretStore = FileSecretStore(),
+        compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing = RuntimeCompatibilityPreflight()
     ) -> AutomaticShellInstallService {
         AutomaticShellInstallService(
             installer: installer,
             secretStore: secretStore,
-            helperCommand: resolvedDefaultHelperCommand()
+            helperCommand: resolvedDefaultHelperCommand(),
+            compatibilityAuthorizer: compatibilityAuthorizer
         )
     }
 
@@ -83,8 +111,21 @@ struct AutomaticShellInstallService: Sendable {
         return "/usr/local/bin/cliproxy-manager"
     }
 
-    func apply(config: AppConfig, helperCommand: String? = nil, enabledFunctions: EnabledFunctions = .allOAuth) throws {
+    func apply(
+        config: AppConfig,
+        helperCommand: String? = nil,
+        enabledFunctions: EnabledFunctions = .allOAuth
+    ) async throws {
         guard isEnabled else { return }
+        let report = await compatibilityAuthorizer.report(artifacts: CompatibilityArtifacts(
+            bundled: nil,
+            active: nil,
+            pending: nil
+        ))
+        if let compatibilityError = compatibilityError(for: report) {
+            throw compatibilityError
+        }
+
         let includeClaudeOAuth = shouldIncludeOAuth(provider: .claude, config: config, enabled: enabledFunctions.claudeOAuth)
         let includeCodex = shouldIncludeOAuth(provider: .codex, config: config, enabled: enabledFunctions.codex)
         var includedAPIKeyProfileIDs: Set<String> = []
@@ -113,6 +154,43 @@ struct AutomaticShellInstallService: Sendable {
             includedAPIKeyProfileIDs.contains(profile.id) ? profile.commandName : nil
         })
         try installer.install(functionScript: script, functionNames: functionNames)
+    }
+
+    func reconcile(
+        config: AppConfig,
+        helperCommand: String? = nil,
+        enabledFunctions: EnabledFunctions = .allOAuth
+    ) async throws -> AutomaticShellInstallationResult {
+        guard isEnabled else { return .disabled }
+        do {
+            try await apply(
+                config: config,
+                helperCommand: helperCommand,
+                enabledFunctions: enabledFunctions
+            )
+            return .written
+        } catch is ShellFunctionInstallationError {
+            return .skippedForCompatibility
+        }
+    }
+
+    private func compatibilityError(for report: RuntimeCompatibilityReport) -> ShellFunctionInstallationError? {
+        if report.findings.contains(where: { finding in
+            if case .unsupportedLoginShell = finding { return true }
+            return false
+        }) {
+            return .unsupportedLoginShell
+        }
+        if report.findings.contains(where: { finding in
+            if case .unavailableClaudeCode = finding { return true }
+            return false
+        }) {
+            return .claudeCodeUnavailable
+        }
+        if report.decision(for: .installShellFunctions).disposition == .blocked {
+            return .runtimeIncompatible
+        }
+        return nil
     }
 
     private func shouldIncludeOAuth(provider: AuthProfileType, config: AppConfig, enabled: Bool) -> Bool {

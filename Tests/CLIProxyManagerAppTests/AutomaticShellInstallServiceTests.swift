@@ -4,15 +4,18 @@ import CLIProxyManagerCore
 
 @MainActor
 final class AutomaticShellInstallServiceTests: XCTestCase {
-    func testRuntimeDefaultInstallsShellFunctionsInDebugBuild() throws {
+    func testRuntimeDefaultInstallsShellFunctionsInDebugBuild() async throws {
         let installer = StubShellInstaller()
-        let service = AutomaticShellInstallService.runtimeDefault(installer: installer)
+        let service = AutomaticShellInstallService.runtimeDefault(
+            installer: installer,
+            compatibilityAuthorizer: FixedCompatibilityAuthorizer(report: allowedCompatibilityReport())
+        )
         var config = AppConfig.default
         config.oauthCommandProfiles = [
             AppConfig.OAuthCommandProfile(id: "claude", provider: .claude, authProfileID: "claude.json", commandName: "cc")
         ]
 
-        try service.apply(config: config)
+        try await service.apply(config: config)
 
         XCTAssertNotNil(installer.installedScript)
         XCTAssertEqual(installer.installedFunctionNames, ["cc"])
@@ -98,12 +101,13 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
         #endif
     }
 
-    func testViewModelCreatesEmptyShellFunctionsFileOnInitialization() {
+    func testViewModelCreatesEmptyShellFunctionsFileOnInitialization() async {
         let installer = StubShellInstaller()
         let automaticInstaller = AutomaticShellInstallService(
             installer: installer,
             secretStore: FailingSecretStore(error: SecretStoreError.missingSecret(SecretKey.claudeAPIKey.rawValue)),
-            helperCommand: "/usr/local/bin/cliproxy-manager"
+            helperCommand: "/usr/local/bin/cliproxy-manager",
+            compatibilityAuthorizer: FixedCompatibilityAuthorizer(report: allowedCompatibilityReport())
         )
 
         _ = DashboardViewModel(
@@ -114,6 +118,7 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
             proxyService: StubProxyService(),
             claudeConnector: connectedClaudeConnector()
         )
+        for _ in 0..<100 { await Task.yield() }
 
         XCTAssertEqual(installer.installedFunctionNames, [])
         XCTAssertFalse(installer.installedScript?.contains("cc() {") == true)
@@ -122,7 +127,7 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
     }
 
 
-    func testViewModelInstallsClaudeFunctionAfterSettingsSave() throws {
+    func testViewModelInstallsClaudeFunctionAfterSettingsSave() async throws {
         let installer = StubShellInstaller()
         let authStore = StubAuthProfileStore(profiles: [
             AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
@@ -130,7 +135,8 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
         let automaticInstaller = AutomaticShellInstallService(
             installer: installer,
             secretStore: FailingSecretStore(error: SecretStoreError.missingSecret(SecretKey.claudeAPIKey.rawValue)),
-            helperCommand: "/usr/local/bin/cliproxy-manager"
+            helperCommand: "/usr/local/bin/cliproxy-manager",
+            compatibilityAuthorizer: FixedCompatibilityAuthorizer(report: allowedCompatibilityReport())
         )
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: .default),
@@ -144,13 +150,14 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
         installer.reset()
 
         try viewModel.saveClaudeOAuthSettings(functionName: "cc", nickname: "", dangerousPermissionsEnabled: false)
+        for _ in 0..<100 { await Task.yield() }
 
         XCTAssertEqual(installer.installedFunctionNames, ["cc"])
         XCTAssertTrue(installer.installedScript?.contains("cc() {") == true)
         XCTAssertFalse(installer.installedScript?.contains("ccodex() {") == true)
     }
 
-    func testViewModelInstallsCodexFunctionAfterSettingsSave() throws {
+    func testViewModelInstallsCodexFunctionAfterSettingsSave() async throws {
         let installer = StubShellInstaller()
         let authStore = StubAuthProfileStore(profiles: [
             AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
@@ -158,7 +165,8 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
         let automaticInstaller = AutomaticShellInstallService(
             installer: installer,
             secretStore: FailingSecretStore(error: SecretStoreError.missingSecret(SecretKey.claudeAPIKey.rawValue)),
-            helperCommand: "/usr/local/bin/cliproxy-manager"
+            helperCommand: "/usr/local/bin/cliproxy-manager",
+            compatibilityAuthorizer: FixedCompatibilityAuthorizer(report: allowedCompatibilityReport())
         )
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: .default),
@@ -172,13 +180,14 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
         installer.reset()
 
         try viewModel.saveCodexSettings(functionName: "ccodex", nickname: "", codex: AppConfig.Codex.default, dangerousPermissionsEnabled: false)
+        for _ in 0..<100 { await Task.yield() }
 
         XCTAssertEqual(installer.installedFunctionNames, ["ccodex"])
         XCTAssertFalse(installer.installedScript?.contains("cc() {") == true)
         XCTAssertTrue(installer.installedScript?.contains("ccodex() {") == true)
     }
 
-    func testApplyRendersAndInstallsCurrentConfigWithoutClaudeAPIWhenSecretIsMissing() throws {
+    func testApplyRendersAndInstallsCurrentConfigWithoutClaudeAPIWhenSecretIsMissing() async throws {
         var config = AppConfig.default
         config.oauthCommandProfiles = [
             AppConfig.OAuthCommandProfile(id: "claude", provider: .claude, authProfileID: "claude.json", commandName: "cc"),
@@ -188,10 +197,11 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
         let service = AutomaticShellInstallService(
             installer: installer,
             secretStore: FailingSecretStore(error: SecretStoreError.missingSecret(SecretKey.claudeAPIKey.rawValue)),
-            helperCommand: "/usr/local/bin/cliproxy-manager"
+            helperCommand: "/usr/local/bin/cliproxy-manager",
+            compatibilityAuthorizer: FixedCompatibilityAuthorizer(report: allowedCompatibilityReport())
         )
 
-        try service.apply(config: config)
+        try await service.apply(config: config)
 
         XCTAssertEqual(installer.installedFunctionNames, ["cc", "codexcustom"])
         XCTAssertTrue(installer.installedScript?.contains("cc() {") == true)
@@ -199,7 +209,7 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
         XCTAssertFalse(installer.installedScript?.contains("ccapi() {") == true)
     }
 
-    func testApplyIncludesRoundRobinNameWithoutBlankLegacyName() throws {
+    func testApplyIncludesRoundRobinNameWithoutBlankLegacyName() async throws {
         var config = AppConfig.default
         config.roundRobinProfiles = [
             AppConfig.RoundRobinProfile(
@@ -214,21 +224,23 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
         let service = AutomaticShellInstallService(
             installer: installer,
             secretStore: FailingSecretStore(error: SecretStoreError.missingSecret(SecretKey.claudeAPIKey.rawValue)),
-            helperCommand: "/usr/local/bin/cliproxy-manager"
+            helperCommand: "/usr/local/bin/cliproxy-manager",
+            compatibilityAuthorizer: FixedCompatibilityAuthorizer(report: allowedCompatibilityReport())
         )
 
-        try service.apply(config: config)
+        try await service.apply(config: config)
 
         XCTAssertEqual(installer.installedFunctionNames, ["ccodex"])
         XCTAssertTrue(installer.installedScript?.contains("ccodex() {") == true)
     }
 
-    func testApplyIncludesClaudeAPIWhenSecretExists() throws {
+    func testApplyIncludesClaudeAPIWhenSecretExists() async throws {
         let installer = StubShellInstaller()
         let service = AutomaticShellInstallService(
             installer: installer,
             secretStore: InMemorySecretStore(values: [.claudeAPIKey: "sk-test"]),
-            helperCommand: "/usr/local/bin/cliproxy-manager"
+            helperCommand: "/usr/local/bin/cliproxy-manager",
+            compatibilityAuthorizer: FixedCompatibilityAuthorizer(report: allowedCompatibilityReport())
         )
 
         var config = AppConfig.default
@@ -238,7 +250,7 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
         ]
         config.claudeAPI.commandName = "ccapi"
 
-        try service.apply(
+        try await service.apply(
             config: config,
             enabledFunctions: AutomaticShellInstallService.EnabledFunctions(claudeOAuth: true, codex: true, claudeAPI: true)
         )
@@ -247,12 +259,13 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
         XCTAssertTrue(installer.installedScript?.contains("ccapi() {") == true)
     }
 
-    func testApplySkipsClaudeAPIWhenCommandNameIsBlankEvenIfSecretExists() throws {
+    func testApplySkipsClaudeAPIWhenCommandNameIsBlankEvenIfSecretExists() async throws {
         let installer = StubShellInstaller()
         let service = AutomaticShellInstallService(
             installer: installer,
             secretStore: InMemorySecretStore(values: [.claudeAPIKey: "sk-test"]),
-            helperCommand: "/usr/local/bin/cliproxy-manager"
+            helperCommand: "/usr/local/bin/cliproxy-manager",
+            compatibilityAuthorizer: FixedCompatibilityAuthorizer(report: allowedCompatibilityReport())
         )
 
         var config = AppConfig.default
@@ -261,7 +274,7 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
             AppConfig.OAuthCommandProfile(id: "codex", provider: .codex, authProfileID: "codex.json", commandName: "ccodex", codex: .default)
         ]
 
-        try service.apply(
+        try await service.apply(
             config: config,
             enabledFunctions: AutomaticShellInstallService.EnabledFunctions(claudeOAuth: true, codex: true, claudeAPI: true)
         )
@@ -270,12 +283,13 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
         XCTAssertFalse(installer.installedScript?.contains("ccapi() {") == true)
     }
 
-    func testApplyOmitsClaudeAPIOnlyWhenSecretIsMissing() throws {
+    func testApplyOmitsClaudeAPIOnlyWhenSecretIsMissing() async throws {
         let installer = StubShellInstaller()
         let service = AutomaticShellInstallService(
             installer: installer,
             secretStore: FailingSecretStore(error: SecretStoreError.missingSecret(SecretKey.claudeAPIKey.rawValue)),
-            helperCommand: "/usr/local/bin/cliproxy-manager"
+            helperCommand: "/usr/local/bin/cliproxy-manager",
+            compatibilityAuthorizer: FixedCompatibilityAuthorizer(report: allowedCompatibilityReport())
         )
 
         var config = AppConfig.default
@@ -284,30 +298,90 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
             AppConfig.OAuthCommandProfile(id: "codex", provider: .codex, authProfileID: "codex.json", commandName: "ccodex", codex: .default)
         ]
 
-        try service.apply(config: config)
+        try await service.apply(config: config)
 
         XCTAssertEqual(installer.installedFunctionNames, ["cc", "ccodex"])
         XCTAssertFalse(installer.installedScript?.contains("ccapi() {") == true)
     }
 
-    func testApplySkipsAPIProfileWhenSecretReadFails() throws {
+    func testApplySkipsAPIProfileWhenSecretReadFails() async throws {
         let installer = StubShellInstaller()
         let service = AutomaticShellInstallService(
             installer: installer,
             secretStore: FailingSecretStore(error: SecretStoreError.readFailed(SecretKey.claudeAPIKey.rawValue)),
-            helperCommand: "/usr/local/bin/cliproxy-manager"
+            helperCommand: "/usr/local/bin/cliproxy-manager",
+            compatibilityAuthorizer: FixedCompatibilityAuthorizer(report: allowedCompatibilityReport())
         )
 
         var config = AppConfig.default
         config.claudeAPI.commandName = "ccapi"
 
-        try service.apply(
+        try await service.apply(
             config: config,
             enabledFunctions: AutomaticShellInstallService.EnabledFunctions(claudeOAuth: true, codex: true, claudeAPI: true)
         )
 
         XCTAssertTrue(installer.installedFunctionNames.isEmpty)
         XCTAssertFalse(installer.installedScript?.contains("ccapi() {") == true)
+    }
+
+    func testNonZshExplicitInstallDoesNotWriteShellFiles() async throws {
+        let installer = StubShellInstaller()
+        let service = AutomaticShellInstallService(
+            installer: installer,
+            compatibilityAuthorizer: FixedCompatibilityAuthorizer(
+                report: compatibilityReport(
+                    finding: .unsupportedLoginShell(expectedBasename: "zsh", actualBasename: "bash")
+                )
+            )
+        )
+
+        do {
+            _ = try await service.apply(config: .default)
+            XCTFail("Expected unsupported-login-shell block")
+        } catch let error as ShellFunctionInstallationError {
+            XCTAssertEqual(error, .unsupportedLoginShell)
+        } catch {
+            XCTFail("Expected sanitized shell compatibility blocker, got \(error)")
+        }
+
+        XCTAssertNil(installer.installedScript)
+        XCTAssertEqual(installer.installedFunctionNames, [])
+    }
+
+    func testClaudeUnavailableExplicitInstallDoesNotWriteShellFiles() async throws {
+        let installer = StubShellInstaller()
+        let service = AutomaticShellInstallService(
+            installer: installer,
+            compatibilityAuthorizer: FixedCompatibilityAuthorizer(
+                report: compatibilityReport(finding: .unavailableClaudeCode)
+            )
+        )
+
+        do {
+            _ = try await service.apply(config: .default)
+            XCTFail("Expected unavailable-Claude block")
+        } catch let error as ShellFunctionInstallationError {
+            XCTAssertEqual(error, .claudeCodeUnavailable)
+        } catch {
+            XCTFail("Expected sanitized shell compatibility blocker, got \(error)")
+        }
+
+        XCTAssertNil(installer.installedScript)
+        XCTAssertEqual(installer.installedFunctionNames, [])
+    }
+
+    func testApplyFinishesCompatibilityPreflightBeforeWritingShellFiles() async throws {
+        let events = InstallationEventLog()
+        let installer = OrderedShellInstaller(events: events)
+        let service = AutomaticShellInstallService(
+            installer: installer,
+            compatibilityAuthorizer: OrderedCompatibilityAuthorizer(events: events)
+        )
+
+        _ = try await service.apply(config: .default)
+
+        XCTAssertEqual(events.events, ["preflight", "install"])
     }
 }
 
@@ -416,4 +490,93 @@ private final class StubProcessRunner: ProcessRunning, @unchecked Sendable {
             return results.removeFirst()
         }
     }
+}
+
+private struct FixedCompatibilityAuthorizer: RuntimeCompatibilityAuthorizing {
+    let report: RuntimeCompatibilityReport
+
+    func staticReport(artifacts _: CompatibilityArtifacts) -> RuntimeCompatibilityReport { report }
+
+    func report(artifacts _: CompatibilityArtifacts) async -> RuntimeCompatibilityReport { report }
+
+    func require(_ action: CompatibilityAction, artifacts _: CompatibilityArtifacts) throws {
+        guard report.decision(for: action).disposition != .blocked else {
+            throw RuntimeCompatibilityError.actionBlocked(action)
+        }
+    }
+}
+
+private func compatibilityReport(finding: CompatibilityFinding) -> RuntimeCompatibilityReport {
+    let disposition: CompatibilityDisposition
+    switch finding {
+    case .unsupportedLoginShell:
+        disposition = .blocked
+    case .unavailableClaudeCode:
+        disposition = .allowedWithWarnings
+    default:
+        disposition = .blocked
+    }
+    return RuntimeCompatibilityReport(
+        findings: [finding],
+        decisions: Dictionary(uniqueKeysWithValues: CompatibilityAction.allCases.map { action in
+            (
+                action,
+                CompatibilityDecision(
+                    action: action,
+                    disposition: action == .installShellFunctions ? disposition : .allowed
+                )
+            )
+        })
+    )
+}
+
+private func allowedCompatibilityReport() -> RuntimeCompatibilityReport {
+    RuntimeCompatibilityReport(
+        findings: [],
+        decisions: Dictionary(uniqueKeysWithValues: CompatibilityAction.allCases.map { action in
+            (action, CompatibilityDecision(action: action, disposition: .allowed))
+        })
+    )
+}
+
+private final class InstallationEventLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedEvents: [String] = []
+
+    var events: [String] { lock.withLock { recordedEvents } }
+
+    func record(_ event: String) {
+        lock.withLock { recordedEvents.append(event) }
+    }
+}
+
+private struct OrderedCompatibilityAuthorizer: RuntimeCompatibilityAuthorizing {
+    let events: InstallationEventLog
+
+    func staticReport(artifacts _: CompatibilityArtifacts) -> RuntimeCompatibilityReport {
+        allowedCompatibilityReport()
+    }
+
+    func report(artifacts _: CompatibilityArtifacts) async -> RuntimeCompatibilityReport {
+        events.record("preflight")
+        return allowedCompatibilityReport()
+    }
+
+    func require(_: CompatibilityAction, artifacts _: CompatibilityArtifacts) throws {}
+}
+
+private final class OrderedShellInstaller: ShellFunctionInstalling, @unchecked Sendable {
+    private let events: InstallationEventLog
+
+    init(events: InstallationEventLog) {
+        self.events = events
+    }
+
+    func install(functionScript _: String, functionNames _: [String]) throws {
+        events.record("install")
+    }
+
+    func isInstalled() -> Bool { false }
+
+    func validateFunctionNames(_: [String]) throws {}
 }

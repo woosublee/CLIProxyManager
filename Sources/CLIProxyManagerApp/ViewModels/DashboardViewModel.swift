@@ -2807,7 +2807,7 @@ final class DashboardViewModel: ObservableObject {
             if let priorAuthDisabled {
                 _ = try? setAuthProfileDisabled(priorAuthDisabled, for: provider)
                 authProfiles = (try? authProfileStore.profiles()) ?? authProfiles
-                try? applyShellInstallForCurrentProfiles()
+                scheduleAutomaticShellInstall()
             }
             refreshProfiles()
             scheduleSubscriptionUsagePollingIfNeeded()
@@ -3138,10 +3138,7 @@ final class DashboardViewModel: ObservableObject {
             } else {
                 try? secretStore.delete(key)
             }
-            try? automaticShellInstallService.apply(
-                config: shellInstallConfig(in: config),
-                enabledFunctions: enabledShellFunctions(in: config)
-            )
+            scheduleAutomaticShellInstall()
             throw error
         }
     }
@@ -3429,8 +3426,12 @@ final class DashboardViewModel: ObservableObject {
         try saveConfig(updatedConfig)
     }
 
-    func installShellFunctions(helperCommand: String = "/usr/local/bin/cliproxy-manager") throws {
-        try automaticShellInstallService.apply(config: config, helperCommand: helperCommand, enabledFunctions: enabledShellFunctions())
+    func installShellFunctions(helperCommand: String = "/usr/local/bin/cliproxy-manager") async throws {
+        try await automaticShellInstallService.apply(
+            config: config,
+            helperCommand: helperCommand,
+            enabledFunctions: enabledShellFunctions()
+        )
         settingsMessage = "Installation complete. Open a new terminal or run source ~/.zshrc."
         rebuildOptionRows()
     }
@@ -4289,20 +4290,14 @@ final class DashboardViewModel: ObservableObject {
         updatedConfig = config
 
         var prefixRollbacks: [AuthProfilePrefixRollback] = []
-        var didApplyShellInstall = false
         do {
             prefixRollbacks = try syncAuthProfilePrefixesForSave()
-            try automaticShellInstallService.apply(config: shellInstallConfig(in: updatedConfig), enabledFunctions: enabledShellFunctions(in: updatedConfig))
-            didApplyShellInstall = true
             try configStore.save(updatedConfig)
             lastPersistedConfig = updatedConfig
             rebuildOptionRows()
             rebuildProviderRows(claudeStatus: nil, codexStatus: nil)
         } catch {
             rollbackAuthProfilePrefixes(prefixRollbacks)
-            if didApplyShellInstall {
-                try? automaticShellInstallService.apply(config: shellInstallConfig(in: oldConfig), enabledFunctions: enabledShellFunctions(in: oldConfig))
-            }
             config = oldConfig
             cards = oldCards
             rebuildOptionRows()
@@ -4310,6 +4305,7 @@ final class DashboardViewModel: ObservableObject {
             throw error
         }
 
+        scheduleAutomaticShellInstall(config: updatedConfig)
         configSaveSucceeded = true
         if fastConfigurationChanged {
             requestProxyConfigurationRestart(reason: .fastMode)
@@ -4362,17 +4358,28 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func applyInitialShellInstall() {
-        do {
-            try applyShellInstallForCurrentProfiles()
-        } catch {
-            settingsMessage = "Automatic shell function installation failed: \(error.localizedDescription)"
-        }
+        scheduleAutomaticShellInstall()
     }
 
-    private func applyShellInstallForCurrentProfiles() throws {
-        let activeNames = activeFunctionNames(in: config)
-        try ShellCommandNameValidator.validate(activeNames)
-        try automaticShellInstallService.apply(config: shellInstallConfig(in: config), enabledFunctions: enabledShellFunctions())
+    private func scheduleAutomaticShellInstall(config: AppConfig? = nil) {
+        let installConfig = config ?? self.config
+        let activeNames = activeFunctionNames(in: installConfig)
+        guard (try? ShellCommandNameValidator.validate(activeNames)) != nil else {
+            return
+        }
+        let shellConfig = shellInstallConfig(in: installConfig)
+        let enabledFunctions = enabledShellFunctions(in: installConfig)
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                _ = try await automaticShellInstallService.reconcile(
+                    config: shellConfig,
+                    enabledFunctions: enabledFunctions
+                )
+            } catch {
+                settingsMessage = "Automatic shell function installation failed. Retry the operation."
+            }
+        }
     }
 
     private func enabledShellFunctions() -> AutomaticShellInstallService.EnabledFunctions {

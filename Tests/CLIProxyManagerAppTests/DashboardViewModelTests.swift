@@ -3286,7 +3286,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertTrue(viewModel.settingsMessage?.hasPrefix("Claude OAuth account disable failed:") == true)
     }
 
-    func testSetProviderEnabledRollsBackAuthProfileWhenShellInstallFails() {
+    func testSetProviderEnabledPersistsConfigWhenAutomaticShellInstallFails() async {
         var config = AppConfig.default
         config.oauthCommandProfiles = [
             AppConfig.OAuthCommandProfile(
@@ -3300,23 +3300,31 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             AuthProfile(fileName: "claude-work.json", type: .claude, email: "work@example.com", accountID: nil, expired: nil, disabled: false)
         ])
         let installer = StubShellInstaller(installError: NSError(domain: "test", code: 2))
+        let automaticInstaller = AutomaticShellInstallService(
+            installer: installer,
+            compatibilityAuthorizer: AllowingShellCompatibilityAuthorizer()
+        )
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: config),
             shellInstaller: installer,
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
+            automaticShellInstallService: automaticInstaller,
             proxyService: StubProxyServiceStarter(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
 
         viewModel.setProviderEnabled(ProviderRowState.ID(rawValue: "claude-work"), enabled: false)
+        for _ in 0..<1_000 where viewModel.settingsMessage != "Automatic shell function installation failed. Retry the operation." {
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
 
-        XCTAssertEqual(authStore.disabledIDUpdates.map(\.disabled), [true, false])
-        XCTAssertEqual(viewModel.config.oauthCommandProfiles.first?.isEnabled, true)
-        XCTAssertTrue(viewModel.providerRows.first?.isConnected == true)
-        XCTAssertFalse(viewModel.providerRows.first?.isDisabled == true)
-        XCTAssertTrue(viewModel.settingsMessage?.hasPrefix("Claude OAuth account disable failed:") == true)
+        XCTAssertEqual(authStore.disabledIDUpdates.map(\.disabled), [true])
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.first?.isEnabled, false)
+        XCTAssertFalse(viewModel.providerRows.first?.isConnected == true)
+        XCTAssertTrue(viewModel.providerRows.first?.isDisabled == true)
+        XCTAssertEqual(viewModel.settingsMessage, "Automatic shell function installation failed. Retry the operation.")
     }
 
     func testSavePortPersistsConfigAndRefreshesOptionRows() throws {
@@ -3357,7 +3365,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(store.savedConfigs, [])
     }
 
-    func testInstallShellFunctionsRendersAndInstallsCurrentConfig() throws {
+    func testInstallShellFunctionsRendersAndInstallsCurrentConfig() async throws {
         var config = AppConfig.default
         config.oauthCommandProfiles = [
             AppConfig.OAuthCommandProfile(id: "claude", provider: .claude, authProfileID: "claude.json", commandName: "cc", modelPrefix: "claude-account"),
@@ -3367,7 +3375,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let installer = StubShellInstaller()
         let automaticInstaller = AutomaticShellInstallService(
             installer: installer,
-            helperCommand: "/usr/local/bin/cliproxy-manager"
+            helperCommand: "/usr/local/bin/cliproxy-manager",
+            compatibilityAuthorizer: AllowingShellCompatibilityAuthorizer()
         )
         let viewModel = DashboardViewModel(
             configStore: store,
@@ -3383,13 +3392,13 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             secretStore: InMemorySecretStore()
         )
 
-        try viewModel.installShellFunctions(helperCommand: "/usr/local/bin/cliproxy-manager")
+        try await viewModel.installShellFunctions(helperCommand: "/usr/local/bin/cliproxy-manager")
 
         XCTAssertEqual(installer.installedFunctionNames, ["cc", "customcodex"])
         XCTAssertTrue(installer.installedScript?.contains("customcodex() {") == true)
     }
 
-    func testInstallShellFunctionsInstallsActiveProvidersOnly() throws {
+    func testInstallShellFunctionsInstallsActiveProvidersOnly() async throws {
         var config = AppConfig.default
         config.oauthCommandProfiles = [
             AppConfig.OAuthCommandProfile(id: "claude", provider: .claude, authProfileID: "claude.json", commandName: "cc", modelPrefix: "claude-account")
@@ -3398,7 +3407,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let automaticInstaller = AutomaticShellInstallService(
             installer: installer,
             secretStore: InMemorySecretStore(values: [.claudeAPIKey: "sk-test"]),
-            helperCommand: "/usr/local/bin/cliproxy-manager"
+            helperCommand: "/usr/local/bin/cliproxy-manager",
+            compatibilityAuthorizer: AllowingShellCompatibilityAuthorizer()
         )
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: config),
@@ -3413,7 +3423,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             secretStore: InMemorySecretStore()
         )
 
-        try viewModel.installShellFunctions(helperCommand: "/Applications/CLI Proxy/cliproxy-manager")
+        try await viewModel.installShellFunctions(helperCommand: "/Applications/CLI Proxy/cliproxy-manager")
 
         XCTAssertEqual(installer.installedFunctionNames, ["cc"])
         XCTAssertTrue(installer.installedScript?.contains("cc() {") == true)
@@ -3421,8 +3431,12 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertFalse(installer.installedScript?.contains("ccapi() {") == true)
     }
 
-    func testInstallShellFunctionsSkipsConnectedProvidersWithBlankCommandNames() throws {
+    func testInstallShellFunctionsSkipsConnectedProvidersWithBlankCommandNames() async throws {
         let installer = StubShellInstaller()
+        let automaticInstaller = AutomaticShellInstallService(
+            installer: installer,
+            compatibilityAuthorizer: AllowingShellCompatibilityAuthorizer()
+        )
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: .default),
             shellInstaller: installer,
@@ -3431,18 +3445,59 @@ final class DashboardViewModelRefreshTests: XCTestCase {
                 AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
             ]),
             oauthLoginService: StubOAuthLoginService(),
+            automaticShellInstallService: automaticInstaller,
             proxyService: StubProxyServiceStarter(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
         installer.reset()
 
-        try viewModel.installShellFunctions(helperCommand: "/usr/local/bin/cliproxy-manager")
+        try await viewModel.installShellFunctions(helperCommand: "/usr/local/bin/cliproxy-manager")
 
         XCTAssertEqual(installer.installedFunctionNames, [])
         XCTAssertFalse(installer.installedScript?.contains("cc() {") == true)
         XCTAssertFalse(installer.installedScript?.contains("ccodex() {") == true)
         XCTAssertFalse(installer.installedScript?.contains("ccapi() {") == true)
+    }
+
+    func testAutomaticCompatibilitySkipPreservesSavedConfigAndExistingScript() async throws {
+        let installer = StubShellInstaller()
+        try installer.install(functionScript: "existing managed shell content", functionNames: ["cc"])
+        let compatibilityAuthorizer = BlockingShellCompatibilityAuthorizer()
+        let automaticInstaller = AutomaticShellInstallService(
+            installer: installer,
+            compatibilityAuthorizer: compatibilityAuthorizer
+        )
+        var initialConfig = AppConfig.default
+        initialConfig.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "claude",
+                provider: .claude,
+                authProfileID: "claude.json",
+                commandName: "cc"
+            )
+        ]
+        let store = StubConfigStore(config: initialConfig)
+        let viewModel = DashboardViewModel(
+            configStore: store,
+            shellInstaller: installer,
+            authProfileStore: StubAuthProfileStore(profiles: [
+                AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: nil, disabled: false)
+            ]),
+            oauthLoginService: StubOAuthLoginService(),
+            automaticShellInstallService: automaticInstaller,
+            proxyService: StubProxyServiceStarter(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
+        )
+
+        try viewModel.savePort(18_888)
+        await compatibilityAuthorizer.waitForReportCount(1)
+
+        XCTAssertEqual(store.savedConfigs.last?.port, 18_888)
+        XCTAssertEqual(viewModel.config.port, 18_888)
+        XCTAssertEqual(installer.installedScript, "existing managed shell content")
+        XCTAssertEqual(installer.installedFunctionNames, ["cc"])
     }
 
     func testAPIKeyChangeDuringServerStartQueuesRestartAfterStartCompletes() async throws {
@@ -11735,6 +11790,64 @@ private final class StubShellInstaller: ShellFunctionInstalling, @unchecked Send
         installed = false
         validatedFunctionNames = []
     }
+}
+
+private final class BlockingShellCompatibilityAuthorizer: RuntimeCompatibilityAuthorizing, @unchecked Sendable {
+    private let lock = NSLock()
+    private var reportCount = 0
+
+    var observedReportCount: Int { lock.withLock { reportCount } }
+
+    private let blockedReport = RuntimeCompatibilityReport(
+        findings: [.unsupportedLoginShell(expectedBasename: "zsh", actualBasename: "bash")],
+        decisions: Dictionary(uniqueKeysWithValues: CompatibilityAction.allCases.map { action in
+            (
+                action,
+                CompatibilityDecision(
+                    action: action,
+                    disposition: action == .installShellFunctions ? .blocked : .allowed
+                )
+            )
+        })
+    )
+
+    func staticReport(artifacts _: CompatibilityArtifacts) -> RuntimeCompatibilityReport {
+        blockedReport
+    }
+
+    func report(artifacts _: CompatibilityArtifacts) async -> RuntimeCompatibilityReport {
+        lock.withLock { reportCount += 1 }
+        return blockedReport
+    }
+
+    func require(_ action: CompatibilityAction, artifacts _: CompatibilityArtifacts) throws {
+        guard blockedReport.decision(for: action).disposition != .blocked else {
+            throw RuntimeCompatibilityError.actionBlocked(action)
+        }
+    }
+
+    func waitForReportCount(_ expectedCount: Int) async {
+        for _ in 0..<1_000 {
+            if lock.withLock({ reportCount >= expectedCount }) { return }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTFail("Timed out waiting for shell compatibility preflight; observed \(observedReportCount) report(s)")
+    }
+}
+
+private struct AllowingShellCompatibilityAuthorizer: RuntimeCompatibilityAuthorizing {
+    private let reportValue = RuntimeCompatibilityReport(
+        findings: [],
+        decisions: Dictionary(uniqueKeysWithValues: CompatibilityAction.allCases.map { action in
+            (action, CompatibilityDecision(action: action, disposition: .allowed))
+        })
+    )
+
+    func staticReport(artifacts _: CompatibilityArtifacts) -> RuntimeCompatibilityReport { reportValue }
+
+    func report(artifacts _: CompatibilityArtifacts) async -> RuntimeCompatibilityReport { reportValue }
+
+    func require(_: CompatibilityAction, artifacts _: CompatibilityArtifacts) throws {}
 }
 
 private struct PrefixModelRequest: Equatable {
