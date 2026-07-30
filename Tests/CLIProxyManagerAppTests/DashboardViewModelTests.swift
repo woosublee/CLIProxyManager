@@ -98,6 +98,35 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.compatibilityReport.decision(for: .stopProxy).disposition, .allowedWithWarnings)
     }
 
+    func testLegacyInferencePresentationIncludesSanitizedFindingCode() async {
+        let report = RuntimeCompatibilityPolicy.current.report(
+            environment: .init(
+                operatingSystem: .macOS(major: 15, minor: 0),
+                architecture: .arm64,
+                loginShell: "/bin/zsh"
+            ),
+            artifacts: .init(bundled: .legacy, active: nil, pending: nil),
+            claude: .notChecked
+        )
+        let viewModel = DashboardViewModel(
+            config: .default,
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
+            proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: FixedCompatibilityAuthorizer(report: report),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        await viewModel.refresh()
+
+        XCTAssertEqual(viewModel.compatibilityPresentation?.isBlocked, false)
+        XCTAssertTrue(viewModel.compatibilityPresentation?.text.contains("legacyArtifactTargetInferred") == true)
+        XCTAssertFalse(viewModel.compatibilityPresentation?.text.contains("/") == true)
+    }
+
     func testRefreshPassesBundledActiveAndPendingArtifactsToCompatibilityPreflight() async {
         let artifacts = CompatibilityArtifacts(
             bundled: .legacy,

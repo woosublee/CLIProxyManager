@@ -286,6 +286,7 @@ public enum ProxyRestartFailureStage: String, Equatable, Sendable {
 public enum RuntimeCompatibilityBlocker: Equatable, Sendable {
     case unsupportedOperatingSystem
     case unsupportedArchitecture
+    case translatedExecution
     case unsupportedArtifactTarget
     case unavailable
 
@@ -298,10 +299,14 @@ public enum RuntimeCompatibilityBlocker: Equatable, Sendable {
             case .unsupportedArchitecture:
                 self = .unsupportedArchitecture
                 return
+            case .translatedExecution:
+                self = .translatedExecution
+                return
             case .unsupportedArtifactTarget:
                 self = .unsupportedArtifactTarget
                 return
-            case .unsupportedLoginShell,
+            case .legacyArtifactTargetInferred,
+                 .unsupportedLoginShell,
                  .unavailableClaudeCode,
                  .unverifiedClaudeCode,
                  .unverifiedClaudeCodeVersion:
@@ -317,6 +322,8 @@ public enum RuntimeCompatibilityBlocker: Equatable, Sendable {
             "CLIProxyAPI requires macOS 15 or later. Update macOS, then retry."
         case .unsupportedArchitecture:
             "CLIProxyAPI requires an Apple silicon Mac. Use a supported Mac, then retry."
+        case .translatedExecution:
+            "CLIProxyAPI cannot run through Rosetta. Run the arm64 version of CLIProxyManager, then retry."
         case .unsupportedArtifactTarget:
             "The installed CLIProxyAPI binary is not supported. Restore the bundled proxy, then retry."
         case .unavailable:

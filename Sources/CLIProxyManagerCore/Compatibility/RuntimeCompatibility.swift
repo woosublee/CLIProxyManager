@@ -106,10 +106,12 @@ public enum CompatibilityFinding: Codable, Equatable, Sendable {
         expected: CLIProxyAPIArtifactTarget.Architecture,
         actual: CLIProxyAPIArtifactTarget.Architecture
     )
+    case translatedExecution
     case unsupportedArtifactTarget(
         expected: CLIProxyAPIArtifactTarget,
         actual: CLIProxyAPIArtifactTarget
     )
+    case legacyArtifactTargetInferred
     case unsupportedLoginShell(expectedBasename: String, actualBasename: String)
     case unavailableClaudeCode
     case unverifiedClaudeCode
@@ -216,13 +218,21 @@ public struct RuntimeCompatibilityPolicy: Equatable, Sendable {
             )
         }
 
-        for artifact in [artifacts.bundled, artifacts.active, artifacts.pending].compactMap({ $0 }) {
+        if environment.isTranslated {
+            findings.append(.translatedExecution)
+        }
+
+        let artifactsToInspect = [artifacts.bundled, artifacts.active, artifacts.pending].compactMap { $0 }
+        for artifact in artifactsToInspect {
             let target = inferredTarget(for: artifact)
             if target != supportedArtifactTarget {
                 findings.append(
                     .unsupportedArtifactTarget(expected: supportedArtifactTarget, actual: target)
                 )
             }
+        }
+        if artifactsToInspect.contains(.legacy) {
+            findings.append(.legacyArtifactTargetInferred)
         }
 
         let expectedShellBasename = URL(fileURLWithPath: requiredLoginShellPath).lastPathComponent
@@ -266,9 +276,13 @@ public struct RuntimeCompatibilityPolicy: Equatable, Sendable {
 
     private func isBlocking(_ finding: CompatibilityFinding) -> Bool {
         switch finding {
-        case .unsupportedOperatingSystem, .unsupportedArchitecture, .unsupportedArtifactTarget:
+        case .unsupportedOperatingSystem,
+             .unsupportedArchitecture,
+             .translatedExecution,
+             .unsupportedArtifactTarget:
             return true
-        case .unsupportedLoginShell,
+        case .legacyArtifactTargetInferred,
+             .unsupportedLoginShell,
              .unavailableClaudeCode,
              .unverifiedClaudeCode,
              .unverifiedClaudeCodeVersion:

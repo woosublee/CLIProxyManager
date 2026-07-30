@@ -86,6 +86,7 @@ public struct ProxyUpdateService: Sendable {
     private let downloader: any ProxyUpdateDownloading
     private let runtime: (any ProxyRuntimeUpdating)?
     private let bundledManifestURL: URL?
+    private let appBundleLocator: (any AppBundleLocating)?
     private let compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing
 
     public init(
@@ -94,6 +95,7 @@ public struct ProxyUpdateService: Sendable {
         downloader: any ProxyUpdateDownloading = ProxyUpdateDownloader(),
         runtime: (any ProxyRuntimeUpdating)? = nil,
         bundledManifestURL: URL? = nil,
+        appBundleLocator: any AppBundleLocating = AppBundleLocator(),
         compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing = RuntimeCompatibilityPreflight()
     ) {
         self.store = CLIProxyAPIBinaryStore(paths: paths)
@@ -101,6 +103,7 @@ public struct ProxyUpdateService: Sendable {
         self.downloader = downloader
         self.runtime = runtime ?? ProxyRuntimeService(paths: paths)
         self.bundledManifestURL = bundledManifestURL
+        self.appBundleLocator = bundledManifestURL == nil ? appBundleLocator : nil
         self.compatibilityAuthorizer = compatibilityAuthorizer
     }
 
@@ -117,6 +120,7 @@ public struct ProxyUpdateService: Sendable {
         self.downloader = downloader
         self.runtime = runtime
         self.bundledManifestURL = bundledManifestURL
+        self.appBundleLocator = nil
         self.compatibilityAuthorizer = compatibilityAuthorizer
     }
 
@@ -181,10 +185,17 @@ public struct ProxyUpdateService: Sendable {
     }
 
     private func bundledArtifact() throws -> RuntimeCompatibilityArtifact? {
-        guard let bundledManifestURL else { return nil }
+        let manifestURL: URL
+        if let bundledManifestURL {
+            manifestURL = bundledManifestURL
+        } else if let appBundleLocator {
+            manifestURL = try appBundleLocator.locateInstalledApp().proxyManifestURL
+        } else {
+            return nil
+        }
         let manifest = try JSONDecoder().decode(
             CLIProxyAPIBinaryManifest.self,
-            from: Data(contentsOf: bundledManifestURL)
+            from: Data(contentsOf: manifestURL)
         )
         return try compatibilityArtifact(forCandidate: manifest)
     }

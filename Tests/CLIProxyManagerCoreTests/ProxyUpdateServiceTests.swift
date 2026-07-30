@@ -125,6 +125,64 @@ final class ProxyUpdateServiceTests: XCTestCase {
         XCTAssertNil(try CLIProxyAPIBinaryStore(paths: paths).pendingManifest())
     }
 
+    func testProductionInitializerBlocksUnknownBundledManifestBeforeStageMutation() async throws {
+        let paths = try makePaths(activeVersion: "7.2.41")
+        let bundledManifestURL = paths.rootDirectory.appendingPathComponent("bundle/manifest.json")
+        var bundled = try XCTUnwrap(CLIProxyAPIBinaryStore(paths: paths).activeManifest())
+        bundled.target = nil
+        bundled.upstreamAsset = "unrecognized-artifact.tar.gz"
+        try FileManager.default.createDirectory(at: bundledManifestURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(bundled).write(to: bundledManifestURL)
+        let (binaryURL, manifest) = try makeVerificationFixture(version: "7.2.50")
+        let downloader = DownloaderDouble(result: .init(binaryURL: binaryURL, manifest: manifest))
+        let service = ProxyUpdateService(
+            paths: paths,
+            checker: ReleaseCheckerDouble(release: makeRelease(version: "7.2.50")),
+            downloader: downloader,
+            appBundleLocator: StaticAppBundleLocator(manifestURL: bundledManifestURL),
+            compatibilityAuthorizer: RejectingCompatibilityAuthorizer()
+        )
+
+        do {
+            _ = try await service.stage()
+            XCTFail("Expected bundled manifest compatibility block")
+        } catch let error as CLIProxyManagerCommandError {
+            XCTAssertEqual(error, .prerequisite(RuntimeCompatibilityBlocker.unsupportedArtifactTarget.recoveryMessage))
+        }
+
+        XCTAssertEqual(downloader.requests, [])
+        XCTAssertNil(try CLIProxyAPIBinaryStore(paths: paths).pendingManifest())
+    }
+
+    func testProductionInitializerBlocksMismatchedBundledManifestBeforeApplyMutation() async throws {
+        let paths = try makePaths(activeVersion: "7.2.41", pendingVersion: "7.2.50")
+        let bundledManifestURL = paths.rootDirectory.appendingPathComponent("bundle/manifest.json")
+        var bundled = try XCTUnwrap(CLIProxyAPIBinaryStore(paths: paths).activeManifest())
+        bundled.target = .init(operatingSystem: .darwin, architecture: .x86_64)
+        try FileManager.default.createDirectory(at: bundledManifestURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(bundled).write(to: bundledManifestURL)
+        let runtime = ProxyRuntimeUpdateDouble(statuses: [
+            ProxyRuntimeStatus(port: 8317, running: true, health: .ready, activeVersion: "7.2.41", pendingVersion: "7.2.50")
+        ])
+        let service = ProxyUpdateService(
+            paths: paths,
+            runtime: runtime,
+            appBundleLocator: StaticAppBundleLocator(manifestURL: bundledManifestURL),
+            compatibilityAuthorizer: ArtifactMismatchAuthorizer()
+        )
+
+        do {
+            _ = try await service.apply()
+            XCTFail("Expected bundled manifest compatibility block")
+        } catch let error as CLIProxyManagerCommandError {
+            XCTAssertEqual(error, .prerequisite(RuntimeCompatibilityBlocker.unsupportedArtifactTarget.recoveryMessage))
+        }
+
+        XCTAssertEqual(try CLIProxyAPIBinaryStore(paths: paths).activeManifest()?.version, "7.2.41")
+        XCTAssertEqual(try CLIProxyAPIBinaryStore(paths: paths).pendingManifest()?.version, "7.2.50")
+        XCTAssertEqual(runtime.restartCount, 0)
+    }
+
     func testStageDoesNotDownloadWhenCurrentBinaryIsAlreadyNewer() async throws {
         let paths = try makePaths(activeVersion: "7.2.60")
         let downloader = DownloaderDouble(result: nil)
@@ -359,6 +417,20 @@ private struct ArtifactMismatchAuthorizer: RuntimeCompatibilityAuthorizing {
         if staticReport(artifacts: artifacts).decision(for: action).disposition == .blocked {
             throw RuntimeCompatibilityError.actionBlocked(action)
         }
+    }
+}
+
+private struct StaticAppBundleLocator: AppBundleLocating {
+    let manifestURL: URL
+
+    func locateInstalledApp() throws -> ManagedAppBundle {
+        ManagedAppBundle(
+            appURL: manifestURL.deletingLastPathComponent().appendingPathComponent("CLIProxyManager.app"),
+            proxyBinaryURL: manifestURL.deletingLastPathComponent().appendingPathComponent("cliproxyapi"),
+            proxyManifestURL: manifestURL,
+            version: "0.1.0",
+            build: "1"
+        )
     }
 }
 

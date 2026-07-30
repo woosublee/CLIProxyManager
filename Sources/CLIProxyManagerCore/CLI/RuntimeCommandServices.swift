@@ -189,11 +189,23 @@ public struct CPMStatus: Codable, Equatable, Sendable {
                     disposition: .blocked,
                     recovery: RuntimeCompatibilityBlocker.unsupportedArchitecture.recoveryMessage
                 )
+            case .translatedExecution:
+                Finding(
+                    code: "translatedExecution",
+                    disposition: .blocked,
+                    recovery: RuntimeCompatibilityBlocker.translatedExecution.recoveryMessage
+                )
             case .unsupportedArtifactTarget:
                 Finding(
                     code: "unsupportedArtifactTarget",
                     disposition: .blocked,
                     recovery: RuntimeCompatibilityBlocker.unsupportedArtifactTarget.recoveryMessage
+                )
+            case .legacyArtifactTargetInferred:
+                Finding(
+                    code: "legacyArtifactTargetInferred",
+                    disposition: .allowedWithWarnings,
+                    recovery: "The CLIProxyAPI target was inferred from legacy metadata. A verified update will record explicit target metadata."
                 )
             case .unsupportedLoginShell:
                 Finding(

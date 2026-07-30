@@ -1387,6 +1387,30 @@ final class ProxyServiceManagerTests: XCTestCase {
         XCTAssertEqual(launcher.invocations, [])
     }
 
+    func testTranslatedArm64StartDoesNotStageConfigurationOrLaunch() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let launcher = FakeProcessLauncher()
+        let manager = ProxyServiceManager(
+            paths: paths,
+            launcher: launcher,
+            compatibilityAuthorizer: RuntimeCompatibilityPreflight(
+                environment: TranslatedArm64Environment()
+            )
+        )
+
+        do {
+            try await manager.start(port: 8317)
+            XCTFail("Expected translated execution block")
+        } catch let error as ProxyServiceError {
+            XCTAssertEqual(error, .compatibilityBlocked(.translatedExecution))
+        }
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.clipProxyConfigFile.path))
+        XCTAssertEqual(launcher.invocations, [])
+    }
+
     func testBlockedRestartLeavesRunningProxyUntouched() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
@@ -1484,6 +1508,17 @@ final class ProxyServiceManagerTests: XCTestCase {
             value = expression()
         }
         XCTAssertEqual(value, expected, file: file, line: line)
+    }
+}
+
+private struct TranslatedArm64Environment: RuntimeEnvironmentProviding {
+    func snapshot() -> RuntimeEnvironmentSnapshot {
+        RuntimeEnvironmentSnapshot(
+            operatingSystem: .macOS(major: 15, minor: 0),
+            architecture: .arm64,
+            isTranslated: true,
+            loginShell: "/bin/zsh"
+        )
     }
 }
 
