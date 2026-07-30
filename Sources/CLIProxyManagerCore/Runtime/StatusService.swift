@@ -67,6 +67,7 @@ public struct StatusService: StatusReporting, Sendable {
     private let proxyRuntime: any ProxyRuntimeServicing
     private let helperInspector: any HelperInspecting
     private let compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing
+    private let compatibilityArtifactsProvider: @Sendable () -> CompatibilityArtifacts
     private let paths: ManagedPaths
 
     public init(
@@ -74,19 +75,22 @@ public struct StatusService: StatusReporting, Sendable {
         proxyRuntime: any ProxyRuntimeServicing = ProxyRuntimeService(),
         helperInspector: any HelperInspecting = HelperInspector(),
         compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing = RuntimeCompatibilityPreflight(),
+        compatibilityArtifactsProvider: (@Sendable () -> CompatibilityArtifacts)? = nil,
         paths: ManagedPaths = ManagedPaths()
     ) {
         self.appLifecycle = appLifecycle
         self.proxyRuntime = proxyRuntime
         self.helperInspector = helperInspector
         self.compatibilityAuthorizer = compatibilityAuthorizer
+        self.compatibilityArtifactsProvider = compatibilityArtifactsProvider ?? { Self.defaultCompatibilityArtifacts() }
         self.paths = paths
     }
 
     public func status() async throws -> CPMStatus {
         async let appResult = appLifecycle.status()
         async let proxyResult = proxyRuntime.status()
-        async let compatibilityResult = compatibilityAuthorizer.report(artifacts: compatibilityArtifacts())
+        let artifacts = compatibilityArtifactsProvider()
+        async let compatibilityResult = compatibilityAuthorizer.report(artifacts: artifacts)
         let helperStatus = helperInspector.inspect()
         let app = try await appResult
         let proxy = try await proxyResult
@@ -117,12 +121,51 @@ public struct StatusService: StatusReporting, Sendable {
         )
     }
 
-    private func compatibilityArtifacts() -> CompatibilityArtifacts {
-        CompatibilityArtifacts(bundled: nil, active: nil, pending: nil)
+    private static func defaultCompatibilityArtifacts() -> CompatibilityArtifacts {
+        let paths = ManagedPaths()
+        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let bundledManifestURL = try? AppBundleLocator().locateInstalledApp().proxyManifestURL
+        return CompatibilityArtifacts(
+            bundled: artifact(at: bundledManifestURL),
+            active: artifact(reading: Result { try store.activeManifest() }),
+            pending: artifact(reading: Result { try store.pendingManifest() })
+        )
     }
 
+    private static func artifact(at manifestURL: URL?) -> RuntimeCompatibilityArtifact? {
+        guard let manifestURL,
+              let data = try? Data(contentsOf: manifestURL),
+              let manifest = try? JSONDecoder().decode(CLIProxyAPIBinaryManifest.self, from: data)
+        else {
+            return manifestURL == nil ? nil : unsupportedArtifact
+        }
+        return artifact(for: manifest)
+    }
+
+    private static func artifact(reading result: Result<CLIProxyAPIBinaryManifest?, Error>) -> RuntimeCompatibilityArtifact? {
+        switch result {
+        case .success(let manifest):
+            artifact(for: manifest)
+        case .failure:
+            unsupportedArtifact
+        }
+    }
+
+    private static func artifact(for manifest: CLIProxyAPIBinaryManifest?) -> RuntimeCompatibilityArtifact? {
+        guard let manifest else { return nil }
+        if let target = manifest.target { return .explicit(target) }
+        guard manifest.upstreamAsset == "CLIProxyAPI_\(manifest.version)_darwin_aarch64.tar.gz" else {
+            return unsupportedArtifact
+        }
+        return .legacy
+    }
+
+    private static let unsupportedArtifact = RuntimeCompatibilityArtifact.explicit(
+        CLIProxyAPIArtifactTarget(operatingSystem: .darwin, architecture: .x86_64)
+    )
+
     private static func sanitizedPath(_ path: String) -> String {
-        guard path.hasPrefix("/Users/") || path.hasPrefix("/home/") else { return path }
-        return "<redacted>"
+        guard path.hasPrefix("/") else { return path }
+        return URL(fileURLWithPath: path).lastPathComponent
     }
 }

@@ -303,6 +303,7 @@ final class DashboardViewModel: ObservableObject {
     private let proxyHealthClient: any ProxyHealthChecking
     private let proxyService: any ProxyServiceControlling
     private let compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing
+    private let compatibilityArtifactsProvider: () -> CompatibilityArtifacts
     private let bundledProxyReconciler: any BundledProxyReconciling
     private let claudeConnector: ClaudeConnector
     private let loginItemService: any LoginItemControlling
@@ -593,6 +594,7 @@ final class DashboardViewModel: ObservableObject {
         proxyHealthClient: any ProxyHealthChecking = ProxyHealthClient(),
         proxyService: any ProxyServiceControlling = BundledProxyBinary.serviceManager(),
         compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing = RuntimeCompatibilityPreflight(),
+        compatibilityArtifactsProvider: (() -> CompatibilityArtifacts)? = nil,
         bundledProxyReconciler: (any BundledProxyReconciling)? = nil,
         claudeConnector: ClaudeConnector = ClaudeConnector(),
         loginItemService: any LoginItemControlling = LoginItemService(),
@@ -626,6 +628,7 @@ final class DashboardViewModel: ObservableObject {
         self.proxyHealthClient = proxyHealthClient
         self.proxyService = proxyService
         self.compatibilityAuthorizer = compatibilityAuthorizer
+        self.compatibilityArtifactsProvider = compatibilityArtifactsProvider ?? Self.defaultCompatibilityArtifacts
         self.bundledProxyReconciler = bundledProxyReconciler ?? BundledProxyBinary.reconciliationService()
         self.claudeConnector = claudeConnector
         self.loginItemService = loginItemService
@@ -733,7 +736,7 @@ final class DashboardViewModel: ObservableObject {
             title: "Needs check",
             message: "Server status has not been checked yet."
         )
-        compatibilityReport = compatibilityAuthorizer.staticReport(artifacts: Self.compatibilityArtifacts)
+        compatibilityReport = compatibilityAuthorizer.staticReport(artifacts: self.compatibilityArtifactsProvider())
         restoreClaudeModelOptions()
         restoreSubscriptionUsageSnapshots()
         restoreCodexResetCreditsSnapshots()
@@ -1032,7 +1035,8 @@ final class DashboardViewModel: ObservableObject {
 
     func refresh() async {
         let wasProxyReady = serverStatus.severity == .ready
-        async let updatedCompatibilityReport = compatibilityAuthorizer.report(artifacts: Self.compatibilityArtifacts)
+        let compatibilityArtifacts = compatibilityArtifactsProvider()
+        async let updatedCompatibilityReport = compatibilityAuthorizer.report(artifacts: compatibilityArtifacts)
         let rawServerStatus = await stableServerStatus()
         updateProxyRuntimeCertainty(from: rawServerStatus)
         let updatedServerStatus = passiveRefreshPresentationStatus(from: rawServerStatus)
@@ -1044,10 +1048,45 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
-    private static let compatibilityArtifacts = CompatibilityArtifacts(
-        bundled: nil,
-        active: nil,
-        pending: nil
+    private static func defaultCompatibilityArtifacts() -> CompatibilityArtifacts {
+        let store = CLIProxyAPIBinaryStore(paths: ManagedPaths())
+        return CompatibilityArtifacts(
+            bundled: artifact(at: BundledProxyBinary.manifestURL()),
+            active: artifact(reading: Result { try store.activeManifest() }),
+            pending: artifact(reading: Result { try store.pendingManifest() })
+        )
+    }
+
+    private static func artifact(at manifestURL: URL?) -> RuntimeCompatibilityArtifact? {
+        guard let manifestURL,
+              let data = try? Data(contentsOf: manifestURL),
+              let manifest = try? JSONDecoder().decode(CLIProxyAPIBinaryManifest.self, from: data)
+        else {
+            return manifestURL == nil ? nil : unsupportedArtifact
+        }
+        return artifact(for: manifest)
+    }
+
+    private static func artifact(reading result: Result<CLIProxyAPIBinaryManifest?, Error>) -> RuntimeCompatibilityArtifact? {
+        switch result {
+        case .success(let manifest):
+            artifact(for: manifest)
+        case .failure:
+            unsupportedArtifact
+        }
+    }
+
+    private static func artifact(for manifest: CLIProxyAPIBinaryManifest?) -> RuntimeCompatibilityArtifact? {
+        guard let manifest else { return nil }
+        if let target = manifest.target { return .explicit(target) }
+        guard manifest.upstreamAsset == "CLIProxyAPI_\(manifest.version)_darwin_aarch64.tar.gz" else {
+            return unsupportedArtifact
+        }
+        return .legacy
+    }
+
+    private static let unsupportedArtifact = RuntimeCompatibilityArtifact.explicit(
+        CLIProxyAPIArtifactTarget(operatingSystem: .darwin, architecture: .x86_64)
     )
 
     func prepareUsage() async {

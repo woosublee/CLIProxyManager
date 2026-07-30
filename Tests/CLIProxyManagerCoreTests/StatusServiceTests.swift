@@ -29,17 +29,21 @@ final class StatusServiceTests: XCTestCase {
             artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil),
             claude: .version("2.1.221")
         )
+        let artifacts = CompatibilityArtifacts(bundled: .legacy, active: .explicit(.darwinArm64), pending: .legacy)
+        let authorizer = RecordingStatusCompatibilityAuthorizer(report: report)
         let status = try await StatusService(
             appLifecycle: AppLifecycleDouble(running: false),
             proxyRuntime: ProxyRuntimeDouble(port: 8317, running: false, activeVersion: nil),
             helperInspector: HelperInspectorDouble(installed: false, matchesBundled: false),
-            compatibilityAuthorizer: FixedStatusCompatibilityAuthorizer(report: report),
-            paths: ManagedPaths(rootDirectory: URL(fileURLWithPath: "/Users/example.com/.cliproxy-manager"))
+            compatibilityAuthorizer: authorizer,
+            compatibilityArtifactsProvider: { artifacts },
+            paths: ManagedPaths(rootDirectory: URL(fileURLWithPath: "/private/var/folders/example.com/.cliproxy-manager"))
         ).status()
 
+        XCTAssertEqual(authorizer.reportedArtifacts, artifacts)
         XCTAssertEqual(status.compatibility.disposition, .blocked)
         XCTAssertEqual(status.compatibility.findings.map(\.code), ["unsupportedArchitecture", "unverifiedClaudeCodeVersion"])
-        XCTAssertFalse(try String(decoding: JSONEncoder().encode(status), as: UTF8.self).contains("/Users/"))
+        XCTAssertFalse(try String(decoding: JSONEncoder().encode(status), as: UTF8.self).contains("/private/"))
         XCTAssertFalse(try String(decoding: JSONEncoder().encode(status), as: UTF8.self).contains("example.com"))
     }
 
@@ -128,6 +132,34 @@ private struct HelperInspectorDouble: HelperInspecting {
 
     func inspect() -> HelperStatus {
         HelperStatus(path: "/usr/local/bin/cpm", installed: installed, matchesBundled: matchesBundled)
+    }
+}
+
+private final class RecordingStatusCompatibilityAuthorizer: RuntimeCompatibilityAuthorizing, @unchecked Sendable {
+    private let reportValue: RuntimeCompatibilityReport
+    private let lock = NSLock()
+    private var latestArtifacts: CompatibilityArtifacts?
+
+    init(report: RuntimeCompatibilityReport) {
+        reportValue = report
+    }
+
+    var reportedArtifacts: CompatibilityArtifacts? {
+        lock.withLock { latestArtifacts }
+    }
+
+    func staticReport(artifacts: CompatibilityArtifacts) -> RuntimeCompatibilityReport {
+        lock.withLock { latestArtifacts = artifacts }
+        return reportValue
+    }
+
+    func report(artifacts: CompatibilityArtifacts) async -> RuntimeCompatibilityReport {
+        lock.withLock { latestArtifacts = artifacts }
+        return reportValue
+    }
+
+    func require(_: CompatibilityAction, artifacts: CompatibilityArtifacts) throws {
+        lock.withLock { latestArtifacts = artifacts }
     }
 }
 

@@ -98,6 +98,39 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.compatibilityReport.decision(for: .stopProxy).disposition, .allowedWithWarnings)
     }
 
+    func testRefreshPassesBundledActiveAndPendingArtifactsToCompatibilityPreflight() async {
+        let artifacts = CompatibilityArtifacts(
+            bundled: .legacy,
+            active: .explicit(.darwinArm64),
+            pending: .legacy
+        )
+        let authorizer = RecordingCompatibilityAuthorizer(report: RuntimeCompatibilityPolicy.current.report(
+            environment: .init(
+                operatingSystem: .macOS(major: 15, minor: 0),
+                architecture: .arm64,
+                loginShell: "/bin/zsh"
+            ),
+            artifacts: artifacts,
+            claude: .version("2.1.220")
+        ))
+        let viewModel = DashboardViewModel(
+            config: .default,
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
+            proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: authorizer,
+            compatibilityArtifactsProvider: { artifacts },
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        await viewModel.refresh()
+
+        XCTAssertEqual(authorizer.reportedArtifacts, artifacts)
+    }
+
     func testRefreshUpdatesBlankCommandCardsByStableIdentity() async {
         let config = AppConfig.default
         let serverStatus = DiagnosticStatus(
@@ -12700,6 +12733,34 @@ private final class StubProxyServiceStarter: ProxyServiceControlling, @unchecked
         if let error {
             throw error
         }
+    }
+}
+
+private final class RecordingCompatibilityAuthorizer: RuntimeCompatibilityAuthorizing, @unchecked Sendable {
+    private let reportValue: RuntimeCompatibilityReport
+    private let lock = NSLock()
+    private var latestArtifacts: CompatibilityArtifacts?
+
+    init(report: RuntimeCompatibilityReport) {
+        reportValue = report
+    }
+
+    var reportedArtifacts: CompatibilityArtifacts? {
+        lock.withLock { latestArtifacts }
+    }
+
+    func staticReport(artifacts: CompatibilityArtifacts) -> RuntimeCompatibilityReport {
+        lock.withLock { latestArtifacts = artifacts }
+        return reportValue
+    }
+
+    func report(artifacts: CompatibilityArtifacts) async -> RuntimeCompatibilityReport {
+        lock.withLock { latestArtifacts = artifacts }
+        return reportValue
+    }
+
+    func require(_: CompatibilityAction, artifacts: CompatibilityArtifacts) throws {
+        lock.withLock { latestArtifacts = artifacts }
     }
 }
 
