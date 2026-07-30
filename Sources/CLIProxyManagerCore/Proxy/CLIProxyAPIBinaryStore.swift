@@ -356,16 +356,16 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
         manifest: CLIProxyAPIBinaryManifest,
         action: CompatibilityAction
     ) throws {
-        let target: CLIProxyAPIArtifactTarget
+        let artifact: RuntimeCompatibilityArtifact
         if let explicitTarget = manifest.target {
-            target = explicitTarget
+            artifact = .explicit(explicitTarget)
         } else if manifest.upstreamAsset == legacyProductionAsset(for: manifest) {
-            target = .darwinArm64
+            artifact = .legacy
         } else {
             throw CLIProxyAPIBinaryStoreError.unsupportedArtifactTarget
         }
 
-        let artifacts = CompatibilityArtifacts(bundled: nil, active: nil, pending: .explicit(target))
+        let artifacts = CompatibilityArtifacts(bundled: nil, active: nil, pending: artifact)
         let report = compatibilityAuthorizer.staticReport(artifacts: artifacts)
         if report.findings.contains(where: { finding in
             if case .unsupportedArtifactTarget = finding {

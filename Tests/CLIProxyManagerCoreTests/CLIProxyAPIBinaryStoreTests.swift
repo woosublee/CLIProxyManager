@@ -537,6 +537,31 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         XCTAssertEqual(try store.pendingManifest()?.target, .darwinArm64)
     }
 
+    func testSavePendingAuthorizesExactLegacyProductionAssetAsLegacyArtifact() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let candidate = sandbox.appendingPathComponent("download/candidate")
+        let authorizer = ArtifactRecordingAuthorizer()
+        try writeExecutable("legacy candidate", to: candidate)
+        let store = CLIProxyAPIBinaryStore(paths: paths, compatibilityAuthorizer: authorizer)
+
+        try store.savePending(
+            binaryURL: candidate,
+            manifest: try manifest(
+                version: "7.2.42",
+                sourceKind: .userUpdated,
+                binarySha: sha256(candidate),
+                size: fileSize(candidate)
+            )
+        )
+
+        XCTAssertEqual(
+            authorizer.staticArtifacts,
+            [.init(bundled: nil, active: nil, pending: .legacy)]
+        )
+        XCTAssertEqual(try store.pendingManifest()?.target, .darwinArm64)
+    }
+
     func testSchedulePendingRejectsMismatchedTargetWithoutCreatingMarker() throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
@@ -819,4 +844,26 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         let values = try url.resourceValues(forKeys: [.fileSizeKey])
         return try XCTUnwrap(values.fileSize)
     }
+}
+
+private final class ArtifactRecordingAuthorizer: RuntimeCompatibilityAuthorizing, @unchecked Sendable {
+    private(set) var staticArtifacts: [CompatibilityArtifacts] = []
+
+    func staticReport(artifacts: CompatibilityArtifacts) -> RuntimeCompatibilityReport {
+        staticArtifacts.append(artifacts)
+        return Self.allowedReport
+    }
+
+    func report(artifacts: CompatibilityArtifacts) async -> RuntimeCompatibilityReport {
+        staticReport(artifacts: artifacts)
+    }
+
+    func require(_ action: CompatibilityAction, artifacts: CompatibilityArtifacts) throws {}
+
+    private static let allowedReport = RuntimeCompatibilityReport(
+        findings: [],
+        decisions: Dictionary(uniqueKeysWithValues: CompatibilityAction.allCases.map {
+            ($0, CompatibilityDecision(action: $0, disposition: .allowed))
+        })
+    )
 }

@@ -42,3 +42,38 @@
 ## Residual concerns
 
 - Only the brief-required focused binary-store XCTest suite was run; the full package suite was intentionally not run.
+
+## Fix round 1
+
+### Files
+
+- `Sources/CLIProxyManagerCore/Proxy/CLIProxyAPIBinaryStore.swift`
+  - Preserved exact target-less legacy asset provenance as `RuntimeCompatibilityArtifact.legacy` during authorization; unknown target-less assets still fail closed.
+- `Tests/CLIProxyManagerCoreTests/CLIProxyAPIBinaryStoreTests.swift`
+  - Added injected-authorizer coverage confirming an exact legacy candidate is authorized as pending `.legacy` before its validated manifest is backfilled to explicit arm64.
+- `.superpowers/sdd/2026-07-31-runtime-compatibility/task-4-report.md`
+  - Appended this fix-round evidence.
+
+### RED
+
+- `swift test --filter CLIProxyAPIBinaryStoreTests/testSavePendingAuthorizesExactLegacyProductionAssetAsLegacyArtifact`
+  - Failed as expected: the recorded pending artifact was `.explicit(.darwinArm64)`, not `.legacy`.
+
+### GREEN
+
+- `swift test --filter CLIProxyAPIBinaryStoreTests/testSavePendingAuthorizesExactLegacyProductionAssetAsLegacyArtifact`
+  - Passed: 1 test, 0 failures.
+- `swift test --filter CLIProxyAPIBinaryStoreTests`
+  - Passed: 33 tests, 0 failures.
+- `swift test --filter RuntimeCompatibilityTests`
+  - Passed: 2 tests, 0 failures.
+- `git diff --check`
+  - Passed with no whitespace errors.
+
+### Commit
+
+- Fix-round commit SHA is reported in the task completion response after Git creates this commit.
+
+### Residual concerns
+
+- The full package suite was intentionally not run; focused binary-store and runtime-compatibility suites cover this fix.
