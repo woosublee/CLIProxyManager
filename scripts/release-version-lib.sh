@@ -94,15 +94,15 @@ release_read_appcast_identity() {
   local item_version enclosure_version item_build enclosure_build enclosure_url
 
   "$xml" --noout "$appcast" >/dev/null 2>&1 || release_fail 'appcast.xml must be valid XML' || return 1
-  item_build="$($xml --xpath 'string((//*[local-name()="item"]/*[local-name()="version"])[1])' "$appcast" 2>/dev/null)" ||
+  item_build="$($xml --xpath 'string(((//*[local-name()="item"])[1]/*[local-name()="version"])[1])' "$appcast" 2>/dev/null)" ||
     release_fail 'Unable to read build from appcast.xml' || return 1
-  item_version="$($xml --xpath 'string((//*[local-name()="item"]/*[local-name()="shortVersionString"])[1])' "$appcast" 2>/dev/null)" ||
+  item_version="$($xml --xpath 'string(((//*[local-name()="item"])[1]/*[local-name()="shortVersionString"])[1])' "$appcast" 2>/dev/null)" ||
     release_fail 'Unable to read version from appcast.xml' || return 1
-  enclosure_build="$($xml --xpath 'string((//*[local-name()="item"]/*[local-name()="enclosure"])[1]/@*[local-name()="version"])' "$appcast" 2>/dev/null)" ||
+  enclosure_build="$($xml --xpath 'string(((//*[local-name()="item"])[1]/*[local-name()="enclosure"])[1]/@*[local-name()="version"])' "$appcast" 2>/dev/null)" ||
     release_fail 'Unable to read enclosure build from appcast.xml' || return 1
-  enclosure_version="$($xml --xpath 'string((//*[local-name()="item"]/*[local-name()="enclosure"])[1]/@*[local-name()="shortVersionString"])' "$appcast" 2>/dev/null)" ||
+  enclosure_version="$($xml --xpath 'string(((//*[local-name()="item"])[1]/*[local-name()="enclosure"])[1]/@*[local-name()="shortVersionString"])' "$appcast" 2>/dev/null)" ||
     release_fail 'Unable to read enclosure version from appcast.xml' || return 1
-  enclosure_url="$($xml --xpath 'string((//*[local-name()="item"]/*[local-name()="enclosure"])[1]/@url)' "$appcast" 2>/dev/null)" ||
+  enclosure_url="$($xml --xpath 'string(((//*[local-name()="item"])[1]/*[local-name()="enclosure"])[1]/@url)' "$appcast" 2>/dev/null)" ||
     release_fail 'Unable to read enclosure URL from appcast.xml' || return 1
 
   [[ "$item_build" =~ ^[1-9][0-9]*$ ]] || release_fail 'appcast build must be a positive integer' || return 1

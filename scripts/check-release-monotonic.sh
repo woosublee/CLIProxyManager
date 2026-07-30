@@ -35,7 +35,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     *)
-      release_fail "Unknown option: $1"
+      release_fail 'Unknown option'
       ;;
   esac
 done
@@ -112,25 +112,31 @@ staged="$(mktemp "$provenance_dir/.release-provenance.XXXXXX" 2>/dev/null)" ||
   release_fail 'Unable to stage release provenance'
 
 if [[ -n "$latest_tag" || -n "$previous_appcast" ]]; then
-  if ! {
-    printf '{\n'
-    printf '  "trust": "%s",\n' "$trust"
-    printf '  "current": {"version": "%s", "build": %s, "tag": "%s"},\n' "$RELEASE_VERSION" "$RELEASE_BUILD" "$RELEASE_TAG"
-    printf '  "previous": {"version": "%s", "build": %s, "tag": "%s", "dmgName": "%s"},\n' "$APPCAST_VERSION" "$APPCAST_BUILD" "$APPCAST_TAG" "$APPCAST_DMG_NAME"
-    printf '  "source": "%s"\n' "$source_name"
-    printf '}\n'
-  } >"$staged" 2>/dev/null; then
+  if ! (
+    exec 2>/dev/null
+    {
+      printf '{\n'
+      printf '  "trust": "%s",\n' "$trust"
+      printf '  "current": {"version": "%s", "build": %s, "tag": "%s"},\n' "$RELEASE_VERSION" "$RELEASE_BUILD" "$RELEASE_TAG"
+      printf '  "previous": {"version": "%s", "build": %s, "tag": "%s", "dmgName": "%s"},\n' "$APPCAST_VERSION" "$APPCAST_BUILD" "$APPCAST_TAG" "$APPCAST_DMG_NAME"
+      printf '  "source": "%s"\n' "$source_name"
+      printf '}\n'
+    } >"$staged"
+  ); then
     release_fail 'Unable to write release provenance'
   fi
 else
-  if ! {
-    printf '{\n'
-    printf '  "trust": "official",\n'
-    printf '  "current": {"version": "%s", "build": %s, "tag": "%s"},\n' "$RELEASE_VERSION" "$RELEASE_BUILD" "$RELEASE_TAG"
-    printf '  "previous": null,\n'
-    printf '  "source": "no-previous-release"\n'
-    printf '}\n'
-  } >"$staged" 2>/dev/null; then
+  if ! (
+    exec 2>/dev/null
+    {
+      printf '{\n'
+      printf '  "trust": "official",\n'
+      printf '  "current": {"version": "%s", "build": %s, "tag": "%s"},\n' "$RELEASE_VERSION" "$RELEASE_BUILD" "$RELEASE_TAG"
+      printf '  "previous": null,\n'
+      printf '  "source": "no-previous-release"\n'
+      printf '}\n'
+    } >"$staged"
+  ); then
     release_fail 'Unable to write release provenance'
   fi
 fi

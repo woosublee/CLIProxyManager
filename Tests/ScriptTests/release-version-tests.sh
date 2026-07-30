@@ -262,6 +262,19 @@ JSON
 previous_appcast="$sandbox/previous-appcast.xml"
 write_appcast "$previous_appcast" 0.1.9 6 0.1.9 6 v0.1.9 CLIProxyManager-0.1.9.dmg
 
+unknown_sentinel=$'--unknown\nUNKNOWN_OPTION_SENTINEL '
+unknown_sentinel+="$sandbox"
+unknown_stdout="$sandbox/unknown-option-stdout"
+unknown_stderr="$sandbox/unknown-option-stderr"
+if "$monotonic_repo/scripts/check-release-monotonic.sh" "$unknown_sentinel" \
+  >"$unknown_stdout" 2>"$unknown_stderr"; then
+  fail "unknown option should fail"
+fi
+grep -F 'ERROR: Unknown option' "$unknown_stderr" >/dev/null || fail "unknown option should use a fixed error"
+! grep -F 'UNKNOWN_OPTION_SENTINEL' "$unknown_stderr" >/dev/null || fail "unknown option must not expose raw input"
+! grep -F "$sandbox" "$unknown_stderr" >/dev/null || fail "unknown option must not expose local paths"
+[[ ! -s "$unknown_stdout" ]] || fail "unknown option failure should not write stdout"
+
 "$monotonic_repo/scripts/check-release-monotonic.sh" \
   --previous-appcast "$previous_appcast" \
   --provenance "$monotonic_repo/build/release-provenance.json"
@@ -269,6 +282,38 @@ write_appcast "$previous_appcast" 0.1.9 6 0.1.9 6 v0.1.9 CLIProxyManager-0.1.9.d
 [[ "$(plutil -extract current.build raw "$monotonic_repo/build/release-provenance.json")" == '7' ]] || fail "current provenance mismatch"
 [[ "$(plutil -extract previous.build raw "$monotonic_repo/build/release-provenance.json")" == '6' ]] || fail "previous provenance mismatch"
 ! grep -F "$previous_appcast" "$monotonic_repo/build/release-provenance.json" >/dev/null || fail "provenance must not contain local paths"
+
+stage_bin="$sandbox/stage-bin"
+mkdir -p "$stage_bin"
+cat > "$stage_bin/mktemp" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  */.release-provenance.XXXXXX)
+    printf '%s\n' "$STAGE_OPEN_PATH"
+    ;;
+  *)
+    exec /usr/bin/mktemp "$@"
+    ;;
+esac
+SH
+chmod +x "$stage_bin/mktemp"
+stage_open_path="$sandbox/STAGE_OPEN_SENTINEL/missing/release-provenance.json"
+stage_stdout="$sandbox/stage-open-stdout"
+stage_stderr="$sandbox/stage-open-stderr"
+stage_provenance="$monotonic_repo/build/release-provenance.json"
+stage_checksum="$(shasum -a 256 "$stage_provenance" | cut -d' ' -f1)"
+if env PATH="$stage_bin:$PATH" STAGE_OPEN_PATH="$stage_open_path" \
+  "$monotonic_repo/scripts/check-release-monotonic.sh" \
+  --previous-appcast "$previous_appcast" \
+  --provenance "$stage_provenance" \
+  >"$stage_stdout" 2>"$stage_stderr"; then
+  fail "provenance stage-open failure should fail"
+fi
+grep -F 'ERROR: Unable to write release provenance' "$stage_stderr" >/dev/null || fail "stage-open failure should use a fixed error"
+! grep -F 'STAGE_OPEN_SENTINEL' "$stage_stderr" >/dev/null || fail "stage-open failure must not expose the staging sentinel"
+! grep -F "$sandbox" "$stage_stderr" >/dev/null || fail "stage-open failure must not expose local paths"
+[[ ! -s "$stage_stdout" ]] || fail "stage-open failure should not write stdout"
+[[ "$(shasum -a 256 "$stage_provenance" | cut -d' ' -f1)" == "$stage_checksum" ]] || fail "stage-open failure must preserve existing provenance"
 
 write_appcast "$previous_appcast" 0.2.0 7 0.2.0 7 v0.2.0 CLIProxyManager-0.2.0.dmg
 assert_failure_contains 'current build 7 must be greater than previous build 7' \
@@ -287,6 +332,28 @@ assert_failure_contains 'appcast build mismatch between item and enclosure' \
   --previous-appcast "$previous_appcast" \
   --provenance "$existing_provenance"
 [[ "$(shasum -a 256 "$existing_provenance" | cut -d' ' -f1)" == "$provenance_checksum" ]] || fail "failed monotonic check must preserve existing provenance"
+
+cat > "$previous_appcast" <<'XML'
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <item>
+      <sparkle:version>6</sparkle:version>
+      <sparkle:shortVersionString>0.1.9</sparkle:shortVersionString>
+    </item>
+    <item>
+      <enclosure url="https://github.com/example/CLIProxyManager/releases/download/v0.1.9/CLIProxyManager-0.1.9.dmg"
+        sparkle:version="6"
+        sparkle:shortVersionString="0.1.9" />
+    </item>
+  </channel>
+</rss>
+XML
+assert_failure_contains 'appcast build mismatch between item and enclosure' \
+  "$monotonic_repo/scripts/check-release-monotonic.sh" \
+  --previous-appcast "$previous_appcast" \
+  --provenance "$existing_provenance"
+[[ "$(shasum -a 256 "$existing_provenance" | cut -d' ' -f1)" == "$provenance_checksum" ]] || fail "hybrid appcast failure must preserve existing provenance"
 
 malformed_stdout="$sandbox/malformed-appcast-stdout"
 malformed_stderr="$sandbox/malformed-appcast-stderr"
