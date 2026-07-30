@@ -437,4 +437,122 @@ assert_failure_contains 'Release monotonicity check requires official artifacts'
   env ARTIFACT_CHANNEL=development DEVELOPMENT_VERSION=0.2.0 DEVELOPMENT_BUILD_NUMBER=9001 \
   "$monotonic_repo/scripts/check-release-monotonic.sh" --previous-appcast "$previous_appcast"
 
+verify_repo="$sandbox/verify-repo"
+new_repo "$verify_repo"
+cp "$REPO_ROOT/scripts/verify-release-artifacts.sh" "$verify_repo/scripts/verify-release-artifacts.sh"
+chmod +x "$verify_repo/scripts/verify-release-artifacts.sh"
+cat > "$verify_repo/release/version.json" <<'JSON'
+{"version":"0.2.0","build":7}
+JSON
+mkdir -p "$verify_repo/build/CLIProxyManager.app/Contents"
+cat > "$verify_repo/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>
+<key>CFBundleShortVersionString</key><string>0.2.0</string>
+<key>CFBundleVersion</key><string>7</string>
+</dict></plist>
+PLIST
+cp "$verify_repo/Info.plist" "$verify_repo/build/CLIProxyManager.app/Contents/Info.plist"
+printf 'fake dmg' > "$verify_repo/build/CLIProxyManager-0.2.0.dmg"
+write_appcast "$verify_repo/build/appcast.xml" 0.2.0 7 0.2.0 7 v0.2.0 CLIProxyManager-0.2.0.dmg
+cat > "$verify_repo/build/release-provenance.json" <<'JSON'
+{"trust":"official","current":{"version":"0.2.0","build":7,"tag":"v0.2.0"},"previous":{"version":"0.1.9","build":6,"tag":"v0.1.9"},"source":"github-release-appcast"}
+JSON
+
+fake_hdiutil="$sandbox/fake-hdiutil"
+cat > "$fake_hdiutil" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$HDIUTIL_LOG"
+if [[ "$1" == 'attach' ]]; then
+  mount=''
+  while [[ $# -gt 0 ]]; do
+    if [[ "$1" == '-mountpoint' ]]; then mount="$2"; shift 2; else shift; fi
+  done
+  mkdir -p "$mount"
+  cp -R "$HDIUTIL_APP_FIXTURE" "$mount/CLIProxyManager.app"
+elif [[ "$1" == 'detach' ]]; then
+  exit 0
+else
+  exit 64
+fi
+SH
+chmod +x "$fake_hdiutil"
+hdiutil_log="$sandbox/hdiutil.log"
+
+HDIUTIL="$fake_hdiutil" HDIUTIL_LOG="$hdiutil_log" HDIUTIL_APP_FIXTURE="$verify_repo/build/CLIProxyManager.app" \
+  "$verify_repo/scripts/verify-release-artifacts.sh" \
+  --source-plist "$verify_repo/Info.plist" \
+  --app "$verify_repo/build/CLIProxyManager.app" \
+  --dmg "$verify_repo/build/CLIProxyManager-0.2.0.dmg" \
+  --appcast "$verify_repo/build/appcast.xml" \
+  --provenance "$verify_repo/build/release-provenance.json" \
+  --official
+
+grep -F 'attach' "$hdiutil_log" | grep -F -- '-readonly' | grep -F -- '-nobrowse' | grep -F -- '-quiet' | grep -F -- '-mountpoint' >/dev/null || fail "DMG attach must be read-only and hidden"
+grep -F 'detach' "$hdiutil_log" >/dev/null || fail "successful DMG verification must detach"
+
+assert_failure_contains 'At least one release artifact is required' \
+  "$verify_repo/scripts/verify-release-artifacts.sh"
+
+plutil -replace CFBundleVersion -string 6 "$verify_repo/build/CLIProxyManager.app/Contents/Info.plist"
+verify_stderr="$sandbox/verify-stderr"
+if "$verify_repo/scripts/verify-release-artifacts.sh" --app "$verify_repo/build/CLIProxyManager.app" --official 2>"$verify_stderr"; then
+  fail "built app build mismatch should fail"
+fi
+grep -F 'built app build mismatch: expected 7, actual 6' "$verify_stderr" >/dev/null || fail "built app mismatch should use its logical name"
+! grep -F "$verify_repo" "$verify_stderr" >/dev/null || fail "artifact mismatch must not expose repository paths"
+plutil -replace CFBundleVersion -string 7 "$verify_repo/build/CLIProxyManager.app/Contents/Info.plist"
+
+plutil -replace CFBundleShortVersionString -string 0.1.9 "$verify_repo/Info.plist"
+assert_failure_contains 'source Info.plist version mismatch: expected 0.2.0, actual 0.1.9' \
+  "$verify_repo/scripts/verify-release-artifacts.sh" --source-plist "$verify_repo/Info.plist" --official
+plutil -replace CFBundleShortVersionString -string 0.2.0 "$verify_repo/Info.plist"
+
+cp "$verify_repo/build/CLIProxyManager-0.2.0.dmg" "$verify_repo/build/CLIProxyManager-0.2.1.dmg"
+assert_failure_contains 'DMG filename mismatch: expected CLIProxyManager-0.2.0.dmg, actual CLIProxyManager-0.2.1.dmg' \
+  "$verify_repo/scripts/verify-release-artifacts.sh" --dmg "$verify_repo/build/CLIProxyManager-0.2.1.dmg" --official
+
+: > "$hdiutil_log"
+plutil -replace CFBundleVersion -string 6 "$verify_repo/build/CLIProxyManager.app/Contents/Info.plist"
+assert_failure_contains 'DMG app build mismatch: expected 7, actual 6' \
+  env HDIUTIL="$fake_hdiutil" HDIUTIL_LOG="$hdiutil_log" HDIUTIL_APP_FIXTURE="$verify_repo/build/CLIProxyManager.app" \
+  "$verify_repo/scripts/verify-release-artifacts.sh" --dmg "$verify_repo/build/CLIProxyManager-0.2.0.dmg" --official
+grep -F 'detach' "$hdiutil_log" >/dev/null || fail "failed DMG verification must detach"
+plutil -replace CFBundleVersion -string 7 "$verify_repo/build/CLIProxyManager.app/Contents/Info.plist"
+
+write_appcast "$verify_repo/build/appcast.xml" 0.2.1 8 0.2.1 8 v0.2.1 CLIProxyManager-0.2.1.dmg
+assert_failure_contains 'appcast version mismatch: expected 0.2.0, actual 0.2.1' \
+  "$verify_repo/scripts/verify-release-artifacts.sh" --appcast "$verify_repo/build/appcast.xml" --official
+write_appcast "$verify_repo/build/appcast.xml" 0.2.0 7 0.2.0 7 v0.2.0 CLIProxyManager-0.2.0.dmg
+
+plutil -replace current.build -integer 6 "$verify_repo/build/release-provenance.json"
+assert_failure_contains 'provenance build mismatch: expected 7, actual 6' \
+  "$verify_repo/scripts/verify-release-artifacts.sh" --provenance "$verify_repo/build/release-provenance.json" --official
+plutil -replace current.build -integer 7 "$verify_repo/build/release-provenance.json"
+plutil -replace trust -string untrusted "$verify_repo/build/release-provenance.json"
+assert_failure_contains 'provenance trust mismatch: expected official or local-fallback, actual untrusted' \
+  "$verify_repo/scripts/verify-release-artifacts.sh" --provenance "$verify_repo/build/release-provenance.json" --official
+plutil -replace trust -string official "$verify_repo/build/release-provenance.json"
+plutil -remove trust "$verify_repo/build/release-provenance.json"
+assert_failure_contains 'provenance trust mismatch: expected official or local-fallback, actual missing' \
+  "$verify_repo/scripts/verify-release-artifacts.sh" --provenance "$verify_repo/build/release-provenance.json" --official
+plutil -insert trust -string official "$verify_repo/build/release-provenance.json"
+
+plutil -insert CLIProxyManagerReleaseChannel -string development "$verify_repo/build/CLIProxyManager.app/Contents/Info.plist"
+assert_failure_contains 'official release cannot use a development app artifact' \
+  "$verify_repo/scripts/verify-release-artifacts.sh" --app "$verify_repo/build/CLIProxyManager.app" --official
+
+unknown_verify_option=$'--unknown\nUNKNOWN_VERIFY_SENTINEL '
+unknown_verify_option+="$verify_repo"
+verify_unknown_stderr="$sandbox/verify-unknown-stderr"
+if "$verify_repo/scripts/verify-release-artifacts.sh" "$unknown_verify_option" 2>"$verify_unknown_stderr"; then
+  fail "unknown verifier option should fail"
+fi
+grep -F 'ERROR: Unknown option' "$verify_unknown_stderr" >/dev/null || fail "unknown verifier option should use a fixed error"
+! grep -F 'UNKNOWN_VERIFY_SENTINEL' "$verify_unknown_stderr" >/dev/null || fail "unknown verifier option must not expose raw input"
+! grep -F "$verify_repo" "$verify_unknown_stderr" >/dev/null || fail "unknown verifier option must not expose local paths"
+
+grep -F 'scripts/verify-release-artifacts.sh --source-plist "$(INFO_PLIST)" --app "$(APP_BUNDLE)"' "$REPO_ROOT/Makefile" >/dev/null || fail "make verify must check app identity"
+grep -F -- '--dmg "$(DMG_PATH)"' "$REPO_ROOT/Makefile" >/dev/null || fail "make verify-dmg must check DMG identity"
+
 printf 'release version resolver tests passed\n'

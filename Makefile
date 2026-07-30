@@ -165,6 +165,7 @@ verify: sign
 	test -d "$$VERIFY_APP/Contents/Frameworks/Sparkle.framework/Updater.app" || { echo "Missing Sparkle Updater.app"; exit 1; }; \
 	test ! -e "$$VERIFY_APP/Contents/Resources/cliproxy-manager" || { echo "Helper must not be bundled in Contents/Resources"; exit 1; }; \
 	echo "codesign verification passed"
+	scripts/verify-release-artifacts.sh --source-plist "$(INFO_PLIST)" --app "$(APP_BUNDLE)"
 
 install-helper: sign
 	mkdir -p /usr/local/bin
@@ -260,6 +261,7 @@ verify-dmg: dmg
 	test "$$(readlink "$$MOUNT_DIR/Applications")" = "/Applications" || { echo "Applications symlink points to wrong target"; exit 1; }; \
 	codesign --verify --deep --strict --verbose=2 "$$MOUNT_DIR/$(APP_NAME).app"; \
 	echo "DMG verification passed"
+	scripts/verify-release-artifacts.sh --source-plist "$(INFO_PLIST)" --app "$(APP_BUNDLE)" --dmg "$(DMG_PATH)"
 
 sign-dmg: release-metadata-check
 	@set -e; \
