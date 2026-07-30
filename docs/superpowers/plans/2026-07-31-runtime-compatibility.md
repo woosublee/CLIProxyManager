@@ -82,7 +82,7 @@ Expected: compile failure because compatibility policy types and `target` do not
 ```swift
 public struct CLIProxyAPIArtifactTarget: Codable, Equatable, Sendable {
     public enum OperatingSystem: String, Codable, Sendable { case darwin }
-    public enum Architecture: String, Codable, Sendable { case arm64 }
+    public enum Architecture: String, Codable, Sendable { case arm64, x86_64 }
     public let operatingSystem: OperatingSystem
     public let architecture: Architecture
     public static let darwinArm64 = Self(operatingSystem: .darwin, architecture: .arm64)
@@ -128,7 +128,7 @@ git commit -m "feat: define runtime compatibility policy"
 
 **Interfaces:**
 - Consumes Task 1 policy, manifests, and artifact target.
-- Produces `RuntimeCompatibilityChecking.staticReport(artifacts:)` and `RuntimeCompatibilityChecking.report(artifacts:) async`.
+- Produces `RuntimeCompatibilityAuthorizing.staticReport(artifacts:)`, `RuntimeCompatibilityAuthorizing.report(artifacts:) async`, and synchronous `require(_:artifacts:)` for mutation boundaries.
 - `staticReport` reports only synchronous host/artifact hard blockers; `report` adds sanitized Claude availability/version findings.
 
 - [ ] **Step 1: Write failing read-only and Claude observation tests**
@@ -167,9 +167,10 @@ Expected: compile failure because preflight and version-only observation APIs do
 - [ ] **Step 3: Implement observers and sanitized report construction**
 
 ```swift
-public protocol RuntimeCompatibilityChecking: Sendable {
+public protocol RuntimeCompatibilityAuthorizing: Sendable {
     func staticReport(artifacts: CompatibilityArtifacts) -> RuntimeCompatibilityReport
     func report(artifacts: CompatibilityArtifacts) async -> RuntimeCompatibilityReport
+    func require(_ action: CompatibilityAction, artifacts: CompatibilityArtifacts) throws
 }
 
 public protocol RuntimeEnvironmentProviding: Sendable {
@@ -267,8 +268,7 @@ git commit -m "feat: preserve CLIProxyAPI artifact targets"
 ## Task 4: Enforce Artifact Target Safety in Binary Storage
 
 **Files:**
-- Modify: `Sources/CLIProxyManagerCore/Proxy/CLIProxyAPIBinaryStore.swift`
-- Modify: `Sources/CLIProxyManagerCore/Proxy/CLIProxyAPIBinaryStore.swift` (the existing `CLIProxyAPIBinaryStoreError` declaration at the file top)
+- Modify: `Sources/CLIProxyManagerCore/Proxy/CLIProxyAPIBinaryStore.swift` (including the existing `CLIProxyAPIBinaryStoreError` declaration at the file top)
 - Test: `Tests/CLIProxyManagerCoreTests/CLIProxyAPIBinaryStoreTests.swift`
 
 **Interfaces:**
@@ -452,7 +452,7 @@ git commit -m "feat: guard shell functions with compatibility preflight"
 - Modify: `Sources/CLIProxyManagerApp/ViewModels/DashboardViewModel.swift`
 - Modify: `Sources/CLIProxyManagerApp/Views/DashboardView.swift`
 - Modify: `Sources/CLIProxyManagerApp/Views/GeneralSettingsView.swift`
-- Modify: `Sources/CLIProxyManagerCore/CLI/CPMStatus.swift` or its existing model declaration file
+- Modify: `Sources/CLIProxyManagerCore/CLI/RuntimeCommandServices.swift` (`CPMStatus` model declaration)
 - Modify: `Sources/CLIProxyManagerCore/Runtime/StatusService.swift`
 - Modify: `Sources/CLIProxyManagerCore/CLI/CLIProxyManagerCommand.swift`
 - Modify: `README.md`
