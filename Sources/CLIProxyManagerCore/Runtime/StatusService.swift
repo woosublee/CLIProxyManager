@@ -66,37 +66,42 @@ public struct StatusService: StatusReporting, Sendable {
     private let appLifecycle: any AppLifecycleControlling
     private let proxyRuntime: any ProxyRuntimeServicing
     private let helperInspector: any HelperInspecting
+    private let compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing
     private let paths: ManagedPaths
 
     public init(
         appLifecycle: any AppLifecycleControlling = AppLifecycleService(),
         proxyRuntime: any ProxyRuntimeServicing = ProxyRuntimeService(),
         helperInspector: any HelperInspecting = HelperInspector(),
+        compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing = RuntimeCompatibilityPreflight(),
         paths: ManagedPaths = ManagedPaths()
     ) {
         self.appLifecycle = appLifecycle
         self.proxyRuntime = proxyRuntime
         self.helperInspector = helperInspector
+        self.compatibilityAuthorizer = compatibilityAuthorizer
         self.paths = paths
     }
 
     public func status() async throws -> CPMStatus {
         async let appResult = appLifecycle.status()
         async let proxyResult = proxyRuntime.status()
+        async let compatibilityResult = compatibilityAuthorizer.report(artifacts: compatibilityArtifacts())
         let helperStatus = helperInspector.inspect()
         let app = try await appResult
         let proxy = try await proxyResult
+        let compatibility = await compatibilityResult
         return CPMStatus(
             app: CPMStatus.App(
                 installed: app.installed,
-                path: app.path,
+                path: app.path.map(Self.sanitizedPath),
                 version: app.version,
                 build: app.build,
                 running: app.running,
                 stagedVersion: nil
             ),
             helper: CPMStatus.Helper(
-                path: helperStatus.path,
+                path: Self.sanitizedPath(helperStatus.path),
                 installed: helperStatus.installed,
                 matchesBundled: helperStatus.matchesBundled
             ),
@@ -106,8 +111,18 @@ public struct StatusService: StatusReporting, Sendable {
                 activeVersion: proxy.activeVersion,
                 pendingVersion: proxy.pendingVersion,
                 stagedVersion: nil,
-                logsPath: paths.proxyLogsDirectory.path
-            )
+                logsPath: Self.sanitizedPath(paths.proxyLogsDirectory.path)
+            ),
+            compatibility: .init(report: compatibility)
         )
+    }
+
+    private func compatibilityArtifacts() -> CompatibilityArtifacts {
+        CompatibilityArtifacts(bundled: nil, active: nil, pending: nil)
+    }
+
+    private static func sanitizedPath(_ path: String) -> String {
+        guard path.hasPrefix("/Users/") || path.hasPrefix("/home/") else { return path }
+        return "<redacted>"
     }
 }

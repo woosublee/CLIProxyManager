@@ -177,6 +177,7 @@ final class DashboardViewModel: ObservableObject {
 
     @Published var cards: [ProfileCard]
     @Published var serverStatus: DiagnosticStatus
+    @Published private(set) var compatibilityReport: RuntimeCompatibilityReport
     @Published var serverControlState: ServerControlState = .stopped
     @Published var isServerActionInProgress = false
     @Published var isProfileLoginInProgress = false
@@ -242,6 +243,39 @@ final class DashboardViewModel: ObservableObject {
             || isAPIUsageReloadInProgress
     }
 
+    var canStartServerForCompatibility: Bool {
+        compatibilityReport.decision(for: .startProxy).disposition != .blocked
+    }
+
+    var canRestartServerForCompatibility: Bool {
+        compatibilityReport.decision(for: .restartProxy).disposition != .blocked
+    }
+
+    var canInstallShellFunctionsForCompatibility: Bool {
+        compatibilityReport.decision(for: .installShellFunctions).disposition != .blocked
+    }
+
+    var canStageProxyUpdateForCompatibility: Bool {
+        compatibilityReport.decision(for: .stageProxyUpdate).disposition != .blocked
+    }
+
+    var canApplyProxyUpdateForCompatibility: Bool {
+        compatibilityReport.decision(for: .applyProxyUpdate).disposition != .blocked
+    }
+
+    var canScheduleProxyUpdateForCompatibility: Bool {
+        compatibilityReport.decision(for: .scheduleProxyUpdate).disposition != .blocked
+    }
+
+    var compatibilityPresentation: (isBlocked: Bool, text: String)? {
+        let summary = CPMStatus.Compatibility(report: compatibilityReport)
+        guard let finding = summary.findings.first else { return nil }
+        return (
+            isBlocked: summary.disposition == .blocked,
+            text: "\(finding.code): \(finding.recovery)"
+        )
+    }
+
     var lastSuccessfulUsageRefreshAt: Date? {
         let subscriptionDates = providerRows.compactMap { row -> Date? in
             guard row.showsUsage,
@@ -268,6 +302,7 @@ final class DashboardViewModel: ObservableObject {
     private let automaticShellInstallService: AutomaticShellInstallService
     private let proxyHealthClient: any ProxyHealthChecking
     private let proxyService: any ProxyServiceControlling
+    private let compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing
     private let bundledProxyReconciler: any BundledProxyReconciling
     private let claudeConnector: ClaudeConnector
     private let loginItemService: any LoginItemControlling
@@ -557,6 +592,7 @@ final class DashboardViewModel: ObservableObject {
         automaticShellInstallService: AutomaticShellInstallService? = nil,
         proxyHealthClient: any ProxyHealthChecking = ProxyHealthClient(),
         proxyService: any ProxyServiceControlling = BundledProxyBinary.serviceManager(),
+        compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing = RuntimeCompatibilityPreflight(),
         bundledProxyReconciler: (any BundledProxyReconciling)? = nil,
         claudeConnector: ClaudeConnector = ClaudeConnector(),
         loginItemService: any LoginItemControlling = LoginItemService(),
@@ -589,6 +625,7 @@ final class DashboardViewModel: ObservableObject {
         )
         self.proxyHealthClient = proxyHealthClient
         self.proxyService = proxyService
+        self.compatibilityAuthorizer = compatibilityAuthorizer
         self.bundledProxyReconciler = bundledProxyReconciler ?? BundledProxyBinary.reconciliationService()
         self.claudeConnector = claudeConnector
         self.loginItemService = loginItemService
@@ -696,6 +733,7 @@ final class DashboardViewModel: ObservableObject {
             title: "Needs check",
             message: "Server status has not been checked yet."
         )
+        compatibilityReport = compatibilityAuthorizer.staticReport(artifacts: Self.compatibilityArtifacts)
         restoreClaudeModelOptions()
         restoreSubscriptionUsageSnapshots()
         restoreCodexResetCreditsSnapshots()
@@ -994,15 +1032,23 @@ final class DashboardViewModel: ObservableObject {
 
     func refresh() async {
         let wasProxyReady = serverStatus.severity == .ready
+        async let updatedCompatibilityReport = compatibilityAuthorizer.report(artifacts: Self.compatibilityArtifacts)
         let rawServerStatus = await stableServerStatus()
         updateProxyRuntimeCertainty(from: rawServerStatus)
         let updatedServerStatus = passiveRefreshPresentationStatus(from: rawServerStatus)
         let claudeStatus = await claudeConnector.status()
+        compatibilityReport = await updatedCompatibilityReport
         updateStatuses(serverStatus: updatedServerStatus, claudeStatus: claudeStatus)
         if wasProxyReady != (updatedServerStatus.severity == .ready) {
             scheduleAPIUsageCollectorUpdateIfStarted()
         }
     }
+
+    private static let compatibilityArtifacts = CompatibilityArtifacts(
+        bundled: nil,
+        active: nil,
+        pending: nil
+    )
 
     func prepareUsage() async {
         guard !isPreparingAPIUsageForTermination else { return }

@@ -30,6 +30,17 @@ CLIProxyManager is a macOS menu bar app for managing multiple Claude and Codex O
 - A Claude/Codex OAuth account or a Claude/OpenAI API key.
 - zsh if you want to use the generated terminal commands.
 
+## Runtime compatibility support matrix
+
+| Requirement | Support and recovery |
+| --- | --- |
+| macOS | macOS 15+ |
+| Architecture | Apple silicon `arm64` |
+| Shell | Generated terminal functions require the zsh login shell. |
+| Artifact | The supported CLIProxyAPI artifact is `darwin/arm64`. |
+| Claude Code | Claude Code `2.1.220` was verified on 2026-07-31. Other detected versions are reported as unverified. |
+| Compatibility | A **Warning** keeps existing proxy operation available and explains the next step. A **Block** prevents start, restart, proxy updates, and generated shell writes; stopping an already running proxy remains available. Follow the displayed **Recovery** guidance, then refresh the status. |
+
 ## Installation and macOS security warning
 
 The release app is self-signed but is **not Apple-notarized**, so macOS may show a security warning the first time you launch it.

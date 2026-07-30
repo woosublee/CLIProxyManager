@@ -69,6 +69,35 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.cards.first { $0.command == "codex-local" }?.status, serverStatus)
     }
 
+    func testCompatibilityBlockerDoesNotReplaceReadyServerStatus() async {
+        let report = RuntimeCompatibilityPolicy.current.report(
+            environment: .init(
+                operatingSystem: .macOS(major: 15, minor: 0),
+                architecture: .x86_64,
+                loginShell: "/bin/zsh"
+            ),
+            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil),
+            claude: .version("2.1.220")
+        )
+        let viewModel = DashboardViewModel(
+            config: .default,
+            configStore: StubConfigStore(config: .default),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: StubAuthProfileStore(profiles: []),
+            oauthLoginService: StubOAuthLoginService(),
+            proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
+            proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: FixedCompatibilityAuthorizer(report: report),
+            claudeConnector: connectedClaudeConnector()
+        )
+
+        await viewModel.refresh()
+
+        XCTAssertEqual(viewModel.serverStatus.severity, .ready)
+        XCTAssertEqual(viewModel.compatibilityReport.decision(for: .startProxy).disposition, .blocked)
+        XCTAssertEqual(viewModel.compatibilityReport.decision(for: .stopProxy).disposition, .allowedWithWarnings)
+    }
+
     func testRefreshUpdatesBlankCommandCardsByStableIdentity() async {
         let config = AppConfig.default
         let serverStatus = DiagnosticStatus(
@@ -12672,4 +12701,14 @@ private final class StubProxyServiceStarter: ProxyServiceControlling, @unchecked
             throw error
         }
     }
+}
+
+private struct FixedCompatibilityAuthorizer: RuntimeCompatibilityAuthorizing {
+    let report: RuntimeCompatibilityReport
+
+    func staticReport(artifacts _: CompatibilityArtifacts) -> RuntimeCompatibilityReport { report }
+
+    func report(artifacts _: CompatibilityArtifacts) async -> RuntimeCompatibilityReport { report }
+
+    func require(_: CompatibilityAction, artifacts _: CompatibilityArtifacts) throws {}
 }

@@ -632,6 +632,30 @@ final class CLIProxyManagerCommandTests: XCTestCase {
         XCTAssertTrue(output.stderr.isEmpty)
     }
 
+    func testStatusJSONContainsSanitizedCompatibilitySummary() async throws {
+        let output = OutputDouble(isInteractive: false)
+        let report = RuntimeCompatibilityPolicy.current.report(
+            environment: .init(
+                operatingSystem: .macOS(major: 15, minor: 0),
+                architecture: .arm64,
+                loginShell: "/bin/zsh"
+            ),
+            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil),
+            claude: .version("2.1.221")
+        )
+        let services = RuntimeServicesDouble(compatibility: CPMStatus.Compatibility(report: report))
+        let command = makeRuntimeCommand(output: output, services: services)
+
+        try await command.run(arguments: ["status", "--json"])
+
+        let text = output.stdout.joined()
+        XCTAssertTrue(text.contains("compatibility"))
+        XCTAssertTrue(text.contains("unverifiedClaudeCodeVersion"))
+        XCTAssertFalse(text.contains("/Users/"))
+        XCTAssertFalse(text.contains("example.com"))
+        XCTAssertTrue(output.stderr.isEmpty)
+    }
+
     func testRootUserIsRejectedBeforeStart() async throws {
         let services = RuntimeServicesDouble()
         let command = makeRuntimeCommand(services: services, uid: 0)
@@ -1046,6 +1070,11 @@ private final class RuntimeServicesDouble: ProxyRuntimeServicing, AppLifecycleCo
 
     private let proxyStatusResult = ProxyRuntimeStatus(port: 8317, running: false, health: ProxyHealthSummary(title: "OK", message: "OK"), activeVersion: nil, pendingVersion: nil)
     private let appStatusResult = AppLifecycleStatus(installed: true, running: false, path: nil, version: nil, build: nil)
+    private let compatibility: CPMStatus.Compatibility
+
+    init(compatibility: CPMStatus.Compatibility = .allowed) {
+        self.compatibility = compatibility
+    }
 
     // ProxyRuntimeServicing
     func status() async throws -> ProxyRuntimeStatus { record(.proxyStatus); return proxyStatusResult }
@@ -1072,7 +1101,8 @@ private final class RuntimeServicesDouble: ProxyRuntimeServicing, AppLifecycleCo
         return CPMStatus(
             app: CPMStatus.App(installed: true, path: nil, version: nil, build: nil, running: false, stagedVersion: nil),
             helper: CPMStatus.Helper(path: "/usr/local/bin/cpm", installed: false, matchesBundled: false),
-            proxy: CPMStatus.Proxy(port: 8317, running: false, activeVersion: nil, pendingVersion: nil, stagedVersion: nil, logsPath: "/tmp/logs")
+            proxy: CPMStatus.Proxy(port: 8317, running: false, activeVersion: nil, pendingVersion: nil, stagedVersion: nil, logsPath: "/tmp/logs"),
+            compatibility: compatibility
         )
     }
 }

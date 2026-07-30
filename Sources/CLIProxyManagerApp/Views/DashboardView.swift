@@ -54,6 +54,7 @@ struct DashboardView: View {
                         statusMessage: viewModel.serverStatus.message,
                         port: viewModel.config.port,
                         isActionInProgress: viewModel.isServerActionInProgress,
+                        canStart: viewModel.canStartServerForCompatibility,
                         copied: copiedEndpoint,
                         toggleAction: { isOn in
                             Task {
@@ -63,6 +64,24 @@ struct DashboardView: View {
                         copyEndpoint: copyEndpointToPasteboard
                     )
                     .padding(.bottom, 8)
+
+                    if let compatibility = viewModel.compatibilityPresentation {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(compatibility.isBlocked ? "Compatibility blocks Start and Restart" : "Compatibility warning")
+                                .font(.system(size: 12, weight: .semibold))
+                            Text(compatibility.isBlocked
+                                 ? "Stop remains available for a running proxy. \(compatibility.text)"
+                                 : compatibility.text)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(compatibility.isBlocked ? BrandPalette.statusError.opacity(0.10) : Color.orange.opacity(0.10))
+                        )
+                    }
 
                     SectionHeader(
                         title: "Accounts",
@@ -203,6 +222,7 @@ struct DashboardView: View {
                     }
                 }
             }
+            .disabled(!viewModel.canStageProxyUpdateForCompatibility)
             Button("Later", role: .cancel) {
                 cliProxyAPIUpdateService.deferAvailableUpdate()
             }
@@ -218,6 +238,7 @@ struct DashboardView: View {
             )) {
                 Task { await viewModel.applyCLIProxyAPIPendingUpdate(using: cliProxyAPIUpdateService) }
             }
+            .disabled(!viewModel.canApplyProxyUpdateForCompatibility)
             Button("Apply on next server start") {
                 if cliProxyAPIUpdateService.schedulePendingForNextServerStart() {
                     viewModel.settingsMessage = "CLIProxyAPI update will be applied on next server start."
@@ -225,6 +246,7 @@ struct DashboardView: View {
                     viewModel.settingsMessage = "CLIProxyAPI update failed: \(message)"
                 }
             }
+            .disabled(!viewModel.canScheduleProxyUpdateForCompatibility)
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(cliProxyAPIPendingUpdatePromptMessage(currentVersion: cliProxyAPIUpdateService.currentVersionText))
@@ -516,6 +538,7 @@ private struct ServerHeroView: View {
     let statusMessage: String
     let port: Int
     let isActionInProgress: Bool
+    let canStart: Bool
     let copied: Bool
     let toggleAction: (Bool) -> Void
     let copyEndpoint: () -> Void
@@ -565,7 +588,7 @@ private struct ServerHeroView: View {
                 .toggleStyle(.switch)
                 .tint(BrandPalette.statusRunning)
                 .controlSize(.large)
-                .disabled(isTransitioning)
+                .disabled(isTransitioning || (!toggleOn && !canStart))
             }
 
             Button(action: copyEndpoint) {

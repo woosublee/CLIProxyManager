@@ -19,6 +19,30 @@ final class StatusServiceTests: XCTestCase {
         XCTAssertNil((object["app"] as? [String: Any])?["apiKey"])
     }
 
+    func testStatusPublishesSanitizedCompatibilitySummary() async throws {
+        let report = RuntimeCompatibilityPolicy.current.report(
+            environment: .init(
+                operatingSystem: .macOS(major: 15, minor: 0),
+                architecture: .x86_64,
+                loginShell: "/Users/example.com/bin/zsh"
+            ),
+            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil),
+            claude: .version("2.1.221")
+        )
+        let status = try await StatusService(
+            appLifecycle: AppLifecycleDouble(running: false),
+            proxyRuntime: ProxyRuntimeDouble(port: 8317, running: false, activeVersion: nil),
+            helperInspector: HelperInspectorDouble(installed: false, matchesBundled: false),
+            compatibilityAuthorizer: FixedStatusCompatibilityAuthorizer(report: report),
+            paths: ManagedPaths(rootDirectory: URL(fileURLWithPath: "/Users/example.com/.cliproxy-manager"))
+        ).status()
+
+        XCTAssertEqual(status.compatibility.disposition, .blocked)
+        XCTAssertEqual(status.compatibility.findings.map(\.code), ["unsupportedArchitecture", "unverifiedClaudeCodeVersion"])
+        XCTAssertFalse(try String(decoding: JSONEncoder().encode(status), as: UTF8.self).contains("/Users/"))
+        XCTAssertFalse(try String(decoding: JSONEncoder().encode(status), as: UTF8.self).contains("example.com"))
+    }
+
     func testStatusAggregatesAppAndProxyAndHelper() async throws {
         let status = try await StatusService(
             appLifecycle: AppLifecycleDouble(running: true),
@@ -105,6 +129,16 @@ private struct HelperInspectorDouble: HelperInspecting {
     func inspect() -> HelperStatus {
         HelperStatus(path: "/usr/local/bin/cpm", installed: installed, matchesBundled: matchesBundled)
     }
+}
+
+private struct FixedStatusCompatibilityAuthorizer: RuntimeCompatibilityAuthorizing {
+    let report: RuntimeCompatibilityReport
+
+    func staticReport(artifacts _: CompatibilityArtifacts) -> RuntimeCompatibilityReport { report }
+
+    func report(artifacts _: CompatibilityArtifacts) async -> RuntimeCompatibilityReport { report }
+
+    func require(_: CompatibilityAction, artifacts _: CompatibilityArtifacts) throws {}
 }
 
 private final class ConcurrentFileManager: FileManager {
