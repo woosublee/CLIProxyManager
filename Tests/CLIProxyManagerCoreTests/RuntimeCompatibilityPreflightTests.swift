@@ -62,6 +62,24 @@ final class RuntimeCompatibilityPreflightTests: XCTestCase {
         XCTAssertTrue(report.findings.contains(.unavailableClaudeCode))
     }
 
+    func testAccountLoginShellReaderReturnsAccountRecordShell() {
+        let reader = AccountLoginShellReader(accountRecord: FixedAccountRecord(loginShell: "/bin/zsh"))
+
+        XCTAssertEqual(reader.loginShell(), "/bin/zsh")
+    }
+
+    func testAccountLoginShellReaderReturnsEmptyStringWhenAccountRecordReadFails() {
+        let reader = AccountLoginShellReader(accountRecord: FixedAccountRecord(loginShell: nil))
+
+        XCTAssertEqual(reader.loginShell(), "")
+    }
+
+    func testAccountLoginShellReaderReturnsEmptyStringForEmptyAccountRecordShell() {
+        let reader = AccountLoginShellReader(accountRecord: FixedAccountRecord(loginShell: ""))
+
+        XCTAssertEqual(reader.loginShell(), "")
+    }
+
     func testLiveEnvironmentProviderInjectsHostInputs() {
         let environment = LiveRuntimeEnvironmentProvider(
             operatingSystem: { .macOS(major: 15, minor: 4) },
@@ -123,6 +141,14 @@ private struct FixedEnvironment: RuntimeEnvironmentProviding {
 
     func snapshot() -> RuntimeEnvironmentSnapshot {
         environmentSnapshot
+    }
+}
+
+private struct FixedAccountRecord: AccountRecordReading {
+    let loginShell: String?
+
+    func readLoginShell() -> String? {
+        loginShell
     }
 }
 

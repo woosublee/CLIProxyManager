@@ -11,8 +11,50 @@ public protocol RuntimeEnvironmentProviding: Sendable {
     func snapshot() -> RuntimeEnvironmentSnapshot
 }
 
+protocol AccountRecordReading: Sendable {
+    func readLoginShell() -> String?
+}
+
+struct AccountLoginShellReader: Sendable {
+    private let accountRecord: AccountRecordReading
+
+    init() {
+        accountRecord = CurrentAccountRecordReader()
+    }
+
+    init(accountRecord: AccountRecordReading) {
+        self.accountRecord = accountRecord
+    }
+
+    func loginShell() -> String {
+        guard let loginShell = accountRecord.readLoginShell(), loginShell.isEmpty == false else {
+            return ""
+        }
+        return loginShell
+    }
+}
+
 public enum RuntimeCompatibilityError: Error, Equatable, Sendable {
     case actionBlocked(CompatibilityAction)
+}
+
+private struct CurrentAccountRecordReader: AccountRecordReading {
+    func readLoginShell() -> String? {
+        var account = passwd()
+        var result: UnsafeMutablePointer<passwd>?
+        var buffer = [CChar](repeating: 0, count: 16_384)
+        let status = buffer.withUnsafeMutableBufferPointer { buffer in
+            getpwuid_r(getuid(), &account, buffer.baseAddress, buffer.count, &result)
+        }
+
+        guard status == 0,
+              let result,
+              let shell = result.pointee.pw_shell
+        else {
+            return nil
+        }
+        return String(cString: shell)
+    }
 }
 
 public struct LiveRuntimeEnvironmentProvider: RuntimeEnvironmentProviding, Sendable {
@@ -72,7 +114,7 @@ public struct LiveRuntimeEnvironmentProvider: RuntimeEnvironmentProviding, Senda
     }
 
     private static func currentLoginShell() -> String {
-        ProcessInfo.processInfo.environment["SHELL"] ?? ""
+        AccountLoginShellReader().loginShell()
     }
 
 }
