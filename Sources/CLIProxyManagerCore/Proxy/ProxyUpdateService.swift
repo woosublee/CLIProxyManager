@@ -85,6 +85,7 @@ public struct ProxyUpdateService: Sendable {
     private let checker: any ProxyUpdateChecking
     private let downloader: any ProxyUpdateDownloading
     private let runtime: (any ProxyRuntimeUpdating)?
+    private let bundledManifestURL: URL?
     private let compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing
 
     public init(
@@ -92,12 +93,14 @@ public struct ProxyUpdateService: Sendable {
         checker: any ProxyUpdateChecking = CLIProxyAPIReleaseClient(),
         downloader: any ProxyUpdateDownloading = ProxyUpdateDownloader(),
         runtime: (any ProxyRuntimeUpdating)? = nil,
+        bundledManifestURL: URL? = nil,
         compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing = RuntimeCompatibilityPreflight()
     ) {
         self.store = CLIProxyAPIBinaryStore(paths: paths)
         self.checker = checker
         self.downloader = downloader
         self.runtime = runtime ?? ProxyRuntimeService(paths: paths)
+        self.bundledManifestURL = bundledManifestURL
         self.compatibilityAuthorizer = compatibilityAuthorizer
     }
 
@@ -106,12 +109,14 @@ public struct ProxyUpdateService: Sendable {
         checker: any ProxyUpdateChecking,
         downloader: any ProxyUpdateDownloading,
         runtime: (any ProxyRuntimeUpdating)?,
+        bundledManifestURL: URL? = nil,
         compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing = RuntimeCompatibilityPreflight()
     ) {
         self.store = store
         self.checker = checker
         self.downloader = downloader
         self.runtime = runtime
+        self.bundledManifestURL = bundledManifestURL
         self.compatibilityAuthorizer = compatibilityAuthorizer
     }
 
@@ -159,7 +164,7 @@ public struct ProxyUpdateService: Sendable {
         let artifacts: CompatibilityArtifacts
         do {
             artifacts = CompatibilityArtifacts(
-                bundled: nil,
+                bundled: try bundledArtifact(),
                 active: try compatibilityArtifact(for: store.activeManifest()),
                 pending: candidate
             )
@@ -175,6 +180,15 @@ public struct ProxyUpdateService: Sendable {
         }
     }
 
+    private func bundledArtifact() throws -> RuntimeCompatibilityArtifact? {
+        guard let bundledManifestURL else { return nil }
+        let manifest = try JSONDecoder().decode(
+            CLIProxyAPIBinaryManifest.self,
+            from: Data(contentsOf: bundledManifestURL)
+        )
+        return try compatibilityArtifact(forCandidate: manifest)
+    }
+
     private func compatibilityArtifact(for manifest: CLIProxyAPIBinaryManifest?) throws -> RuntimeCompatibilityArtifact? {
         guard let manifest else { return nil }
         guard let target = manifest.target else {
@@ -186,7 +200,7 @@ public struct ProxyUpdateService: Sendable {
         return .explicit(target)
     }
 
-    private func compatibilityArtifact(for manifest: CLIProxyAPIBinaryManifest) throws -> RuntimeCompatibilityArtifact {
+    private func compatibilityArtifact(forCandidate manifest: CLIProxyAPIBinaryManifest) throws -> RuntimeCompatibilityArtifact {
         try compatibilityArtifact(for: Optional(manifest)) ?? .legacy
     }
 
@@ -201,7 +215,7 @@ public struct ProxyUpdateService: Sendable {
             )
         }
         let version = pending.version
-        try requireCompatibility(for: .applyProxyUpdate, candidate: compatibilityArtifact(for: pending))
+        try requireCompatibility(for: .applyProxyUpdate, candidate: compatibilityArtifact(forCandidate: pending))
         guard let runtime else {
             throw CLIProxyManagerCommandError.operation("Runtime service unavailable.")
         }

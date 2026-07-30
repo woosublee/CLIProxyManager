@@ -193,6 +193,55 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         XCTAssertEqual(service.lastErrorMessage, RuntimeCompatibilityBlocker.unsupportedArchitecture.recoveryMessage)
     }
 
+    func testBlockedDownloadDoesNotInvokeDownloaderWhenActiveArtifactMismatches() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let active = manifest(
+            "7.2.41",
+            target: .init(operatingSystem: .darwin, architecture: .x86_64)
+        )
+        let downloader = StubUpdateDownloading()
+        let service = CLIProxyAPIUpdateService(
+            paths: paths,
+            checker: StubUpdateChecking(release: release("7.2.42")),
+            downloader: downloader,
+            store: StubUpdateBinaryStore(currentVersion: "7.2.41", activeManifest: active),
+            now: { Date() },
+            compatibilityAuthorizer: ArtifactMismatchAuthorizer()
+        )
+        await service.checkNow()
+
+        await service.downloadAvailableUpdate()
+
+        XCTAssertEqual(downloader.invocationCount, 0)
+        XCTAssertEqual(service.lastErrorMessage, RuntimeCompatibilityBlocker.unsupportedArtifactTarget.recoveryMessage)
+    }
+
+    func testBlockedDownloadDoesNotInvokeDownloaderWhenBundledArtifactIsUnknown() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let bundledManifestURL = sandbox.appendingPathComponent("bundle/manifest.json")
+        var bundled = manifest("7.2.41", sourceKind: .bundled)
+        bundled.upstreamAsset = "unknown-artifact.tar.gz"
+        try writeManifest(bundled, to: bundledManifestURL)
+        let downloader = StubUpdateDownloading()
+        let service = CLIProxyAPIUpdateService(
+            paths: paths,
+            checker: StubUpdateChecking(release: release("7.2.42")),
+            downloader: downloader,
+            store: StubUpdateBinaryStore(currentVersion: "7.2.41"),
+            bundledManifestURL: bundledManifestURL,
+            now: { Date() },
+            compatibilityAuthorizer: ArtifactMismatchAuthorizer()
+        )
+        await service.checkNow()
+
+        await service.downloadAvailableUpdate()
+
+        XCTAssertEqual(downloader.invocationCount, 0)
+        XCTAssertEqual(service.lastErrorMessage, RuntimeCompatibilityBlocker.unsupportedArtifactTarget.recoveryMessage)
+    }
+
     func testInitClearsStalePendingStateAfterAutostartPromotion() throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
@@ -334,6 +383,59 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         XCTAssertEqual(store.applyPendingCallCount, 0)
     }
 
+    func testBlockedApplyDoesNotMutateStoreWhenActiveArtifactMismatches() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let active = manifest(
+            "7.2.41",
+            target: .init(operatingSystem: .darwin, architecture: .x86_64)
+        )
+        let store = StubUpdateBinaryStore(
+            currentVersion: "7.2.41",
+            activeManifest: active,
+            pending: manifest("7.2.42")
+        )
+        let service = CLIProxyAPIUpdateService(
+            paths: paths,
+            checker: StubUpdateChecking(release: release("7.2.42")),
+            downloader: StubUpdateDownloading(),
+            store: store,
+            now: { Date() },
+            compatibilityAuthorizer: ArtifactMismatchAuthorizer()
+        )
+
+        XCTAssertThrowsError(try service.applyPendingNow()) { error in
+            XCTAssertEqual(
+                error as? CLIProxyManagerCommandError,
+                .prerequisite(RuntimeCompatibilityBlocker.unsupportedArtifactTarget.recoveryMessage)
+            )
+        }
+        XCTAssertEqual(store.applyPendingCallCount, 0)
+    }
+
+    func testBlockedScheduleDoesNotMutateStoreWhenBundledArtifactIsUnknown() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let bundledManifestURL = sandbox.appendingPathComponent("bundle/manifest.json")
+        var bundled = manifest("7.2.41", sourceKind: .bundled)
+        bundled.upstreamAsset = "unknown-artifact.tar.gz"
+        try writeManifest(bundled, to: bundledManifestURL)
+        let store = StubUpdateBinaryStore(currentVersion: "7.2.41", pending: manifest("7.2.42"))
+        let service = CLIProxyAPIUpdateService(
+            paths: paths,
+            checker: StubUpdateChecking(release: release("7.2.42")),
+            downloader: StubUpdateDownloading(),
+            store: store,
+            bundledManifestURL: bundledManifestURL,
+            now: { Date() },
+            compatibilityAuthorizer: ArtifactMismatchAuthorizer()
+        )
+
+        XCTAssertFalse(service.schedulePendingForNextServerStart())
+        XCTAssertEqual(store.schedulePendingCallCount, 0)
+        XCTAssertEqual(service.lastErrorMessage, RuntimeCompatibilityBlocker.unsupportedArtifactTarget.recoveryMessage)
+    }
+
     func testUpdateOperationsRecordTypedLifecycleEvents() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
@@ -466,8 +568,12 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         CLIProxyAPIRelease(version: CLIProxyAPIVersion(version)!, tagName: "v\(version)", assetName: "CLIProxyAPI_\(version)_darwin_aarch64.tar.gz", assetURL: URL(string: "https://example.com/archive.tar.gz")!, assetSha256: "archive-sha")
     }
 
-    private func manifest(_ version: String, sourceKind: CLIProxyAPIBinarySourceKind = .userUpdated) -> CLIProxyAPIBinaryManifest {
-        CLIProxyAPIBinaryManifest(name: "cliproxyapi", version: version, commit: "commit", builtAt: "2026-07-01T00:00:00Z", sourceKind: sourceKind, source: "https://example.com/archive.tar.gz", upstreamRepository: "router-for-me/CLIProxyAPI", upstreamTag: "v\(version)", upstreamAsset: "CLIProxyAPI_\(version)_darwin_aarch64.tar.gz", upstreamAssetSha256: "archive-sha", vendoredBinaryName: "cliproxyapi", vendoredBinarySha256: "binary-sha", vendoredBinarySizeBytes: 1, vendoredFromArchivePath: "cli-proxy-api")
+    private func manifest(
+        _ version: String,
+        sourceKind: CLIProxyAPIBinarySourceKind = .userUpdated,
+        target: CLIProxyAPIArtifactTarget? = nil
+    ) -> CLIProxyAPIBinaryManifest {
+        CLIProxyAPIBinaryManifest(name: "cliproxyapi", version: version, commit: "commit", builtAt: "2026-07-01T00:00:00Z", sourceKind: sourceKind, source: "https://example.com/archive.tar.gz", upstreamRepository: "router-for-me/CLIProxyAPI", upstreamTag: "v\(version)", upstreamAsset: "CLIProxyAPI_\(version)_darwin_aarch64.tar.gz", upstreamAssetSha256: "archive-sha", vendoredBinaryName: "cliproxyapi", vendoredBinarySha256: "binary-sha", vendoredBinarySizeBytes: 1, vendoredFromArchivePath: "cli-proxy-api", target: target)
     }
 
     private func writeManifest(_ manifest: CLIProxyAPIBinaryManifest, to url: URL) throws {
@@ -521,6 +627,33 @@ private struct RejectingCompatibilityAuthorizer: RuntimeCompatibilityAuthorizing
 
     func require(_ action: CompatibilityAction, artifacts _: CompatibilityArtifacts) throws {
         if action == self.action {
+            throw RuntimeCompatibilityError.actionBlocked(action)
+        }
+    }
+}
+
+private struct ArtifactMismatchAuthorizer: RuntimeCompatibilityAuthorizing {
+    func staticReport(artifacts: CompatibilityArtifacts) -> RuntimeCompatibilityReport {
+        let hasUnsupportedArtifact = [artifacts.bundled, artifacts.active, artifacts.pending].contains {
+            guard case let .explicit(target) = $0 else { return false }
+            return target != .darwinArm64
+        }
+        return RuntimeCompatibilityReport(
+            findings: hasUnsupportedArtifact
+                ? [.unsupportedArtifactTarget(expected: .darwinArm64, actual: .init(operatingSystem: .darwin, architecture: .x86_64))]
+                : [],
+            decisions: Dictionary(uniqueKeysWithValues: CompatibilityAction.allCases.map { action in
+                (action, CompatibilityDecision(action: action, disposition: hasUnsupportedArtifact ? .blocked : .allowed))
+            })
+        )
+    }
+
+    func report(artifacts: CompatibilityArtifacts) async -> RuntimeCompatibilityReport {
+        staticReport(artifacts: artifacts)
+    }
+
+    func require(_ action: CompatibilityAction, artifacts: CompatibilityArtifacts) throws {
+        if staticReport(artifacts: artifacts).decision(for: action).disposition == .blocked {
             throw RuntimeCompatibilityError.actionBlocked(action)
         }
     }
@@ -598,6 +731,7 @@ private final class StubUpdateDownloading: CLIProxyAPIUpdateDownloading, @unchec
 private final class StubUpdateBinaryStore: CLIProxyAPIUpdateBinaryStoring, @unchecked Sendable {
     private let lock = NSLock()
     private var current: CLIProxyAPIVersion?
+    private var active: CLIProxyAPIBinaryManifest?
     private var pending: CLIProxyAPIBinaryManifest?
     private let currentAfterApply: CLIProxyAPIVersion?
     private let scheduleError: Error?
@@ -612,12 +746,14 @@ private final class StubUpdateBinaryStore: CLIProxyAPIUpdateBinaryStoring, @unch
 
     init(
         currentVersion: String?,
+        activeManifest: CLIProxyAPIBinaryManifest? = nil,
         pending: CLIProxyAPIBinaryManifest? = nil,
         currentAfterApply: String? = nil,
         scheduleError: Error? = nil,
         saveError: Error? = nil
     ) {
         self.current = currentVersion.flatMap(CLIProxyAPIVersion.init)
+        self.active = activeManifest
         self.pending = pending
         self.currentAfterApply = currentAfterApply.flatMap(CLIProxyAPIVersion.init)
         self.scheduleError = scheduleError
@@ -625,6 +761,7 @@ private final class StubUpdateBinaryStore: CLIProxyAPIUpdateBinaryStoring, @unch
     }
 
     func validatedCurrentVersion(bundledManifestURL: URL?) throws -> CLIProxyAPIVersion? { lock.withLock { current } }
+    func activeManifest() throws -> CLIProxyAPIBinaryManifest? { lock.withLock { active } }
     func pendingManifest() throws -> CLIProxyAPIBinaryManifest? { lock.withLock { pending } }
 
     func replaceState(currentVersion: String?, pending: CLIProxyAPIBinaryManifest?) {

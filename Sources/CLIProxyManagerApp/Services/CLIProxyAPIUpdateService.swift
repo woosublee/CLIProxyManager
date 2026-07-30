@@ -16,10 +16,15 @@ extension CLIProxyAPIUpdateDownloading {
 
 protocol CLIProxyAPIUpdateBinaryStoring: Sendable {
     func validatedCurrentVersion(bundledManifestURL: URL?) throws -> CLIProxyAPIVersion?
+    func activeManifest() throws -> CLIProxyAPIBinaryManifest?
     func savePending(binaryURL: URL, manifest: CLIProxyAPIBinaryManifest) throws
     func pendingManifest() throws -> CLIProxyAPIBinaryManifest?
     func schedulePendingForNextStart() throws
     func applyPending() throws
+}
+
+extension CLIProxyAPIUpdateBinaryStoring {
+    func activeManifest() throws -> CLIProxyAPIBinaryManifest? { nil }
 }
 
 struct CLIProxyAPIUpdateState: Codable, Equatable {
@@ -183,7 +188,20 @@ final class CLIProxyAPIUpdateService: ObservableObject {
         for action: CompatibilityAction,
         candidate: RuntimeCompatibilityArtifact
     ) throws {
-        let artifacts = CompatibilityArtifacts(bundled: nil, active: nil, pending: candidate)
+        let artifacts: CompatibilityArtifacts
+        do {
+            artifacts = CompatibilityArtifacts(
+                bundled: try bundledArtifact(),
+                active: try compatibilityArtifact(for: store.activeManifest()),
+                pending: candidate
+            )
+        } catch let error as CLIProxyManagerCommandError {
+            throw error
+        } catch {
+            throw CLIProxyManagerCommandError.prerequisite(
+                RuntimeCompatibilityBlocker.unsupportedArtifactTarget.recoveryMessage
+            )
+        }
         do {
             try compatibilityAuthorizer.require(action, artifacts: artifacts)
         } catch {
@@ -195,7 +213,21 @@ final class CLIProxyAPIUpdateService: ObservableObject {
         }
     }
 
-    private func compatibilityArtifact(for manifest: CLIProxyAPIBinaryManifest) throws -> RuntimeCompatibilityArtifact {
+    private func bundledArtifact() throws -> RuntimeCompatibilityArtifact? {
+        guard let bundledManifestURL else { return nil }
+        let manifest = try JSONDecoder().decode(
+            CLIProxyAPIBinaryManifest.self,
+            from: Data(contentsOf: bundledManifestURL)
+        )
+        return try compatibilityArtifact(forCandidate: manifest)
+    }
+
+    private func compatibilityArtifact(for manifest: CLIProxyAPIBinaryManifest?) throws -> RuntimeCompatibilityArtifact? {
+        guard let manifest else { return nil }
+        return try compatibilityArtifact(forCandidate: manifest)
+    }
+
+    private func compatibilityArtifact(forCandidate manifest: CLIProxyAPIBinaryManifest) throws -> RuntimeCompatibilityArtifact {
         guard let target = manifest.target else {
             guard manifest.upstreamAsset == "CLIProxyAPI_\(manifest.version)_darwin_aarch64.tar.gz" else {
                 throw CLIProxyManagerCommandError.prerequisite(
@@ -221,7 +253,7 @@ final class CLIProxyAPIUpdateService: ObservableObject {
     func applyPendingNow() throws {
         refreshStoredStatus()
         if let pendingUpdate {
-            try requireCompatibility(for: .applyProxyUpdate, candidate: try compatibilityArtifact(for: pendingUpdate))
+            try requireCompatibility(for: .applyProxyUpdate, candidate: try compatibilityArtifact(forCandidate: pendingUpdate))
         }
         appLogger.record(.update(target: .proxy, action: .apply, result: .started))
         do {
@@ -252,7 +284,7 @@ final class CLIProxyAPIUpdateService: ObservableObject {
             return false
         }
         do {
-            try requireCompatibility(for: .scheduleProxyUpdate, candidate: try compatibilityArtifact(for: pendingUpdate))
+            try requireCompatibility(for: .scheduleProxyUpdate, candidate: try compatibilityArtifact(forCandidate: pendingUpdate))
             try store.schedulePendingForNextStart()
             refreshStoredStatus()
             state = .pending

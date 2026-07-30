@@ -72,6 +72,59 @@ final class ProxyUpdateServiceTests: XCTestCase {
         XCTAssertNil(try CLIProxyAPIBinaryStore(paths: paths).pendingManifest())
     }
 
+    func testStageBlocksBeforeDownloadWhenActiveArtifactTargetMismatches() async throws {
+        let paths = try makePaths(activeVersion: "7.2.41")
+        var active = try XCTUnwrap(CLIProxyAPIBinaryStore(paths: paths).activeManifest())
+        active.target = .init(operatingSystem: .darwin, architecture: .x86_64)
+        try JSONEncoder().encode(active).write(to: paths.activeClipProxyManifest)
+        let (binaryURL, manifest) = try makeVerificationFixture(version: "7.2.50")
+        let downloader = DownloaderDouble(result: .init(binaryURL: binaryURL, manifest: manifest))
+        let service = makeService(
+            paths: paths,
+            checker: ReleaseCheckerDouble(release: makeRelease(version: "7.2.50")),
+            downloader: downloader,
+            compatibilityAuthorizer: ArtifactMismatchAuthorizer()
+        )
+
+        do {
+            _ = try await service.stage()
+            XCTFail("Expected compatibility block")
+        } catch let error as CLIProxyManagerCommandError {
+            XCTAssertEqual(error, .prerequisite(RuntimeCompatibilityBlocker.unsupportedArtifactTarget.recoveryMessage))
+        }
+        XCTAssertEqual(downloader.requests, [])
+        XCTAssertNil(try CLIProxyAPIBinaryStore(paths: paths).pendingManifest())
+    }
+
+    func testStageBlocksBeforeDownloadWhenBundledArtifactTargetIsUnknown() async throws {
+        let paths = try makePaths(activeVersion: "7.2.41")
+        let bundledManifestURL = paths.rootDirectory.appendingPathComponent("bundle/manifest.json")
+        var bundled = try XCTUnwrap(CLIProxyAPIBinaryStore(paths: paths).activeManifest())
+        bundled.sourceKind = .bundled
+        bundled.upstreamAsset = "unknown-artifact.tar.gz"
+        bundled.target = nil
+        try FileManager.default.createDirectory(at: bundledManifestURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(bundled).write(to: bundledManifestURL)
+        let (binaryURL, manifest) = try makeVerificationFixture(version: "7.2.50")
+        let downloader = DownloaderDouble(result: .init(binaryURL: binaryURL, manifest: manifest))
+        let service = makeService(
+            paths: paths,
+            checker: ReleaseCheckerDouble(release: makeRelease(version: "7.2.50")),
+            downloader: downloader,
+            bundledManifestURL: bundledManifestURL,
+            compatibilityAuthorizer: ArtifactMismatchAuthorizer()
+        )
+
+        do {
+            _ = try await service.stage()
+            XCTFail("Expected compatibility block")
+        } catch let error as CLIProxyManagerCommandError {
+            XCTAssertEqual(error, .prerequisite(RuntimeCompatibilityBlocker.unsupportedArtifactTarget.recoveryMessage))
+        }
+        XCTAssertEqual(downloader.requests, [])
+        XCTAssertNil(try CLIProxyAPIBinaryStore(paths: paths).pendingManifest())
+    }
+
     func testStageDoesNotDownloadWhenCurrentBinaryIsAlreadyNewer() async throws {
         let paths = try makePaths(activeVersion: "7.2.60")
         let downloader = DownloaderDouble(result: nil)
@@ -234,6 +287,7 @@ final class ProxyUpdateServiceTests: XCTestCase {
         checker: any ProxyUpdateChecking = ReleaseCheckerDouble(release: nil),
         downloader: any ProxyUpdateDownloading = DownloaderDouble(result: nil),
         runtime: (any ProxyRuntimeUpdating)? = nil,
+        bundledManifestURL: URL? = nil,
         compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing = RejectingCompatibilityAuthorizer()
     ) -> ProxyUpdateService {
         ProxyUpdateService(
@@ -241,6 +295,7 @@ final class ProxyUpdateServiceTests: XCTestCase {
             checker: checker,
             downloader: downloader,
             runtime: runtime,
+            bundledManifestURL: bundledManifestURL,
             compatibilityAuthorizer: compatibilityAuthorizer
         )
     }
@@ -275,6 +330,33 @@ private struct RejectingCompatibilityAuthorizer: RuntimeCompatibilityAuthorizing
 
     func require(_ action: CompatibilityAction, artifacts _: CompatibilityArtifacts) throws {
         if action == self.action {
+            throw RuntimeCompatibilityError.actionBlocked(action)
+        }
+    }
+}
+
+private struct ArtifactMismatchAuthorizer: RuntimeCompatibilityAuthorizing {
+    func staticReport(artifacts: CompatibilityArtifacts) -> RuntimeCompatibilityReport {
+        let hasUnsupportedArtifact = [artifacts.bundled, artifacts.active, artifacts.pending].contains {
+            guard case let .explicit(target) = $0 else { return false }
+            return target != .darwinArm64
+        }
+        return RuntimeCompatibilityReport(
+            findings: hasUnsupportedArtifact
+                ? [.unsupportedArtifactTarget(expected: .darwinArm64, actual: .init(operatingSystem: .darwin, architecture: .x86_64))]
+                : [],
+            decisions: Dictionary(uniqueKeysWithValues: CompatibilityAction.allCases.map { action in
+                (action, CompatibilityDecision(action: action, disposition: hasUnsupportedArtifact ? .blocked : .allowed))
+            })
+        )
+    }
+
+    func report(artifacts: CompatibilityArtifacts) async -> RuntimeCompatibilityReport {
+        staticReport(artifacts: artifacts)
+    }
+
+    func require(_ action: CompatibilityAction, artifacts: CompatibilityArtifacts) throws {
+        if staticReport(artifacts: artifacts).decision(for: action).disposition == .blocked {
             throw RuntimeCompatibilityError.actionBlocked(action)
         }
     }

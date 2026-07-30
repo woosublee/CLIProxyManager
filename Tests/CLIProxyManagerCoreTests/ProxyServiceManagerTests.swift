@@ -1391,7 +1391,8 @@ final class ProxyServiceManagerTests: XCTestCase {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         try createBinary(at: paths.clipProxyBinary)
-        let launcher = FakeProcessLauncher()
+        let runningProcess = ManagedProxyProcessDouble()
+        let launcher = FakeProcessLauncher(process: runningProcess)
         let authorizer = CompatibilityAuthorizerDouble()
         let manager = ProxyServiceManager(
             paths: paths,
@@ -1408,6 +1409,8 @@ final class ProxyServiceManagerTests: XCTestCase {
             XCTAssertEqual(error, .compatibilityBlocked(.unsupportedArchitecture))
         }
 
+        XCTAssertEqual(runningProcess.terminateCallCount, 0)
+        XCTAssertEqual(runningProcess.waitUntilExitCallCount, 0)
         XCTAssertEqual(launcher.invocations.count, 1)
         XCTAssertEqual(try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8).contains("port: 8317"), true)
     }
