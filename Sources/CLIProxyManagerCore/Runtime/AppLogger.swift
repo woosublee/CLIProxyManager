@@ -1,6 +1,6 @@
 import Darwin
 import Foundation
-import OSLog
+@preconcurrency import OSLog
 
 public enum AppLogResult: Equatable, Sendable {
     case started

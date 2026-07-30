@@ -23,8 +23,13 @@ release_plutil() {
 release_plist_value() {
   local key="$1"
   local plist="$2"
+  local value
 
-  "$(release_plutil)" -extract "$key" raw "$plist" 2>/dev/null || true
+  if ! value="$("$(release_plutil)" -extract "$key" raw "$plist" 2>/dev/null)"; then
+    return 0
+  fi
+
+  printf '%s\n' "$value"
 }
 
 release_is_positive_integer() {

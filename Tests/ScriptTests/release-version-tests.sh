@@ -694,7 +694,21 @@ assert_failure_contains 'provenance trust mismatch: expected official or local-f
   "$verify_repo/scripts/verify-release-artifacts.sh" --provenance "$verify_repo/build/release-provenance.json" --official
 plutil -replace trust -string official "$verify_repo/build/release-provenance.json"
 plutil -remove trust "$verify_repo/build/release-provenance.json"
+fake_missing_trust_plutil="$sandbox/fake-missing-trust-plutil"
+cat > "$fake_missing_trust_plutil" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "$1" == '-extract' && "$2" == 'trust' && "$3" == 'raw' ]]; then
+  printf '%s\n' 'Could not extract value, error: No value at that key path or invalid key path: trust'
+  exit 1
+fi
+
+exec /usr/bin/plutil "$@"
+SH
+chmod +x "$fake_missing_trust_plutil"
 assert_failure_contains 'provenance trust mismatch: expected official or local-fallback, actual missing' \
+  env PLUTIL="$fake_missing_trust_plutil" \
   "$verify_repo/scripts/verify-release-artifacts.sh" --provenance "$verify_repo/build/release-provenance.json" --official
 plutil -insert trust -string official "$verify_repo/build/release-provenance.json"
 

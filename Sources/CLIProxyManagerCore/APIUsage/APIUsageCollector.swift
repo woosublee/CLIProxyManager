@@ -146,7 +146,25 @@ public actor APIUsageCollector: APIUsageCollecting {
 
     public init(
         queueClient: any APIUsageQueueFetching = CLIProxyAPIUsageQueueClient(),
-        ledgerStore: any APIUsageLedgerStoring = APIUsageLedgerStore(),
+        mapper: APIUsageRecordMapper = APIUsageRecordMapper(),
+        catalog: APIPriceCatalog = .current,
+        now: @escaping @Sendable () -> Date = { Date() },
+        sleep: @escaping @Sendable (UInt64) async throws -> Void = {
+            try await Task.sleep(nanoseconds: $0)
+        }
+    ) {
+        self.queueClient = queueClient
+        self.ledgerStore = APIUsageLedgerStore()
+        self.mapper = mapper
+        self.catalog = catalog
+        self.estimator = APICostEstimator(catalog: catalog)
+        self.now = now
+        self.sleep = sleep
+    }
+
+    public init(
+        queueClient: any APIUsageQueueFetching = CLIProxyAPIUsageQueueClient(),
+        ledgerStore: any APIUsageLedgerStoring,
         mapper: APIUsageRecordMapper = APIUsageRecordMapper(),
         catalog: APIPriceCatalog = .current,
         now: @escaping @Sendable () -> Date = { Date() },
@@ -176,6 +194,7 @@ public actor APIUsageCollector: APIUsageCollecting {
 
     public func reports() async -> AsyncStream<APIUsageCollectionReport> {
         let id = UUID()
+        let collector = self
         return AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
             reportContinuation?.finish()
             reportContinuation = continuation
@@ -183,9 +202,9 @@ public actor APIUsageCollector: APIUsageCollecting {
             if let latestReport {
                 continuation.yield(latestReport)
             }
-            continuation.onTermination = { [weak self] _ in
-                Task {
-                    await self?.removeReportContinuation(id: id)
+            continuation.onTermination = { [weak collector, id] _ in
+                Task { [weak collector, id] in
+                    await collector?.removeReportContinuation(id: id)
                 }
             }
         }
