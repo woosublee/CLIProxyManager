@@ -6,13 +6,22 @@ public struct CLIProxyAPIRelease: Equatable, Sendable {
     public let assetName: String
     public let assetURL: URL
     public let assetSha256: String
+    public let target: CLIProxyAPIArtifactTarget
 
-    public init(version: CLIProxyAPIVersion, tagName: String, assetName: String, assetURL: URL, assetSha256: String) {
+    public init(
+        version: CLIProxyAPIVersion,
+        tagName: String,
+        assetName: String,
+        assetURL: URL,
+        assetSha256: String,
+        target: CLIProxyAPIArtifactTarget = .darwinArm64
+    ) {
         self.version = version
         self.tagName = tagName
         self.assetName = assetName
         self.assetURL = assetURL
         self.assetSha256 = assetSha256
+        self.target = target
     }
 }
 
@@ -23,6 +32,7 @@ public enum CLIProxyAPIReleaseClientError: Error, Equatable {
     case missingChecksumAsset
     case missingChecksumEntry(String)
     case invalidAssetURL(String)
+    case unsupportedTarget(CLIProxyAPIArtifactTarget)
 }
 
 public struct CLIProxyAPIReleaseClient: Sendable {
@@ -52,7 +62,10 @@ public struct CLIProxyAPIReleaseClient: Sendable {
         guard githubRelease.prerelease == false else {
             throw CLIProxyAPIReleaseClientError.prereleaseUnsupported(githubRelease.tagName)
         }
-        let assetName = "CLIProxyAPI_\(version.description)_darwin_aarch64.tar.gz"
+        let target = CLIProxyAPIArtifactTarget.darwinArm64
+        guard let assetName = Self.assetName(for: version, target: target) else {
+            throw CLIProxyAPIReleaseClientError.unsupportedTarget(target)
+        }
         guard let archiveAsset = githubRelease.assets.first(where: { $0.name == assetName }) else {
             throw CLIProxyAPIReleaseClientError.missingAsset(assetName)
         }
@@ -74,12 +87,18 @@ public struct CLIProxyAPIReleaseClient: Sendable {
             tagName: githubRelease.tagName,
             assetName: assetName,
             assetURL: archiveURL,
-            assetSha256: assetSha
+            assetSha256: assetSha,
+            target: target
         )
     }
 
     public func downloadArchive(for release: CLIProxyAPIRelease) async throws -> Data {
         try await httpClient.get(release.assetURL, headers: Self.userAgentHeaders)
+    }
+
+    private static func assetName(for version: CLIProxyAPIVersion, target: CLIProxyAPIArtifactTarget) -> String? {
+        guard target == .darwinArm64 else { return nil }
+        return "CLIProxyAPI_\(version.description)_darwin_aarch64.tar.gz"
     }
 
     static func checksum(for assetName: String, in data: Data) -> String? {

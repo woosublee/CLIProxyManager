@@ -82,7 +82,11 @@ write_manifest() {
   "vendoredBinaryName": "cliproxyapi",
   "vendoredBinarySha256": "$binary_sha",
   "vendoredBinarySizeBytes": $size_bytes,
-  "vendoredFromArchivePath": "$archive_path"
+  "vendoredFromArchivePath": "$archive_path",
+  "target": {
+    "operatingSystem": "darwin",
+    "architecture": "arm64"
+  }
 }
 EOF
 }

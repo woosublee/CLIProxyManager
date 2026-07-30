@@ -90,7 +90,8 @@ public struct CLIProxyAPIArchiveVerifier: Sendable {
             vendoredBinarySha256: try binaryURL.sha256HexDigest(),
             vendoredBinarySizeBytes: size,
             vendoredFromArchivePath: "cli-proxy-api",
-            downloadedAt: ISO8601DateFormatter().string(from: Date())
+            downloadedAt: ISO8601DateFormatter().string(from: Date()),
+            target: release.target
         )
         didTransferTemporaryDirectoryOwnership = true
         return CLIProxyAPIBinaryVerificationResult(binaryURL: binaryURL, manifest: manifest, temporaryDirectory: tempDirectory)

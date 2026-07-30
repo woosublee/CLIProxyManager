@@ -41,3 +41,12 @@ grep -q '"commit": "testcommit"' "$manifest" || fail "manifest should include pa
 grep -q '"builtAt": "2026-05-10T01:02:03Z"' "$manifest" || fail "manifest should include parsed build time"
 grep -q '"source": "test-fixture"' "$manifest" || fail "manifest should include source label"
 grep -q '"vendoredBinarySha256"' "$manifest" || fail "manifest should include binary checksum"
+python3 - "$manifest" <<'PY' || fail "manifest should declare a darwin arm64 target"
+import json
+import sys
+
+with open(sys.argv[1]) as manifest_file:
+    target = json.load(manifest_file).get("target")
+
+assert target == {"operatingSystem": "darwin", "architecture": "arm64"}
+PY
