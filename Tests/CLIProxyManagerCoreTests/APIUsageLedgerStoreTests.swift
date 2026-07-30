@@ -4,6 +4,25 @@ import XCTest
 @testable import CLIProxyManagerCore
 
 final class APIUsageLedgerStoreTests: XCTestCase {
+    func testInitializersPreserveDefaultAndHookForms() throws {
+        let paths = try makePaths()
+        let stores: [APIUsageLedgerStore] = [
+            APIUsageLedgerStore(),
+            APIUsageLedgerStore(paths: paths),
+            APIUsageLedgerStore(
+                paths: paths,
+                writeDelayNanoseconds: 0,
+                sleep: { _ in }
+            ),
+            APIUsageLedgerStore(
+                paths: paths,
+                beforeCorruptBackupMove: { _ in }
+            )
+        ]
+
+        XCTAssertEqual(stores.count, 4)
+    }
+
     func testReadBeforePrepareThrowsNotInitialized() async throws {
         let store = APIUsageLedgerStore(paths: try makePaths(), writeDelayNanoseconds: 0)
 
