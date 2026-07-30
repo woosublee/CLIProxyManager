@@ -3267,7 +3267,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.settingsMessage, "Codex OAuth account was disabled. The auth file was not deleted.")
     }
 
-    func testSetProviderEnabledPreservesSelectedAccountAndRoundRobinConfiguration() {
+    func testSetProviderEnabledPreservesSelectedAccountAndRoundRobinConfiguration() async {
         var config = AppConfig.default
         config.oauthCommandProfiles = [
             AppConfig.OAuthCommandProfile(
@@ -3304,11 +3304,16 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             AuthProfile(fileName: "claude-work.json", type: .claude, email: "work@example.com", accountID: nil, expired: nil, disabled: false, prefix: "work"),
             AuthProfile(fileName: "claude-personal.json", type: .claude, email: "personal@example.com", accountID: nil, expired: nil, disabled: false, prefix: "personal")
         ])
+        let automaticInstaller = AutomaticShellInstallService(
+            installer: installer,
+            compatibilityAuthorizer: AllowingShellCompatibilityAuthorizer()
+        )
         let viewModel = DashboardViewModel(
             configStore: store,
             shellInstaller: installer,
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
+            automaticShellInstallService: automaticInstaller,
             proxyService: StubProxyServiceStarter(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
@@ -3316,6 +3321,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         installer.reset()
 
         viewModel.setProviderEnabled(ProviderRowState.ID(rawValue: "claude-work"), enabled: false)
+        await waitForShellInstallation(installer, functionNames: ["ccpersonal"])
 
         XCTAssertEqual(authStore.disabledIDUpdates.map(\.id), ["claude-work.json"])
         XCTAssertEqual(authStore.disabledIDUpdates.map(\.disabled), [true])
@@ -3332,6 +3338,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(installer.installedFunctionNames, ["ccpersonal"])
 
         viewModel.setProviderEnabled(ProviderRowState.ID(rawValue: "claude-work"), enabled: true)
+        await waitForShellInstallation(installer, functionNames: ["ccwork", "ccpersonal", "ccrr"])
 
         XCTAssertEqual(authStore.disabledIDUpdates.map(\.disabled), [true, false])
         let enabledConfig = try! XCTUnwrap(store.savedConfigs.last)
@@ -3342,7 +3349,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(installer.installedFunctionNames, ["ccwork", "ccpersonal", "ccrr"])
     }
 
-    func testSetProviderEnabledRollsBackAuthProfileWhenConfigSaveFails() {
+    func testSetProviderEnabledRollsBackAuthProfileWhenConfigSaveFails() async {
         var config = AppConfig.default
         config.oauthCommandProfiles = [
             AppConfig.OAuthCommandProfile(
@@ -3356,11 +3363,16 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             AuthProfile(fileName: "claude-work.json", type: .claude, email: "work@example.com", accountID: nil, expired: nil, disabled: false)
         ])
         let installer = StubShellInstaller()
+        let automaticInstaller = AutomaticShellInstallService(
+            installer: installer,
+            compatibilityAuthorizer: AllowingShellCompatibilityAuthorizer()
+        )
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: config, saveError: NSError(domain: "test", code: 1)),
             shellInstaller: installer,
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
+            automaticShellInstallService: automaticInstaller,
             proxyService: StubProxyServiceStarter(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
@@ -3368,6 +3380,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         installer.reset()
 
         viewModel.setProviderEnabled(ProviderRowState.ID(rawValue: "claude-work"), enabled: false)
+        await waitForShellInstallation(installer, functionNames: ["ccwork"])
 
         XCTAssertEqual(authStore.disabledIDUpdates.map(\.disabled), [true, false])
         XCTAssertEqual(viewModel.config.oauthCommandProfiles.first?.isEnabled, true)
@@ -9893,6 +9906,17 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             sleeper,
             viewModel
         )
+    }
+
+    private func waitForShellInstallation(
+        _ installer: StubShellInstaller,
+        functionNames: [String]
+    ) async {
+        for _ in 0..<1_000 {
+            if installer.installedFunctionNames == functionNames { return }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTFail("Timed out waiting for shell installation")
     }
 
     private func waitForOAuthReconciliation(_ authStore: StubAuthProfileStore) async {
