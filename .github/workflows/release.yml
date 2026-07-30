@@ -42,7 +42,7 @@ jobs:
           scripts/sync-release-version.sh --check
           eval "$(scripts/resolve-release-version.sh shell)"
           ACTUAL_TAG='invalid'
-          if [[ "$INPUT_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          if [[ "$INPUT_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
             ACTUAL_TAG="$INPUT_TAG"
           fi
 

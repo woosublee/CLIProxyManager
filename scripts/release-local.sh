@@ -9,6 +9,10 @@ fail() {
   exit 1
 }
 
+is_safe_release_tag() {
+  [[ "$1" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+}
+
 remote_tag_commit() {
   local tag="$1"
   local output direct peeled
@@ -32,12 +36,13 @@ fi
 for legacy_name in VERSION BUILD_NUMBER RELEASE_TAG DMG_PATH; do
   [[ -z "${!legacy_name+x}" ]] || fail "$legacy_name is derived from release/version.json; remove the override"
 done
+[[ -z "${BUILD_DIR+x}" ]] || fail 'BUILD_DIR is fixed to build for local releases; remove the override'
 
 cd "$REPO_ROOT"
 eval "$("$SCRIPT_DIR/resolve-release-version.sh" shell)"
 [[ "$RELEASE_CHANNEL" == 'official' ]] || fail 'Local releases require the official artifact channel'
 SAFE_INPUT_TAG='invalid'
-if [[ "$INPUT_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+if is_safe_release_tag "$INPUT_TAG"; then
   SAFE_INPUT_TAG="$INPUT_TAG"
 fi
 [[ "$INPUT_TAG" == "$RELEASE_TAG" ]] || fail "Release tag mismatch: expected $RELEASE_TAG, actual $SAFE_INPUT_TAG"
@@ -45,13 +50,16 @@ fi
 APP_VERSION="$RELEASE_VERSION"
 APP_BUILD="$RELEASE_BUILD"
 CANONICAL_TAG="$RELEASE_TAG"
+RELEASE_APP_BUNDLE='build/CLIProxyManager.app'
 PROVENANCE_PATH='build/release-provenance.json'
 RELEASE_NOTES_PATH='build/release-notes.md'
 "$SCRIPT_DIR/sync-release-version.sh" --check
-if [[ -z "${REPOSITORY:-}" ]]; then
-  REPOSITORY="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" || fail 'Unable to determine the GitHub repository'
+current_repository="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" || fail 'Unable to determine the GitHub repository'
+[[ "$current_repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || fail 'Unable to determine the GitHub repository'
+if [[ -n "${REPOSITORY+x}" && "$REPOSITORY" != "$current_repository" ]]; then
+  fail 'REPOSITORY must match the current GitHub checkout'
 fi
-[[ "$REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || fail 'Repository must use OWNER/REPO'
+REPOSITORY="$current_repository"
 export REPOSITORY
 
 initial_remote_commit="$(remote_tag_commit "$CANONICAL_TAG")"
@@ -102,7 +110,7 @@ make verify-dmg
 "$SCRIPT_DIR/generate-sparkle-appcast.sh"
 "$SCRIPT_DIR/verify-release-artifacts.sh" \
   --source-plist Info.plist \
-  --app build/CLIProxyManager.app \
+  --app "$RELEASE_APP_BUNDLE" \
   --dmg "$RELEASE_DMG_PATH" \
   --appcast "$RELEASE_APPCAST_PATH" \
   --provenance "$PROVENANCE_PATH" \

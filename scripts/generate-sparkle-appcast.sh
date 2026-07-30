@@ -8,7 +8,6 @@ source "$SCRIPT_DIR/release-version-lib.sh"
 
 REPOSITORY="${REPOSITORY:-woosublee/CLIProxyManager}"
 APP_NAME="${APP_NAME:-CLIProxyManager}"
-APPCAST_PATH="${APPCAST_PATH:-build/appcast.xml}"
 SPARKLE_VERSION="${SPARKLE_VERSION:-2.9.2}"
 SPARKLE_KEYCHAIN_SERVICE="${SPARKLE_KEYCHAIN_SERVICE:-https://sparkle-project.org}"
 SPARKLE_KEYCHAIN_ACCOUNT="${SPARKLE_KEYCHAIN_ACCOUNT:-com.woosublee.CLIProxyManager.sparkle.ed25519}"
@@ -18,7 +17,7 @@ fail() {
   exit 1
 }
 
-for legacy_name in VERSION BUILD_NUMBER RELEASE_TAG DMG_PATH; do
+for legacy_name in VERSION BUILD_NUMBER RELEASE_TAG DMG_PATH APPCAST_PATH; do
   if [[ -n "${!legacy_name+x}" ]]; then
     fail "$legacy_name is derived from release/version.json; remove the override"
   fi
@@ -30,12 +29,9 @@ APP_VERSION="$RELEASE_VERSION"
 APP_BUILD="$RELEASE_BUILD"
 APP_TAG="$RELEASE_TAG"
 CANONICAL_DMG_PATH="$REPO_ROOT/$RELEASE_DMG_PATH"
+CANONICAL_APPCAST_PATH="$REPO_ROOT/$RELEASE_APPCAST_PATH"
 
 [[ -f "$CANONICAL_DMG_PATH" ]] || fail 'Canonical DMG is missing'
-
-if [[ "$APPCAST_PATH" != /* ]]; then
-  APPCAST_PATH="$REPO_ROOT/$APPCAST_PATH"
-fi
 
 sparkle_private_key() {
   if [[ -n "${SPARKLE_PRIVATE_KEY:-}" ]]; then
@@ -96,7 +92,7 @@ length="$(wc -c < "$CANONICAL_DMG_PATH" | tr -d '[:space:]')"
 pub_date="$(date -u '+%a, %d %b %Y %H:%M:%S +0000')"
 dmg_name="$(basename "$CANONICAL_DMG_PATH")"
 dmg_url="https://github.com/${REPOSITORY}/releases/download/${APP_TAG}/${dmg_name}"
-appcast_dir="$(dirname "$APPCAST_PATH")"
+appcast_dir="$(dirname "$CANONICAL_APPCAST_PATH")"
 mkdir -p "$appcast_dir"
 staged_appcast="$(mktemp "$appcast_dir/.appcast.xml.XXXXXX")"
 cleanup() { rm -f "$staged_appcast"; }
@@ -133,5 +129,5 @@ cat > "$staged_appcast" <<EOF
 EOF
 
 "$SCRIPT_DIR/verify-release-artifacts.sh" --appcast "$staged_appcast" --official
-release_atomic_replace "$staged_appcast" "$APPCAST_PATH"
+release_atomic_replace "$staged_appcast" "$CANONICAL_APPCAST_PATH"
 trap - EXIT

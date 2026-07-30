@@ -12,8 +12,10 @@ fail() {
 
 assert_no_remote_writes() {
   local log_file="$1"
-  ! grep -E 'git (tag|push)|gh release (create|upload)' "$log_file" >/dev/null ||
-    fail "failure path must not write tags or releases"
+  if [[ -e "$log_file" ]]; then
+    ! grep -E 'git (tag|push)|gh release (create|upload)' "$log_file" >/dev/null ||
+      fail "failure path must not write tags or releases"
+  fi
 }
 
 [[ -x "$SOURCE_SCRIPT" ]] || fail "release-local.sh should exist and be executable"
@@ -88,7 +90,7 @@ SH
 cat > "$repo/scripts/generate-sparkle-appcast.sh" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
-printf 'appcast\n' >> "$RELEASE_LOCAL_TEST_LOG"
+printf 'appcast repository=%s\n' "${REPOSITORY:-missing}" >> "$RELEASE_LOCAL_TEST_LOG"
 printf '<rss />\n' > build/appcast.xml
 SH
 
@@ -211,7 +213,7 @@ printf '%s\n' \
   'monotonic --repository example/CLIProxyManager --provenance build/release-provenance.json' \
   'security find-identity -v -p codesigning' \
   'make verify-dmg' \
-  'appcast' \
+  'appcast repository=example/CLIProxyManager' \
   'verify-artifacts --source-plist Info.plist --app build/CLIProxyManager.app --dmg build/CLIProxyManager-1.2.3.dmg --appcast build/appcast.xml --provenance build/release-provenance.json --official' \
   'monotonic --repository example/CLIProxyManager --provenance build/release-provenance.json' \
   'git ls-remote --tags origin refs/tags/v1.2.3 refs/tags/v1.2.3^{}' \
@@ -221,6 +223,32 @@ printf '%s\n' \
   'gh release upload v1.2.3 build/CLIProxyManager-1.2.3.dmg build/appcast.xml build/release-provenance.json' \
   > "$expected"
 diff -u "$expected" "$normal_log" || fail "normal release orchestration call order changed"
+
+build_dir_log="$sandbox/build-dir-override.log"
+build_dir_stderr="$sandbox/build-dir-override.err"
+if BUILD_DIR=release-output run_release "$build_dir_log" "$release_script" v1.2.3 \
+  >"$sandbox/build-dir-override.out" 2>"$build_dir_stderr"; then
+  fail "release-local.sh must reject BUILD_DIR overrides"
+fi
+grep -F 'BUILD_DIR is fixed to build for local releases; remove the override' "$build_dir_stderr" >/dev/null ||
+  fail "BUILD_DIR rejection should explain the canonical output directory"
+if [[ -e "$build_dir_log" ]]; then
+  ! grep -F 'make verify-dmg' "$build_dir_log" >/dev/null || fail "BUILD_DIR override must fail before build"
+fi
+assert_no_remote_writes "$build_dir_log"
+
+repository_mismatch_log="$sandbox/repository-mismatch.log"
+repository_mismatch_stderr="$sandbox/repository-mismatch.err"
+if REPOSITORY=other/CLIProxyManager run_release "$repository_mismatch_log" "$release_script" v1.2.3 \
+  >"$sandbox/repository-mismatch.out" 2>"$repository_mismatch_stderr"; then
+  fail "release-local.sh must reject a repository override for another checkout"
+fi
+grep -F 'REPOSITORY must match the current GitHub checkout' "$repository_mismatch_stderr" >/dev/null ||
+  fail "repository mismatch should explain the current-checkout policy"
+grep -F 'gh repo view --json nameWithOwner --jq .nameWithOwner' "$repository_mismatch_log" >/dev/null ||
+  fail "repository override must still resolve the current checkout"
+! grep -F 'git ls-remote' "$repository_mismatch_log" >/dev/null || fail "repository mismatch must fail before remote tag lookup"
+assert_no_remote_writes "$repository_mismatch_log"
 
 tag_mismatch_log="$sandbox/tag-mismatch.log"
 if RELEASE_LOCAL_GIT_SCENARIO=matching run_release "$tag_mismatch_log" "$release_script" v1.2.3; then
@@ -281,6 +309,18 @@ assert_no_remote_writes "$valid_log"
 if run_release "$sandbox/bad-arguments.log" "$release_script" 1.2.3; then
   fail "release-local.sh should reject a non-canonical tag"
 fi
+
+leading_zero_tag_stderr="$sandbox/leading-zero-tag.err"
+if run_release "$sandbox/leading-zero-tag.log" "$release_script" v01.2.3 \
+  >"$sandbox/leading-zero-tag.out" 2>"$leading_zero_tag_stderr"; then
+  fail "release-local.sh should reject a leading-zero SemVer tag"
+fi
+grep -F 'Release tag mismatch: expected v1.2.3, actual invalid' "$leading_zero_tag_stderr" >/dev/null ||
+  fail "leading-zero tags must use the safe invalid diagnostic"
+assert_no_remote_writes "$sandbox/leading-zero-tag.log"
+
+grep -F "RELEASE_APP_BUNDLE='build/CLIProxyManager.app'" "$SOURCE_SCRIPT" >/dev/null ||
+  fail "release-local.sh must bind verification to the canonical build app path"
 
 untrusted_tag=$'v9.9.9 fixture@example.com\nPROMPT_SENTINEL /fixture-path-sentinel'
 untrusted_tag_log="$sandbox/untrusted-tag.log"

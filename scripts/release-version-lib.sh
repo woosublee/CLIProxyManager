@@ -24,6 +24,21 @@ release_is_positive_integer() {
   [[ "$1" =~ ^[1-9][0-9]*$ ]]
 }
 
+release_is_positive_int64() {
+  local value="$1"
+
+  release_is_positive_integer "$value" || return 1
+  case "${#value}" in
+    [1-9]|1[0-8]) return 0 ;;
+    19) [[ "$value" < '9223372036854775807' || "$value" == '9223372036854775807' ]] ;;
+    *) return 1 ;;
+  esac
+}
+
+release_is_stable_semver() {
+  [[ "$1" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+}
+
 release_positive_integer_greater_than() {
   local current="$1" previous="$2"
   local current_length="${#current}" previous_length="${#previous}"
@@ -72,9 +87,9 @@ release_load_identity() {
 
   RELEASE_VERSION="$(plutil -extract version raw "$metadata")"
   RELEASE_BUILD="$(plutil -extract build raw "$metadata")"
-  [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
-    release_fail 'version must use stable SemVer x.y.z without whitespace, prerelease, or build metadata' || return 1
-  release_is_positive_integer "$RELEASE_BUILD" ||
+  release_is_stable_semver "$RELEASE_VERSION" ||
+    release_fail 'version must use stable SemVer x.y.z without whitespace, prerelease, build metadata, or leading zeroes' || return 1
+  release_is_positive_int64 "$RELEASE_BUILD" ||
     release_fail 'build must be a positive integer' || return 1
 
   RELEASE_CHANNEL="${ARTIFACT_CHANNEL:-official}"
@@ -88,8 +103,8 @@ release_load_identity() {
     development)
       [[ -n "${DEVELOPMENT_VERSION:-}" ]] || release_fail 'DEVELOPMENT_VERSION is required for development artifacts' || return 1
       [[ -n "${DEVELOPMENT_BUILD_NUMBER:-}" ]] || release_fail 'DEVELOPMENT_BUILD_NUMBER is required for development artifacts' || return 1
-      [[ "$DEVELOPMENT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || release_fail 'development version must use stable SemVer x.y.z' || return 1
-      release_is_positive_integer "$DEVELOPMENT_BUILD_NUMBER" || release_fail 'development build must be a positive integer' || return 1
+      release_is_stable_semver "$DEVELOPMENT_VERSION" || release_fail 'development version must use stable SemVer x.y.z' || return 1
+      release_is_positive_int64 "$DEVELOPMENT_BUILD_NUMBER" || release_fail 'development build must be a positive integer' || return 1
       RELEASE_VERSION="$DEVELOPMENT_VERSION"
       RELEASE_BUILD="$DEVELOPMENT_BUILD_NUMBER"
       RELEASE_TAG=''
@@ -122,8 +137,8 @@ release_read_appcast_identity() {
   enclosure_url="$($xml --xpath 'string(((//*[local-name()="item"])[1]/*[local-name()="enclosure"])[1]/@url)' "$appcast" 2>/dev/null)" ||
     release_fail 'Unable to read enclosure URL from appcast.xml' || return 1
 
-  release_is_positive_integer "$item_build" || release_fail 'appcast build must be a positive integer' || return 1
-  [[ "$item_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || release_fail 'appcast version must use stable SemVer x.y.z' || return 1
+  release_is_positive_int64 "$item_build" || release_fail 'appcast build must be a positive integer' || return 1
+  release_is_stable_semver "$item_version" || release_fail 'appcast version must use stable SemVer x.y.z' || return 1
   [[ "$item_build" == "$enclosure_build" ]] || release_fail 'appcast build mismatch between item and enclosure' || return 1
   [[ "$item_version" == "$enclosure_version" ]] || release_fail 'appcast version mismatch between item and enclosure' || return 1
 

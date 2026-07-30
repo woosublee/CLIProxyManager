@@ -69,7 +69,6 @@ chmod +x "$fake_sign_update"
 SPARKLE_PRIVATE_KEY='test-private-key' \
 SPARKLE_SIGN_UPDATE="$fake_sign_update" \
 REPOSITORY='woosublee/CLIProxyManager' \
-APPCAST_PATH="$sandbox/repo/build/appcast.xml" \
 "$sandbox/repo/scripts/generate-sparkle-appcast.sh"
 
 [[ -f "$sandbox/repo/build/appcast.xml" ]] || fail "appcast.xml should be generated"
@@ -80,11 +79,21 @@ grep -q 'sparkle:edSignature="fake-ed-signature"' "$sandbox/repo/build/appcast.x
 grep -q 'length="17"' "$sandbox/repo/build/appcast.xml" || fail "appcast should include the exact DMG byte length"
 grep -q 'type="application/octet-stream"' "$sandbox/repo/build/appcast.xml" || fail "appcast should include enclosure MIME type"
 
+if APPCAST_PATH="$sandbox/repo/build/untrusted.xml" \
+  SPARKLE_PRIVATE_KEY='test-private-key' \
+  SPARKLE_SIGN_UPDATE="$fake_sign_update" \
+  "$sandbox/repo/scripts/generate-sparkle-appcast.sh" \
+  >"$sandbox/appcast-path.out" 2>"$sandbox/appcast-path.err"; then
+  fail "APPCAST_PATH override should fail"
+fi
+grep -F 'APPCAST_PATH is derived from release/version.json; remove the override' "$sandbox/appcast-path.err" >/dev/null ||
+  fail "APPCAST_PATH rejection should explain canonical source"
+[[ ! -e "$sandbox/repo/build/untrusted.xml" ]] || fail "APPCAST_PATH override must not create an alternate appcast"
+
 for legacy_name in VERSION BUILD_NUMBER RELEASE_TAG DMG_PATH; do
   if env "$legacy_name=unexpected" \
     SPARKLE_PRIVATE_KEY='test-private-key' \
     SPARKLE_SIGN_UPDATE="$fake_sign_update" \
-    APPCAST_PATH="$sandbox/repo/build/rejected.xml" \
     "$sandbox/repo/scripts/generate-sparkle-appcast.sh" \
     >"$sandbox/$legacy_name.out" 2>"$sandbox/$legacy_name.err"; then
     fail "$legacy_name override should fail"
@@ -96,7 +105,6 @@ for legacy_name in VERSION BUILD_NUMBER RELEASE_TAG DMG_PATH; do
   if env "$legacy_name=" \
     SPARKLE_PRIVATE_KEY='test-private-key' \
     SPARKLE_SIGN_UPDATE="$fake_sign_update" \
-    APPCAST_PATH="$sandbox/repo/build/rejected-empty.xml" \
     "$sandbox/repo/scripts/generate-sparkle-appcast.sh" \
     >"$sandbox/$legacy_name-empty.out" 2>"$sandbox/$legacy_name-empty.err"; then
     fail "empty $legacy_name override should fail"
@@ -109,7 +117,6 @@ if ARTIFACT_CHANNEL=development \
   DEVELOPMENT_BUILD_NUMBER=7 \
   SPARKLE_PRIVATE_KEY='test-private-key' \
   SPARKLE_SIGN_UPDATE="$fake_sign_update" \
-  APPCAST_PATH="$sandbox/repo/build/development.xml" \
   "$sandbox/repo/scripts/generate-sparkle-appcast.sh" \
   >"$sandbox/development.out" 2>"$sandbox/development.err"; then
   fail "development appcast generation should fail"
@@ -127,7 +134,6 @@ chmod +x "$failing_signer"
 
 if SPARKLE_PRIVATE_KEY='test-private-key' \
   SPARKLE_SIGN_UPDATE="$failing_signer" \
-  APPCAST_PATH="$sandbox/repo/build/appcast.xml" \
   "$sandbox/repo/scripts/generate-sparkle-appcast.sh"; then
   fail "signing failure should abort appcast generation"
 fi
@@ -170,10 +176,9 @@ chmod +x "$fake_bin/security"
 PATH="$fake_bin:$PATH" \
 SPARKLE_SIGN_UPDATE="$fake_sign_update" \
 REPOSITORY='woosublee/CLIProxyManager' \
-APPCAST_PATH="$sandbox/repo/build/keychain-appcast.xml" \
 "$sandbox/repo/scripts/generate-sparkle-appcast.sh"
 
-[[ -f "$sandbox/repo/build/keychain-appcast.xml" ]] || fail "keychain fallback should generate appcast.xml"
-grep -q 'sparkle:edSignature="fake-ed-signature"' "$sandbox/repo/build/keychain-appcast.xml" || fail "keychain fallback appcast should include ed signature"
+[[ -f "$sandbox/repo/build/appcast.xml" ]] || fail "keychain fallback should generate the canonical appcast.xml"
+grep -q 'sparkle:edSignature="fake-ed-signature"' "$sandbox/repo/build/appcast.xml" || fail "keychain fallback appcast should include ed signature"
 
 printf 'PASS: generate-sparkle-appcast tests\n'

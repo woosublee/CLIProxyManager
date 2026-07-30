@@ -76,11 +76,13 @@ fi
 
 release_load_identity "$REPO_ROOT"
 
+CANONICAL_BUNDLE_ID='com.woosublee.CLIProxyManager'
+
 safe_version_actual() {
   local value="$1"
   if [[ -z "$value" ]]; then
     printf 'missing\n'
-  elif [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  elif release_is_stable_semver "$value"; then
     printf '%s\n' "$value"
   else
     printf 'invalid\n'
@@ -91,7 +93,7 @@ safe_build_actual() {
   local value="$1"
   if [[ -z "$value" ]]; then
     printf 'missing\n'
-  elif [[ "$value" =~ ^[1-9][0-9]*$ ]]; then
+  elif release_is_positive_int64 "$value"; then
     printf '%s\n' "$value"
   else
     printf 'invalid\n'
@@ -102,7 +104,7 @@ safe_tag_actual() {
   local value="$1"
   if [[ -z "$value" ]]; then
     printf 'missing\n'
-  elif [[ "$value" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  elif [[ "$value" == v* ]] && release_is_stable_semver "${value#v}"; then
     printf '%s\n' "$value"
   else
     printf 'invalid\n'
@@ -110,8 +112,25 @@ safe_tag_actual() {
 }
 
 safe_dmg_name_actual() {
+  local value="$1" version
+  case "$value" in
+    CLIProxyManager-*-development.dmg) version="${value#CLIProxyManager-}"; version="${version%-development.dmg}" ;;
+    CLIProxyManager-*.dmg) version="${value#CLIProxyManager-}"; version="${version%.dmg}" ;;
+    *) printf 'invalid\n'; return ;;
+  esac
+
+  if release_is_stable_semver "$version"; then
+    printf '%s\n' "$value"
+  else
+    printf 'invalid\n'
+  fi
+}
+
+safe_bundle_identifier_actual() {
   local value="$1"
-  if [[ "$value" =~ ^CLIProxyManager-[0-9]+\.[0-9]+\.[0-9]+(-development)?\.dmg$ ]]; then
+  if [[ -z "$value" ]]; then
+    printf 'missing\n'
+  elif [[ "$value" == "$CANONICAL_BUNDLE_ID" ]]; then
     printf '%s\n' "$value"
   else
     printf 'invalid\n'
@@ -147,12 +166,17 @@ verify_plist_identity() {
   local logical_name="$1"
   local plist="$2"
   local require_development="$3"
-  local actual_version actual_build display_version display_build
+  local actual_identifier actual_version actual_build
+  local display_identifier display_version display_build
+  actual_identifier="$(plist_value CFBundleIdentifier "$plist")"
   actual_version="$(plist_value CFBundleShortVersionString "$plist")"
   actual_build="$(plist_value CFBundleVersion "$plist")"
+  display_identifier="$(safe_bundle_identifier_actual "$actual_identifier")"
   display_version="$(safe_version_actual "$actual_version")"
   display_build="$(safe_build_actual "$actual_build")"
 
+  [[ "$actual_identifier" == "$CANONICAL_BUNDLE_ID" ]] ||
+    release_fail "$logical_name bundle identifier mismatch: expected $CANONICAL_BUNDLE_ID, actual $display_identifier"
   [[ "$actual_version" == "$RELEASE_VERSION" ]] ||
     release_fail "$logical_name version mismatch: expected $RELEASE_VERSION, actual $display_version"
   [[ "$actual_build" == "$RELEASE_BUILD" ]] ||

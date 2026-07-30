@@ -18,8 +18,8 @@ actual_version="$($PLUTIL_BIN -extract CFBundleShortVersionString raw "$plist" 2
 actual_build="$($PLUTIL_BIN -extract CFBundleVersion raw "$plist" 2>/dev/null || true)"
 display_version='invalid'
 display_build='invalid'
-[[ "$actual_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && display_version="$actual_version"
-[[ "$actual_build" =~ ^[1-9][0-9]*$ ]] && display_build="$actual_build"
+release_is_stable_semver "$actual_version" && display_version="$actual_version"
+release_is_positive_int64 "$actual_build" && display_build="$actual_build"
 
 if [[ "$mode" == '--check' ]]; then
   status=0

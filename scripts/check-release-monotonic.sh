@@ -40,7 +40,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ -z "$exclude_tag" || "$exclude_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || release_fail '--exclude-tag must use vX.Y.Z'
+if [[ -n "$exclude_tag" ]]; then
+  [[ "$exclude_tag" == v* ]] && release_is_stable_semver "${exclude_tag#v}" ||
+    release_fail '--exclude-tag must use vX.Y.Z'
+fi
 if [[ -z "$repository" && -z "$previous_appcast" ]]; then
   repository="$($GH repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null)" ||
     release_fail 'Unable to determine the GitHub repository'
@@ -77,9 +80,9 @@ else
     --repo "$repository" \
     --exclude-drafts \
     --exclude-pre-releases \
-    --limit 100 \
-    --json tagName \
-    --jq ".[] | select(.tagName != \"$exclude_tag\") | .tagName" 2>/dev/null | sed -n '1p')" ||
+    --limit 1000 \
+    --json tagName,publishedAt \
+    --jq "[.[] | select(.tagName != \"$exclude_tag\" and .publishedAt != null)] | sort_by(.publishedAt) | last | .tagName // empty" 2>/dev/null)" ||
     release_fail 'Unable to query the latest published release'
 
   if [[ -n "$latest_tag" ]]; then

@@ -7,9 +7,12 @@ endif
 ifneq ($(filter command line environment,$(origin DMG_PATH)),)
 $(error DMG_PATH is derived from release/version.json; edit the canonical file and run scripts/sync-release-version.sh)
 endif
+ifneq ($(filter command line environment,$(origin BUNDLE_ID)),)
+$(error BUNDLE_ID is fixed to com.woosublee.CLIProxyManager for release artifacts; remove the override)
+endif
 
 APP_NAME ?= CLIProxyManager
-BUNDLE_ID ?= com.woosublee.CLIProxyManager
+BUNDLE_ID := com.woosublee.CLIProxyManager
 ARTIFACT_CHANNEL ?= official
 DEVELOPMENT_VERSION?=
 DEVELOPMENT_BUILD_NUMBER?=
@@ -64,12 +67,12 @@ print-build-number:
 print-build-tag:
 	@$(RELEASE_RESOLVE) tag
 
-swift-build:
+swift-build: release-metadata-check
 	swift build -c $(CONFIGURATION) --product $(APP_NAME)
 	swift build -c $(CONFIGURATION) --product cpm
 	swift build -c $(CONFIGURATION) --product cliproxy-manager
 
-bundle: release-metadata-check swift-build $(INFO_PLIST) $(ENTITLEMENTS) $(ICON_FILE)
+bundle: swift-build $(INFO_PLIST) $(ENTITLEMENTS) $(ICON_FILE)
 	test -x "$(APP_EXECUTABLE)" || { echo "Missing executable: $(APP_EXECUTABLE)"; exit 1; }
 	test -x "$(CPM_EXECUTABLE)" || { echo "Missing executable: $(CPM_EXECUTABLE)"; exit 1; }
 	test -x "$(HELPER_EXECUTABLE)" || { echo "Missing executable: $(HELPER_EXECUTABLE)"; exit 1; }

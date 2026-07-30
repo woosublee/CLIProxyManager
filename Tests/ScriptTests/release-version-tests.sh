@@ -116,6 +116,18 @@ assert_failure_contains 'build must be a JSON integer' "$resolver" validate
 write_metadata '{"version":"0.2.0","build":[]}'
 assert_failure_contains 'build must be a JSON integer' "$resolver" validate
 
+write_metadata '{"version":"00.2.0","build":7}'
+assert_failure_contains 'version must use stable SemVer x.y.z' "$resolver" validate
+write_metadata '{"version":"0.02.0","build":7}'
+assert_failure_contains 'version must use stable SemVer x.y.z' "$resolver" validate
+write_metadata '{"version":"0.2.00","build":7}'
+assert_failure_contains 'version must use stable SemVer x.y.z' "$resolver" validate
+
+write_metadata '{"version":"0.2.0","build":9223372036854775807}'
+[[ "$("$resolver" build)" == '9223372036854775807' ]] || fail "resolver must accept the signed 64-bit build maximum"
+write_metadata '{"version":"0.2.0","build":9223372036854775808}'
+assert_failure_contains 'build must be a positive integer' "$resolver" validate
+
 write_metadata '{"version":"0.2.0","build":7}'
 
 dev_shell="$(
@@ -126,6 +138,10 @@ dev_shell="$(
 )"
 grep -Fx "RELEASE_CHANNEL='development'" <<<"$dev_shell" >/dev/null || fail "development channel missing"
 grep -Fx "RELEASE_DMG_NAME='CLIProxyManager-0.2.0-development.dmg'" <<<"$dev_shell" >/dev/null || fail "development DMG must be marked"
+assert_failure_contains 'development version must use stable SemVer x.y.z' \
+  env ARTIFACT_CHANNEL=development DEVELOPMENT_VERSION=01.2.0 DEVELOPMENT_BUILD_NUMBER=7 "$resolver" validate
+assert_failure_contains 'development build must be a positive integer' \
+  env ARTIFACT_CHANNEL=development DEVELOPMENT_VERSION=0.2.0 DEVELOPMENT_BUILD_NUMBER=9223372036854775808 "$resolver" validate
 
 assert_failure_contains 'development artifacts do not have a release tag' \
   env ARTIFACT_CHANNEL=development DEVELOPMENT_VERSION=0.2.0 DEVELOPMENT_BUILD_NUMBER=9001 \
@@ -236,6 +252,8 @@ assert_failure_contains 'VERSION is derived from release/version.json' make -s -
 assert_failure_contains 'BUILD_NUMBER is derived from release/version.json' make -s -C "$REPO_ROOT" BUILD_NUMBER=999 print-build-number
 assert_failure_contains 'DMG_PATH is derived from release/version.json' make -s -C "$REPO_ROOT" DMG_PATH=alternate.dmg print-app-version
 assert_failure_contains 'DMG_PATH is derived from release/version.json' env DMG_PATH=alternate.dmg make -s -C "$REPO_ROOT" print-app-version
+assert_failure_contains 'BUNDLE_ID is fixed to com.woosublee.CLIProxyManager' make -s -C "$REPO_ROOT" BUNDLE_ID=com.example.override print-app-version
+grep -F 'swift-build: release-metadata-check' "$makefile" >/dev/null || fail "release metadata must gate Swift compilation before bundle"
 canonical_dmg_dry_run="$(make -n -C "$REPO_ROOT" BUILD_DIR=release-output sign-dmg)"
 printf '%s\n' "$canonical_dmg_dry_run" | grep -F 'release-output/CLIProxyManager-0.1.32.dmg' >/dev/null ||
   fail "DMG path must use the permitted build directory and resolver basename"
@@ -338,7 +356,11 @@ cat > "$monotonic_repo/release/version.json" <<'JSON'
 {"version":"0.2.0","build":100}
 JSON
 write_appcast "$previous_appcast" 0.2.1 9223372036854775808 0.2.1 9223372036854775808 v0.2.1 CLIProxyManager-0.2.1.dmg
-assert_failure_contains 'current build 100 must be greater than previous build 9223372036854775808' \
+assert_failure_contains 'appcast build must be a positive integer' \
+  "$monotonic_repo/scripts/check-release-monotonic.sh" --previous-appcast "$previous_appcast"
+
+write_appcast "$previous_appcast" 0.01.9 6 0.01.9 6 v0.01.9 CLIProxyManager-0.01.9.dmg
+assert_failure_contains 'appcast version must use stable SemVer x.y.z' \
   "$monotonic_repo/scripts/check-release-monotonic.sh" --previous-appcast "$previous_appcast"
 
 cat > "$monotonic_repo/release/version.json" <<'JSON'
@@ -413,6 +435,22 @@ case "${GH_SCENARIO:-published}" in
       exit 73
     fi
     ;;
+  old-draft-later-published)
+    if [[ "$1 $2" == 'release list' ]]; then
+      case "$*" in
+        *'--json tagName,publishedAt'*'sort_by(.publishedAt)'*) printf 'v0.1.9\n' ;;
+        *) printf 'v0.1.8\n' ;;
+      esac
+    elif [[ "$1 $2" == 'release download' && "$3" == 'v0.1.9' ]]; then
+      output_dir=''
+      while [[ $# -gt 0 ]]; do
+        if [[ "$1" == '--dir' ]]; then output_dir="$2"; shift 2; else shift; fi
+      done
+      cp "$GH_APPCAST" "$output_dir/appcast.xml"
+    else
+      exit 75
+    fi
+    ;;
   exclude-current)
     if [[ "$1 $2" == 'release list' ]]; then
       case "$*" in
@@ -436,6 +474,14 @@ chmod +x "$fake_gh"
 write_appcast "$previous_appcast" 0.1.9 6 0.1.9 6 v0.1.9 CLIProxyManager-0.1.9.dmg
 GH="$fake_gh" GH_LOG="$sandbox/gh.log" GH_APPCAST="$previous_appcast" \
   "$monotonic_repo/scripts/check-release-monotonic.sh" --repository example/CLIProxyManager
+
+published_at_log="$sandbox/published-at.log"
+GH="$fake_gh" GH_LOG="$published_at_log" GH_APPCAST="$previous_appcast" GH_SCENARIO=old-draft-later-published \
+  "$monotonic_repo/scripts/check-release-monotonic.sh" --repository example/CLIProxyManager
+grep -F 'release download v0.1.9' "$published_at_log" >/dev/null ||
+  fail "monotonicity must select the latest release by publishedAt rather than creation order"
+grep -F -- '--json tagName,publishedAt' "$published_at_log" >/dev/null ||
+  fail "monotonicity release query must request publishedAt"
 
 GH="$fake_gh" GH_LOG="$sandbox/no-release.log" GH_SCENARIO=no-release \
   "$monotonic_repo/scripts/check-release-monotonic.sh" --repository example/CLIProxyManager
@@ -468,6 +514,7 @@ JSON
 mkdir -p "$verify_repo/build/CLIProxyManager.app/Contents"
 cat > "$verify_repo/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>com.woosublee.CLIProxyManager</string>
 <key>CFBundleShortVersionString</key><string>0.2.0</string>
 <key>CFBundleVersion</key><string>7</string>
 </dict></plist>
@@ -533,6 +580,29 @@ plutil -replace CFBundleShortVersionString -string 0.1.9 "$verify_repo/Info.plis
 assert_failure_contains 'source Info.plist version mismatch: expected 0.2.0, actual 0.1.9' \
   "$verify_repo/scripts/verify-release-artifacts.sh" --source-plist "$verify_repo/Info.plist" --official
 plutil -replace CFBundleShortVersionString -string 0.2.0 "$verify_repo/Info.plist"
+
+untrusted_bundle_identifier=$'com.example.untrusted\nBUNDLE_IDENTIFIER_PROMPT_SENTINEL'
+bundle_identifier_stderr="$sandbox/bundle-identifier-stderr"
+plutil -replace CFBundleIdentifier -string "$untrusted_bundle_identifier" "$verify_repo/Info.plist"
+if "$verify_repo/scripts/verify-release-artifacts.sh" --source-plist "$verify_repo/Info.plist" --official \
+  >"$sandbox/bundle-identifier-stdout" 2>"$bundle_identifier_stderr"; then
+  fail "source Info.plist must reject an untrusted bundle identifier"
+fi
+grep -F 'source Info.plist bundle identifier mismatch: expected com.woosublee.CLIProxyManager, actual invalid' "$bundle_identifier_stderr" >/dev/null ||
+  fail "source bundle identifier mismatch must use a safe diagnostic"
+! grep -F 'com.example.untrusted' "$bundle_identifier_stderr" >/dev/null || fail "bundle identifier diagnostic must not expose untrusted input"
+! grep -F 'BUNDLE_IDENTIFIER_PROMPT_SENTINEL' "$bundle_identifier_stderr" >/dev/null || fail "bundle identifier diagnostic must redact prompt-like input"
+plutil -replace CFBundleIdentifier -string com.woosublee.CLIProxyManager "$verify_repo/Info.plist"
+
+plutil -replace CFBundleIdentifier -string com.example.other "$verify_repo/build/CLIProxyManager.app/Contents/Info.plist"
+assert_failure_contains 'built app bundle identifier mismatch: expected com.woosublee.CLIProxyManager, actual invalid' \
+  "$verify_repo/scripts/verify-release-artifacts.sh" --app "$verify_repo/build/CLIProxyManager.app" --official
+: > "$hdiutil_log"
+assert_failure_contains 'DMG app bundle identifier mismatch: expected com.woosublee.CLIProxyManager, actual invalid' \
+  env HDIUTIL="$fake_hdiutil" HDIUTIL_LOG="$hdiutil_log" HDIUTIL_APP_FIXTURE="$verify_repo/build/CLIProxyManager.app" \
+  "$verify_repo/scripts/verify-release-artifacts.sh" --dmg "$verify_repo/build/CLIProxyManager-0.2.0.dmg" --official
+grep -F 'detach' "$hdiutil_log" >/dev/null || fail "bundle identifier DMG rejection must detach"
+plutil -replace CFBundleIdentifier -string com.woosublee.CLIProxyManager "$verify_repo/build/CLIProxyManager.app/Contents/Info.plist"
 
 cp "$verify_repo/build/CLIProxyManager-0.2.0.dmg" "$verify_repo/build/CLIProxyManager-0.2.1.dmg"
 assert_failure_contains 'DMG filename mismatch: expected CLIProxyManager-0.2.0.dmg, actual CLIProxyManager-0.2.1.dmg' \
