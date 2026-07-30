@@ -162,7 +162,7 @@ struct LegacyUsageOverlayFrame: Equatable {
     let screenFrame: CGRect
 
     init?(descriptor: String) {
-        let tokens = descriptor.split(whereSeparator: \Character.isWhitespace)
+        let tokens = descriptor.split(whereSeparator: { $0.isWhitespace })
         let values = tokens.compactMap { Double($0) }
         guard tokens.count == 8,
               values.count == tokens.count,
