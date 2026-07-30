@@ -18,11 +18,14 @@ DEVELOPMENT_VERSION?=
 DEVELOPMENT_BUILD_NUMBER?=
 RELEASE_RESOLVER := scripts/resolve-release-version.sh
 RELEASE_RESOLVE = ARTIFACT_CHANNEL="$(ARTIFACT_CHANNEL)" DEVELOPMENT_VERSION="$(DEVELOPMENT_VERSION)" DEVELOPMENT_BUILD_NUMBER="$(DEVELOPMENT_BUILD_NUMBER)" $(RELEASE_RESOLVER)
+CANONICAL_DEVELOPMENT_VERSION = $(shell ARTIFACT_CHANNEL=official DEVELOPMENT_VERSION= DEVELOPMENT_BUILD_NUMBER= $(RELEASE_RESOLVER) version 2>/dev/null)
+CANONICAL_DEVELOPMENT_BUILD_NUMBER = $(shell ARTIFACT_CHANNEL=official DEVELOPMENT_VERSION= DEVELOPMENT_BUILD_NUMBER= $(RELEASE_RESOLVER) build 2>/dev/null)
 VERSION := $(shell $(RELEASE_RESOLVE) version 2>/dev/null)
 BUILD_NUMBER := $(shell $(RELEASE_RESOLVE) build 2>/dev/null)
 RELEASE_CHANNEL := $(shell $(RELEASE_RESOLVE) channel 2>/dev/null)
 BUILD_DIR ?= build
 CONFIGURATION ?= release
+SWIFT_BUILD_FLAGS ?=
 LOCAL_CODESIGN_IDENTITY ?= cliproxymanager
 RELEASE_CODESIGN_IDENTITY ?= $(CODESIGN_IDENTITY)
 CODESIGN_IDENTITY ?= $(LOCAL_CODESIGN_IDENTITY)
@@ -50,9 +53,12 @@ SPARKLE_FRAMEWORK = $(shell find .build/artifacts -path '*/Sparkle.framework' -t
 INFO_PLIST := Info.plist
 ENTITLEMENTS := CLIProxyManager.entitlements
 
-.PHONY: all release-metadata-check print-app-version print-build-number print-build-tag swift-build bundle sign release-sign verify install-helper install run install-and-run dmg verify-dmg sign-dmg clean distclean
+.PHONY: all ci-build development-bundle verify-bundle-structure verify-app-structure release-metadata-check print-app-version print-build-number print-build-tag swift-build bundle sign release-sign verify install-helper install run install-and-run dmg verify-dmg sign-dmg clean distclean
 
 all: sign
+
+ci-build:
+	$(MAKE) swift-build CONFIGURATION=debug SWIFT_BUILD_FLAGS="-Xswiftc -warnings-as-errors"
 
 release-metadata-check:
 	@$(RELEASE_RESOLVE) validate
@@ -68,9 +74,17 @@ print-build-tag:
 	@$(RELEASE_RESOLVE) tag
 
 swift-build: release-metadata-check
-	swift build -c $(CONFIGURATION) --product $(APP_NAME)
-	swift build -c $(CONFIGURATION) --product cpm
-	swift build -c $(CONFIGURATION) --product cliproxy-manager
+	swift build -c $(CONFIGURATION) $(SWIFT_BUILD_FLAGS) --product $(APP_NAME)
+	swift build -c $(CONFIGURATION) $(SWIFT_BUILD_FLAGS) --product cpm
+	swift build -c $(CONFIGURATION) $(SWIFT_BUILD_FLAGS) --product cliproxy-manager
+
+verify-app-structure: bundle
+	scripts/verify-app-structure.sh --app "$(APP_BUNDLE)" --version "$(VERSION)" --build "$(BUILD_NUMBER)" --channel "$(RELEASE_CHANNEL)"
+
+development-bundle:
+	$(MAKE) verify-app-structure ARTIFACT_CHANNEL=development CONFIGURATION=debug DEVELOPMENT_VERSION="$(CANONICAL_DEVELOPMENT_VERSION)" DEVELOPMENT_BUILD_NUMBER="$(CANONICAL_DEVELOPMENT_BUILD_NUMBER)"
+
+verify-bundle-structure: development-bundle
 
 bundle: swift-build $(INFO_PLIST) $(ENTITLEMENTS) $(ICON_FILE)
 	test -x "$(APP_EXECUTABLE)" || { echo "Missing executable: $(APP_EXECUTABLE)"; exit 1; }
@@ -111,7 +125,7 @@ bundle: swift-build $(INFO_PLIST) $(ENTITLEMENTS) $(ICON_FILE)
 	xattr -d com.apple.FinderInfo "$(APP_BUNDLE)" 2>/dev/null || true
 	@echo "Bundled $(APP_BUNDLE)"
 
-sign: bundle
+sign: verify-app-structure
 	@set -e; \
 	STAGING_DIR=$$(mktemp -d "/tmp/$(APP_NAME).sign.XXXXXX"); \
 	cleanup() { rm -rf "$$STAGING_DIR"; }; \
@@ -162,14 +176,6 @@ verify: sign
 	ditto --norsrc --noextattr "$(APP_BUNDLE)" "$$VERIFY_APP"; \
 	xattr -cr "$$VERIFY_APP"; \
 	codesign --verify --deep --strict --verbose=2 "$$VERIFY_APP"; \
-	test -f "$$VERIFY_APP/Contents/Resources/$(ICON_FILE)" || { echo "Missing bundled icon: $$VERIFY_APP/Contents/Resources/$(ICON_FILE)"; exit 1; }; \
-	plutil -extract CFBundleIconFile raw "$$VERIFY_APP/Contents/Info.plist" | grep -Fx "$(ICON_NAME)" >/dev/null || { echo "Missing CFBundleIconFile: $(ICON_NAME)"; exit 1; }; \
-	test -x "$$VERIFY_APP/Contents/Helpers/cpm" || { echo "Missing bundled helper: $$VERIFY_APP/Contents/Helpers/cpm"; exit 1; }; \
-	test -x "$$VERIFY_APP/Contents/Helpers/cliproxy-manager" || { echo "Missing bundled helper: $$VERIFY_APP/Contents/Helpers/cliproxy-manager"; exit 1; }; \
-	test -d "$$VERIFY_APP/Contents/Frameworks/Sparkle.framework" || { echo "Missing Sparkle.framework"; exit 1; }; \
-	test -x "$$VERIFY_APP/Contents/Frameworks/Sparkle.framework/Autoupdate" || { echo "Missing Sparkle Autoupdate"; exit 1; }; \
-	test -d "$$VERIFY_APP/Contents/Frameworks/Sparkle.framework/Updater.app" || { echo "Missing Sparkle Updater.app"; exit 1; }; \
-	test ! -e "$$VERIFY_APP/Contents/Resources/cliproxy-manager" || { echo "Helper must not be bundled in Contents/Resources"; exit 1; }; \
 	echo "codesign verification passed"
 	@if [ "$(RELEASE_CHANNEL)" = "development" ]; then \
 		scripts/verify-release-artifacts.sh --app "$(APP_BUNDLE)"; \

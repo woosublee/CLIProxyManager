@@ -20,6 +20,13 @@ release_plutil() {
   printf '%s\n' "${PLUTIL:-/usr/bin/plutil}"
 }
 
+release_plist_value() {
+  local key="$1"
+  local plist="$2"
+
+  "$(release_plutil)" -extract "$key" raw "$plist" 2>/dev/null || true
+}
+
 release_is_positive_integer() {
   [[ "$1" =~ ^[1-9][0-9]*$ ]]
 }

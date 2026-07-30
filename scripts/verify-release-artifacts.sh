@@ -6,7 +6,6 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=scripts/release-version-lib.sh
 source "$SCRIPT_DIR/release-version-lib.sh"
 
-PLUTIL_BIN="$(release_plutil)"
 HDIUTIL="${HDIUTIL:-/usr/bin/hdiutil}"
 source_plist=''
 app_bundle=''
@@ -137,18 +136,12 @@ safe_bundle_identifier_actual() {
   fi
 }
 
-plist_value() {
-  local key="$1"
-  local plist="$2"
-  "$PLUTIL_BIN" -extract "$key" raw "$plist" 2>/dev/null || true
-}
-
 verify_plist_channel() {
   local logical_name="$1"
   local plist="$2"
   local require_development="$3"
   local actual_channel
-  actual_channel="$(plist_value CLIProxyManagerReleaseChannel "$plist")"
+  actual_channel="$(release_plist_value CLIProxyManagerReleaseChannel "$plist")"
 
   if [[ "$official" -eq 1 && "$actual_channel" == 'development' ]]; then
     if [[ "$logical_name" == 'built app' ]]; then
@@ -168,9 +161,9 @@ verify_plist_identity() {
   local require_development="$3"
   local actual_identifier actual_version actual_build
   local display_identifier display_version display_build
-  actual_identifier="$(plist_value CFBundleIdentifier "$plist")"
-  actual_version="$(plist_value CFBundleShortVersionString "$plist")"
-  actual_build="$(plist_value CFBundleVersion "$plist")"
+  actual_identifier="$(release_plist_value CFBundleIdentifier "$plist")"
+  actual_version="$(release_plist_value CFBundleShortVersionString "$plist")"
+  actual_build="$(release_plist_value CFBundleVersion "$plist")"
   display_identifier="$(safe_bundle_identifier_actual "$actual_identifier")"
   display_version="$(safe_version_actual "$actual_version")"
   display_build="$(safe_build_actual "$actual_build")"
@@ -201,9 +194,9 @@ verify_provenance() {
   local provenance="$1"
   local actual_version actual_build actual_tag actual_trust
   local display_version display_build display_tag display_trust
-  actual_version="$(plist_value current.version "$provenance")"
-  actual_build="$(plist_value current.build "$provenance")"
-  actual_tag="$(plist_value current.tag "$provenance")"
+  actual_version="$(release_plist_value current.version "$provenance")"
+  actual_build="$(release_plist_value current.build "$provenance")"
+  actual_tag="$(release_plist_value current.tag "$provenance")"
   display_version="$(safe_version_actual "$actual_version")"
   display_build="$(safe_build_actual "$actual_build")"
   display_tag="$(safe_tag_actual "$actual_tag")"
@@ -216,7 +209,7 @@ verify_provenance() {
     release_fail "provenance tag mismatch: expected $RELEASE_TAG, actual $display_tag"
 
   if [[ "$official" -eq 1 ]]; then
-    actual_trust="$(plist_value trust "$provenance")"
+    actual_trust="$(release_plist_value trust "$provenance")"
     case "$actual_trust" in
       official|local-fallback) ;;
       '')

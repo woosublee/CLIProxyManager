@@ -31,9 +31,11 @@ final class ReleaseWorkflowTests: XCTestCase {
         XCTAssertTrue(makefile.contains("scripts/verify-dmg.sh \"$(DMG_PATH)\""))
         XCTAssertTrue(makefile.contains("sign-dmg:"))
         XCTAssertTrue(makefile.contains("codesign --force --sign \"$(CODESIGN_IDENTITY)\" \"$(DMG_PATH)\""))
-        XCTAssertTrue(makefile.contains("test -d \"$$VERIFY_APP/Contents/Frameworks/Sparkle.framework\""))
-        XCTAssertTrue(makefile.contains("test -x \"$$VERIFY_APP/Contents/Frameworks/Sparkle.framework/Autoupdate\""))
-        XCTAssertTrue(makefile.contains("test -d \"$$VERIFY_APP/Contents/Frameworks/Sparkle.framework/Updater.app\""))
+        XCTAssertTrue(makefile.contains("verify-app-structure: bundle"))
+        XCTAssertTrue(
+            makefile.contains("scripts/verify-app-structure.sh --app \"$(APP_BUNDLE)\" --version \"$(VERSION)\" --build \"$(BUILD_NUMBER)\" --channel \"$(RELEASE_CHANNEL)\""),
+            "The Makefile should validate canonical app structure before signing."
+        )
         XCTAssertTrue(makefile.contains("install_name_tool -add_rpath \"@executable_path/../Frameworks\""))
         XCTAssertTrue(
             makefile.contains("Sparkle.framework/Versions/Current/XPCServices"),
@@ -147,9 +149,13 @@ final class ReleaseWorkflowTests: XCTestCase {
             "The self-signed CI release should build the current workflow commit, not checkout a pre-existing tag."
         )
 
-        XCTAssertTrue(workflow.contains("bash Tests/ScriptTests/release-version-tests.sh"))
-        XCTAssertTrue(workflow.contains("bash Tests/ScriptTests/release-local-tests.sh"))
-        XCTAssertTrue(workflow.contains("bash Tests/ScriptTests/generate-sparkle-appcast-tests.sh"))
+        XCTAssertTrue(
+            workflow.contains("bash scripts/run-script-tests.sh"),
+            "The release workflow must run every Git-tracked script regression test through the deterministic runner."
+        )
+        XCTAssertFalse(workflow.contains("bash Tests/ScriptTests/release-version-tests.sh"))
+        XCTAssertFalse(workflow.contains("bash Tests/ScriptTests/release-local-tests.sh"))
+        XCTAssertFalse(workflow.contains("bash Tests/ScriptTests/generate-sparkle-appcast-tests.sh"))
         XCTAssertTrue(workflow.contains("swift test"))
         XCTAssertTrue(workflow.contains("CLIPROXYMANAGER_CERTIFICATE_BASE64"))
         XCTAssertTrue(workflow.contains("CLIPROXYMANAGER_CERTIFICATE_PASSWORD"))

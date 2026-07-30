@@ -42,6 +42,28 @@ final class StatusServiceTests: XCTestCase {
         XCTAssertNil(status.app.stagedVersion)
         XCTAssertNil(status.proxy.stagedVersion)
     }
+
+    func testHelperInspectorRetainsFileManagerInitializer() {
+        _ = HelperInspector(fileManager: .default)
+    }
+
+    func testHelperInspectorSerializesInjectedFileManagerAccess() async {
+        let fileManager = ConcurrentFileManager()
+        let inspectors = [
+            HelperInspector(fileManager: fileManager),
+            HelperInspector(fileManager: fileManager)
+        ]
+
+        await withTaskGroup(of: Void.self) { group in
+            for inspector in inspectors {
+                group.addTask {
+                    _ = inspector.inspect()
+                }
+            }
+        }
+
+        XCTAssertEqual(fileManager.maximumConcurrentAccesses, 1)
+    }
 }
 
 // MARK: - Test doubles
@@ -82,5 +104,31 @@ private struct HelperInspectorDouble: HelperInspecting {
 
     func inspect() -> HelperStatus {
         HelperStatus(path: "/usr/local/bin/cpm", installed: installed, matchesBundled: matchesBundled)
+    }
+}
+
+private final class ConcurrentFileManager: FileManager {
+    private let lock = NSLock()
+    private var concurrentAccesses = 0
+    private var highestConcurrentAccesses = 0
+
+    override func fileExists(atPath path: String, isDirectory: UnsafeMutablePointer<ObjCBool>?) -> Bool {
+        lock.lock()
+        concurrentAccesses += 1
+        highestConcurrentAccesses = max(highestConcurrentAccesses, concurrentAccesses)
+        lock.unlock()
+
+        Thread.sleep(forTimeInterval: 0.01)
+
+        lock.lock()
+        concurrentAccesses -= 1
+        lock.unlock()
+        return false
+    }
+
+    var maximumConcurrentAccesses: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return highestConcurrentAccesses
     }
 }
