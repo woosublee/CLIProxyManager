@@ -3,37 +3,98 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-SCRIPT="$REPO_ROOT/scripts/release-local.sh"
+SOURCE_SCRIPT="$REPO_ROOT/scripts/release-local.sh"
 
 fail() {
   echo "FAIL: $*" >&2
   exit 1
 }
 
-[[ -x "$SCRIPT" ]] || fail "release-local.sh should exist and be executable"
+assert_no_remote_writes() {
+  local log_file="$1"
+  ! grep -E 'git (tag|push)|gh release (create|upload)' "$log_file" >/dev/null ||
+    fail "failure path must not write tags or releases"
+}
+
+[[ -x "$SOURCE_SCRIPT" ]] || fail "release-local.sh should exist and be executable"
 
 sandbox="$(mktemp -d /tmp/release-local-test.XXXXXX)"
 trap 'rm -rf "$sandbox"' EXIT
 
 repo="$sandbox/repo"
-mkdir -p "$repo"
-
 fake_bin="$sandbox/bin"
-mkdir -p "$fake_bin"
-log="$sandbox/calls.log"
+mkdir -p "$repo/scripts" "$repo/build" "$fake_bin"
+cp "$REPO_ROOT/scripts/release-local.sh" "$repo/scripts/release-local.sh"
+chmod +x "$repo/scripts/release-local.sh"
+release_script="$repo/scripts/release-local.sh"
 
-cat > "$fake_bin/plutil" <<'FAKE_PLUTIL'
+cat > "$repo/scripts/resolve-release-version.sh" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
-[[ "${1:-}" == "-extract" ]] || exit 10
-[[ "${2:-}" == "CFBundleVersion" ]] || exit 11
-[[ "${3:-}" == "raw" ]] || exit 12
-[[ "${4:-}" == "Info.plist" ]] || exit 13
-printf '42\n'
-FAKE_PLUTIL
-chmod +x "$fake_bin/plutil"
+case "$1" in
+  validate) ;;
+  tag) printf 'v1.2.3\n' ;;
+  shell)
+    printf '%s\n' \
+      "RELEASE_CHANNEL='official'" \
+      "RELEASE_VERSION='1.2.3'" \
+      "RELEASE_BUILD='42'" \
+      "RELEASE_TAG='v1.2.3'" \
+      "RELEASE_DMG_NAME='CLIProxyManager-1.2.3.dmg'" \
+      "RELEASE_DMG_PATH='build/CLIProxyManager-1.2.3.dmg'" \
+      "RELEASE_APPCAST_PATH='build/appcast.xml'"
+  ;;
+  *) exit 64 ;;
+esac
+SH
 
-cat > "$fake_bin/security" <<'FAKE_SECURITY'
+cat > "$repo/scripts/sync-release-version.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'sync %s\n' "$*" >> "$RELEASE_LOCAL_TEST_LOG"
+[[ "$*" == '--check' ]]
+SH
+
+cat > "$repo/scripts/check-release-monotonic.sh" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'monotonic %s\n' "$*" >> "$RELEASE_LOCAL_TEST_LOG"
+[[ "${MONOTONIC_SCENARIO:-pass}" == 'pass' ]] || exit 59
+mkdir -p build
+printf '%s\n' '{"trust":"official","current":{"version":"1.2.3","build":42,"tag":"v1.2.3"},"previous":{"version":"1.2.2","build":41,"tag":"v1.2.2"},"source":"github-release-appcast"}' > build/release-provenance.json
+SH
+
+cat > "$repo/scripts/verify-release-artifacts.sh" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'verify-artifacts %s\n' "$*" >> "$RELEASE_LOCAL_TEST_LOG"
+case "${VERIFY_SCENARIO:-pass}" in
+  pass) exit 0 ;;
+  fail-final)
+    case " $* " in
+      *' --source-plist '*) exit 60 ;;
+      *) exit 0 ;;
+    esac
+  ;;
+  valid-existing)
+    case " $* " in
+      *' --appcast '*) exit 0 ;;
+      *) exit 0 ;;
+    esac
+  ;;
+  *) exit 61 ;;
+esac
+SH
+
+cat > "$repo/scripts/generate-sparkle-appcast.sh" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'appcast\n' >> "$RELEASE_LOCAL_TEST_LOG"
+printf '<rss />\n' > build/appcast.xml
+SH
+
+chmod +x "$repo/scripts/"*.sh
+
+cat > "$fake_bin/security" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'security %s\n' "$*" >> "$RELEASE_LOCAL_TEST_LOG"
@@ -41,133 +102,214 @@ case "$*" in
   'find-identity -v -p codesigning')
     printf '  1) A39E5510B609DE50287781AFDBAE19C4F91783C7 "cliproxymanager"\n'
     printf '     1 valid identities found\n'
-    ;;
-  *)
-    echo "unexpected security args: $*" >&2
-    exit 50
-    ;;
+  ;;
+  *) exit 50 ;;
 esac
-FAKE_SECURITY
+SH
 chmod +x "$fake_bin/security"
 
-cat > "$fake_bin/make" <<'FAKE_MAKE'
+cat > "$fake_bin/make" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'make %s\n' "$*" >> "$RELEASE_LOCAL_TEST_LOG"
-[[ "$*" == 'VERSION=1.2.3 BUILD_NUMBER=42 verify-dmg' ]] || {
-  echo "unexpected make args: $*" >&2
-  exit 20
-}
+[[ "$*" == 'verify-dmg' ]] || exit 20
 mkdir -p build
 printf 'fake dmg' > build/CLIProxyManager-1.2.3.dmg
-FAKE_MAKE
+SH
 chmod +x "$fake_bin/make"
 
-mkdir -p "$repo/scripts"
-cat > "$repo/scripts/generate-sparkle-appcast.sh" <<'FAKE_APPCAST'
+cat > "$fake_bin/git" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
-printf 'appcast RELEASE_TAG=%s VERSION=%s BUILD_NUMBER=%s DMG_PATH=%s APPCAST_PATH=%s REPOSITORY=%s SPARKLE_PRIVATE_KEY=%s\n' \
-  "${RELEASE_TAG:-}" \
-  "${VERSION:-}" \
-  "${BUILD_NUMBER:-}" \
-  "${DMG_PATH:-}" \
-  "${APPCAST_PATH:-}" \
-  "${REPOSITORY:-}" \
-  "${SPARKLE_PRIVATE_KEY:-}" >> "$RELEASE_LOCAL_TEST_LOG"
-[[ "${RELEASE_TAG:-}" == "v1.2.3" ]] || exit 30
-[[ "${VERSION:-}" == "1.2.3" ]] || exit 31
-[[ "${BUILD_NUMBER:-}" == "42" ]] || exit 32
-[[ "${DMG_PATH:-}" == "build/CLIProxyManager-1.2.3.dmg" ]] || exit 33
-[[ "${APPCAST_PATH:-}" == "build/appcast.xml" ]] || exit 34
-[[ "${REPOSITORY:-}" == "example/CLIProxyManager" ]] || exit 35
-[[ -z "${SPARKLE_PRIVATE_KEY:-}" ]] || exit 36
-printf '<rss />' > "$APPCAST_PATH"
-FAKE_APPCAST
-chmod +x "$repo/scripts/generate-sparkle-appcast.sh"
+printf 'git %s\n' "$*" >> "$RELEASE_LOCAL_TEST_LOG"
+case "$1" in
+  rev-parse)
+    [[ "$2" == 'HEAD' ]] || exit 80
+    printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
+  ;;
+  ls-remote)
+    case "${RELEASE_LOCAL_GIT_SCENARIO:-absent}" in
+      absent) exit 0 ;;
+      matching)
+        printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/tags/v1.2.3\n'
+      ;;
+      other)
+        printf 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\trefs/tags/v1.2.3\n'
+      ;;
+      network) exit 81 ;;
+    esac
+  ;;
+  tag)
+    [[ "$*" == 'tag v1.2.3 HEAD' ]] || exit 82
+  ;;
+  push)
+    [[ "$*" == 'push origin refs/tags/v1.2.3' ]] || exit 83
+  ;;
+  *) exit 84 ;;
+esac
+SH
+chmod +x "$fake_bin/git"
 
-cat > "$fake_bin/gh" <<'FAKE_GH'
+cat > "$fake_bin/gh" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'gh %s\n' "$*" >> "$RELEASE_LOCAL_TEST_LOG"
-case "$*" in
-  'repo view --json nameWithOwner --jq .nameWithOwner')
+case "$1 $2" in
+  'repo view')
     printf 'example/CLIProxyManager\n'
-    ;;
-  'release view v1.2.3')
-    exit 1
-    ;;
-  'release create v1.2.3 --verify-tag --title CLIProxyManager 1.2.3 --notes Manual fallback release: self-signed, non-notarized DMG signed with the local cliproxymanager code signing identity and Sparkle appcast.')
+  ;;
+  'release view')
+    case "${RELEASE_LOCAL_RELEASE_SCENARIO:-missing}" in
+      missing) exit 1 ;;
+      no-appcast) printf 'CLIProxyManager-1.2.3.dmg\n' ;;
+      valid-appcast) printf 'appcast.xml\n' ;;
+      network) exit 90 ;;
+    esac
+  ;;
+  'release download')
+    output_dir=''
+    while [[ $# -gt 0 ]]; do
+      if [[ "$1" == '--dir' ]]; then output_dir="$2"; shift 2; else shift; fi
+    done
+    mkdir -p "$output_dir"
+    cp "$RELEASE_LOCAL_EXISTING_APPCAST" "$output_dir/appcast.xml"
+  ;;
+  'release create')
     exit 0
-    ;;
-  'release upload v1.2.3 build/CLIProxyManager-1.2.3.dmg build/appcast.xml')
+  ;;
+  'release upload')
     exit 0
-    ;;
+  ;;
+  'api repos/example/CLIProxyManager')
+    [[ "${RELEASE_LOCAL_RELEASE_SCENARIO:-missing}" != 'network' ]] || exit 91
+    printf '{}\n'
+  ;;
   *)
     echo "unexpected gh args: $*" >&2
-    exit 40
-    ;;
+    exit 92
+  ;;
 esac
-FAKE_GH
+SH
 chmod +x "$fake_bin/gh"
 
-(
-  cd "$repo"
-  PATH="$fake_bin:$PATH" \
-  RELEASE_LOCAL_TEST_LOG="$log" \
-  "$SCRIPT" v1.2.3
-)
+run_release() {
+  local log_file="$1"
+  shift
+  (
+    cd "$repo"
+    PATH="$fake_bin:$PATH" RELEASE_LOCAL_TEST_LOG="$log_file" "$@"
+  )
+}
 
+normal_log="$sandbox/normal.log"
+run_release "$normal_log" "$release_script" v1.2.3
 expected="$sandbox/expected.log"
 printf '%s\n' \
-  'security find-identity -v -p codesigning' \
+  'sync --check' \
   'gh repo view --json nameWithOwner --jq .nameWithOwner' \
-  'make VERSION=1.2.3 BUILD_NUMBER=42 verify-dmg' \
-  'appcast RELEASE_TAG=v1.2.3 VERSION=1.2.3 BUILD_NUMBER=42 DMG_PATH=build/CLIProxyManager-1.2.3.dmg APPCAST_PATH=build/appcast.xml REPOSITORY=example/CLIProxyManager SPARKLE_PRIVATE_KEY=' \
-  'gh release view v1.2.3' \
-  'gh release create v1.2.3 --verify-tag --title CLIProxyManager 1.2.3 --notes Manual fallback release: self-signed, non-notarized DMG signed with the local cliproxymanager code signing identity and Sparkle appcast.' \
-  'gh release upload v1.2.3 build/CLIProxyManager-1.2.3.dmg build/appcast.xml' \
+  'git ls-remote --tags origin refs/tags/v1.2.3 refs/tags/v1.2.3^{}' \
+  'monotonic --repository example/CLIProxyManager --provenance build/release-provenance.json' \
+  'security find-identity -v -p codesigning' \
+  'make verify-dmg' \
+  'appcast' \
+  'verify-artifacts --source-plist Info.plist --app build/CLIProxyManager.app --dmg build/CLIProxyManager-1.2.3.dmg --appcast build/appcast.xml --provenance build/release-provenance.json --official' \
+  'monotonic --repository example/CLIProxyManager --provenance build/release-provenance.json' \
+  'git ls-remote --tags origin refs/tags/v1.2.3 refs/tags/v1.2.3^{}' \
+  'git tag v1.2.3 HEAD' \
+  'git push origin refs/tags/v1.2.3' \
+  'gh release create v1.2.3 --verify-tag --title CLIProxyManager 1.2.3 --notes-file build/release-notes.md' \
+  'gh release upload v1.2.3 build/CLIProxyManager-1.2.3.dmg build/appcast.xml build/release-provenance.json' \
   > "$expected"
+diff -u "$expected" "$normal_log" || fail "normal release orchestration call order changed"
 
-diff -u "$expected" "$log" || fail "release-local.sh should call make, appcast generation, and gh upload in order"
+tag_mismatch_log="$sandbox/tag-mismatch.log"
+if RELEASE_LOCAL_GIT_SCENARIO=matching run_release "$tag_mismatch_log" "$release_script" v1.2.3; then
+  fail "normal release must reject an existing tag"
+fi
+assert_no_remote_writes "$tag_mismatch_log"
 
-if (
-  cd "$repo"
-  PATH="$fake_bin:$PATH" \
-  RELEASE_LOCAL_TEST_LOG="$sandbox/invalid.log" \
-  "$SCRIPT" 1.2.3
-) >/tmp/release-local-invalid.out 2>/tmp/release-local-invalid.err; then
-  fail "release-local.sh should reject tags without v prefix"
+monotonic_log="$sandbox/monotonic.log"
+if MONOTONIC_SCENARIO=fail run_release "$monotonic_log" "$release_script" v1.2.3; then
+  fail "release must reject a non-monotonic version"
+fi
+assert_no_remote_writes "$monotonic_log"
+
+parity_log="$sandbox/parity.log"
+if VERIFY_SCENARIO=fail-final run_release "$parity_log" "$release_script" v1.2.3; then
+  fail "release must reject artifacts that fail final parity verification"
+fi
+assert_no_remote_writes "$parity_log"
+
+previous_fixture="$sandbox/previous-appcast.xml"
+printf '<rss />\n' > "$previous_fixture"
+fallback_log="$sandbox/fallback.log"
+run_release "$fallback_log" "$release_script" v1.2.3 --previous-appcast "$previous_fixture"
+[[ "$(grep -F -- "--previous-appcast $previous_fixture" "$fallback_log" | wc -l | tr -d '[:space:]')" == '2' ]] || fail "fallback source must be checked twice"
+grep -F 'explicit local fallback appcast' "$repo/build/release-notes.md" >/dev/null || fail "fallback trust must be documented"
+! grep -F "$previous_fixture" "$repo/build/release-notes.md" >/dev/null || fail "release notes must not expose the fallback path"
+
+resume_log="$sandbox/resume.log"
+RELEASE_LOCAL_GIT_SCENARIO=matching \
+RELEASE_LOCAL_RELEASE_SCENARIO=no-appcast \
+ALLOW_LOCAL_RELEASE_CLOBBER=1 \
+run_release "$resume_log" "$release_script" v1.2.3
+! grep -E 'git (tag|push)' "$resume_log" >/dev/null || fail "resume must not write a tag"
+tail -n 1 "$resume_log" | grep -Fx 'gh release upload v1.2.3 build/CLIProxyManager-1.2.3.dmg build/appcast.xml build/release-provenance.json --clobber' >/dev/null || fail "resume must finish by clobbering assets"
+
+other_log="$sandbox/other-tag.log"
+if RELEASE_LOCAL_GIT_SCENARIO=other ALLOW_LOCAL_RELEASE_CLOBBER=1 \
+  run_release "$other_log" "$release_script" v1.2.3; then
+  fail "resume must reject a tag pointing to another commit"
+fi
+! grep -F 'make verify-dmg' "$other_log" >/dev/null || fail "tag mismatch must fail before build"
+
+existing_appcast="$sandbox/existing-appcast.xml"
+printf '<rss />\n' > "$existing_appcast"
+valid_log="$sandbox/valid-existing.log"
+if RELEASE_LOCAL_GIT_SCENARIO=matching \
+  RELEASE_LOCAL_RELEASE_SCENARIO=valid-appcast \
+  RELEASE_LOCAL_EXISTING_APPCAST="$existing_appcast" \
+  VERIFY_SCENARIO=valid-existing \
+  ALLOW_LOCAL_RELEASE_CLOBBER=1 \
+  run_release "$valid_log" "$release_script" v1.2.3 \
+  >"$sandbox/valid-existing.out" 2>"$sandbox/valid-existing.err"; then
+  fail "resume must reject an already valid appcast"
+fi
+grep -F 'A valid canonical appcast is already published; clobber is not allowed' "$sandbox/valid-existing.err" >/dev/null || fail "valid existing appcast rejection missing"
+assert_no_remote_writes "$valid_log"
+
+if run_release "$sandbox/bad-arguments.log" "$release_script" 1.2.3; then
+  fail "release-local.sh should reject a non-canonical tag"
 fi
 
-grep -q 'RELEASE_TAG must start with v' /tmp/release-local-invalid.err || fail "invalid tag should explain v-prefix requirement"
+if VERSION=1.2.3 run_release "$sandbox/legacy-override.log" "$release_script" v1.2.3; then
+  fail "release-local.sh should reject legacy overrides"
+fi
 
-cat > "$fake_bin/security" <<'FAKE_SECURITY_MISSING'
+network_log="$sandbox/network.log"
+if RELEASE_LOCAL_GIT_SCENARIO=network run_release "$network_log" "$release_script" v1.2.3; then
+  fail "release must fail closed when the remote tag cannot be queried"
+fi
+assert_no_remote_writes "$network_log"
+
+partial_network_log="$sandbox/partial-network.log"
+if RELEASE_LOCAL_GIT_SCENARIO=matching \
+  RELEASE_LOCAL_RELEASE_SCENARIO=network \
+  ALLOW_LOCAL_RELEASE_CLOBBER=1 \
+  run_release "$partial_network_log" "$release_script" v1.2.3; then
+  fail "resume must fail closed when the partial release cannot be queried"
+fi
+assert_no_remote_writes "$partial_network_log"
+
+cat > "$fake_bin/security" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'security %s\n' "$*" >> "$RELEASE_LOCAL_TEST_LOG"
-case "$*" in
-  'find-identity -v -p codesigning')
-    printf '     0 valid identities found\n'
-    ;;
-  *)
-    echo "unexpected security args: $*" >&2
-    exit 50
-    ;;
-esac
-FAKE_SECURITY_MISSING
+printf '     0 valid identities found\n'
+SH
 chmod +x "$fake_bin/security"
-
-if (
-  cd "$repo"
-  PATH="$fake_bin:$PATH" \
-  RELEASE_LOCAL_TEST_LOG="$sandbox/missing-identity.log" \
-  "$SCRIPT" v1.2.3
-) >/tmp/release-local-missing-identity.out 2>/tmp/release-local-missing-identity.err; then
-  fail "release-local.sh should reject releases without the cliproxymanager signing identity"
+missing_identity_log="$sandbox/missing-identity.log"
+if run_release "$missing_identity_log" "$release_script" v1.2.3; then
+  fail "release must require the cliproxymanager signing identity"
 fi
-
-grep -q 'cliproxymanager code signing identity is required' /tmp/release-local-missing-identity.err || \
-  fail "missing identity should explain the cliproxymanager requirement"
-grep -q 'security find-identity -v -p codesigning' /tmp/release-local-missing-identity.err || \
-  fail "missing identity should show the verification command"
+assert_no_remote_writes "$missing_identity_log"
