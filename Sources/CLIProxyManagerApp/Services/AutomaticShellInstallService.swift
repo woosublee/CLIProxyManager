@@ -27,30 +27,54 @@ enum AutomaticShellInstallationResult: Equatable, Sendable {
 
 private final class AutomaticShellReconciliationCoordinator: @unchecked Sendable {
     private let lock = NSLock()
-    private var latestGeneration = 0
+    private var latestAutomaticGeneration = 0
+    private var activeExplicitInstallations = 0
 
-    func begin() -> AutomaticShellReconciliationRequest {
+    func beginAutomatic() -> AutomaticShellReconciliationRequest {
         let generation = lock.withLock { () -> Int in
-            latestGeneration &+= 1
-            return latestGeneration
+            latestAutomaticGeneration &+= 1
+            return latestAutomaticGeneration
         }
         return AutomaticShellReconciliationRequest(coordinator: self, generation: generation)
     }
 
-    func invalidate() {
-        lock.withLock { latestGeneration &+= 1 }
+    func beginExplicit() -> ExplicitShellInstallationRequest {
+        lock.withLock {
+            latestAutomaticGeneration &+= 1
+            activeExplicitInstallations &+= 1
+        }
+        return ExplicitShellInstallationRequest(coordinator: self)
     }
 
-    fileprivate func installIfCurrent(
+    fileprivate func installAutomaticIfCurrent(
         generation: Int,
         installer: any ShellFunctionInstalling,
         functionScript: String,
         functionNames: [String]
     ) throws -> Bool {
         try lock.withLock {
-            guard generation == latestGeneration else { return false }
+            guard activeExplicitInstallations == 0,
+                  generation == latestAutomaticGeneration else {
+                return false
+            }
             try installer.install(functionScript: functionScript, functionNames: functionNames)
             return true
+        }
+    }
+
+    fileprivate func installExplicit(
+        using installer: any ShellFunctionInstalling,
+        functionScript: String,
+        functionNames: [String]
+    ) throws {
+        try lock.withLock {
+            try installer.install(functionScript: functionScript, functionNames: functionNames)
+        }
+    }
+
+    fileprivate func finishExplicit() {
+        lock.withLock {
+            activeExplicitInstallations = max(0, activeExplicitInstallations - 1)
         }
     }
 }
@@ -69,12 +93,36 @@ struct AutomaticShellReconciliationRequest: Sendable {
         functionScript: String,
         functionNames: [String]
     ) throws -> Bool {
-        try coordinator.installIfCurrent(
+        try coordinator.installAutomaticIfCurrent(
             generation: generation,
             installer: installer,
             functionScript: functionScript,
             functionNames: functionNames
         )
+    }
+}
+
+struct ExplicitShellInstallationRequest: Sendable {
+    private let coordinator: AutomaticShellReconciliationCoordinator
+
+    fileprivate init(coordinator: AutomaticShellReconciliationCoordinator) {
+        self.coordinator = coordinator
+    }
+
+    fileprivate func install(
+        using installer: any ShellFunctionInstalling,
+        functionScript: String,
+        functionNames: [String]
+    ) throws {
+        try coordinator.installExplicit(
+            using: installer,
+            functionScript: functionScript,
+            functionNames: functionNames
+        )
+    }
+
+    fileprivate func finish() {
+        coordinator.finishExplicit()
     }
 }
 
@@ -172,21 +220,23 @@ struct AutomaticShellInstallService: Sendable {
         enabledFunctions: EnabledFunctions = .allOAuth
     ) async throws {
         guard isEnabled else { return }
-        reconciliationCoordinator.invalidate()
+        let request = reconciliationCoordinator.beginExplicit()
+        defer { request.finish() }
         try await preflight()
         let installation = try renderedInstallation(
             config: config,
             helperCommand: helperCommand,
             enabledFunctions: enabledFunctions
         )
-        try installer.install(
+        try request.install(
+            using: installer,
             functionScript: installation.functionScript,
             functionNames: installation.functionNames
         )
     }
 
     func beginAutomaticReconciliation() -> AutomaticShellReconciliationRequest {
-        reconciliationCoordinator.begin()
+        reconciliationCoordinator.beginAutomatic()
     }
 
     func reconcile(

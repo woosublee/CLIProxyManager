@@ -414,6 +414,38 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
 
         XCTAssertEqual(installer.installationHistory, [["ccnew"]])
     }
+
+    func testExplicitInstallWinsOverAutomaticReconciliationStartedDuringExplicitPreflight() async throws {
+        let installer = StubShellInstaller()
+        let compatibilityAuthorizer = FirstPreflightDelayingCompatibilityAuthorizer()
+        let service = AutomaticShellInstallService(
+            installer: installer,
+            compatibilityAuthorizer: compatibilityAuthorizer
+        )
+        var explicitConfig = AppConfig.default
+        explicitConfig.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "claude",
+                provider: .claude,
+                authProfileID: "claude.json",
+                commandName: "ccexplicit"
+            )
+        ]
+        var automaticConfig = explicitConfig
+        automaticConfig.oauthCommandProfiles[0].commandName = "ccautomatic"
+
+        let explicitInstall = Task {
+            try await service.apply(config: explicitConfig)
+        }
+        await compatibilityAuthorizer.waitForFirstPreflight()
+
+        let automaticResult = try await service.reconcile(config: automaticConfig)
+        await compatibilityAuthorizer.releaseFirstPreflight()
+        try await explicitInstall.value
+
+        XCTAssertEqual(automaticResult, .skippedForSupersededRequest)
+        XCTAssertEqual(installer.installationHistory, [["ccexplicit"]])
+    }
 }
 
 private final class StubConfigStore: AppConfigStoring, @unchecked Sendable {
