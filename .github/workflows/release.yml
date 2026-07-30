@@ -17,6 +17,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: cliproxymanager-official-release
+  cancel-in-progress: false
+
 jobs:
   build-and-release:
     name: Build and publish self-signed release
@@ -28,52 +32,53 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Resolve release version
+      - name: Resolve and validate release identity
         id: version
         env:
           INPUT_TAG: ${{ inputs.tag }}
         run: |
-          TAG="$INPUT_TAG"
-          APP_VERSION="$(make -s print-app-version)"
-          BUILD_NUMBER="$(make -s print-build-number)"
-          BUILD_TAG="$(make -s print-build-tag)"
-          VERSION="${TAG#v}"
-          DMG_PATH="build/CLIProxyManager-${VERSION}.dmg"
-          APPCAST_PATH="build/appcast.xml"
+          set -euo pipefail
+          scripts/resolve-release-version.sh validate
+          scripts/sync-release-version.sh --check
+          eval "$(scripts/resolve-release-version.sh shell)"
+          ACTUAL_TAG='invalid'
+          if [[ "$INPUT_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            ACTUAL_TAG="$INPUT_TAG"
+          fi
 
-          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Release tags must use semantic versioning, for example v0.1.0." >&2
+          if [ "$INPUT_TAG" != "$RELEASE_TAG" ]; then
+            echo "Workflow tag mismatch: expected $RELEASE_TAG, actual $ACTUAL_TAG" >&2
             exit 1
           fi
 
-          if [ "$TAG" != "$BUILD_TAG" ]; then
-            echo "Workflow tag $TAG must match BUILD_TAG $BUILD_TAG from Makefile." >&2
+          if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release tag $RELEASE_TAG already exists on origin." >&2
             exit 1
+          else
+            status=$?
+            if [ "$status" -ne 2 ]; then
+              echo "Unable to query release tag $RELEASE_TAG." >&2
+              exit "$status"
+            fi
           fi
 
-          if [ "$VERSION" != "$APP_VERSION" ]; then
-            echo "Workflow version $VERSION must match APP_VERSION $APP_VERSION from Makefile." >&2
-            exit 1
-          fi
+          scripts/check-release-monotonic.sh \
+            --repository "$GITHUB_REPOSITORY" \
+            --provenance build/release-provenance.json
 
-          if ! [[ "$BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
-            echo "Build number must be a positive integer." >&2
-            exit 1
-          fi
-
-          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-            echo "Release tag $TAG already exists on origin. Choose a new release tag." >&2
-            exit 1
-          fi
-
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "build_number=$BUILD_NUMBER" >> "$GITHUB_OUTPUT"
-          echo "dmg_path=$DMG_PATH" >> "$GITHUB_OUTPUT"
-          echo "appcast_path=$APPCAST_PATH" >> "$GITHUB_OUTPUT"
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "build_number=$RELEASE_BUILD" >> "$GITHUB_OUTPUT"
+          echo "dmg_path=$RELEASE_DMG_PATH" >> "$GITHUB_OUTPUT"
+          echo "appcast_path=$RELEASE_APPCAST_PATH" >> "$GITHUB_OUTPUT"
+          echo "provenance_path=build/release-provenance.json" >> "$GITHUB_OUTPUT"
 
       - name: Test
-        run: swift test
+        run: |
+          bash Tests/ScriptTests/release-version-tests.sh
+          bash Tests/ScriptTests/release-local-tests.sh
+          bash Tests/ScriptTests/generate-sparkle-appcast-tests.sh
+          swift test
 
       # Required GitHub secrets:
       #   CLIPROXYMANAGER_CERTIFICATE_BASE64 — base64-encoded .p12 of the self-signed "cliproxymanager" certificate (with private key)
@@ -127,21 +132,42 @@ jobs:
           echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
 
       - name: Build and verify self-signed DMG
-        run: make CODESIGN_IDENTITY="$CODESIGN_IDENTITY" VERSION="${{ steps.version.outputs.version }}" BUILD_NUMBER="${{ steps.version.outputs.build_number }}" verify-dmg
+        run: make CODESIGN_IDENTITY="$CODESIGN_IDENTITY" verify-dmg
 
       - name: Sign DMG
-        run: make CODESIGN_IDENTITY="$CODESIGN_IDENTITY" VERSION="${{ steps.version.outputs.version }}" BUILD_NUMBER="${{ steps.version.outputs.build_number }}" sign-dmg
+        run: make CODESIGN_IDENTITY="$CODESIGN_IDENTITY" sign-dmg
 
       - name: Generate Sparkle appcast
         env:
-          RELEASE_TAG: ${{ steps.version.outputs.tag }}
-          VERSION: ${{ steps.version.outputs.version }}
-          BUILD_NUMBER: ${{ steps.version.outputs.build_number }}
-          DMG_PATH: ${{ steps.version.outputs.dmg_path }}
-          APPCAST_PATH: ${{ steps.version.outputs.appcast_path }}
           REPOSITORY: ${{ github.repository }}
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: scripts/generate-sparkle-appcast.sh
+
+      - name: Verify release artifacts
+        run: |
+          scripts/verify-release-artifacts.sh \
+            --source-plist Info.plist \
+            --app build/CLIProxyManager.app \
+            --dmg "${{ steps.version.outputs.dmg_path }}" \
+            --appcast "${{ steps.version.outputs.appcast_path }}" \
+            --provenance "${{ steps.version.outputs.provenance_path }}" \
+            --official
+
+      - name: Recheck published build
+        run: |
+          scripts/check-release-monotonic.sh \
+            --repository "$GITHUB_REPOSITORY" \
+            --provenance "${{ steps.version.outputs.provenance_path }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+            echo "Release tag ${{ steps.version.outputs.tag }} appeared while artifacts were building." >&2
+            exit 1
+          else
+            status=$?
+            if [ "$status" -ne 2 ]; then
+              echo "Unable to recheck release tag ${{ steps.version.outputs.tag }}." >&2
+              exit "$status"
+            fi
+          fi
 
       - name: Create tag
         run: |
@@ -163,6 +189,7 @@ jobs:
           files: |
             ${{ steps.version.outputs.dmg_path }}
             ${{ steps.version.outputs.appcast_path }}
+            ${{ steps.version.outputs.provenance_path }}
 
       - name: Cleanup signing artifacts
         if: always()

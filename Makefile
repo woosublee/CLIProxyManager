@@ -1,7 +1,26 @@
+ifneq ($(filter command line environment,$(origin VERSION)),)
+$(error VERSION is derived from release/version.json; edit the canonical file and run scripts/sync-release-version.sh)
+endif
+ifneq ($(filter command line environment,$(origin BUILD_NUMBER)),)
+$(error BUILD_NUMBER is derived from release/version.json; edit the canonical file and run scripts/sync-release-version.sh)
+endif
+ifneq ($(filter command line environment,$(origin DMG_PATH)),)
+$(error DMG_PATH is derived from release/version.json; edit the canonical file and run scripts/sync-release-version.sh)
+endif
+ifneq ($(filter command line environment,$(origin BUNDLE_ID)),)
+$(error BUNDLE_ID is fixed to com.woosublee.CLIProxyManager for release artifacts; remove the override)
+endif
+
 APP_NAME ?= CLIProxyManager
-BUNDLE_ID ?= com.woosublee.CLIProxyManager
-VERSION ?= 0.1.32
-BUILD_NUMBER ?= 35
+BUNDLE_ID := com.woosublee.CLIProxyManager
+ARTIFACT_CHANNEL ?= official
+DEVELOPMENT_VERSION?=
+DEVELOPMENT_BUILD_NUMBER?=
+RELEASE_RESOLVER := scripts/resolve-release-version.sh
+RELEASE_RESOLVE = ARTIFACT_CHANNEL="$(ARTIFACT_CHANNEL)" DEVELOPMENT_VERSION="$(DEVELOPMENT_VERSION)" DEVELOPMENT_BUILD_NUMBER="$(DEVELOPMENT_BUILD_NUMBER)" $(RELEASE_RESOLVER)
+VERSION := $(shell $(RELEASE_RESOLVE) version 2>/dev/null)
+BUILD_NUMBER := $(shell $(RELEASE_RESOLVE) build 2>/dev/null)
+RELEASE_CHANNEL := $(shell $(RELEASE_RESOLVE) channel 2>/dev/null)
 BUILD_DIR ?= build
 CONFIGURATION ?= release
 LOCAL_CODESIGN_IDENTITY ?= cliproxymanager
@@ -11,8 +30,8 @@ ICON_NAME ?= CLIProxyManager
 ICON_FILE ?= $(ICON_NAME).icns
 
 APP_BUNDLE := $(BUILD_DIR)/$(APP_NAME).app
-DMG_NAME := $(APP_NAME)-$(VERSION).dmg
-DMG_PATH := $(BUILD_DIR)/$(DMG_NAME)
+override DMG_NAME := $(shell $(RELEASE_RESOLVE) dmg-name 2>/dev/null)
+override DMG_PATH := $(BUILD_DIR)/$(DMG_NAME)
 DMG_STAGING_TEMPLATE := /tmp/$(APP_NAME).dmg-src.XXXXXX
 CONTENTS_DIR := $(APP_BUNDLE)/Contents
 MACOS_DIR := $(CONTENTS_DIR)/MacOS
@@ -31,20 +50,24 @@ SPARKLE_FRAMEWORK = $(shell find .build/artifacts -path '*/Sparkle.framework' -t
 INFO_PLIST := Info.plist
 ENTITLEMENTS := CLIProxyManager.entitlements
 
-.PHONY: all print-app-version print-build-number print-build-tag swift-build bundle sign release-sign verify install-helper install run install-and-run dmg verify-dmg sign-dmg clean distclean
+.PHONY: all release-metadata-check print-app-version print-build-number print-build-tag swift-build bundle sign release-sign verify install-helper install run install-and-run dmg verify-dmg sign-dmg clean distclean
 
 all: sign
 
+release-metadata-check:
+	@$(RELEASE_RESOLVE) validate
+	@scripts/sync-release-version.sh --check
+
 print-app-version:
-	@printf '%s\n' "$(VERSION)"
+	@$(RELEASE_RESOLVE) version
 
 print-build-number:
-	@printf '%s\n' "$(BUILD_NUMBER)"
+	@$(RELEASE_RESOLVE) build
 
 print-build-tag:
-	@printf 'v%s\n' "$(VERSION)"
+	@$(RELEASE_RESOLVE) tag
 
-swift-build:
+swift-build: release-metadata-check
 	swift build -c $(CONFIGURATION) --product $(APP_NAME)
 	swift build -c $(CONFIGURATION) --product cpm
 	swift build -c $(CONFIGURATION) --product cliproxy-manager
@@ -73,6 +96,10 @@ bundle: swift-build $(INFO_PLIST) $(ENTITLEMENTS) $(ICON_FILE)
 	plutil -replace CFBundleIconFile -string "$(ICON_NAME)" "$(CONTENTS_DIR)/Info.plist"
 	plutil -replace CFBundleShortVersionString -string "$(VERSION)" "$(CONTENTS_DIR)/Info.plist"
 	plutil -replace CFBundleVersion -string "$(BUILD_NUMBER)" "$(CONTENTS_DIR)/Info.plist"
+	plutil -remove CLIProxyManagerReleaseChannel "$(CONTENTS_DIR)/Info.plist" 2>/dev/null || true
+	@if [ "$(RELEASE_CHANNEL)" = "development" ]; then \
+		plutil -insert CLIProxyManagerReleaseChannel -string development "$(CONTENTS_DIR)/Info.plist"; \
+	fi
 	@for bundle in $(SWIFT_BUILD_DIR)/*CLIProxyManagerApp*.bundle; do \
 		if [ -d "$$bundle" ]; then \
 			ditto --norsrc --noextattr "$$bundle" "$(RESOURCES_DIR)"; \
@@ -144,6 +171,11 @@ verify: sign
 	test -d "$$VERIFY_APP/Contents/Frameworks/Sparkle.framework/Updater.app" || { echo "Missing Sparkle Updater.app"; exit 1; }; \
 	test ! -e "$$VERIFY_APP/Contents/Resources/cliproxy-manager" || { echo "Helper must not be bundled in Contents/Resources"; exit 1; }; \
 	echo "codesign verification passed"
+	@if [ "$(RELEASE_CHANNEL)" = "development" ]; then \
+		scripts/verify-release-artifacts.sh --app "$(APP_BUNDLE)"; \
+	else \
+		scripts/verify-release-artifacts.sh --source-plist "$(INFO_PLIST)" --app "$(APP_BUNDLE)"; \
+	fi
 
 install-helper: sign
 	mkdir -p /usr/local/bin
@@ -239,8 +271,13 @@ verify-dmg: dmg
 	test "$$(readlink "$$MOUNT_DIR/Applications")" = "/Applications" || { echo "Applications symlink points to wrong target"; exit 1; }; \
 	codesign --verify --deep --strict --verbose=2 "$$MOUNT_DIR/$(APP_NAME).app"; \
 	echo "DMG verification passed"
+	@if [ "$(RELEASE_CHANNEL)" = "development" ]; then \
+		scripts/verify-release-artifacts.sh --app "$(APP_BUNDLE)" --dmg "$(DMG_PATH)"; \
+	else \
+		scripts/verify-release-artifacts.sh --source-plist "$(INFO_PLIST)" --app "$(APP_BUNDLE)" --dmg "$(DMG_PATH)"; \
+	fi
 
-sign-dmg:
+sign-dmg: release-metadata-check
 	@set -e; \
 		test -f "$(DMG_PATH)" || { echo "Missing DMG: $(DMG_PATH)"; exit 1; }; \
 		codesign --force --sign "$(CODESIGN_IDENTITY)" "$(DMG_PATH)"; \

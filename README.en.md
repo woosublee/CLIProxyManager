@@ -129,6 +129,33 @@ cpm update stage all
 cpm update apply all --yes
 ```
 
+### Maintainer release procedure
+
+The only manually edited source for the app version and build number is `release/version.json`. Do not edit the values in `Makefile` or `Info.plist` directly; `Info.plist` is a committed generated mirror.
+
+```bash
+# 1. Update version and build together in release/version.json, then sync the plist mirror
+scripts/sync-release-version.sh
+scripts/sync-release-version.sh --check
+
+# 2. Inspect the resolved identity
+scripts/resolve-release-version.sh json | plutil -p -
+
+# 3. Run the GitHub Actions Self-signed Release workflow with the canonical tag
+scripts/resolve-release-version.sh tag
+```
+
+The official release compares the source plist, GitHub tag, previous appcast build, app bundle, DMG filename, and generated appcast before it creates a tag or Release. It fails closed when identity is stale, the published build is not lower, or GitHub cannot be queried.
+
+Use the local fallback only when CI release is unavailable and you have a separately verified previous appcast.
+
+```bash
+scripts/release-local.sh "$(scripts/resolve-release-version.sh tag)" \
+  --previous-appcast /path/to/verified-previous-appcast.xml
+```
+
+The fallback artifact records `local-fallback` trust in `release-provenance.json`. Do not run CI release and local fallback concurrently. `ALLOW_LOCAL_RELEASE_CLOBBER=1` does not replace a completed release; it resumes a verified partial publish where the same commit was tagged but release or asset upload failed.
+
 ## Logs and diagnostics
 
 The Log level under **Settings → Advanced** has two options: Info and Debug.

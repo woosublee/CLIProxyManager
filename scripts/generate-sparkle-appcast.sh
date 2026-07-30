@@ -3,10 +3,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=scripts/release-version-lib.sh
+source "$SCRIPT_DIR/release-version-lib.sh"
 
 REPOSITORY="${REPOSITORY:-woosublee/CLIProxyManager}"
 APP_NAME="${APP_NAME:-CLIProxyManager}"
-APPCAST_PATH="${APPCAST_PATH:-build/appcast.xml}"
 SPARKLE_VERSION="${SPARKLE_VERSION:-2.9.2}"
 SPARKLE_KEYCHAIN_SERVICE="${SPARKLE_KEYCHAIN_SERVICE:-https://sparkle-project.org}"
 SPARKLE_KEYCHAIN_ACCOUNT="${SPARKLE_KEYCHAIN_ACCOUNT:-com.woosublee.CLIProxyManager.sparkle.ed25519}"
@@ -16,10 +17,21 @@ fail() {
   exit 1
 }
 
-require_env() {
-  local name="$1"
-  [[ -n "${!name:-}" ]] || fail "$name is required"
-}
+for legacy_name in VERSION BUILD_NUMBER RELEASE_TAG DMG_PATH APPCAST_PATH; do
+  if [[ -n "${!legacy_name+x}" ]]; then
+    fail "$legacy_name is derived from release/version.json; remove the override"
+  fi
+done
+
+[[ "${ARTIFACT_CHANNEL:-official}" == 'official' ]] || fail 'Sparkle appcasts can only be generated for official artifacts'
+eval "$("$SCRIPT_DIR/resolve-release-version.sh" shell)"
+APP_VERSION="$RELEASE_VERSION"
+APP_BUILD="$RELEASE_BUILD"
+APP_TAG="$RELEASE_TAG"
+CANONICAL_DMG_PATH="$REPO_ROOT/$RELEASE_DMG_PATH"
+CANONICAL_APPCAST_PATH="$REPO_ROOT/$RELEASE_APPCAST_PATH"
+
+[[ -f "$CANONICAL_DMG_PATH" ]] || fail 'Canonical DMG is missing'
 
 sparkle_private_key() {
   if [[ -n "${SPARKLE_PRIVATE_KEY:-}" ]]; then
@@ -30,19 +42,12 @@ sparkle_private_key() {
   security find-generic-password \
     -s "$SPARKLE_KEYCHAIN_SERVICE" \
     -a "$SPARKLE_KEYCHAIN_ACCOUNT" \
-    -w 2>/dev/null || fail "SPARKLE_PRIVATE_KEY is required or Keychain item is missing: service=$SPARKLE_KEYCHAIN_SERVICE account=$SPARKLE_KEYCHAIN_ACCOUNT"
+    -w 2>/dev/null || fail 'SPARKLE_PRIVATE_KEY is required or Keychain credentials are unavailable'
 }
-
-require_env RELEASE_TAG
-require_env VERSION
-require_env BUILD_NUMBER
-require_env DMG_PATH
-
-[[ -f "$DMG_PATH" ]] || fail "DMG_PATH does not exist: $DMG_PATH"
 
 find_sign_update() {
   if [[ -n "${SPARKLE_SIGN_UPDATE:-}" ]]; then
-    [[ -x "$SPARKLE_SIGN_UPDATE" ]] || fail "SPARKLE_SIGN_UPDATE is not executable: $SPARKLE_SIGN_UPDATE"
+    [[ -x "$SPARKLE_SIGN_UPDATE" ]] || fail 'SPARKLE_SIGN_UPDATE is not executable'
     printf '%s\n' "$SPARKLE_SIGN_UPDATE"
     return
   fi
@@ -63,7 +68,7 @@ find_sign_update() {
 
   local sign_update
   sign_update="$(find "$tools_dir" -type f -name sign_update -exec test -x {} \; -print -quit)"
-  [[ -n "$sign_update" ]] || fail "sign_update not found under $tools_dir"
+  [[ -n "$sign_update" ]] || fail 'sign_update could not be located'
   printf '%s\n' "$sign_update"
 }
 
@@ -77,24 +82,29 @@ xml_escape() {
 }
 
 SIGN_UPDATE="$(find_sign_update)"
-signature_output="$(sparkle_private_key | "$SIGN_UPDATE" "$DMG_PATH" --ed-key-file -)"
+if ! signature_output="$(sparkle_private_key | "$SIGN_UPDATE" "$CANONICAL_DMG_PATH" --ed-key-file - 2>/dev/null)"; then
+  fail 'Sparkle signing failed'
+fi
 ed_signature="$(printf '%s\n' "$signature_output" | sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p' | sed -n '1p')"
-[[ -n "$ed_signature" ]] || fail "Unable to parse sparkle:edSignature from sign_update output"
+[[ -n "$ed_signature" ]] || fail 'Unable to parse sparkle:edSignature from sign_update output'
 
-length="$(wc -c < "$DMG_PATH" | tr -d '[:space:]')"
+length="$(wc -c < "$CANONICAL_DMG_PATH" | tr -d '[:space:]')"
 pub_date="$(date -u '+%a, %d %b %Y %H:%M:%S +0000')"
-dmg_name="$(basename "$DMG_PATH")"
-dmg_url="https://github.com/${REPOSITORY}/releases/download/${RELEASE_TAG}/${dmg_name}"
-appcast_dir="$(dirname "$APPCAST_PATH")"
+dmg_name="$(basename "$CANONICAL_DMG_PATH")"
+dmg_url="https://github.com/${REPOSITORY}/releases/download/${APP_TAG}/${dmg_name}"
+appcast_dir="$(dirname "$CANONICAL_APPCAST_PATH")"
 mkdir -p "$appcast_dir"
+staged_appcast="$(mktemp "$appcast_dir/.appcast.xml.XXXXXX")"
+cleanup() { rm -f "$staged_appcast"; }
+trap cleanup EXIT
 
 escaped_app_name="$(printf '%s' "$APP_NAME" | xml_escape)"
-escaped_version="$(printf '%s' "$VERSION" | xml_escape)"
-escaped_build="$(printf '%s' "$BUILD_NUMBER" | xml_escape)"
+escaped_version="$(printf '%s' "$APP_VERSION" | xml_escape)"
+escaped_build="$(printf '%s' "$APP_BUILD" | xml_escape)"
 escaped_dmg_url="$(printf '%s' "$dmg_url" | xml_escape)"
 escaped_signature="$(printf '%s' "$ed_signature" | xml_escape)"
 
-cat > "$APPCAST_PATH" <<EOF
+cat > "$staged_appcast" <<EOF
 <?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
   <channel>
@@ -117,3 +127,7 @@ cat > "$APPCAST_PATH" <<EOF
   </channel>
 </rss>
 EOF
+
+"$SCRIPT_DIR/verify-release-artifacts.sh" --appcast "$staged_appcast" --official
+release_atomic_replace "$staged_appcast" "$CANONICAL_APPCAST_PATH"
+trap - EXIT

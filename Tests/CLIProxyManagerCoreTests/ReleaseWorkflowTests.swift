@@ -18,10 +18,16 @@ final class ReleaseWorkflowTests: XCTestCase {
             makefile.contains("CODESIGN_IDENTITY ?= $(LOCAL_CODESIGN_IDENTITY)"),
             "Generic signing should inherit the local default identity."
         )
+        XCTAssertFalse(makefile.contains("VERSION ?="))
+        XCTAssertFalse(makefile.contains("BUILD_NUMBER ?="))
+        XCTAssertTrue(makefile.contains("RELEASE_RESOLVER := scripts/resolve-release-version.sh"))
+        XCTAssertTrue(makefile.contains("release-metadata-check:"))
+        XCTAssertTrue(makefile.contains("scripts/sync-release-version.sh --check"))
         XCTAssertTrue(makefile.contains("print-app-version:"))
-        XCTAssertTrue(makefile.contains("print-build-number:"))
-        XCTAssertTrue(makefile.contains("print-build-tag:"))
-        XCTAssertTrue(makefile.contains("printf 'v%s\\n' \"$(VERSION)\""))
+        XCTAssertTrue(makefile.contains("$(RELEASE_RESOLVE) version"))
+        XCTAssertTrue(makefile.contains("$(RELEASE_RESOLVE) build"))
+        XCTAssertTrue(makefile.contains("$(RELEASE_RESOLVE) tag"))
+        XCTAssertTrue(makefile.contains("CLIProxyManagerReleaseChannel"))
         XCTAssertTrue(makefile.contains("scripts/verify-dmg.sh \"$(DMG_PATH)\""))
         XCTAssertTrue(makefile.contains("sign-dmg:"))
         XCTAssertTrue(makefile.contains("codesign --force --sign \"$(CODESIGN_IDENTITY)\" \"$(DMG_PATH)\""))
@@ -55,36 +61,32 @@ final class ReleaseWorkflowTests: XCTestCase {
         )
 
         XCTAssertTrue(
-            releaseLocal.contains("CODESIGN_IDENTITY=\"cliproxymanager\""),
-            "Local fallback releases should name the required signing identity explicitly."
+            releaseLocal.contains("security find-identity -v -p codesigning | grep -F '\"cliproxymanager\"'"),
+            "Local fallback releases should verify the required signing identity before building."
         )
         XCTAssertTrue(
-            releaseLocal.contains("security find-identity -v -p codesigning"),
-            "Local fallback releases should fail before building if the cliproxymanager identity is missing."
-        )
-        XCTAssertTrue(
-            releaseLocal.contains("make VERSION=\"$VERSION\" BUILD_NUMBER=\"$BUILD_NUMBER\" verify-dmg"),
-            "Local fallback releases should use Makefile signing defaults instead of forcing ad-hoc signing."
+            releaseLocal.contains("make verify-dmg"),
+            "Local fallback releases should let Makefile resolve canonical release metadata and signing defaults."
         )
         XCTAssertFalse(
             releaseLocal.contains("make CODESIGN_IDENTITY=- VERSION=\"$VERSION\" BUILD_NUMBER=\"$BUILD_NUMBER\" verify-dmg"),
             "The local fallback release path must not force ad-hoc signing."
         )
         XCTAssertTrue(
-            releaseLocal.contains("Manual fallback release: self-signed, non-notarized DMG signed with the local cliproxymanager code signing identity and Sparkle appcast."),
-            "Local release notes should describe the fallback self-signed artifact."
+            releaseLocal.contains("Artifacts passed canonical identity, monotonicity, and parity verification before publication."),
+            "Local release notes should record the canonical verification gates."
         )
         XCTAssertTrue(
             releaseLocal.contains("ALLOW_LOCAL_RELEASE_CLOBBER"),
             "Local fallback releases should require an explicit opt-in before clobbering release assets."
         )
         XCTAssertTrue(
-            releaseLocal.contains("gh release upload \"$RELEASE_TAG\" \"$DMG_PATH\" \"$APPCAST_PATH\"\n"),
-            "Local fallback releases should upload without --clobber by default."
+            releaseLocal.contains("gh release upload \"$CANONICAL_TAG\" \"$RELEASE_DMG_PATH\" \"$RELEASE_APPCAST_PATH\" \"$PROVENANCE_PATH\"\n"),
+            "Local fallback releases should upload canonical artifacts and provenance without --clobber by default."
         )
         XCTAssertTrue(
-            releaseLocal.contains("gh release upload \"$RELEASE_TAG\" \"$DMG_PATH\" \"$APPCAST_PATH\" --clobber"),
-            "Local fallback releases may still clobber when explicitly requested."
+            releaseLocal.contains("gh release upload \"$CANONICAL_TAG\" \"$RELEASE_DMG_PATH\" \"$RELEASE_APPCAST_PATH\" \"$PROVENANCE_PATH\" --clobber"),
+            "Local fallback releases may still clobber canonical artifacts when explicitly requested."
         )
         XCTAssertFalse(
             releaseLocal.contains("Ad-hoc signed, non-notarized DMG with Sparkle appcast."),
@@ -102,22 +104,52 @@ final class ReleaseWorkflowTests: XCTestCase {
             "Release workflow should not include automatic tag push triggers."
         )
         XCTAssertTrue(workflow.contains("contents: write"))
+        XCTAssertTrue(workflow.contains("concurrency:"))
+        XCTAssertTrue(workflow.contains("group: cliproxymanager-official-release"))
+        XCTAssertTrue(workflow.contains("cancel-in-progress: false"))
         XCTAssertTrue(workflow.contains("fetch-depth: 0"))
         XCTAssertTrue(workflow.contains("INPUT_TAG: ${{ inputs.tag }}"))
-        XCTAssertTrue(workflow.contains("TAG=\"$INPUT_TAG\""))
-        XCTAssertTrue(workflow.contains("APP_VERSION=\"$(make -s print-app-version)\""))
-        XCTAssertTrue(workflow.contains("BUILD_NUMBER=\"$(make -s print-build-number)\""))
-        XCTAssertTrue(workflow.contains("BUILD_TAG=\"$(make -s print-build-tag)\""))
-        XCTAssertTrue(workflow.contains("if ! [[ \"$TAG\" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]"))
-        XCTAssertTrue(workflow.contains("[ \"$TAG\" != \"$BUILD_TAG\" ]"))
-        XCTAssertTrue(workflow.contains("[ \"$VERSION\" != \"$APP_VERSION\" ]"))
-        XCTAssertTrue(workflow.contains("[[ \"$BUILD_NUMBER\" =~ ^[1-9][0-9]*$ ]]"))
-        XCTAssertTrue(workflow.contains("git ls-remote --exit-code --tags origin \"refs/tags/$TAG\""))
+        XCTAssertTrue(workflow.contains("ACTUAL_TAG='invalid'"))
+        XCTAssertTrue(workflow.contains("[[ \"$INPUT_TAG\" =~ ^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$ ]]"))
+        XCTAssertTrue(workflow.contains("actual $ACTUAL_TAG"))
+        XCTAssertTrue(makefile.contains("swift-build: release-metadata-check"))
+        XCTAssertTrue(makefile.contains("BUNDLE_ID is fixed to com.woosublee.CLIProxyManager"))
+        XCTAssertFalse(workflow.contains("actual $INPUT_TAG"))
+        XCTAssertTrue(workflow.contains("scripts/resolve-release-version.sh validate"))
+        XCTAssertTrue(workflow.contains("scripts/resolve-release-version.sh shell"))
+        XCTAssertTrue(workflow.contains("scripts/sync-release-version.sh --check"))
+        XCTAssertTrue(workflow.contains("scripts/check-release-monotonic.sh"))
+        XCTAssertTrue(workflow.contains("scripts/verify-release-artifacts.sh"))
+        XCTAssertTrue(workflow.contains("provenance_path=build/release-provenance.json"))
+        XCTAssertTrue(workflow.contains("git ls-remote --exit-code --tags origin \"refs/tags/$RELEASE_TAG\""))
+        XCTAssertEqual(
+            workflow.components(separatedBy: "scripts/check-release-monotonic.sh").count - 1,
+            2
+        )
+        XCTAssertEqual(
+            workflow.components(separatedBy: "if [ \"$status\" -ne 2 ]; then").count - 1,
+            2,
+            "Only exit status 2 should represent a missing remote tag."
+        )
+        XCTAssertEqual(
+            workflow.components(separatedBy: "exit \"$status\"").count - 1,
+            2,
+            "Every other remote lookup error should be propagated."
+        )
+        XCTAssertFalse(workflow.contains("APP_VERSION=\"$(make -s print-app-version)\""))
+        XCTAssertFalse(workflow.contains("BUILD_NUMBER=\"$(make -s print-build-number)\""))
+        XCTAssertFalse(workflow.contains("VERSION=\"${{ steps.version.outputs.version }}\""))
+        XCTAssertFalse(workflow.contains("BUILD_NUMBER=\"${{ steps.version.outputs.build_number }}\""))
+        XCTAssertFalse(workflow.contains("RELEASE_TAG: ${{ steps.version.outputs.tag }}"))
+        XCTAssertFalse(workflow.contains("DMG_PATH: ${{ steps.version.outputs.dmg_path }}"))
         XCTAssertFalse(
             workflow.contains("ref: ${{ steps.release-tag.outputs.release_tag }}"),
             "The self-signed CI release should build the current workflow commit, not checkout a pre-existing tag."
         )
 
+        XCTAssertTrue(workflow.contains("bash Tests/ScriptTests/release-version-tests.sh"))
+        XCTAssertTrue(workflow.contains("bash Tests/ScriptTests/release-local-tests.sh"))
+        XCTAssertTrue(workflow.contains("bash Tests/ScriptTests/generate-sparkle-appcast-tests.sh"))
         XCTAssertTrue(workflow.contains("swift test"))
         XCTAssertTrue(workflow.contains("CLIPROXYMANAGER_CERTIFICATE_BASE64"))
         XCTAssertTrue(workflow.contains("CLIPROXYMANAGER_CERTIFICATE_PASSWORD"))
@@ -133,8 +165,8 @@ final class ReleaseWorkflowTests: XCTestCase {
             workflow.contains("CODESIGN_IDENTITY=-"),
             "The official self-signed CI release should import the cliproxymanager certificate instead of using ad-hoc signing."
         )
-        XCTAssertTrue(workflow.contains("make CODESIGN_IDENTITY=\"$CODESIGN_IDENTITY\" VERSION=\"${{ steps.version.outputs.version }}\" BUILD_NUMBER=\"${{ steps.version.outputs.build_number }}\" verify-dmg"))
-        XCTAssertTrue(workflow.contains("make CODESIGN_IDENTITY=\"$CODESIGN_IDENTITY\" VERSION=\"${{ steps.version.outputs.version }}\" BUILD_NUMBER=\"${{ steps.version.outputs.build_number }}\" sign-dmg"))
+        XCTAssertTrue(workflow.contains("make CODESIGN_IDENTITY=\"$CODESIGN_IDENTITY\" verify-dmg"))
+        XCTAssertTrue(workflow.contains("make CODESIGN_IDENTITY=\"$CODESIGN_IDENTITY\" sign-dmg"))
         XCTAssertFalse(workflow.contains("notarytool"))
         XCTAssertFalse(workflow.contains("stapler"))
         XCTAssertTrue(workflow.contains("REPOSITORY: ${{ github.repository }}"))
@@ -145,12 +177,14 @@ final class ReleaseWorkflowTests: XCTestCase {
         XCTAssertTrue(workflow.contains("make_latest: true"))
         XCTAssertTrue(workflow.contains("${{ steps.version.outputs.dmg_path }}"))
         XCTAssertTrue(workflow.contains("${{ steps.version.outputs.appcast_path }}"))
+        XCTAssertTrue(workflow.contains("${{ steps.version.outputs.provenance_path }}"))
         XCTAssertTrue(workflow.contains("Self-signed, non-notarized DMG with Sparkle appcast."))
         XCTAssertTrue(workflow.contains("Cleanup signing artifacts"))
         XCTAssertTrue(workflow.contains("security delete-keychain \"$KPATH\""))
 
         assert("- name: Sign DMG", appearsBefore: "- name: Generate Sparkle appcast", in: workflow)
-        assert("- name: Generate Sparkle appcast", appearsBefore: "- name: Create tag", in: workflow)
+        assert("- name: Verify release artifacts", appearsBefore: "- name: Recheck published build", in: workflow)
+        assert("- name: Recheck published build", appearsBefore: "- name: Create tag", in: workflow)
         assert("- name: Create tag", appearsBefore: "- name: Create Release", in: workflow)
 
         XCTAssertTrue(makefile.contains("CPM_EXECUTABLE = $(SWIFT_BUILD_DIR)/cpm"))

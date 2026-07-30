@@ -129,6 +129,33 @@ cpm update stage all
 cpm update apply all --yes
 ```
 
+### Maintainer release 절차
+
+앱 version과 build number의 유일한 수동 편집 source는 `release/version.json`입니다. `Makefile`이나 `Info.plist`의 값을 직접 수정하지 마세요.
+
+```bash
+# 1. release/version.json의 version과 build를 함께 올린 뒤 plist mirror 동기화
+scripts/sync-release-version.sh
+scripts/sync-release-version.sh --check
+
+# 2. identity 확인
+scripts/resolve-release-version.sh json | plutil -p -
+
+# 3. GitHub Actions의 Self-signed Release workflow를 canonical tag로 실행
+scripts/resolve-release-version.sh tag
+```
+
+Official release는 source plist, GitHub tag, previous appcast build, app bundle, DMG filename, generated appcast를 비교한 뒤에만 tag와 Release를 생성합니다. Published build 이하이거나 GitHub 조회가 실패하면 release는 중단됩니다.
+
+Local fallback은 CI release를 실행할 수 없고 이전 appcast를 별도로 검증할 수 있을 때만 사용합니다.
+
+```bash
+scripts/release-local.sh "$(scripts/resolve-release-version.sh tag)" \
+  --previous-appcast /path/to/verified-previous-appcast.xml
+```
+
+Fallback artifact의 `release-provenance.json`에는 `local-fallback` trust가 기록됩니다. CI release와 local fallback을 동시에 실행하지 마세요. `ALLOW_LOCAL_RELEASE_CLOBBER=1`은 이미 성공한 release를 교체하는 옵션이 아니라, 같은 commit의 tag가 만들어진 뒤 upload만 실패한 partial publish를 재개하는 용도입니다.
+
 ## 로그와 진단
 
 **Settings → Advanced**의 Log level은 Info와 Debug 두 단계입니다.
