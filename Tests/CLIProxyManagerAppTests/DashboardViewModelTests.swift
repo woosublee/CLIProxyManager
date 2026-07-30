@@ -9519,6 +9519,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         codexResetCreditsNow: @escaping @Sendable () -> Date = { Date() },
         appAppearanceService: (any AppAppearanceApplying)? = nil,
         proxyHealthClient: (any ProxyHealthChecking)? = nil,
+        compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing = AllowingShellCompatibilityAuthorizer(),
         bundledProxyReconciler: any BundledProxyReconciling = BundledProxyReconcilerDouble(
             result: .unchanged(version: CLIProxyAPIVersion("7.2.91")!)
         ),
@@ -9538,6 +9539,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             proxyHealthClient: proxyHealthClient
                 ?? ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
             proxyService: proxyService,
+            compatibilityAuthorizer: compatibilityAuthorizer,
             bundledProxyReconciler: bundledProxyReconciler,
             claudeConnector: connectedClaudeConnector(),
             appAppearanceService: appAppearanceService ?? RecordingAppAppearanceService(),
