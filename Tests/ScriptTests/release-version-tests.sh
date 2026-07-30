@@ -234,6 +234,11 @@ makefile="$REPO_ROOT/Makefile"
 [[ "$(make -s -C "$REPO_ROOT" print-build-tag)" == 'v0.1.32' ]] || fail "Makefile tag must delegate to resolver"
 assert_failure_contains 'VERSION is derived from release/version.json' make -s -C "$REPO_ROOT" VERSION=9.9.9 print-app-version
 assert_failure_contains 'BUILD_NUMBER is derived from release/version.json' make -s -C "$REPO_ROOT" BUILD_NUMBER=999 print-build-number
+assert_failure_contains 'DMG_PATH is derived from release/version.json' make -s -C "$REPO_ROOT" DMG_PATH=alternate.dmg print-app-version
+assert_failure_contains 'DMG_PATH is derived from release/version.json' env DMG_PATH=alternate.dmg make -s -C "$REPO_ROOT" print-app-version
+canonical_dmg_dry_run="$(make -n -C "$REPO_ROOT" BUILD_DIR=release-output sign-dmg)"
+printf '%s\n' "$canonical_dmg_dry_run" | grep -F 'release-output/CLIProxyManager-0.1.32.dmg' >/dev/null ||
+  fail "DMG path must use the permitted build directory and resolver basename"
 [[ "$(make -s -C "$REPO_ROOT" ARTIFACT_CHANNEL=development DEVELOPMENT_VERSION=0.2.0 DEVELOPMENT_BUILD_NUMBER=9001 print-app-version)" == '0.2.0' ]] || fail "development version should be explicit"
 
 write_appcast() {
@@ -323,6 +328,22 @@ write_appcast "$previous_appcast" 0.2.1 8 0.2.1 8 v0.2.1 CLIProxyManager-0.2.1.d
 assert_failure_contains 'current build 7 must be greater than previous build 8' \
   "$monotonic_repo/scripts/check-release-monotonic.sh" --previous-appcast "$previous_appcast"
 
+cat > "$monotonic_repo/release/version.json" <<'JSON'
+{"version":"0.2.0","build":9223372036854775807}
+JSON
+write_appcast "$previous_appcast" 0.2.0 9223372036854775806 0.2.0 9223372036854775806 v0.2.0 CLIProxyManager-0.2.0.dmg
+"$monotonic_repo/scripts/check-release-monotonic.sh" --previous-appcast "$previous_appcast"
+
+cat > "$monotonic_repo/release/version.json" <<'JSON'
+{"version":"0.2.0","build":100}
+JSON
+write_appcast "$previous_appcast" 0.2.1 9223372036854775808 0.2.1 9223372036854775808 v0.2.1 CLIProxyManager-0.2.1.dmg
+assert_failure_contains 'current build 100 must be greater than previous build 9223372036854775808' \
+  "$monotonic_repo/scripts/check-release-monotonic.sh" --previous-appcast "$previous_appcast"
+
+cat > "$monotonic_repo/release/version.json" <<'JSON'
+{"version":"0.2.0","build":7}
+JSON
 write_appcast "$previous_appcast" 0.1.9 6 0.1.9 5 v0.1.9 CLIProxyManager-0.1.9.dmg
 existing_provenance="$monotonic_repo/build/release-provenance.json"
 printf '%s\n' '{"existing":true}' > "$existing_provenance"

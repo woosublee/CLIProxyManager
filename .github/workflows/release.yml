@@ -41,9 +41,13 @@ jobs:
           scripts/resolve-release-version.sh validate
           scripts/sync-release-version.sh --check
           eval "$(scripts/resolve-release-version.sh shell)"
+          ACTUAL_TAG='invalid'
+          if [[ "$INPUT_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            ACTUAL_TAG="$INPUT_TAG"
+          fi
 
           if [ "$INPUT_TAG" != "$RELEASE_TAG" ]; then
-            echo "Workflow tag mismatch: expected $RELEASE_TAG, actual $INPUT_TAG" >&2
+            echo "Workflow tag mismatch: expected $RELEASE_TAG, actual $ACTUAL_TAG" >&2
             exit 1
           fi
 

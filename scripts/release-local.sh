@@ -36,7 +36,11 @@ done
 cd "$REPO_ROOT"
 eval "$("$SCRIPT_DIR/resolve-release-version.sh" shell)"
 [[ "$RELEASE_CHANNEL" == 'official' ]] || fail 'Local releases require the official artifact channel'
-[[ "$INPUT_TAG" == "$RELEASE_TAG" ]] || fail "Release tag mismatch: expected $RELEASE_TAG, actual $INPUT_TAG"
+SAFE_INPUT_TAG='invalid'
+if [[ "$INPUT_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  SAFE_INPUT_TAG="$INPUT_TAG"
+fi
+[[ "$INPUT_TAG" == "$RELEASE_TAG" ]] || fail "Release tag mismatch: expected $RELEASE_TAG, actual $SAFE_INPUT_TAG"
 
 APP_VERSION="$RELEASE_VERSION"
 APP_BUILD="$RELEASE_BUILD"

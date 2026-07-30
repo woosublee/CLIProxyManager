@@ -282,6 +282,20 @@ if run_release "$sandbox/bad-arguments.log" "$release_script" 1.2.3; then
   fail "release-local.sh should reject a non-canonical tag"
 fi
 
+untrusted_tag=$'v9.9.9 fixture@example.com\nPROMPT_SENTINEL /fixture-path-sentinel'
+untrusted_tag_log="$sandbox/untrusted-tag.log"
+untrusted_tag_stderr="$sandbox/untrusted-tag.err"
+: > "$untrusted_tag_log"
+if run_release "$untrusted_tag_log" "$release_script" "$untrusted_tag" >"$sandbox/untrusted-tag.out" 2>"$untrusted_tag_stderr"; then
+  fail "release-local.sh should reject an untrusted mismatched tag"
+fi
+grep -F 'Release tag mismatch: expected v1.2.3, actual invalid' "$untrusted_tag_stderr" >/dev/null ||
+  fail "untrusted tag mismatch should redact the actual tag"
+! grep -F 'fixture@example.com' "$untrusted_tag_stderr" >/dev/null || fail "tag mismatch must not expose email fixtures"
+! grep -F 'PROMPT_SENTINEL' "$untrusted_tag_stderr" >/dev/null || fail "tag mismatch must not expose prompt fixtures"
+! grep -F '/fixture-path-sentinel' "$untrusted_tag_stderr" >/dev/null || fail "tag mismatch must not expose path fixtures"
+assert_no_remote_writes "$untrusted_tag_log"
+
 if VERSION=1.2.3 run_release "$sandbox/legacy-override.log" "$release_script" v1.2.3; then
   fail "release-local.sh should reject legacy overrides"
 fi

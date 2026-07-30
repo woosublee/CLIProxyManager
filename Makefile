@@ -4,6 +4,9 @@ endif
 ifneq ($(filter command line environment,$(origin BUILD_NUMBER)),)
 $(error BUILD_NUMBER is derived from release/version.json; edit the canonical file and run scripts/sync-release-version.sh)
 endif
+ifneq ($(filter command line environment,$(origin DMG_PATH)),)
+$(error DMG_PATH is derived from release/version.json; edit the canonical file and run scripts/sync-release-version.sh)
+endif
 
 APP_NAME ?= CLIProxyManager
 BUNDLE_ID ?= com.woosublee.CLIProxyManager
@@ -24,8 +27,8 @@ ICON_NAME ?= CLIProxyManager
 ICON_FILE ?= $(ICON_NAME).icns
 
 APP_BUNDLE := $(BUILD_DIR)/$(APP_NAME).app
-DMG_NAME := $(shell $(RELEASE_RESOLVE) dmg-name 2>/dev/null)
-DMG_PATH := $(BUILD_DIR)/$(DMG_NAME)
+override DMG_NAME := $(shell $(RELEASE_RESOLVE) dmg-name 2>/dev/null)
+override DMG_PATH := $(BUILD_DIR)/$(DMG_NAME)
 DMG_STAGING_TEMPLATE := /tmp/$(APP_NAME).dmg-src.XXXXXX
 CONTENTS_DIR := $(APP_BUNDLE)/Contents
 MACOS_DIR := $(CONTENTS_DIR)/MacOS

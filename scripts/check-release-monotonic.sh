@@ -101,7 +101,7 @@ else
 fi
 
 if [[ -n "$latest_tag" || -n "$previous_appcast" ]]; then
-  if (( RELEASE_BUILD <= APPCAST_BUILD )); then
+  if ! release_positive_integer_greater_than "$RELEASE_BUILD" "$APPCAST_BUILD"; then
     release_fail "current build $RELEASE_BUILD must be greater than previous build $APPCAST_BUILD"
   fi
 fi
