@@ -17,6 +17,28 @@ final class RuntimeCompatibilityTests: XCTestCase {
         XCTAssertTrue(report.findings.contains(.unsupportedArchitecture(expected: .arm64, actual: .x86_64)))
     }
 
+    func testInstallShellFunctionsAllowsArtifactMismatchWithZshAndAvailableClaudeCode() {
+        let report = RuntimeCompatibilityPolicy.current.report(
+            environment: .init(
+                operatingSystem: .macOS(major: 15, minor: 0),
+                architecture: .arm64,
+                loginShell: "/bin/zsh"
+            ),
+            artifacts: .init(
+                bundled: .explicit(.darwinArm64),
+                active: .explicit(.init(operatingSystem: .darwin, architecture: .x86_64)),
+                pending: nil
+            ),
+            claude: .version("2.1.220")
+        )
+
+        XCTAssertTrue(report.findings.contains(.unsupportedArtifactTarget(
+            expected: .darwinArm64,
+            actual: .init(operatingSystem: .darwin, architecture: .x86_64)
+        )))
+        XCTAssertEqual(report.decision(for: .installShellFunctions).disposition, .allowedWithWarnings)
+    }
+
     func testInstallShellFunctionsBlocksUnsupportedLoginShell() {
         let report = RuntimeCompatibilityPolicy.current.report(
             environment: .init(
@@ -30,6 +52,36 @@ final class RuntimeCompatibilityTests: XCTestCase {
 
         XCTAssertEqual(report.decision(for: .installShellFunctions).disposition, .blocked)
         XCTAssertTrue(report.findings.contains(.unsupportedLoginShell(expectedBasename: "zsh", actualBasename: "bash")))
+    }
+
+    func testInstallShellFunctionsBlocksUnavailableClaudeCode() {
+        let report = RuntimeCompatibilityPolicy.current.report(
+            environment: .init(
+                operatingSystem: .macOS(major: 15, minor: 0),
+                architecture: .arm64,
+                loginShell: "/bin/zsh"
+            ),
+            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil),
+            claude: .unavailable
+        )
+
+        XCTAssertTrue(report.findings.contains(.unavailableClaudeCode))
+        XCTAssertEqual(report.decision(for: .installShellFunctions).disposition, .blocked)
+    }
+
+    func testUnsupportedLoginShellOnlyBlocksShellFunctionInstallation() {
+        let report = RuntimeCompatibilityPolicy.current.report(
+            environment: .init(
+                operatingSystem: .macOS(major: 15, minor: 0),
+                architecture: .arm64,
+                loginShell: "/bin/bash"
+            ),
+            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil),
+            claude: .version("2.1.220")
+        )
+
+        XCTAssertEqual(report.decision(for: .startProxy).disposition, .allowedWithWarnings)
+        XCTAssertEqual(report.decision(for: .installShellFunctions).disposition, .blocked)
     }
 
     func testTranslatedArm64BlocksMutationActionsWhileAllowingRecovery() {

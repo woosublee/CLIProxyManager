@@ -291,6 +291,21 @@ public struct RuntimeCompatibilityPolicy: Equatable, Sendable {
     }
 
     private func isBlocking(_ finding: CompatibilityFinding, for action: CompatibilityAction) -> Bool {
+        if action == .installShellFunctions {
+            switch finding {
+            case .unsupportedLoginShell, .unavailableClaudeCode:
+                return true
+            case .unsupportedOperatingSystem,
+                 .unsupportedArchitecture,
+                 .translatedExecution,
+                 .unsupportedArtifactTarget,
+                 .legacyArtifactTargetInferred,
+                 .unverifiedClaudeCode,
+                 .unverifiedClaudeCodeVersion:
+                return false
+            }
+        }
+
         if isBlocking(finding) {
             return true
         }
