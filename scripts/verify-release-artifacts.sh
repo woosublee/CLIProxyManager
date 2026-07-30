@@ -20,30 +20,35 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --source-plist)
       [[ $# -ge 2 ]] || release_fail 'Missing value for --source-plist'
+      [[ -n "$2" ]] || release_fail '--source-plist requires a non-empty path'
       source_plist="$2"
       artifact_count=$((artifact_count + 1))
       shift 2
       ;;
     --app)
       [[ $# -ge 2 ]] || release_fail 'Missing value for --app'
+      [[ -n "$2" ]] || release_fail '--app requires a non-empty path'
       app_bundle="$2"
       artifact_count=$((artifact_count + 1))
       shift 2
       ;;
     --dmg)
       [[ $# -ge 2 ]] || release_fail 'Missing value for --dmg'
+      [[ -n "$2" ]] || release_fail '--dmg requires a non-empty path'
       dmg_file="$2"
       artifact_count=$((artifact_count + 1))
       shift 2
       ;;
     --appcast)
       [[ $# -ge 2 ]] || release_fail 'Missing value for --appcast'
+      [[ -n "$2" ]] || release_fail '--appcast requires a non-empty path'
       appcast_file="$2"
       artifact_count=$((artifact_count + 1))
       shift 2
       ;;
     --provenance)
       [[ $# -ge 2 ]] || release_fail 'Missing value for --provenance'
+      [[ -n "$2" ]] || release_fail '--provenance requires a non-empty path'
       provenance_file="$2"
       artifact_count=$((artifact_count + 1))
       shift 2

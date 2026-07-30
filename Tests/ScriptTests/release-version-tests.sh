@@ -20,7 +20,7 @@ assert_failure_contains() {
   if "$@" >"$stdout" 2>"$stderr"; then
     fail "command should fail: $*"
   fi
-  grep -F "$expected" "$stderr" >/dev/null || {
+  grep -F -- "$expected" "$stderr" >/dev/null || {
     printf '%s\n' '--- stderr ---' >&2
     perl -ne 'print' "$stderr" >&2
     fail "missing error text: $expected"
@@ -494,6 +494,11 @@ grep -F 'detach' "$hdiutil_log" >/dev/null || fail "successful DMG verification 
 assert_failure_contains 'At least one release artifact is required' \
   "$verify_repo/scripts/verify-release-artifacts.sh"
 
+for empty_option in --source-plist --app --dmg --appcast --provenance; do
+  assert_failure_contains "$empty_option requires a non-empty path" \
+    "$verify_repo/scripts/verify-release-artifacts.sh" "$empty_option" ''
+done
+
 plutil -replace CFBundleVersion -string 6 "$verify_repo/build/CLIProxyManager.app/Contents/Info.plist"
 verify_stderr="$sandbox/verify-stderr"
 if "$verify_repo/scripts/verify-release-artifacts.sh" --app "$verify_repo/build/CLIProxyManager.app" --official 2>"$verify_stderr"; then
@@ -542,6 +547,15 @@ plutil -insert CLIProxyManagerReleaseChannel -string development "$verify_repo/b
 assert_failure_contains 'official release cannot use a development app artifact' \
   "$verify_repo/scripts/verify-release-artifacts.sh" --app "$verify_repo/build/CLIProxyManager.app" --official
 
+ARTIFACT_CHANNEL=development DEVELOPMENT_VERSION=0.2.0 DEVELOPMENT_BUILD_NUMBER=7 \
+  "$verify_repo/scripts/verify-release-artifacts.sh" --app "$verify_repo/build/CLIProxyManager.app"
+cp "$verify_repo/build/CLIProxyManager-0.2.0.dmg" "$verify_repo/build/CLIProxyManager-0.2.0-development.dmg"
+HDIUTIL="$fake_hdiutil" HDIUTIL_LOG="$hdiutil_log" HDIUTIL_APP_FIXTURE="$verify_repo/build/CLIProxyManager.app" \
+  ARTIFACT_CHANNEL=development DEVELOPMENT_VERSION=0.2.0 DEVELOPMENT_BUILD_NUMBER=7 \
+  "$verify_repo/scripts/verify-release-artifacts.sh" \
+  --app "$verify_repo/build/CLIProxyManager.app" \
+  --dmg "$verify_repo/build/CLIProxyManager-0.2.0-development.dmg"
+
 unknown_verify_option=$'--unknown\nUNKNOWN_VERIFY_SENTINEL '
 unknown_verify_option+="$verify_repo"
 verify_unknown_stderr="$sandbox/verify-unknown-stderr"
@@ -552,7 +566,8 @@ grep -F 'ERROR: Unknown option' "$verify_unknown_stderr" >/dev/null || fail "unk
 ! grep -F 'UNKNOWN_VERIFY_SENTINEL' "$verify_unknown_stderr" >/dev/null || fail "unknown verifier option must not expose raw input"
 ! grep -F "$verify_repo" "$verify_unknown_stderr" >/dev/null || fail "unknown verifier option must not expose local paths"
 
-grep -F 'scripts/verify-release-artifacts.sh --source-plist "$(INFO_PLIST)" --app "$(APP_BUNDLE)"' "$REPO_ROOT/Makefile" >/dev/null || fail "make verify must check app identity"
-grep -F -- '--dmg "$(DMG_PATH)"' "$REPO_ROOT/Makefile" >/dev/null || fail "make verify-dmg must check DMG identity"
+[[ "$(grep -Fc 'if [ "$(RELEASE_CHANNEL)" = "development" ]; then' "$REPO_ROOT/Makefile")" == '3' ]] || fail "make verify targets must branch on release channel"
+grep -F 'scripts/verify-release-artifacts.sh --source-plist "$(INFO_PLIST)" --app "$(APP_BUNDLE)"' "$REPO_ROOT/Makefile" >/dev/null || fail "official make verify must check source and app identity"
+grep -F 'scripts/verify-release-artifacts.sh --app "$(APP_BUNDLE)" --dmg "$(DMG_PATH)"' "$REPO_ROOT/Makefile" >/dev/null || fail "development make verify-dmg must skip source identity"
 
 printf 'release version resolver tests passed\n'
