@@ -3782,7 +3782,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let updateService = CLIProxyAPIUpdateService(
             paths: ManagedPaths(rootDirectory: sandbox),
             checker: DashboardUpdateChecker(),
-            store: updateStore
+            store: updateStore,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer()
         )
 
         await viewModel.applyCLIProxyAPIPendingUpdate(using: updateService)
@@ -3834,7 +3835,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let updateService = CLIProxyAPIUpdateService(
             paths: ManagedPaths(rootDirectory: sandbox),
             checker: DashboardUpdateChecker(),
-            store: updateStore
+            store: updateStore,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer()
         )
         let updateTask = Task { await viewModel.applyCLIProxyAPIPendingUpdate(using: updateService) }
         for _ in 0..<20 { await Task.yield() }
