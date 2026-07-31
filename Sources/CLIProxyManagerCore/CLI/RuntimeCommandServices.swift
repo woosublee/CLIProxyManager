@@ -133,11 +133,106 @@ public struct CPMStatus: Codable, Equatable, Sendable {
     public let app: App
     public let helper: Helper
     public let proxy: Proxy
+    public let compatibility: Compatibility
 
-    public init(app: App, helper: Helper, proxy: Proxy) {
+    public init(
+        app: App,
+        helper: Helper,
+        proxy: Proxy,
+        compatibility: Compatibility = .allowed
+    ) {
         self.app = app
         self.helper = helper
         self.proxy = proxy
+        self.compatibility = compatibility
+    }
+
+    public struct Compatibility: Codable, Equatable, Sendable {
+        public struct Finding: Codable, Equatable, Sendable {
+            public let code: String
+            public let disposition: CompatibilityDisposition
+            public let recovery: String
+
+            public init(code: String, disposition: CompatibilityDisposition, recovery: String) {
+                self.code = code
+                self.disposition = disposition
+                self.recovery = recovery
+            }
+        }
+
+        public let disposition: CompatibilityDisposition
+        public let findings: [Finding]
+
+        public init(disposition: CompatibilityDisposition, findings: [Finding]) {
+            self.disposition = disposition
+            self.findings = findings
+        }
+
+        public init(report: RuntimeCompatibilityReport) {
+            disposition = report.decision(for: .startProxy).disposition
+            findings = report.findings.map { Self.finding($0, report: report) }
+        }
+
+        public static let allowed = Self(disposition: .allowed, findings: [])
+
+        private static func finding(_ finding: CompatibilityFinding, report: RuntimeCompatibilityReport) -> Finding {
+            switch finding {
+            case .unsupportedOperatingSystem:
+                Finding(
+                    code: "unsupportedOperatingSystem",
+                    disposition: .blocked,
+                    recovery: RuntimeCompatibilityBlocker.unsupportedOperatingSystem.recoveryMessage
+                )
+            case .unsupportedArchitecture:
+                Finding(
+                    code: "unsupportedArchitecture",
+                    disposition: .blocked,
+                    recovery: RuntimeCompatibilityBlocker.unsupportedArchitecture.recoveryMessage
+                )
+            case .translatedExecution:
+                Finding(
+                    code: "translatedExecution",
+                    disposition: .blocked,
+                    recovery: RuntimeCompatibilityBlocker.translatedExecution.recoveryMessage
+                )
+            case .unsupportedArtifactTarget:
+                Finding(
+                    code: "unsupportedArtifactTarget",
+                    disposition: .blocked,
+                    recovery: RuntimeCompatibilityBlocker.unsupportedArtifactTarget.recoveryMessage
+                )
+            case .legacyArtifactTargetInferred:
+                Finding(
+                    code: "legacyArtifactTargetInferred",
+                    disposition: .allowedWithWarnings,
+                    recovery: "The CLIProxyAPI target was inferred from legacy metadata. A verified update will record explicit target metadata."
+                )
+            case .unsupportedLoginShell:
+                Finding(
+                    code: "unsupportedLoginShell",
+                    disposition: report.decision(for: .installShellFunctions).disposition,
+                    recovery: "Use zsh as the login shell before installing generated functions."
+                )
+            case .unavailableClaudeCode:
+                Finding(
+                    code: "unavailableClaudeCode",
+                    disposition: report.decision(for: .installShellFunctions).disposition,
+                    recovery: "Install Claude Code, then refresh compatibility status."
+                )
+            case .unverifiedClaudeCode:
+                Finding(
+                    code: "unverifiedClaudeCode",
+                    disposition: .allowedWithWarnings,
+                    recovery: "Verify the Claude Code installation, then refresh compatibility status."
+                )
+            case .unverifiedClaudeCodeVersion:
+                Finding(
+                    code: "unverifiedClaudeCodeVersion",
+                    disposition: .allowedWithWarnings,
+                    recovery: "Update Claude Code or continue with caution; refresh after updating."
+                )
+            }
+        }
     }
 
     public struct App: Codable, Equatable, Sendable {

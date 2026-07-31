@@ -2,7 +2,7 @@ import XCTest
 @testable import CLIProxyManagerCore
 
 final class CLIProxyAPIBinaryManifestTests: XCTestCase {
-    func testDecodesExistingBundledManifestWithDefaultSourceKind() throws {
+    func testManifestWithoutTargetRemainsDecodable() throws {
         let json = Data("""
         {
           "name": "cliproxyapi",
@@ -25,6 +25,7 @@ final class CLIProxyAPIBinaryManifestTests: XCTestCase {
 
         XCTAssertEqual(manifest.version, "7.2.41")
         XCTAssertEqual(manifest.sourceKind, .bundled)
+        XCTAssertNil(manifest.target)
         XCTAssertEqual(manifest.parsedVersion?.description, "7.2.41")
     }
 
@@ -45,7 +46,8 @@ final class CLIProxyAPIBinaryManifestTests: XCTestCase {
             vendoredBinarySizeBytes: 456,
             vendoredFromArchivePath: "cli-proxy-api",
             downloadedAt: "2026-07-01T00:05:00Z",
-            appliedAt: "2026-07-01T00:06:00Z"
+            appliedAt: "2026-07-01T00:06:00Z",
+            target: .darwinArm64
         )
 
         let data = try JSONEncoder().encode(manifest)

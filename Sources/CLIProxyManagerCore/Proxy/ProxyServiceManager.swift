@@ -283,6 +283,55 @@ public enum ProxyRestartFailureStage: String, Equatable, Sendable {
     case processLaunch = "launch CLIProxyAPI with the generated local-only configuration"
 }
 
+public enum RuntimeCompatibilityBlocker: Equatable, Sendable {
+    case unsupportedOperatingSystem
+    case unsupportedArchitecture
+    case translatedExecution
+    case unsupportedArtifactTarget
+    case unavailable
+
+    public init(report: RuntimeCompatibilityReport) {
+        for finding in report.findings {
+            switch finding {
+            case .unsupportedOperatingSystem:
+                self = .unsupportedOperatingSystem
+                return
+            case .unsupportedArchitecture:
+                self = .unsupportedArchitecture
+                return
+            case .translatedExecution:
+                self = .translatedExecution
+                return
+            case .unsupportedArtifactTarget:
+                self = .unsupportedArtifactTarget
+                return
+            case .legacyArtifactTargetInferred,
+                 .unsupportedLoginShell,
+                 .unavailableClaudeCode,
+                 .unverifiedClaudeCode,
+                 .unverifiedClaudeCodeVersion:
+                continue
+            }
+        }
+        self = .unavailable
+    }
+
+    public var recoveryMessage: String {
+        switch self {
+        case .unsupportedOperatingSystem:
+            "CLIProxyAPI requires macOS 15 or later. Update macOS, then retry."
+        case .unsupportedArchitecture:
+            "CLIProxyAPI requires an Apple silicon Mac. Use a supported Mac, then retry."
+        case .translatedExecution:
+            "CLIProxyAPI cannot run through Rosetta. Run the arm64 version of CLIProxyManager, then retry."
+        case .unsupportedArtifactTarget:
+            "The installed CLIProxyAPI binary is not supported. Restore the bundled proxy, then retry."
+        case .unavailable:
+            "CLIProxyAPI compatibility could not be verified. Restore the bundled proxy, then retry."
+        }
+    }
+}
+
 public enum ProxyServiceError: LocalizedError, Equatable {
     case invalidPort(Int)
     case missingBinary(String)
@@ -290,6 +339,7 @@ public enum ProxyServiceError: LocalizedError, Equatable {
     case launchFailed(String)
     case listenerInspectionFailed(port: Int, detail: String)
     case configurationChangeRequiresRestart
+    case compatibilityBlocked(RuntimeCompatibilityBlocker)
     case restartFailed(stage: ProxyRestartFailureStage, rollbackSucceeded: Bool)
 
     public var errorDescription: String? {
@@ -306,6 +356,8 @@ public enum ProxyServiceError: LocalizedError, Equatable {
             "The proxy listener on port \(port) could not be inspected, so its configuration was left unchanged. Retry the operation or check Diagnostics. Details: \(detail)"
         case .configurationChangeRequiresRestart:
             "The running proxy must be restarted before account login can update its local-only configuration. Restart Server, then retry login."
+        case .compatibilityBlocked(let blocker):
+            blocker.recoveryMessage
         case let .restartFailed(stage, rollbackSucceeded):
             if rollbackSucceeded {
                 "Failed to \(stage.rawValue). The previous proxy configuration was restored and remains available. Retry Restart Server."
@@ -323,6 +375,7 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
     private let bundledBinaryURL: URL?
     private let bundledManifestURL: URL?
     private let binaryStore: CLIProxyAPIBinaryStore
+    private let compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing
     private let launcher: any ProcessLaunching
     private let launchctl: any LaunchctlManaging
     private let fileManager: FileManager
@@ -351,7 +404,8 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         codexAPIKeyProvider: (@Sendable () -> String?)? = nil,
         apiKeyProvider: (@Sendable (SecretReference) throws -> String?)? = nil,
         appConfigProvider: (@Sendable () throws -> AppConfig)? = nil,
-        rollbackReadinessProvider: (@Sendable (Int) -> Bool)? = nil
+        rollbackReadinessProvider: (@Sendable (Int) -> Bool)? = nil,
+        compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing = RuntimeCompatibilityPreflight()
     ) {
         let managesSystemRuntime = Self.shouldInspectSystemRuntime(using: launcher)
         self.init(
@@ -370,6 +424,7 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
             apiKeyProvider: apiKeyProvider,
             appConfigProvider: appConfigProvider ?? { try AppConfigStore(paths: paths).load() },
             rollbackReadinessProvider: rollbackReadinessProvider,
+            compatibilityAuthorizer: compatibilityAuthorizer,
             inspectLaunchctlJobs: managesSystemRuntime,
             inspectSystemProcesses: managesSystemRuntime
         )
@@ -389,6 +444,7 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         apiKeyProvider: (@Sendable (SecretReference) throws -> String?)? = nil,
         appConfigProvider: (@Sendable () throws -> AppConfig)? = nil,
         rollbackReadinessProvider: (@Sendable (Int) -> Bool)? = nil,
+        compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing = RuntimeCompatibilityPreflight(),
         inspectLaunchctlJobs: Bool = true,
         inspectSystemProcesses: Bool? = nil
     ) {
@@ -396,6 +452,7 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         self.bundledBinaryURL = bundledBinaryURL
         self.bundledManifestURL = bundledManifestURL
         self.binaryStore = CLIProxyAPIBinaryStore(paths: paths, fileManager: fileManager)
+        self.compatibilityAuthorizer = compatibilityAuthorizer
         self.launcher = launcher
         self.launchctl = launchctl
         self.fileManager = fileManager
@@ -474,7 +531,50 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         let data: Data
     }
 
+    private func requireCompatibility(for action: CompatibilityAction) throws {
+        let artifacts: CompatibilityArtifacts
+        do {
+            artifacts = try compatibilityArtifacts()
+        } catch {
+            throw ProxyServiceError.compatibilityBlocked(.unsupportedArtifactTarget)
+        }
+        do {
+            try compatibilityAuthorizer.require(action, artifacts: artifacts)
+        } catch {
+            throw ProxyServiceError.compatibilityBlocked(
+                RuntimeCompatibilityBlocker(report: compatibilityAuthorizer.staticReport(artifacts: artifacts))
+            )
+        }
+    }
+
+    private func compatibilityArtifacts() throws -> CompatibilityArtifacts {
+        CompatibilityArtifacts(
+            bundled: try bundledManifestURL.flatMap(compatibilityArtifact(at:)),
+            active: try compatibilityArtifact(for: binaryStore.activeManifest()),
+            pending: try compatibilityArtifact(for: binaryStore.pendingManifest())
+        )
+    }
+
+    private func compatibilityArtifact(at manifestURL: URL) throws -> RuntimeCompatibilityArtifact? {
+        guard fileManager.fileExists(atPath: manifestURL.path) else { return nil }
+        let data = try Data(contentsOf: manifestURL)
+        let manifest = try JSONDecoder().decode(CLIProxyAPIBinaryManifest.self, from: data)
+        return try compatibilityArtifact(for: manifest)
+    }
+
+    private func compatibilityArtifact(for manifest: CLIProxyAPIBinaryManifest?) throws -> RuntimeCompatibilityArtifact? {
+        guard let manifest else { return nil }
+        guard let target = manifest.target else {
+            guard manifest.upstreamAsset == "CLIProxyAPI_\(manifest.version)_darwin_aarch64.tar.gz" else {
+                throw CLIProxyAPIBinaryStoreError.unsupportedArtifactTarget
+            }
+            return .legacy
+        }
+        return .explicit(target)
+    }
+
     private func prepareLocked(port: Int) throws {
+        try requireCompatibility(for: .prepareOAuthLogin)
         guard isValidPort(port) else {
             throw ProxyServiceError.invalidPort(port)
         }
@@ -504,6 +604,7 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
 
     @discardableResult
     private func reconcileConfigurationLocked(port: Int, forceRestart: Bool) throws -> Bool {
+        try requireCompatibility(for: forceRestart ? .restartProxy : .startProxy)
         guard isValidPort(port) else {
             throw ProxyServiceError.invalidPort(port)
         }

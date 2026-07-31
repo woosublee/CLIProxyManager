@@ -10,7 +10,7 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         try writeState(lastCheckedAt: Date(), to: paths.clipProxyUpdateStateFile)
         let checker = StubUpdateChecking(release: release("7.2.42"))
-        let service = CLIProxyAPIUpdateService(paths: paths, checker: checker, downloader: StubUpdateDownloading(), store: StubUpdateBinaryStore(currentVersion: "7.2.41"), now: { Date() })
+        let service = CLIProxyAPIUpdateService(paths: paths, checker: checker, downloader: StubUpdateDownloading(), store: StubUpdateBinaryStore(currentVersion: "7.2.41"), now: { Date() }, compatibilityAuthorizer: supportedCompatibilityAuthorizer())
 
         _ = await service.checkAutomaticallyOnLaunch()
 
@@ -24,7 +24,7 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         try writeFullState(CLIProxyAPIUpdateState(lastCheckedAt: ISO8601DateFormatter().string(from: Date()), pendingVersion: "7.2.42"), to: paths.clipProxyUpdateStateFile)
         let checker = StubUpdateChecking(release: release("7.2.42"))
         let store = StubUpdateBinaryStore(currentVersion: "7.2.41", pending: manifest("7.2.42"))
-        let service = CLIProxyAPIUpdateService(paths: paths, checker: checker, downloader: StubUpdateDownloading(), store: store, now: { Date() })
+        let service = CLIProxyAPIUpdateService(paths: paths, checker: checker, downloader: StubUpdateDownloading(), store: store, now: { Date() }, compatibilityAuthorizer: supportedCompatibilityAuthorizer())
         XCTAssertEqual(service.pendingUpdate?.version, "7.2.42")
         store.replaceState(currentVersion: "7.2.42", pending: nil)
 
@@ -44,7 +44,7 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         let oldDate = Date(timeIntervalSince1970: 0)
         try writeState(lastCheckedAt: oldDate, to: paths.clipProxyUpdateStateFile)
         let checker = StubUpdateChecking(release: release("7.2.42"))
-        let service = CLIProxyAPIUpdateService(paths: paths, checker: checker, downloader: StubUpdateDownloading(), store: StubUpdateBinaryStore(currentVersion: "7.2.41"), now: { Date(timeIntervalSince1970: 90_000) })
+        let service = CLIProxyAPIUpdateService(paths: paths, checker: checker, downloader: StubUpdateDownloading(), store: StubUpdateBinaryStore(currentVersion: "7.2.41"), now: { Date(timeIntervalSince1970: 90_000) }, compatibilityAuthorizer: supportedCompatibilityAuthorizer())
 
         _ = await service.checkAutomaticallyOnLaunch()
 
@@ -57,7 +57,7 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         let now = Date(timeIntervalSince1970: 123_456)
         let checker = StubUpdateChecking(error: NSError(domain: "Network", code: 1, userInfo: [NSLocalizedDescriptionKey: "offline"]))
-        let service = CLIProxyAPIUpdateService(paths: paths, checker: checker, downloader: StubUpdateDownloading(), store: StubUpdateBinaryStore(currentVersion: "7.2.41"), now: { now })
+        let service = CLIProxyAPIUpdateService(paths: paths, checker: checker, downloader: StubUpdateDownloading(), store: StubUpdateBinaryStore(currentVersion: "7.2.41"), now: { now }, compatibilityAuthorizer: supportedCompatibilityAuthorizer())
 
         _ = await service.checkAutomaticallyOnLaunch()
 
@@ -73,8 +73,8 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         let bundledManifest = sandbox.appendingPathComponent("bundle/cliproxyapi.manifest.json")
         try writeManifest(manifest("7.2.42", sourceKind: .bundled), to: bundledManifest)
         let checker = StubUpdateChecking(release: release("7.2.42"))
-        let store = CLIProxyAPIBinaryStore(paths: paths)
-        let service = CLIProxyAPIUpdateService(paths: paths, checker: checker, downloader: StubUpdateDownloading(), store: store, bundledManifestURL: bundledManifest, now: { Date() })
+        let store = CLIProxyAPIBinaryStore(paths: paths, compatibilityAuthorizer: supportedCompatibilityAuthorizer())
+        let service = CLIProxyAPIUpdateService(paths: paths, checker: checker, downloader: StubUpdateDownloading(), store: store, bundledManifestURL: bundledManifest, now: { Date() }, compatibilityAuthorizer: supportedCompatibilityAuthorizer())
 
         await service.checkNow()
 
@@ -92,8 +92,8 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         try writeManifest(manifest("7.2.42", sourceKind: .bundled), to: bundledManifest)
         try writeManifest(manifest("9.0.0", sourceKind: .userUpdated), to: paths.activeClipProxyManifest)
         let checker = StubUpdateChecking(release: release("7.2.43"))
-        let store = CLIProxyAPIBinaryStore(paths: paths)
-        let service = CLIProxyAPIUpdateService(paths: paths, checker: checker, downloader: StubUpdateDownloading(), store: store, bundledManifestURL: bundledManifest, now: { Date() })
+        let store = CLIProxyAPIBinaryStore(paths: paths, compatibilityAuthorizer: supportedCompatibilityAuthorizer())
+        let service = CLIProxyAPIUpdateService(paths: paths, checker: checker, downloader: StubUpdateDownloading(), store: store, bundledManifestURL: bundledManifest, now: { Date() }, compatibilityAuthorizer: supportedCompatibilityAuthorizer())
 
         await service.checkNow()
 
@@ -106,7 +106,7 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         try writeState(lastCheckedAt: Date(), to: paths.clipProxyUpdateStateFile)
         let checker = StubUpdateChecking(release: release("7.2.42"))
-        let service = CLIProxyAPIUpdateService(paths: paths, checker: checker, downloader: StubUpdateDownloading(), store: StubUpdateBinaryStore(currentVersion: "7.2.41"), now: { Date() })
+        let service = CLIProxyAPIUpdateService(paths: paths, checker: checker, downloader: StubUpdateDownloading(), store: StubUpdateBinaryStore(currentVersion: "7.2.41"), now: { Date() }, compatibilityAuthorizer: supportedCompatibilityAuthorizer())
 
         await service.checkNow()
 
@@ -119,7 +119,7 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         let checker = StubUpdateChecking(release: release("7.2.42"))
         let store = StubUpdateBinaryStore(currentVersion: "7.2.41", pending: manifest("7.2.42"))
-        let service = CLIProxyAPIUpdateService(paths: paths, checker: checker, downloader: StubUpdateDownloading(), store: store, now: { Date() })
+        let service = CLIProxyAPIUpdateService(paths: paths, checker: checker, downloader: StubUpdateDownloading(), store: store, now: { Date() }, compatibilityAuthorizer: supportedCompatibilityAuthorizer())
 
         await service.checkNow()
 
@@ -134,7 +134,7 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         let checker = StubUpdateChecking(release: release("7.2.42"))
-        let service = CLIProxyAPIUpdateService(paths: paths, checker: checker, downloader: StubUpdateDownloading(), store: StubUpdateBinaryStore(currentVersion: "7.2.41"), now: { Date(timeIntervalSince1970: 100_000) })
+        let service = CLIProxyAPIUpdateService(paths: paths, checker: checker, downloader: StubUpdateDownloading(), store: StubUpdateBinaryStore(currentVersion: "7.2.41"), now: { Date(timeIntervalSince1970: 100_000) }, compatibilityAuthorizer: supportedCompatibilityAuthorizer())
 
         await service.checkNow()
         service.deferAvailableUpdate()
@@ -156,7 +156,7 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         ))
         try writeExecutable("#!/bin/sh\n", to: downloader.result!.binaryURL)
         let store = StubUpdateBinaryStore(currentVersion: "7.2.41")
-        let service = CLIProxyAPIUpdateService(paths: paths, checker: checker, downloader: downloader, store: store, now: { Date() })
+        let service = CLIProxyAPIUpdateService(paths: paths, checker: checker, downloader: downloader, store: store, now: { Date() }, compatibilityAuthorizer: supportedCompatibilityAuthorizer())
         await service.checkNow()
 
         await service.downloadAvailableUpdate()
@@ -167,13 +167,88 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         XCTAssertEqual(downloader.cleanedTemporaryDirectories.map(\.path), [sandbox.appendingPathComponent("verified").path])
     }
 
+    func testBlockedDownloadDoesNotInvokeDownloaderOrStoreMutation() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let downloader = StubUpdateDownloading(result: CLIProxyAPIBinaryVerificationResult(
+            binaryURL: sandbox.appendingPathComponent("verified/cliproxyapi"),
+            manifest: manifest("7.2.42"),
+            temporaryDirectory: sandbox.appendingPathComponent("verified")
+        ))
+        let store = StubUpdateBinaryStore(currentVersion: "7.2.41")
+        let service = CLIProxyAPIUpdateService(
+            paths: paths,
+            checker: StubUpdateChecking(release: release("7.2.42")),
+            downloader: downloader,
+            store: store,
+            now: { Date() },
+            compatibilityAuthorizer: RejectingCompatibilityAuthorizer(action: .stageProxyUpdate)
+        )
+        await service.checkNow()
+
+        await service.downloadAvailableUpdate()
+
+        XCTAssertEqual(downloader.invocationCount, 0)
+        XCTAssertEqual(store.savedPendingVersions, [])
+        XCTAssertEqual(service.lastErrorMessage, RuntimeCompatibilityBlocker.unsupportedArchitecture.recoveryMessage)
+    }
+
+    func testBlockedDownloadDoesNotInvokeDownloaderWhenActiveArtifactMismatches() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let active = manifest(
+            "7.2.41",
+            target: .init(operatingSystem: .darwin, architecture: .x86_64)
+        )
+        let downloader = StubUpdateDownloading()
+        let service = CLIProxyAPIUpdateService(
+            paths: paths,
+            checker: StubUpdateChecking(release: release("7.2.42")),
+            downloader: downloader,
+            store: StubUpdateBinaryStore(currentVersion: "7.2.41", activeManifest: active),
+            now: { Date() },
+            compatibilityAuthorizer: ArtifactMismatchAuthorizer()
+        )
+        await service.checkNow()
+
+        await service.downloadAvailableUpdate()
+
+        XCTAssertEqual(downloader.invocationCount, 0)
+        XCTAssertEqual(service.lastErrorMessage, RuntimeCompatibilityBlocker.unsupportedArtifactTarget.recoveryMessage)
+    }
+
+    func testBlockedDownloadDoesNotInvokeDownloaderWhenBundledArtifactIsUnknown() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let bundledManifestURL = sandbox.appendingPathComponent("bundle/manifest.json")
+        var bundled = manifest("7.2.41", sourceKind: .bundled)
+        bundled.upstreamAsset = "unknown-artifact.tar.gz"
+        try writeManifest(bundled, to: bundledManifestURL)
+        let downloader = StubUpdateDownloading()
+        let service = CLIProxyAPIUpdateService(
+            paths: paths,
+            checker: StubUpdateChecking(release: release("7.2.42")),
+            downloader: downloader,
+            store: StubUpdateBinaryStore(currentVersion: "7.2.41"),
+            bundledManifestURL: bundledManifestURL,
+            now: { Date() },
+            compatibilityAuthorizer: ArtifactMismatchAuthorizer()
+        )
+        await service.checkNow()
+
+        await service.downloadAvailableUpdate()
+
+        XCTAssertEqual(downloader.invocationCount, 0)
+        XCTAssertEqual(service.lastErrorMessage, RuntimeCompatibilityBlocker.unsupportedArtifactTarget.recoveryMessage)
+    }
+
     func testInitClearsStalePendingStateAfterAutostartPromotion() throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         try writeFullState(CLIProxyAPIUpdateState(lastAvailableVersion: "7.2.42", pendingVersion: "7.2.42"), to: paths.clipProxyUpdateStateFile)
         let store = StubUpdateBinaryStore(currentVersion: "7.2.42", pending: nil)
 
-        let service = CLIProxyAPIUpdateService(paths: paths, checker: StubUpdateChecking(release: release("7.2.42")), downloader: StubUpdateDownloading(), store: store, now: { Date() })
+        let service = CLIProxyAPIUpdateService(paths: paths, checker: StubUpdateChecking(release: release("7.2.42")), downloader: StubUpdateDownloading(), store: store, now: { Date() }, compatibilityAuthorizer: supportedCompatibilityAuthorizer())
 
         XCTAssertNil(service.pendingUpdate)
         XCTAssertEqual(service.currentVersionText, "7.2.42")
@@ -192,7 +267,8 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
             checker: StubUpdateChecking(release: release("7.2.42")),
             downloader: StubUpdateDownloading(),
             store: store,
-            now: { Date() }
+            now: { Date() },
+            compatibilityAuthorizer: supportedCompatibilityAuthorizer()
         )
 
         XCTAssertTrue(service.schedulePendingForNextServerStart())
@@ -200,6 +276,25 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         XCTAssertEqual(store.schedulePendingCallCount, 1)
         XCTAssertEqual(service.pendingUpdate?.version, "7.2.42")
         XCTAssertEqual(service.state, .pending)
+    }
+
+    func testBlockedScheduleDoesNotMutateStore() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let store = StubUpdateBinaryStore(currentVersion: "7.2.41", pending: manifest("7.2.42"))
+        let service = CLIProxyAPIUpdateService(
+            paths: paths,
+            checker: StubUpdateChecking(release: release("7.2.42")),
+            downloader: StubUpdateDownloading(),
+            store: store,
+            now: { Date() },
+            compatibilityAuthorizer: RejectingCompatibilityAuthorizer(action: .scheduleProxyUpdate)
+        )
+
+        XCTAssertFalse(service.schedulePendingForNextServerStart())
+
+        XCTAssertEqual(store.schedulePendingCallCount, 0)
+        XCTAssertEqual(service.lastErrorMessage, RuntimeCompatibilityBlocker.unsupportedArchitecture.recoveryMessage)
     }
 
     func testSchedulePendingForNextServerStartRecordsFailure() throws {
@@ -215,7 +310,8 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
             checker: StubUpdateChecking(release: release("7.2.42")),
             downloader: StubUpdateDownloading(),
             store: store,
-            now: { Date() }
+            now: { Date() },
+            compatibilityAuthorizer: supportedCompatibilityAuthorizer()
         )
 
         XCTAssertFalse(service.schedulePendingForNextServerStart())
@@ -237,7 +333,8 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
             checker: StubUpdateChecking(release: release("7.2.92")),
             downloader: StubUpdateDownloading(),
             store: store,
-            now: { Date() }
+            now: { Date() },
+            compatibilityAuthorizer: supportedCompatibilityAuthorizer()
         )
         store.replaceState(currentVersion: "7.2.91", pending: manifest("7.2.92"))
 
@@ -252,7 +349,7 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         try writeFullState(CLIProxyAPIUpdateState(lastAvailableVersion: "7.2.42", lastDeferredVersion: "7.2.42", pendingVersion: "7.2.42"), to: paths.clipProxyUpdateStateFile)
         let store = StubUpdateBinaryStore(currentVersion: "7.2.41", pending: manifest("7.2.42"), currentAfterApply: "7.2.42")
-        let service = CLIProxyAPIUpdateService(paths: paths, checker: StubUpdateChecking(release: release("7.2.42")), downloader: StubUpdateDownloading(), store: store, now: { Date() })
+        let service = CLIProxyAPIUpdateService(paths: paths, checker: StubUpdateChecking(release: release("7.2.42")), downloader: StubUpdateDownloading(), store: store, now: { Date() }, compatibilityAuthorizer: supportedCompatibilityAuthorizer())
         service.availableUpdate = release("7.2.42")
 
         try service.applyPendingNow()
@@ -265,6 +362,110 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         XCTAssertNil(state.pendingVersion)
         XCTAssertNil(state.lastAvailableVersion)
         XCTAssertNil(state.lastDeferredVersion)
+    }
+
+    func testBlockedApplyDoesNotMutateStore() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let store = StubUpdateBinaryStore(currentVersion: "7.2.41", pending: manifest("7.2.42"))
+        let service = CLIProxyAPIUpdateService(
+            paths: paths,
+            checker: StubUpdateChecking(release: release("7.2.42")),
+            downloader: StubUpdateDownloading(),
+            store: store,
+            now: { Date() },
+            compatibilityAuthorizer: RejectingCompatibilityAuthorizer(action: .applyProxyUpdate)
+        )
+
+        XCTAssertThrowsError(try service.applyPendingNow()) { error in
+            XCTAssertEqual(
+                error as? CLIProxyManagerCommandError,
+                .prerequisite(RuntimeCompatibilityBlocker.unsupportedArchitecture.recoveryMessage)
+            )
+        }
+        XCTAssertEqual(store.applyPendingCallCount, 0)
+    }
+
+    func testApplyPendingNowRejectsUnreadablePendingManifestWithoutMutating() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let store = StubUpdateBinaryStore(currentVersion: "7.2.41", pending: manifest("7.2.42"))
+        let service = CLIProxyAPIUpdateService(
+            paths: paths,
+            checker: StubUpdateChecking(release: release("7.2.42")),
+            downloader: StubUpdateDownloading(),
+            store: store,
+            now: { Date() },
+            compatibilityAuthorizer: supportedCompatibilityAuthorizer()
+        )
+        store.setPendingReadError(NSError(
+            domain: "test",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "/Users/sensitive-user/pending-manifest.json"]
+        ))
+
+        XCTAssertThrowsError(try service.applyPendingNow()) { error in
+            XCTAssertEqual(
+                error as? CLIProxyManagerCommandError,
+                .prerequisite("Unable to read the staged CLIProxyAPI update. Refresh status and try again.")
+            )
+        }
+
+        XCTAssertEqual(store.applyPendingCallCount, 0)
+        XCTAssertEqual(service.pendingUpdate?.version, "7.2.42")
+    }
+
+    func testBlockedApplyDoesNotMutateStoreWhenActiveArtifactMismatches() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let active = manifest(
+            "7.2.41",
+            target: .init(operatingSystem: .darwin, architecture: .x86_64)
+        )
+        let store = StubUpdateBinaryStore(
+            currentVersion: "7.2.41",
+            activeManifest: active,
+            pending: manifest("7.2.42")
+        )
+        let service = CLIProxyAPIUpdateService(
+            paths: paths,
+            checker: StubUpdateChecking(release: release("7.2.42")),
+            downloader: StubUpdateDownloading(),
+            store: store,
+            now: { Date() },
+            compatibilityAuthorizer: ArtifactMismatchAuthorizer()
+        )
+
+        XCTAssertThrowsError(try service.applyPendingNow()) { error in
+            XCTAssertEqual(
+                error as? CLIProxyManagerCommandError,
+                .prerequisite(RuntimeCompatibilityBlocker.unsupportedArtifactTarget.recoveryMessage)
+            )
+        }
+        XCTAssertEqual(store.applyPendingCallCount, 0)
+    }
+
+    func testBlockedScheduleDoesNotMutateStoreWhenBundledArtifactIsUnknown() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let bundledManifestURL = sandbox.appendingPathComponent("bundle/manifest.json")
+        var bundled = manifest("7.2.41", sourceKind: .bundled)
+        bundled.upstreamAsset = "unknown-artifact.tar.gz"
+        try writeManifest(bundled, to: bundledManifestURL)
+        let store = StubUpdateBinaryStore(currentVersion: "7.2.41", pending: manifest("7.2.42"))
+        let service = CLIProxyAPIUpdateService(
+            paths: paths,
+            checker: StubUpdateChecking(release: release("7.2.42")),
+            downloader: StubUpdateDownloading(),
+            store: store,
+            bundledManifestURL: bundledManifestURL,
+            now: { Date() },
+            compatibilityAuthorizer: ArtifactMismatchAuthorizer()
+        )
+
+        XCTAssertFalse(service.schedulePendingForNextServerStart())
+        XCTAssertEqual(store.schedulePendingCallCount, 0)
+        XCTAssertEqual(service.lastErrorMessage, RuntimeCompatibilityBlocker.unsupportedArtifactTarget.recoveryMessage)
     }
 
     func testUpdateOperationsRecordTypedLifecycleEvents() async throws {
@@ -288,7 +489,8 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
             downloader: downloader,
             store: store,
             now: { Date() },
-            appLogger: logger
+            appLogger: logger,
+            compatibilityAuthorizer: supportedCompatibilityAuthorizer()
         )
 
         await service.checkNow()
@@ -313,7 +515,8 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
             downloader: downloader,
             store: StubUpdateBinaryStore(currentVersion: "7.2.41"),
             now: { Date() },
-            appLogger: logger
+            appLogger: logger,
+            compatibilityAuthorizer: supportedCompatibilityAuthorizer()
         )
         await service.checkNow()
 
@@ -335,7 +538,8 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
             downloader: downloader,
             store: StubUpdateBinaryStore(currentVersion: "7.2.41"),
             now: { Date() },
-            appLogger: logger
+            appLogger: logger,
+            compatibilityAuthorizer: supportedCompatibilityAuthorizer()
         )
         await service.checkNow()
 
@@ -367,7 +571,8 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
             downloader: downloader,
             store: store,
             now: { Date() },
-            appLogger: logger
+            appLogger: logger,
+            compatibilityAuthorizer: supportedCompatibilityAuthorizer()
         )
         await service.checkNow()
 
@@ -377,15 +582,20 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         XCTAssertTrue(store.savedPendingVersions.isEmpty)
     }
 
-    func testApplyPendingNowCallsStore() throws {
+    func testApplyPendingNowRejectsNoPendingUpdateWithoutApplying() throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         let store = StubUpdateBinaryStore(currentVersion: "7.2.41")
-        let service = CLIProxyAPIUpdateService(paths: paths, checker: StubUpdateChecking(release: release("7.2.42")), downloader: StubUpdateDownloading(), store: store, now: { Date() })
+        let service = CLIProxyAPIUpdateService(paths: paths, checker: StubUpdateChecking(release: release("7.2.42")), downloader: StubUpdateDownloading(), store: store, now: { Date() }, compatibilityAuthorizer: supportedCompatibilityAuthorizer())
 
-        try service.applyPendingNow()
+        XCTAssertThrowsError(try service.applyPendingNow()) { error in
+            XCTAssertEqual(
+                error as? CLIProxyManagerCommandError,
+                .prerequisite("No staged CLIProxyAPI update is available. Run cpm update stage proxy first.")
+            )
+        }
 
-        XCTAssertEqual(store.applyPendingCallCount, 1)
+        XCTAssertEqual(store.applyPendingCallCount, 0)
     }
 
     private func makeSandbox() throws -> URL {
@@ -399,8 +609,12 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         CLIProxyAPIRelease(version: CLIProxyAPIVersion(version)!, tagName: "v\(version)", assetName: "CLIProxyAPI_\(version)_darwin_aarch64.tar.gz", assetURL: URL(string: "https://example.com/archive.tar.gz")!, assetSha256: "archive-sha")
     }
 
-    private func manifest(_ version: String, sourceKind: CLIProxyAPIBinarySourceKind = .userUpdated) -> CLIProxyAPIBinaryManifest {
-        CLIProxyAPIBinaryManifest(name: "cliproxyapi", version: version, commit: "commit", builtAt: "2026-07-01T00:00:00Z", sourceKind: sourceKind, source: "https://example.com/archive.tar.gz", upstreamRepository: "router-for-me/CLIProxyAPI", upstreamTag: "v\(version)", upstreamAsset: "CLIProxyAPI_\(version)_darwin_aarch64.tar.gz", upstreamAssetSha256: "archive-sha", vendoredBinaryName: "cliproxyapi", vendoredBinarySha256: "binary-sha", vendoredBinarySizeBytes: 1, vendoredFromArchivePath: "cli-proxy-api")
+    private func manifest(
+        _ version: String,
+        sourceKind: CLIProxyAPIBinarySourceKind = .userUpdated,
+        target: CLIProxyAPIArtifactTarget? = nil
+    ) -> CLIProxyAPIBinaryManifest {
+        CLIProxyAPIBinaryManifest(name: "cliproxyapi", version: version, commit: "commit", builtAt: "2026-07-01T00:00:00Z", sourceKind: sourceKind, source: "https://example.com/archive.tar.gz", upstreamRepository: "router-for-me/CLIProxyAPI", upstreamTag: "v\(version)", upstreamAsset: "CLIProxyAPI_\(version)_darwin_aarch64.tar.gz", upstreamAssetSha256: "archive-sha", vendoredBinaryName: "cliproxyapi", vendoredBinarySha256: "binary-sha", vendoredBinarySizeBytes: 1, vendoredFromArchivePath: "cli-proxy-api", target: target)
     }
 
     private func writeManifest(_ manifest: CLIProxyAPIBinaryManifest, to url: URL) throws {
@@ -424,6 +638,79 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
     private func writeExecutable(_ text: String, to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data(text.utf8).write(to: url)
+    }
+}
+
+private func supportedCompatibilityAuthorizer() -> RuntimeCompatibilityPreflight {
+    RuntimeCompatibilityPreflight(environment: SupportedMacOSEnvironment())
+}
+
+private struct SupportedMacOSEnvironment: RuntimeEnvironmentProviding {
+    func snapshot() -> RuntimeEnvironmentSnapshot {
+        RuntimeEnvironmentSnapshot(
+            operatingSystem: .macOS(major: 15, minor: 0),
+            architecture: .arm64,
+            loginShell: "/bin/zsh"
+        )
+    }
+}
+
+private struct RejectingCompatibilityAuthorizer: RuntimeCompatibilityAuthorizing {
+    let action: CompatibilityAction?
+
+    init(action: CompatibilityAction? = nil) {
+        self.action = action
+    }
+
+    func staticReport(artifacts _: CompatibilityArtifacts) -> RuntimeCompatibilityReport {
+        RuntimeCompatibilityReport(
+            findings: action == nil
+                ? []
+                : [.unsupportedArchitecture(expected: .arm64, actual: .x86_64)],
+            decisions: Dictionary(uniqueKeysWithValues: CompatibilityAction.allCases.map { candidate in
+                (candidate, CompatibilityDecision(
+                    action: candidate,
+                    disposition: candidate == action ? .blocked : .allowed
+                ))
+            })
+        )
+    }
+
+    func report(artifacts: CompatibilityArtifacts) async -> RuntimeCompatibilityReport {
+        staticReport(artifacts: artifacts)
+    }
+
+    func require(_ action: CompatibilityAction, artifacts _: CompatibilityArtifacts) throws {
+        if action == self.action {
+            throw RuntimeCompatibilityError.actionBlocked(action)
+        }
+    }
+}
+
+private struct ArtifactMismatchAuthorizer: RuntimeCompatibilityAuthorizing {
+    func staticReport(artifacts: CompatibilityArtifacts) -> RuntimeCompatibilityReport {
+        let hasUnsupportedArtifact = [artifacts.bundled, artifacts.active, artifacts.pending].contains {
+            guard case let .explicit(target) = $0 else { return false }
+            return target != .darwinArm64
+        }
+        return RuntimeCompatibilityReport(
+            findings: hasUnsupportedArtifact
+                ? [.unsupportedArtifactTarget(expected: .darwinArm64, actual: .init(operatingSystem: .darwin, architecture: .x86_64))]
+                : [],
+            decisions: Dictionary(uniqueKeysWithValues: CompatibilityAction.allCases.map { action in
+                (action, CompatibilityDecision(action: action, disposition: hasUnsupportedArtifact ? .blocked : .allowed))
+            })
+        )
+    }
+
+    func report(artifacts: CompatibilityArtifacts) async -> RuntimeCompatibilityReport {
+        staticReport(artifacts: artifacts)
+    }
+
+    func require(_ action: CompatibilityAction, artifacts: CompatibilityArtifacts) throws {
+        if staticReport(artifacts: artifacts).decision(for: action).disposition == .blocked {
+            throw RuntimeCompatibilityError.actionBlocked(action)
+        }
     }
 }
 
@@ -474,8 +761,10 @@ private final class StubUpdateDownloading: CLIProxyAPIUpdateDownloading, @unchec
     let result: CLIProxyAPIBinaryVerificationResult?
     private let downloadError: Error
     private var _cleanedTemporaryDirectories: [URL] = []
+    private var _invocationCount = 0
 
     var cleanedTemporaryDirectories: [URL] { lock.withLock { _cleanedTemporaryDirectories } }
+    var invocationCount: Int { lock.withLock { _invocationCount } }
 
     init(result: CLIProxyAPIBinaryVerificationResult? = nil, downloadError: Error = NSError(domain: "test", code: 1)) {
         self.result = result
@@ -483,6 +772,7 @@ private final class StubUpdateDownloading: CLIProxyAPIUpdateDownloading, @unchec
     }
 
     func downloadAndVerify(_ release: CLIProxyAPIRelease) async throws -> CLIProxyAPIBinaryVerificationResult {
+        lock.withLock { _invocationCount += 1 }
         if let result { return result }
         throw downloadError
     }
@@ -496,7 +786,9 @@ private final class StubUpdateDownloading: CLIProxyAPIUpdateDownloading, @unchec
 private final class StubUpdateBinaryStore: CLIProxyAPIUpdateBinaryStoring, @unchecked Sendable {
     private let lock = NSLock()
     private var current: CLIProxyAPIVersion?
+    private var active: CLIProxyAPIBinaryManifest?
     private var pending: CLIProxyAPIBinaryManifest?
+    private var pendingReadError: Error?
     private let currentAfterApply: CLIProxyAPIVersion?
     private let scheduleError: Error?
     private let saveError: Error?
@@ -510,12 +802,14 @@ private final class StubUpdateBinaryStore: CLIProxyAPIUpdateBinaryStoring, @unch
 
     init(
         currentVersion: String?,
+        activeManifest: CLIProxyAPIBinaryManifest? = nil,
         pending: CLIProxyAPIBinaryManifest? = nil,
         currentAfterApply: String? = nil,
         scheduleError: Error? = nil,
         saveError: Error? = nil
     ) {
         self.current = currentVersion.flatMap(CLIProxyAPIVersion.init)
+        self.active = activeManifest
         self.pending = pending
         self.currentAfterApply = currentAfterApply.flatMap(CLIProxyAPIVersion.init)
         self.scheduleError = scheduleError
@@ -523,7 +817,17 @@ private final class StubUpdateBinaryStore: CLIProxyAPIUpdateBinaryStoring, @unch
     }
 
     func validatedCurrentVersion(bundledManifestURL: URL?) throws -> CLIProxyAPIVersion? { lock.withLock { current } }
-    func pendingManifest() throws -> CLIProxyAPIBinaryManifest? { lock.withLock { pending } }
+    func activeManifest() throws -> CLIProxyAPIBinaryManifest? { lock.withLock { active } }
+    func pendingManifest() throws -> CLIProxyAPIBinaryManifest? {
+        try lock.withLock {
+            if let pendingReadError { throw pendingReadError }
+            return pending
+        }
+    }
+
+    func setPendingReadError(_ error: Error?) {
+        lock.withLock { pendingReadError = error }
+    }
 
     func replaceState(currentVersion: String?, pending: CLIProxyAPIBinaryManifest?) {
         lock.withLock {

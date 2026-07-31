@@ -30,6 +30,17 @@ CLIProxyManager는 여러 Claude·Codex OAuth 구독, Claude·OpenAI API Key, �
 - Claude/Codex OAuth 계정 또는 Claude/OpenAI API Key
 - 생성된 터미널 명령어를 사용할 경우 zsh
 
+## 런타임 호환성 지원 매트릭스
+
+| Requirement | 지원 및 복구 |
+| --- | --- |
+| macOS | macOS 15+ |
+| Architecture | Apple silicon `arm64` |
+| Shell | 생성된 터미널 함수는 zsh login shell이 필요합니다. |
+| Artifact | 지원되는 CLIProxyAPI artifact는 `darwin/arm64`입니다. |
+| Claude Code | Claude Code `2.1.220`은 2026-07-31에 검증되었습니다. 다른 감지 version은 미검증으로 표시됩니다. |
+| Compatibility | **경고**는 기존 proxy 동작을 유지하면서 다음 단계를 안내합니다. **차단**은 시작, 재시작, proxy update, 생성된 shell 쓰기를 막지만 이미 실행 중인 proxy의 중지는 유지합니다. 표시된 **복구** 안내를 따른 뒤 상태를 새로 고치세요. |
+
 ## 설치 및 macOS 보안 경고
 
 배포본은 자체 서명되어 있지만 Apple 공증을 받지 않았습니다. 따라서 처음 실행할 때 macOS 보안 경고가 나타날 수 있습니다.

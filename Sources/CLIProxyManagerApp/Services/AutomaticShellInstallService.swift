@@ -1,6 +1,131 @@
 import CLIProxyManagerCore
 import Foundation
 
+enum ShellFunctionInstallationError: LocalizedError, Equatable, Sendable {
+    case unsupportedLoginShell
+    case claudeCodeUnavailable
+    case runtimeIncompatible
+
+    var errorDescription: String? {
+        switch self {
+        case .unsupportedLoginShell:
+            "Shell functions require zsh as the login shell. Change the login shell to zsh, then retry."
+        case .claudeCodeUnavailable:
+            "Shell functions require the Claude executable. Install Claude Code, then retry."
+        case .runtimeIncompatible:
+            "Shell functions cannot be installed in this runtime. Use a supported runtime, then retry."
+        }
+    }
+}
+
+enum AutomaticShellInstallationResult: Equatable, Sendable {
+    case written
+    case skippedForCompatibility
+    case skippedForSupersededRequest
+    case disabled
+}
+
+private final class AutomaticShellReconciliationCoordinator: @unchecked Sendable {
+    private let lock = NSLock()
+    private var latestAutomaticGeneration = 0
+    private var activeExplicitInstallations = 0
+
+    func beginAutomatic() -> AutomaticShellReconciliationRequest {
+        let generation = lock.withLock { () -> Int in
+            latestAutomaticGeneration &+= 1
+            return latestAutomaticGeneration
+        }
+        return AutomaticShellReconciliationRequest(coordinator: self, generation: generation)
+    }
+
+    func beginExplicit() -> ExplicitShellInstallationRequest {
+        lock.withLock {
+            latestAutomaticGeneration &+= 1
+            activeExplicitInstallations &+= 1
+        }
+        return ExplicitShellInstallationRequest(coordinator: self)
+    }
+
+    fileprivate func installAutomaticIfCurrent(
+        generation: Int,
+        installer: any ShellFunctionInstalling,
+        functionScript: String,
+        functionNames: [String]
+    ) throws -> Bool {
+        try lock.withLock {
+            guard activeExplicitInstallations == 0,
+                  generation == latestAutomaticGeneration else {
+                return false
+            }
+            try installer.install(functionScript: functionScript, functionNames: functionNames)
+            return true
+        }
+    }
+
+    fileprivate func installExplicit(
+        using installer: any ShellFunctionInstalling,
+        functionScript: String,
+        functionNames: [String]
+    ) throws {
+        try lock.withLock {
+            try installer.install(functionScript: functionScript, functionNames: functionNames)
+        }
+    }
+
+    fileprivate func finishExplicit() {
+        lock.withLock {
+            activeExplicitInstallations = max(0, activeExplicitInstallations - 1)
+        }
+    }
+}
+
+struct AutomaticShellReconciliationRequest: Sendable {
+    private let coordinator: AutomaticShellReconciliationCoordinator
+    private let generation: Int
+
+    fileprivate init(coordinator: AutomaticShellReconciliationCoordinator, generation: Int) {
+        self.coordinator = coordinator
+        self.generation = generation
+    }
+
+    fileprivate func install(
+        using installer: any ShellFunctionInstalling,
+        functionScript: String,
+        functionNames: [String]
+    ) throws -> Bool {
+        try coordinator.installAutomaticIfCurrent(
+            generation: generation,
+            installer: installer,
+            functionScript: functionScript,
+            functionNames: functionNames
+        )
+    }
+}
+
+struct ExplicitShellInstallationRequest: Sendable {
+    private let coordinator: AutomaticShellReconciliationCoordinator
+
+    fileprivate init(coordinator: AutomaticShellReconciliationCoordinator) {
+        self.coordinator = coordinator
+    }
+
+    fileprivate func install(
+        using installer: any ShellFunctionInstalling,
+        functionScript: String,
+        functionNames: [String]
+    ) throws {
+        try coordinator.installExplicit(
+            using: installer,
+            functionScript: functionScript,
+            functionNames: functionNames
+        )
+    }
+
+    fileprivate func finish() {
+        coordinator.finishExplicit()
+    }
+}
+
 struct AutomaticShellInstallService: Sendable {
     struct EnabledFunctions: Sendable {
         var claudeOAuth: Bool
@@ -26,6 +151,8 @@ struct AutomaticShellInstallService: Sendable {
 
     private let installer: any ShellFunctionInstalling
     private let secretStore: any SecretStore
+    private let compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing
+    private let reconciliationCoordinator = AutomaticShellReconciliationCoordinator()
     private let defaultHelperCommand: String
     private let isEnabled: Bool
 
@@ -33,22 +160,26 @@ struct AutomaticShellInstallService: Sendable {
         installer: any ShellFunctionInstalling,
         secretStore: any SecretStore = FileSecretStore(),
         helperCommand: String = "/usr/local/bin/cliproxy-manager",
+        compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing = RuntimeCompatibilityPreflight(),
         isEnabled: Bool = true
     ) {
         self.installer = installer
         self.secretStore = secretStore
+        self.compatibilityAuthorizer = compatibilityAuthorizer
         self.defaultHelperCommand = helperCommand
         self.isEnabled = isEnabled
     }
 
     static func runtimeDefault(
         installer: any ShellFunctionInstalling,
-        secretStore: any SecretStore = FileSecretStore()
+        secretStore: any SecretStore = FileSecretStore(),
+        compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing = RuntimeCompatibilityPreflight()
     ) -> AutomaticShellInstallService {
         AutomaticShellInstallService(
             installer: installer,
             secretStore: secretStore,
-            helperCommand: resolvedDefaultHelperCommand()
+            helperCommand: resolvedDefaultHelperCommand(),
+            compatibilityAuthorizer: compatibilityAuthorizer
         )
     }
 
@@ -83,8 +214,75 @@ struct AutomaticShellInstallService: Sendable {
         return "/usr/local/bin/cliproxy-manager"
     }
 
-    func apply(config: AppConfig, helperCommand: String? = nil, enabledFunctions: EnabledFunctions = .allOAuth) throws {
+    func apply(
+        config: AppConfig,
+        helperCommand: String? = nil,
+        enabledFunctions: EnabledFunctions = .allOAuth
+    ) async throws {
         guard isEnabled else { return }
+        let request = reconciliationCoordinator.beginExplicit()
+        defer { request.finish() }
+        try await preflight()
+        let installation = try renderedInstallation(
+            config: config,
+            helperCommand: helperCommand,
+            enabledFunctions: enabledFunctions
+        )
+        try request.install(
+            using: installer,
+            functionScript: installation.functionScript,
+            functionNames: installation.functionNames
+        )
+    }
+
+    func beginAutomaticReconciliation() -> AutomaticShellReconciliationRequest {
+        reconciliationCoordinator.beginAutomatic()
+    }
+
+    func reconcile(
+        config: AppConfig,
+        helperCommand: String? = nil,
+        enabledFunctions: EnabledFunctions = .allOAuth,
+        request: AutomaticShellReconciliationRequest? = nil
+    ) async throws -> AutomaticShellInstallationResult {
+        guard isEnabled else { return .disabled }
+        let request = request ?? beginAutomaticReconciliation()
+        do {
+            try await preflight()
+            let installation = try renderedInstallation(
+                config: config,
+                helperCommand: helperCommand,
+                enabledFunctions: enabledFunctions
+            )
+            guard try request.install(
+                using: installer,
+                functionScript: installation.functionScript,
+                functionNames: installation.functionNames
+            ) else {
+                return .skippedForSupersededRequest
+            }
+            return .written
+        } catch is ShellFunctionInstallationError {
+            return .skippedForCompatibility
+        }
+    }
+
+    private func preflight() async throws {
+        let report = await compatibilityAuthorizer.report(artifacts: CompatibilityArtifacts(
+            bundled: nil,
+            active: nil,
+            pending: nil
+        ))
+        if let compatibilityError = compatibilityError(for: report) {
+            throw compatibilityError
+        }
+    }
+
+    private func renderedInstallation(
+        config: AppConfig,
+        helperCommand: String?,
+        enabledFunctions: EnabledFunctions
+    ) throws -> (functionScript: String, functionNames: [String]) {
         let includeClaudeOAuth = shouldIncludeOAuth(provider: .claude, config: config, enabled: enabledFunctions.claudeOAuth)
         let includeCodex = shouldIncludeOAuth(provider: .codex, config: config, enabled: enabledFunctions.codex)
         var includedAPIKeyProfileIDs: Set<String> = []
@@ -99,7 +297,7 @@ struct AutomaticShellInstallService: Sendable {
                 continue
             }
         }
-        let script = try ShellFunctionRenderer(
+        let functionScript = try ShellFunctionRenderer(
             config: config,
             helperCommand: helperCommand ?? defaultHelperCommand,
             enabledFunctions: ShellFunctionRenderer.EnabledFunctions(
@@ -112,7 +310,26 @@ struct AutomaticShellInstallService: Sendable {
         functionNames.append(contentsOf: config.apiKeyProfiles.compactMap { profile in
             includedAPIKeyProfileIDs.contains(profile.id) ? profile.commandName : nil
         })
-        try installer.install(functionScript: script, functionNames: functionNames)
+        return (functionScript, functionNames)
+    }
+
+    private func compatibilityError(for report: RuntimeCompatibilityReport) -> ShellFunctionInstallationError? {
+        if report.findings.contains(where: { finding in
+            if case .unsupportedLoginShell = finding { return true }
+            return false
+        }) {
+            return .unsupportedLoginShell
+        }
+        if report.findings.contains(where: { finding in
+            if case .unavailableClaudeCode = finding { return true }
+            return false
+        }) {
+            return .claudeCodeUnavailable
+        }
+        if report.decision(for: .installShellFunctions).disposition == .blocked {
+            return .runtimeIncompatible
+        }
+        return nil
     }
 
     private func shouldIncludeOAuth(provider: AuthProfileType, config: AppConfig, enabled: Bool) -> Bool {

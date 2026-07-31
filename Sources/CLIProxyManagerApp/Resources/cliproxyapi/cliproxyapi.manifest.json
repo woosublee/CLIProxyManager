@@ -4,6 +4,10 @@
   "commit": "42f36b94",
   "builtAt": "2026-07-23T17:26:16Z",
   "source": "https://github.com/router-for-me/CLIProxyAPI/releases/download/v7.2.97/CLIProxyAPI_7.2.97_darwin_aarch64.tar.gz",
+  "target": {
+    "operatingSystem": "darwin",
+    "architecture": "arm64"
+  },
   "upstreamRepository": "router-for-me/CLIProxyAPI",
   "upstreamTag": "v7.2.97",
   "upstreamAsset": "CLIProxyAPI_7.2.97_darwin_aarch64.tar.gz",

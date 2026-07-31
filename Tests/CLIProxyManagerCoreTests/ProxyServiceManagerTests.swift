@@ -38,7 +38,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         let launchctl = RunningLabelsLaunchctl(labels: ["com.cliproxymanager.port.28317"])
-        let manager = ProxyServiceManager(
+        let manager = makeProxyServiceManager(
             paths: paths,
             launcher: FakeProcessLauncher(),
             launchctl: launchctl,
@@ -78,7 +78,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         try createBinary(at: paths.clipProxyBinary)
         let launcher = FakeProcessLauncher()
-        let manager = ProxyServiceManager(paths: paths, launcher: launcher)
+        let manager = makeProxyServiceManager(paths: paths, launcher: launcher)
 
         try await manager.start(port: 8317)
 
@@ -132,7 +132,7 @@ final class ProxyServiceManagerTests: XCTestCase {
             config.logLevel = .debug
             return config
         }()
-        let manager = ProxyServiceManager(
+        let manager = makeProxyServiceManager(
             paths: paths,
             launcher: FakeProcessLauncher(),
             appConfigProvider: { config }
@@ -150,7 +150,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         try createBinary(at: paths.clipProxyBinary)
-        let manager = ProxyServiceManager(
+        let manager = makeProxyServiceManager(
             paths: paths,
             launcher: FakeProcessLauncher(),
             managementKeyProvider: { "management-key" },
@@ -174,7 +174,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         try createBinary(at: paths.clipProxyBinary)
         let callCounter = ProviderCallCounter()
-        let manager = ProxyServiceManager(
+        let manager = makeProxyServiceManager(
             paths: paths,
             launcher: FakeProcessLauncher(),
             managementKeyProvider: { "management-key" },
@@ -198,7 +198,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         try createBinary(at: paths.clipProxyBinary)
-        let manager = ProxyServiceManager(
+        let manager = makeProxyServiceManager(
             paths: paths,
             launcher: FakeProcessLauncher(),
             managementKeyProvider: { "management-key" },
@@ -218,7 +218,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         try createBinary(at: paths.clipProxyBinary)
-        let manager = ProxyServiceManager(
+        let manager = makeProxyServiceManager(
             paths: paths,
             launcher: FakeProcessLauncher(),
             managementKeyProvider: { "management-key" },
@@ -252,7 +252,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         config.oauthCommandProfiles[0].codex!.opus = .init(model: "gpt-5.6-sol", reasoning: .xhigh, fastModeEnabled: true)
         config.codexAPI.codex.sonnet = .init(model: "gpt-5.5", reasoning: .medium, fastModeEnabled: true)
         let configuredAppConfig = config
-        let manager = ProxyServiceManager(
+        let manager = makeProxyServiceManager(
             paths: paths,
             launcher: FakeProcessLauncher(),
             codexAPIKeyProvider: { "codex-key" },
@@ -284,7 +284,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         config.codexAPI.codex.opus.fastModeEnabled = true
         let configuredAppConfig = config
         let callCounter = ProviderCallCounter()
-        let manager = ProxyServiceManager(
+        let manager = makeProxyServiceManager(
             paths: paths,
             launcher: FakeProcessLauncher(),
             codexAPIKeyProvider: {
@@ -307,7 +307,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         try createBinary(at: paths.clipProxyBinary)
         let callCounter = ProviderCallCounter()
-        let manager = ProxyServiceManager(
+        let manager = makeProxyServiceManager(
             paths: paths,
             launcher: FakeProcessLauncher(),
             codexAPIKeyProvider: {
@@ -329,7 +329,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         try createBinary(at: paths.clipProxyBinary)
-        let manager = ProxyServiceManager(
+        let manager = makeProxyServiceManager(
             paths: paths,
             launcher: FakeProcessLauncher(),
             codexAPIKeyProvider: { "codex-key" },
@@ -359,7 +359,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         try createBinary(at: paths.clipProxyBinary)
-        let manager = ProxyServiceManager(
+        let manager = makeProxyServiceManager(
             paths: paths,
             launcher: FakeProcessLauncher(),
             codexAPIKeyProvider: { "codex-key" },
@@ -379,7 +379,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         try createBinary(at: paths.clipProxyBinary)
         let loadError = CocoaError(.fileReadCorruptFile)
-        let manager = ProxyServiceManager(
+        let manager = makeProxyServiceManager(
             paths: paths,
             launcher: FakeProcessLauncher(),
             appConfigProvider: { throw loadError }
@@ -398,7 +398,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         try createBinary(at: paths.clipProxyBinary)
-        let manager = ProxyServiceManager(
+        let manager = makeProxyServiceManager(
             paths: paths,
             launcher: FakeProcessLauncher(),
             claudeAPIKeyProvider: { "claude-key\"\nvalue" },
@@ -424,7 +424,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         try createBinary(at: paths.clipProxyBinary)
-        let manager = ProxyServiceManager(
+        let manager = makeProxyServiceManager(
             paths: paths,
             launcher: FakeProcessLauncher(),
             claudeAPIKeyProvider: { "claude-key" },
@@ -442,7 +442,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         try createBinary(at: paths.clipProxyBinary)
-        let manager = ProxyServiceManager(
+        let manager = makeProxyServiceManager(
             paths: paths,
             launcher: FakeProcessLauncher(),
             managementKeyProvider: { "management-key" },
@@ -464,7 +464,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         try createBinary(at: paths.clipProxyBinary)
         try SubscriptionUsageManagementKeyFileStore(paths: paths).setManagementKey("sandbox-management-key")
-        let manager = ProxyServiceManager(
+        let manager = makeProxyServiceManager(
             paths: paths,
             launcher: FakeProcessLauncher(),
             usageEnabledProvider: { true }
@@ -484,7 +484,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         config.usageOverlay.isVisible = true
         try AppConfigStore(paths: paths).save(config)
         try SubscriptionUsageManagementKeyFileStore(paths: paths).setManagementKey("management-key")
-        let manager = ProxyServiceManager(paths: paths, launcher: FakeProcessLauncher())
+        let manager = makeProxyServiceManager(paths: paths, launcher: FakeProcessLauncher())
 
         try await manager.start(port: 8317)
 
@@ -503,7 +503,7 @@ final class ProxyServiceManagerTests: XCTestCase {
             [.posixPermissions: 0o600],
             ofItemAtPath: paths.subscriptionUsageManagementKeyFile.path
         )
-        let manager = ProxyServiceManager(
+        let manager = makeProxyServiceManager(
             paths: paths,
             launcher: FakeProcessLauncher(),
             usageEnabledProvider: { true }
@@ -520,7 +520,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         try createBinary(at: paths.clipProxyBinary)
-        let manager = ProxyServiceManager(
+        let manager = makeProxyServiceManager(
             paths: paths,
             launcher: FakeProcessLauncher(),
             managementKeyProvider: { "stored-management-key" },
@@ -540,7 +540,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         try createBinary(at: paths.clipProxyBinary)
-        let manager = ProxyServiceManager(
+        let manager = makeProxyServiceManager(
             paths: paths,
             launcher: FakeProcessLauncher(),
             managementKeyProvider: { " \n " },
@@ -558,7 +558,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         let root = sandbox.appendingPathComponent("managed\nroot\twith\rcontrol")
         let paths = ManagedPaths(rootDirectory: root)
         try createBinary(at: paths.clipProxyBinary)
-        let manager = ProxyServiceManager(paths: paths, launcher: FakeProcessLauncher())
+        let manager = makeProxyServiceManager(paths: paths, launcher: FakeProcessLauncher())
 
         try await manager.start(port: 8317)
 
@@ -578,7 +578,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         try createBinary(at: bundledBinary, contents: "#!/bin/sh\necho bundled\n")
         let bundledManifestURL = try writeBundledManifest(for: bundledBinary, version: "7.2.41", in: sandbox)
         let launcher = FakeProcessLauncher()
-        let manager = ProxyServiceManager(paths: paths, bundledBinaryURL: bundledBinary, bundledManifestURL: bundledManifestURL, launcher: launcher)
+        let manager = makeProxyServiceManager(paths: paths, bundledBinaryURL: bundledBinary, bundledManifestURL: bundledManifestURL, launcher: launcher)
 
         try await manager.start(port: 8317)
 
@@ -595,7 +595,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         try createBinary(at: bundledBinary, contents: "#!/bin/sh\necho new\n")
         let bundledManifestURL = try writeBundledManifest(for: bundledBinary, version: "7.2.41", in: sandbox)
         let launcher = FakeProcessLauncher()
-        let manager = ProxyServiceManager(paths: paths, bundledBinaryURL: bundledBinary, bundledManifestURL: bundledManifestURL, launcher: launcher)
+        let manager = makeProxyServiceManager(paths: paths, bundledBinaryURL: bundledBinary, bundledManifestURL: bundledManifestURL, launcher: launcher)
 
         try await manager.start(port: 8317)
 
@@ -646,7 +646,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         try FileManager.default.createDirectory(at: bundledManifestURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try JSONEncoder().encode(bundledManifest).write(to: bundledManifestURL)
         let launcher = FakeProcessLauncher()
-        let manager = ProxyServiceManager(paths: paths, bundledBinaryURL: bundledBinary, bundledManifestURL: bundledManifestURL, launcher: launcher)
+        let manager = makeProxyServiceManager(paths: paths, bundledBinaryURL: bundledBinary, bundledManifestURL: bundledManifestURL, launcher: launcher)
 
         try await manager.start(port: 8317)
 
@@ -659,7 +659,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         try createBinary(at: paths.clipProxyBinary)
         let launcher = FakeProcessLauncher()
-        let manager = ProxyServiceManager(paths: paths, launcher: launcher)
+        let manager = makeProxyServiceManager(paths: paths, launcher: launcher)
 
         try await manager.start(port: 9000)
 
@@ -675,7 +675,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         try createBinary(at: paths.clipProxyBinary)
         let process = ManagedProxyProcessDouble()
         let launcher = FakeProcessLauncher(process: process)
-        let manager = ProxyServiceManager(paths: paths, launcher: launcher)
+        let manager = makeProxyServiceManager(paths: paths, launcher: launcher)
 
         try await manager.start(port: 8317)
         try await manager.stop()
@@ -690,7 +690,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         try createBinary(at: paths.clipProxyBinary)
         let process = ManagedProxyProcessDouble(waitDelay: 0.5)
         let launcher = FakeProcessLauncher(process: process)
-        let manager = ProxyServiceManager(paths: paths, launcher: launcher)
+        let manager = makeProxyServiceManager(paths: paths, launcher: launcher)
 
         try await manager.start(port: 8317)
         let startedAt = Date()
@@ -704,7 +704,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         let launcher = FakeProcessLauncher()
-        let manager = ProxyServiceManager(paths: paths, launcher: launcher)
+        let manager = makeProxyServiceManager(paths: paths, launcher: launcher)
 
         try await manager.stop()
 
@@ -717,7 +717,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         try createBinary(at: paths.clipProxyBinary)
         let process = ManagedProxyProcessDouble()
         let launcher = FakeProcessLauncher(process: process)
-        let manager = ProxyServiceManager(paths: paths, launcher: launcher)
+        let manager = makeProxyServiceManager(paths: paths, launcher: launcher)
 
         try await manager.start(port: 28_317)
         try await manager.stop()
@@ -734,7 +734,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         let firstProcess = ManagedProxyProcessDouble(name: "first", events: events)
         let secondProcess = ManagedProxyProcessDouble(name: "second", events: events)
         let launcher = FakeProcessLauncher(processes: [firstProcess, secondProcess], events: events)
-        let manager = ProxyServiceManager(paths: paths, launcher: launcher)
+        let manager = makeProxyServiceManager(paths: paths, launcher: launcher)
 
         try await manager.start(port: 8317)
         try await manager.start(port: 8317)
@@ -752,7 +752,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         let firstProcess = ManagedProxyProcessDouble()
         let secondProcess = ManagedProxyProcessDouble()
         let launcher = FakeProcessLauncher(processes: [firstProcess, secondProcess])
-        let manager = ProxyServiceManager(paths: paths, launcher: launcher)
+        let manager = makeProxyServiceManager(paths: paths, launcher: launcher)
 
         try await manager.start(port: 8317)
         try "port: 8317\n".write(to: paths.clipProxyConfigFile, atomically: true, encoding: .utf8)
@@ -772,13 +772,13 @@ final class ProxyServiceManagerTests: XCTestCase {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         try createBinary(at: paths.clipProxyBinary)
-        let seedManager = ProxyServiceManager(paths: paths, launcher: FakeProcessLauncher())
+        let seedManager = makeProxyServiceManager(paths: paths, launcher: FakeProcessLauncher())
         try await seedManager.start(port: 8317)
         try await seedManager.stop()
         let canonical = try Data(contentsOf: paths.clipProxyConfigFile)
         let launchctl = RunningLabelsLaunchctl(labels: ["com.cliproxymanager.port.8317"])
         let launcher = FakeProcessLauncher(usesManagedLaunchdJobs: true)
-        let manager = ProxyServiceManager(
+        let manager = makeProxyServiceManager(
             paths: paths,
             launcher: launcher,
             launchctl: launchctl,
@@ -799,7 +799,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         let firstProcess = ManagedProxyProcessDouble()
         let secondProcess = ManagedProxyProcessDouble()
         let launcher = FakeProcessLauncher(processes: [firstProcess, secondProcess])
-        let manager = ProxyServiceManager(paths: paths, launcher: launcher)
+        let manager = makeProxyServiceManager(paths: paths, launcher: launcher)
 
         try await manager.start(port: 8317)
         try await manager.restart(port: 9000)
@@ -835,7 +835,7 @@ final class ProxyServiceManagerTests: XCTestCase {
             .failure(NSError(domain: "test", code: 1)),
             .process(restoredProcess)
         ])
-        let manager = ProxyServiceManager(
+        let manager = makeProxyServiceManager(
             paths: paths,
             launcher: launcher,
             rollbackReadinessProvider: { $0 == 8317 }
@@ -873,7 +873,7 @@ final class ProxyServiceManagerTests: XCTestCase {
             .failure(NSError(domain: "test", code: 1)),
             .process(restoredProcess)
         ])
-        let manager = ProxyServiceManager(
+        let manager = makeProxyServiceManager(
             paths: paths,
             launcher: launcher,
             rollbackReadinessProvider: { _ in false }
@@ -902,7 +902,7 @@ final class ProxyServiceManagerTests: XCTestCase {
             .process(legacyProcess),
             .failure(NSError(domain: "test", code: 1))
         ])
-        let manager = ProxyServiceManager(paths: paths, launcher: launcher)
+        let manager = makeProxyServiceManager(paths: paths, launcher: launcher)
 
         try await manager.start(port: 8317)
         try "host: \"0.0.0.0\"\nport: 8317\n".write(
@@ -933,7 +933,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         let process = ManagedProxyProcessDouble()
         let launcher = FakeProcessLauncher(process: process)
         let provider = AppConfigProviderDouble(config: .default)
-        let manager = ProxyServiceManager(
+        let manager = makeProxyServiceManager(
             paths: paths,
             launcher: launcher,
             appConfigProvider: { try provider.load() }
@@ -967,7 +967,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         let firstProcess = ManagedProxyProcessDouble(name: "first", events: events, waitDelay: 0.1)
         let secondProcess = ManagedProxyProcessDouble(name: "second", events: events)
         let launcher = FakeProcessLauncher(processes: [firstProcess, secondProcess], events: events)
-        let manager = ProxyServiceManager(paths: paths, launcher: launcher)
+        let manager = makeProxyServiceManager(paths: paths, launcher: launcher)
 
         try await manager.start(port: 8317)
         try await manager.restart(port: 9000)
@@ -979,7 +979,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         let launcher = FakeProcessLauncher()
-        let manager = ProxyServiceManager(paths: paths, launcher: launcher)
+        let manager = makeProxyServiceManager(paths: paths, launcher: launcher)
 
         do {
             try await manager.start(port: 0)
@@ -996,7 +996,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         let launcher = FakeProcessLauncher()
-        let manager = ProxyServiceManager(paths: paths, launcher: launcher)
+        let manager = makeProxyServiceManager(paths: paths, launcher: launcher)
 
         do {
             try await manager.start(port: 8317)
@@ -1015,7 +1015,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         try createBinary(at: paths.clipProxyBinary)
         try FileManager.default.createDirectory(at: paths.clipProxyConfigFile, withIntermediateDirectories: true)
         let launcher = FakeProcessLauncher()
-        let manager = ProxyServiceManager(paths: paths, launcher: launcher)
+        let manager = makeProxyServiceManager(paths: paths, launcher: launcher)
 
         do {
             try await manager.start(port: 8317)
@@ -1035,7 +1035,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         try createBinary(at: paths.clipProxyBinary)
         let launcher = FakeProcessLauncher(error: NSError(domain: "test", code: 1))
-        let manager = ProxyServiceManager(paths: paths, launcher: launcher)
+        let manager = makeProxyServiceManager(paths: paths, launcher: launcher)
 
         do {
             try await manager.start(port: 8317)
@@ -1195,7 +1195,7 @@ final class ProxyServiceManagerTests: XCTestCase {
             encoding: .utf8
         )
         let launchctl = RunningLabelsLaunchctl(labels: ["com.cliproxymanager.port.8317"])
-        let manager = ProxyServiceManager(
+        let manager = makeProxyServiceManager(
             paths: paths,
             launcher: FakeProcessLauncher(usesManagedLaunchdJobs: true),
             launchctl: launchctl,
@@ -1222,7 +1222,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         )
         let launchctl = RunningLabelsLaunchctl(labels: ["com.cliproxymanager.port.8317"])
         let launcher = FakeProcessLauncher(usesManagedLaunchdJobs: true)
-        let manager = ProxyServiceManager(
+        let manager = makeProxyServiceManager(
             paths: paths,
             launcher: launcher,
             launchctl: launchctl,
@@ -1246,7 +1246,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         let existing = "host: \"0.0.0.0\"\nport: 8317\n"
         try existing.write(to: paths.clipProxyConfigFile, atomically: true, encoding: .utf8)
         let launchctl = RunningLabelsLaunchctl(error: CocoaError(.fileReadUnknown))
-        let manager = ProxyServiceManager(
+        let manager = makeProxyServiceManager(
             paths: paths,
             launcher: FakeProcessLauncher(usesManagedLaunchdJobs: true),
             launchctl: launchctl,
@@ -1264,7 +1264,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         try createBinary(at: paths.clipProxyBinary)
         let process = ManagedProxyProcessDouble()
         let launcher = FakeProcessLauncher(process: process)
-        let manager = ProxyServiceManager(paths: paths, launcher: launcher)
+        let manager = makeProxyServiceManager(paths: paths, launcher: launcher)
 
         try await manager.start(port: 8317)
         try "port: 8317\n".write(to: paths.clipProxyConfigFile, atomically: true, encoding: .utf8)
@@ -1313,7 +1313,7 @@ final class ProxyServiceManagerTests: XCTestCase {
             codexReference: "work-codex-key"
         ]
         let preparedConfig = config
-        let manager = ProxyServiceManager(
+        let manager = makeProxyServiceManager(
             paths: paths,
             launcher: FakeProcessLauncher(),
             apiKeyProvider: { keys[$0] },
@@ -1345,7 +1345,7 @@ final class ProxyServiceManagerTests: XCTestCase {
             .init(id: unreadableID, provider: .claude, secretReference: unreadableReference)
         ]
         let preparedConfig = config
-        let manager = ProxyServiceManager(
+        let manager = makeProxyServiceManager(
             paths: paths,
             launcher: FakeProcessLauncher(),
             apiKeyProvider: { reference in
@@ -1363,6 +1363,122 @@ final class ProxyServiceManagerTests: XCTestCase {
         XCTAssertTrue(yaml.contains("prefix: \"cpm-\(healthyID)\""))
         XCTAssertTrue(yaml.contains("healthy-key"))
         XCTAssertFalse(yaml.contains("prefix: \"cpm-\(unreadableID)\""))
+    }
+
+    func testSupportedManagerFactoryStartsWhenUnsupportedHostPreflightWouldBlock() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let blockedManager = makeProxyServiceManager(
+            paths: paths,
+            launcher: FakeProcessLauncher(),
+            compatibilityAuthorizer: RuntimeCompatibilityPreflight(environment: UnsupportedMacOSEnvironment())
+        )
+
+        do {
+            try await blockedManager.start(port: 8317)
+            XCTFail("Expected unsupported macOS compatibility block")
+        } catch let error as ProxyServiceError {
+            XCTAssertEqual(error, .compatibilityBlocked(.unsupportedOperatingSystem))
+        }
+
+        let launcher = FakeProcessLauncher()
+        let manager = makeProxyServiceManager(paths: paths, launcher: launcher)
+        try await manager.start(port: 8317)
+
+        XCTAssertEqual(launcher.invocations.count, 1)
+    }
+
+    func testBlockedStartDoesNotStageConfigurationOrLaunch() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let launcher = FakeProcessLauncher()
+        let manager = makeProxyServiceManager(
+            paths: paths,
+            launcher: launcher,
+            compatibilityAuthorizer: CompatibilityAuthorizerDouble(blockedActions: [.startProxy])
+        )
+
+        do {
+            try await manager.start(port: 8317)
+            XCTFail("Expected compatibility block")
+        } catch let error as ProxyServiceError {
+            XCTAssertEqual(error, .compatibilityBlocked(.unsupportedArchitecture))
+        }
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.clipProxyConfigFile.path))
+        XCTAssertEqual(launcher.invocations, [])
+    }
+
+    func testTranslatedArm64StartDoesNotStageConfigurationOrLaunch() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let launcher = FakeProcessLauncher()
+        let manager = makeProxyServiceManager(
+            paths: paths,
+            launcher: launcher,
+            compatibilityAuthorizer: RuntimeCompatibilityPreflight(
+                environment: TranslatedArm64Environment()
+            )
+        )
+
+        do {
+            try await manager.start(port: 8317)
+            XCTFail("Expected translated execution block")
+        } catch let error as ProxyServiceError {
+            XCTAssertEqual(error, .compatibilityBlocked(.translatedExecution))
+        }
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.clipProxyConfigFile.path))
+        XCTAssertEqual(launcher.invocations, [])
+    }
+
+    func testBlockedRestartLeavesRunningProxyUntouched() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let runningProcess = ManagedProxyProcessDouble()
+        let launcher = FakeProcessLauncher(process: runningProcess)
+        let authorizer = CompatibilityAuthorizerDouble()
+        let manager = makeProxyServiceManager(
+            paths: paths,
+            launcher: launcher,
+            compatibilityAuthorizer: authorizer
+        )
+        try await manager.start(port: 8317)
+        authorizer.blockedActions = [.restartProxy]
+
+        do {
+            try await manager.restart(port: 8317)
+            XCTFail("Expected compatibility block")
+        } catch let error as ProxyServiceError {
+            XCTAssertEqual(error, .compatibilityBlocked(.unsupportedArchitecture))
+        }
+
+        XCTAssertEqual(runningProcess.terminateCallCount, 0)
+        XCTAssertEqual(runningProcess.waitUntilExitCallCount, 0)
+        XCTAssertEqual(launcher.invocations.count, 1)
+        XCTAssertEqual(try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8).contains("port: 8317"), true)
+    }
+
+    func testBlockedOAuthPreparationLeavesConfigurationUnchanged() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let existing = "host: \"127.0.0.1\"\nport: 8317\n"
+        try existing.write(to: paths.clipProxyConfigFile, atomically: true, encoding: .utf8)
+        let manager = makeProxyServiceManager(
+            paths: paths,
+            launcher: FakeProcessLauncher(),
+            compatibilityAuthorizer: CompatibilityAuthorizerDouble(blockedActions: [.prepareOAuthLogin])
+        )
+
+        XCTAssertThrowsError(try manager.prepare(port: 8317)) { error in
+            XCTAssertEqual(error as? ProxyServiceError, .compatibilityBlocked(.unsupportedArchitecture))
+        }
+        XCTAssertEqual(try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8), existing)
     }
 
     private func makeSandbox() throws -> URL {
@@ -1416,6 +1532,136 @@ final class ProxyServiceManagerTests: XCTestCase {
             value = expression()
         }
         XCTAssertEqual(value, expected, file: file, line: line)
+    }
+}
+
+private func makeProxyServiceManager(
+    paths: ManagedPaths,
+    bundledBinaryURL: URL? = nil,
+    bundledManifestURL: URL? = nil,
+    launcher: any ProcessLaunching = ProcessLauncher(),
+    fileManager: FileManager = .default,
+    managementKeyProvider: (@Sendable () -> String?)? = nil,
+    usageEnabledProvider: (@Sendable () -> Bool)? = nil,
+    claudeAPIKeyProvider: (@Sendable () -> String?)? = nil,
+    codexAPIKeyProvider: (@Sendable () -> String?)? = nil,
+    apiKeyProvider: (@Sendable (SecretReference) throws -> String?)? = nil,
+    appConfigProvider: (@Sendable () throws -> AppConfig)? = nil,
+    rollbackReadinessProvider: (@Sendable (Int) -> Bool)? = nil,
+    compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing = CompatibilityAuthorizerDouble()
+) -> ProxyServiceManager {
+    ProxyServiceManager(
+        paths: paths,
+        bundledBinaryURL: bundledBinaryURL,
+        bundledManifestURL: bundledManifestURL,
+        launcher: launcher,
+        fileManager: fileManager,
+        managementKeyProvider: managementKeyProvider,
+        usageEnabledProvider: usageEnabledProvider,
+        claudeAPIKeyProvider: claudeAPIKeyProvider,
+        codexAPIKeyProvider: codexAPIKeyProvider,
+        apiKeyProvider: apiKeyProvider,
+        appConfigProvider: appConfigProvider,
+        rollbackReadinessProvider: rollbackReadinessProvider,
+        compatibilityAuthorizer: compatibilityAuthorizer
+    )
+}
+
+private func makeProxyServiceManager(
+    paths: ManagedPaths,
+    bundledBinaryURL: URL? = nil,
+    bundledManifestURL: URL? = nil,
+    launcher: any ProcessLaunching = ProcessLauncher(),
+    launchctl: any LaunchctlManaging,
+    fileManager: FileManager = .default,
+    managementKeyProvider: (@Sendable () -> String?)? = nil,
+    usageEnabledProvider: (@Sendable () -> Bool)? = nil,
+    claudeAPIKeyProvider: (@Sendable () -> String?)? = nil,
+    codexAPIKeyProvider: (@Sendable () -> String?)? = nil,
+    apiKeyProvider: (@Sendable (SecretReference) throws -> String?)? = nil,
+    appConfigProvider: (@Sendable () throws -> AppConfig)? = nil,
+    rollbackReadinessProvider: (@Sendable (Int) -> Bool)? = nil,
+    compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing = CompatibilityAuthorizerDouble(),
+    inspectLaunchctlJobs: Bool = true,
+    inspectSystemProcesses: Bool? = nil
+) -> ProxyServiceManager {
+    ProxyServiceManager(
+        paths: paths,
+        bundledBinaryURL: bundledBinaryURL,
+        bundledManifestURL: bundledManifestURL,
+        launcher: launcher,
+        launchctl: launchctl,
+        fileManager: fileManager,
+        managementKeyProvider: managementKeyProvider,
+        usageEnabledProvider: usageEnabledProvider,
+        claudeAPIKeyProvider: claudeAPIKeyProvider,
+        codexAPIKeyProvider: codexAPIKeyProvider,
+        apiKeyProvider: apiKeyProvider,
+        appConfigProvider: appConfigProvider,
+        rollbackReadinessProvider: rollbackReadinessProvider,
+        compatibilityAuthorizer: compatibilityAuthorizer,
+        inspectLaunchctlJobs: inspectLaunchctlJobs,
+        inspectSystemProcesses: inspectSystemProcesses
+    )
+}
+
+private struct UnsupportedMacOSEnvironment: RuntimeEnvironmentProviding {
+    func snapshot() -> RuntimeEnvironmentSnapshot {
+        RuntimeEnvironmentSnapshot(
+            operatingSystem: .macOS(major: 14, minor: 0),
+            architecture: .arm64,
+            loginShell: "/bin/zsh"
+        )
+    }
+}
+
+private struct TranslatedArm64Environment: RuntimeEnvironmentProviding {
+    func snapshot() -> RuntimeEnvironmentSnapshot {
+        RuntimeEnvironmentSnapshot(
+            operatingSystem: .macOS(major: 15, minor: 0),
+            architecture: .arm64,
+            isTranslated: true,
+            loginShell: "/bin/zsh"
+        )
+    }
+}
+
+private final class CompatibilityAuthorizerDouble: RuntimeCompatibilityAuthorizing, @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedBlockedActions: Set<CompatibilityAction>
+
+    var blockedActions: Set<CompatibilityAction> {
+        get { lock.withLock { storedBlockedActions } }
+        set { lock.withLock { storedBlockedActions = newValue } }
+    }
+
+    init(blockedActions: Set<CompatibilityAction> = []) {
+        storedBlockedActions = blockedActions
+    }
+
+    func staticReport(artifacts _: CompatibilityArtifacts) -> RuntimeCompatibilityReport {
+        let blocked = blockedActions
+        return RuntimeCompatibilityReport(
+            findings: blocked.isEmpty
+                ? []
+                : [.unsupportedArchitecture(expected: .arm64, actual: .x86_64)],
+            decisions: Dictionary(uniqueKeysWithValues: CompatibilityAction.allCases.map { action in
+                (action, CompatibilityDecision(
+                    action: action,
+                    disposition: blocked.contains(action) ? .blocked : .allowed
+                ))
+            })
+        )
+    }
+
+    func report(artifacts: CompatibilityArtifacts) async -> RuntimeCompatibilityReport {
+        staticReport(artifacts: artifacts)
+    }
+
+    func require(_ action: CompatibilityAction, artifacts _: CompatibilityArtifacts) throws {
+        if blockedActions.contains(action) {
+            throw RuntimeCompatibilityError.actionBlocked(action)
+        }
     }
 }
 

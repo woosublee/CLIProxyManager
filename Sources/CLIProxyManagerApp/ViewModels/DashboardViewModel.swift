@@ -177,6 +177,7 @@ final class DashboardViewModel: ObservableObject {
 
     @Published var cards: [ProfileCard]
     @Published var serverStatus: DiagnosticStatus
+    @Published private(set) var compatibilityReport: RuntimeCompatibilityReport
     @Published var serverControlState: ServerControlState = .stopped
     @Published var isServerActionInProgress = false
     @Published var isProfileLoginInProgress = false
@@ -242,6 +243,39 @@ final class DashboardViewModel: ObservableObject {
             || isAPIUsageReloadInProgress
     }
 
+    var canStartServerForCompatibility: Bool {
+        compatibilityReport.decision(for: .startProxy).disposition != .blocked
+    }
+
+    var canRestartServerForCompatibility: Bool {
+        compatibilityReport.decision(for: .restartProxy).disposition != .blocked
+    }
+
+    var canInstallShellFunctionsForCompatibility: Bool {
+        compatibilityReport.decision(for: .installShellFunctions).disposition != .blocked
+    }
+
+    var canStageProxyUpdateForCompatibility: Bool {
+        compatibilityReport.decision(for: .stageProxyUpdate).disposition != .blocked
+    }
+
+    var canApplyProxyUpdateForCompatibility: Bool {
+        compatibilityReport.decision(for: .applyProxyUpdate).disposition != .blocked
+    }
+
+    var canScheduleProxyUpdateForCompatibility: Bool {
+        compatibilityReport.decision(for: .scheduleProxyUpdate).disposition != .blocked
+    }
+
+    var compatibilityPresentation: (isBlocked: Bool, text: String)? {
+        let summary = CPMStatus.Compatibility(report: compatibilityReport)
+        guard let finding = summary.findings.first else { return nil }
+        return (
+            isBlocked: summary.disposition == .blocked,
+            text: "\(finding.code): \(finding.recovery)"
+        )
+    }
+
     var lastSuccessfulUsageRefreshAt: Date? {
         let subscriptionDates = providerRows.compactMap { row -> Date? in
             guard row.showsUsage,
@@ -268,6 +302,8 @@ final class DashboardViewModel: ObservableObject {
     private let automaticShellInstallService: AutomaticShellInstallService
     private let proxyHealthClient: any ProxyHealthChecking
     private let proxyService: any ProxyServiceControlling
+    private let compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing
+    private let compatibilityArtifactsProvider: () -> CompatibilityArtifacts
     private let bundledProxyReconciler: any BundledProxyReconciling
     private let claudeConnector: ClaudeConnector
     private let loginItemService: any LoginItemControlling
@@ -557,6 +593,8 @@ final class DashboardViewModel: ObservableObject {
         automaticShellInstallService: AutomaticShellInstallService? = nil,
         proxyHealthClient: any ProxyHealthChecking = ProxyHealthClient(),
         proxyService: any ProxyServiceControlling = BundledProxyBinary.serviceManager(),
+        compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing = RuntimeCompatibilityPreflight(),
+        compatibilityArtifactsProvider: (() -> CompatibilityArtifacts)? = nil,
         bundledProxyReconciler: (any BundledProxyReconciling)? = nil,
         claudeConnector: ClaudeConnector = ClaudeConnector(),
         loginItemService: any LoginItemControlling = LoginItemService(),
@@ -589,6 +627,8 @@ final class DashboardViewModel: ObservableObject {
         )
         self.proxyHealthClient = proxyHealthClient
         self.proxyService = proxyService
+        self.compatibilityAuthorizer = compatibilityAuthorizer
+        self.compatibilityArtifactsProvider = compatibilityArtifactsProvider ?? Self.defaultCompatibilityArtifacts
         self.bundledProxyReconciler = bundledProxyReconciler ?? BundledProxyBinary.reconciliationService()
         self.claudeConnector = claudeConnector
         self.loginItemService = loginItemService
@@ -696,6 +736,7 @@ final class DashboardViewModel: ObservableObject {
             title: "Needs check",
             message: "Server status has not been checked yet."
         )
+        compatibilityReport = compatibilityAuthorizer.staticReport(artifacts: self.compatibilityArtifactsProvider())
         restoreClaudeModelOptions()
         restoreSubscriptionUsageSnapshots()
         restoreCodexResetCreditsSnapshots()
@@ -994,15 +1035,59 @@ final class DashboardViewModel: ObservableObject {
 
     func refresh() async {
         let wasProxyReady = serverStatus.severity == .ready
+        let compatibilityArtifacts = compatibilityArtifactsProvider()
+        async let updatedCompatibilityReport = compatibilityAuthorizer.report(artifacts: compatibilityArtifacts)
         let rawServerStatus = await stableServerStatus()
         updateProxyRuntimeCertainty(from: rawServerStatus)
         let updatedServerStatus = passiveRefreshPresentationStatus(from: rawServerStatus)
         let claudeStatus = await claudeConnector.status()
+        compatibilityReport = await updatedCompatibilityReport
         updateStatuses(serverStatus: updatedServerStatus, claudeStatus: claudeStatus)
         if wasProxyReady != (updatedServerStatus.severity == .ready) {
             scheduleAPIUsageCollectorUpdateIfStarted()
         }
     }
+
+    private static func defaultCompatibilityArtifacts() -> CompatibilityArtifacts {
+        let store = CLIProxyAPIBinaryStore(paths: ManagedPaths())
+        return CompatibilityArtifacts(
+            bundled: artifact(at: BundledProxyBinary.manifestURL()),
+            active: artifact(reading: Result { try store.activeManifest() }),
+            pending: artifact(reading: Result { try store.pendingManifest() })
+        )
+    }
+
+    private static func artifact(at manifestURL: URL?) -> RuntimeCompatibilityArtifact? {
+        guard let manifestURL,
+              let data = try? Data(contentsOf: manifestURL),
+              let manifest = try? JSONDecoder().decode(CLIProxyAPIBinaryManifest.self, from: data)
+        else {
+            return manifestURL == nil ? nil : unsupportedArtifact
+        }
+        return artifact(for: manifest)
+    }
+
+    private static func artifact(reading result: Result<CLIProxyAPIBinaryManifest?, Error>) -> RuntimeCompatibilityArtifact? {
+        switch result {
+        case .success(let manifest):
+            artifact(for: manifest)
+        case .failure:
+            unsupportedArtifact
+        }
+    }
+
+    private static func artifact(for manifest: CLIProxyAPIBinaryManifest?) -> RuntimeCompatibilityArtifact? {
+        guard let manifest else { return nil }
+        if let target = manifest.target { return .explicit(target) }
+        guard manifest.upstreamAsset == "CLIProxyAPI_\(manifest.version)_darwin_aarch64.tar.gz" else {
+            return unsupportedArtifact
+        }
+        return .legacy
+    }
+
+    private static let unsupportedArtifact = RuntimeCompatibilityArtifact.explicit(
+        CLIProxyAPIArtifactTarget(operatingSystem: .darwin, architecture: .x86_64)
+    )
 
     func prepareUsage() async {
         guard !isPreparingAPIUsageForTermination else { return }
@@ -2807,7 +2892,7 @@ final class DashboardViewModel: ObservableObject {
             if let priorAuthDisabled {
                 _ = try? setAuthProfileDisabled(priorAuthDisabled, for: provider)
                 authProfiles = (try? authProfileStore.profiles()) ?? authProfiles
-                try? applyShellInstallForCurrentProfiles()
+                scheduleAutomaticShellInstall()
             }
             refreshProfiles()
             scheduleSubscriptionUsagePollingIfNeeded()
@@ -3138,10 +3223,7 @@ final class DashboardViewModel: ObservableObject {
             } else {
                 try? secretStore.delete(key)
             }
-            try? automaticShellInstallService.apply(
-                config: shellInstallConfig(in: config),
-                enabledFunctions: enabledShellFunctions(in: config)
-            )
+            scheduleAutomaticShellInstall()
             throw error
         }
     }
@@ -3429,8 +3511,12 @@ final class DashboardViewModel: ObservableObject {
         try saveConfig(updatedConfig)
     }
 
-    func installShellFunctions(helperCommand: String = "/usr/local/bin/cliproxy-manager") throws {
-        try automaticShellInstallService.apply(config: config, helperCommand: helperCommand, enabledFunctions: enabledShellFunctions())
+    func installShellFunctions(helperCommand: String = "/usr/local/bin/cliproxy-manager") async throws {
+        try await automaticShellInstallService.apply(
+            config: config,
+            helperCommand: helperCommand,
+            enabledFunctions: enabledShellFunctions()
+        )
         settingsMessage = "Installation complete. Open a new terminal or run source ~/.zshrc."
         rebuildOptionRows()
     }
@@ -4289,20 +4375,14 @@ final class DashboardViewModel: ObservableObject {
         updatedConfig = config
 
         var prefixRollbacks: [AuthProfilePrefixRollback] = []
-        var didApplyShellInstall = false
         do {
             prefixRollbacks = try syncAuthProfilePrefixesForSave()
-            try automaticShellInstallService.apply(config: shellInstallConfig(in: updatedConfig), enabledFunctions: enabledShellFunctions(in: updatedConfig))
-            didApplyShellInstall = true
             try configStore.save(updatedConfig)
             lastPersistedConfig = updatedConfig
             rebuildOptionRows()
             rebuildProviderRows(claudeStatus: nil, codexStatus: nil)
         } catch {
             rollbackAuthProfilePrefixes(prefixRollbacks)
-            if didApplyShellInstall {
-                try? automaticShellInstallService.apply(config: shellInstallConfig(in: oldConfig), enabledFunctions: enabledShellFunctions(in: oldConfig))
-            }
             config = oldConfig
             cards = oldCards
             rebuildOptionRows()
@@ -4310,6 +4390,7 @@ final class DashboardViewModel: ObservableObject {
             throw error
         }
 
+        scheduleAutomaticShellInstall(config: updatedConfig)
         configSaveSucceeded = true
         if fastConfigurationChanged {
             requestProxyConfigurationRestart(reason: .fastMode)
@@ -4362,17 +4443,30 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func applyInitialShellInstall() {
-        do {
-            try applyShellInstallForCurrentProfiles()
-        } catch {
-            settingsMessage = "Automatic shell function installation failed: \(error.localizedDescription)"
-        }
+        scheduleAutomaticShellInstall()
     }
 
-    private func applyShellInstallForCurrentProfiles() throws {
-        let activeNames = activeFunctionNames(in: config)
-        try ShellCommandNameValidator.validate(activeNames)
-        try automaticShellInstallService.apply(config: shellInstallConfig(in: config), enabledFunctions: enabledShellFunctions())
+    private func scheduleAutomaticShellInstall(config: AppConfig? = nil) {
+        let installConfig = config ?? self.config
+        let activeNames = activeFunctionNames(in: installConfig)
+        guard (try? ShellCommandNameValidator.validate(activeNames)) != nil else {
+            return
+        }
+        let shellConfig = shellInstallConfig(in: installConfig)
+        let enabledFunctions = enabledShellFunctions(in: installConfig)
+        let request = automaticShellInstallService.beginAutomaticReconciliation()
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                _ = try await automaticShellInstallService.reconcile(
+                    config: shellConfig,
+                    enabledFunctions: enabledFunctions,
+                    request: request
+                )
+            } catch {
+                settingsMessage = "Automatic shell function installation failed. Retry the operation."
+            }
+        }
     }
 
     private func enabledShellFunctions() -> AutomaticShellInstallService.EnabledFunctions {

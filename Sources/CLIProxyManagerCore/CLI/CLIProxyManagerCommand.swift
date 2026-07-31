@@ -217,11 +217,16 @@ public struct CLIProxyManagerCommand: Sendable {
             let app = cpmStatus.app
             let helper = cpmStatus.helper
             let proxy = cpmStatus.proxy
+            let compatibility = cpmStatus.compatibility
             let versionSuffix = app.version.map { ", v\($0)" } ?? ""
             output.writeStdout("App: installed=\(app.installed), running=\(app.running)\(versionSuffix)\n")
             output.writeStdout("Helper: \(helper.path) (\(helper.installed ? "installed" : "not installed"))\n")
             let activeVersionSuffix = proxy.activeVersion.map { ", version=\($0)" } ?? ""
             output.writeStdout("Proxy: port=\(proxy.port), running=\(proxy.running)\(activeVersionSuffix)\n")
+            output.writeStdout("Compatibility: \(compatibility.disposition.rawValue)\n")
+            for finding in compatibility.findings {
+                output.writeStdout("  \(finding.code): \(finding.disposition.rawValue). \(finding.recovery)\n")
+            }
         }
     }
 

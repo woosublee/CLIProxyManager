@@ -22,6 +22,7 @@ public struct CLIProxyAPIBinaryManifest: Codable, Equatable, Sendable {
     public var vendoredFromArchivePath: String
     public var downloadedAt: String?
     public var appliedAt: String?
+    public var target: CLIProxyAPIArtifactTarget?
 
     public init(
         name: String,
@@ -39,7 +40,8 @@ public struct CLIProxyAPIBinaryManifest: Codable, Equatable, Sendable {
         vendoredBinarySizeBytes: Int,
         vendoredFromArchivePath: String,
         downloadedAt: String? = nil,
-        appliedAt: String? = nil
+        appliedAt: String? = nil,
+        target: CLIProxyAPIArtifactTarget? = nil
     ) {
         self.name = name
         self.version = version
@@ -57,6 +59,7 @@ public struct CLIProxyAPIBinaryManifest: Codable, Equatable, Sendable {
         self.vendoredFromArchivePath = vendoredFromArchivePath
         self.downloadedAt = downloadedAt
         self.appliedAt = appliedAt
+        self.target = target
     }
 
     public var parsedVersion: CLIProxyAPIVersion? {
@@ -67,7 +70,7 @@ public struct CLIProxyAPIBinaryManifest: Codable, Equatable, Sendable {
         case name, version, commit, builtAt, sourceKind, source
         case upstreamRepository, upstreamTag, upstreamAsset, upstreamAssetSha256
         case vendoredBinaryName, vendoredBinarySha256, vendoredBinarySizeBytes, vendoredFromArchivePath
-        case downloadedAt, appliedAt
+        case downloadedAt, appliedAt, target
     }
 
     public init(from decoder: Decoder) throws {
@@ -88,5 +91,6 @@ public struct CLIProxyAPIBinaryManifest: Codable, Equatable, Sendable {
         self.vendoredFromArchivePath = try c.decode(String.self, forKey: .vendoredFromArchivePath)
         self.downloadedAt = try c.decodeIfPresent(String.self, forKey: .downloadedAt)
         self.appliedAt = try c.decodeIfPresent(String.self, forKey: .appliedAt)
+        self.target = try c.decodeIfPresent(CLIProxyAPIArtifactTarget.self, forKey: .target)
     }
 }

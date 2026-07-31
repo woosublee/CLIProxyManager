@@ -58,6 +58,29 @@ struct GeneralSettingsView: View {
                 }
             }
 
+            SettingsGroup(title: "Runtime compatibility") {
+                if let compatibility = viewModel.compatibilityPresentation {
+                    SettingsRow(
+                        label: !viewModel.canInstallShellFunctionsForCompatibility
+                            ? "Generated shell writes blocked"
+                            : (compatibility.isBlocked ? "Action blocked" : "Warning"),
+                        description: !viewModel.canInstallShellFunctionsForCompatibility
+                            ? "Generated shell writes stay unavailable until recovery. \(compatibility.text)"
+                            : (compatibility.isBlocked
+                                ? "Start, restart, and proxy updates stay unavailable until recovery. Stop remains available for a running proxy. \(compatibility.text)"
+                                : "Existing proxy operation can continue. \(compatibility.text)")
+                    ) {
+                        Image(systemName: compatibility.isBlocked ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
+                            .foregroundStyle(compatibility.isBlocked ? BrandPalette.statusError : Color.orange)
+                    }
+                } else {
+                    SettingsRow(label: "Compatible", description: "Runtime checks passed. Start, updates, and generated shell functions are available.") {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(BrandPalette.statusRunning)
+                    }
+                }
+            }
+
             SettingsGroup(title: "Command Line") {
                 SettingsRow(label: "cpm Command Line Tool", description: cpmDescription) {
                     if viewModel.isCPMInstallationActionInProgress {
@@ -315,6 +338,16 @@ struct AboutSettingsView: View {
     @State private var showLicenses: Bool = false
     @State private var showApplyPrompt = false
 
+    private var canRunCLIProxyAPIUpdateAction: Bool {
+        if cliProxyAPIUpdateService.pendingUpdate != nil {
+            return viewModel.canApplyProxyUpdateForCompatibility
+        }
+        if cliProxyAPIUpdateService.availableUpdate != nil {
+            return viewModel.canStageProxyUpdateForCompatibility
+        }
+        return true
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(spacing: 12) {
@@ -357,7 +390,9 @@ struct AboutSettingsView: View {
                         availableUpdate: cliProxyAPIUpdateService.availableUpdate,
                         pendingUpdate: cliProxyAPIUpdateService.pendingUpdate
                     ),
-                    isEnabled: !cliProxyAPIUpdateService.isChecking && !cliProxyAPIUpdateService.isUpdating
+                    isEnabled: !cliProxyAPIUpdateService.isChecking
+                        && !cliProxyAPIUpdateService.isUpdating
+                        && canRunCLIProxyAPIUpdateAction
                 ) {
                     HStack(spacing: 8) {
                         if cliProxyAPIUpdateService.isChecking || cliProxyAPIUpdateService.isUpdating {
@@ -423,6 +458,7 @@ struct AboutSettingsView: View {
             )) {
                 Task { await viewModel.applyCLIProxyAPIPendingUpdate(using: cliProxyAPIUpdateService) }
             }
+            .disabled(!viewModel.canApplyProxyUpdateForCompatibility)
             Button("Apply on next server start") {
                 if cliProxyAPIUpdateService.schedulePendingForNextServerStart() {
                     viewModel.settingsMessage = "CLIProxyAPI update will be applied on next server start."
@@ -430,6 +466,7 @@ struct AboutSettingsView: View {
                     viewModel.settingsMessage = "CLIProxyAPI update failed: \(message)"
                 }
             }
+            .disabled(!viewModel.canScheduleProxyUpdateForCompatibility)
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(cliProxyAPIPendingUpdatePromptMessage(currentVersion: cliProxyAPIUpdateService.currentVersionText))

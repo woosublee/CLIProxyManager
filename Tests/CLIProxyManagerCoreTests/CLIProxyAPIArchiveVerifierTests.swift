@@ -35,6 +35,7 @@ final class CLIProxyAPIArchiveVerifierTests: XCTestCase {
         XCTAssertEqual(result.manifest.commit, "abcdef12")
         XCTAssertEqual(result.manifest.builtAt, "2026-07-01T00:00:00Z")
         XCTAssertEqual(result.manifest.sourceKind, .userUpdated)
+        XCTAssertEqual(result.manifest.target, .darwinArm64)
         XCTAssertEqual(result.manifest.upstreamAssetSha256, archiveData.sha256HexDigest())
         XCTAssertEqual(result.manifest.vendoredBinaryName, "cliproxyapi")
         XCTAssertTrue(FileManager.default.fileExists(atPath: result.binaryURL.path))

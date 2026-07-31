@@ -53,6 +53,29 @@ final class CLIProxyAPIReleaseClientTests: XCTestCase {
         XCTAssertEqual(http.requestedHeaders[checksumURL]?["User-Agent"], "CLIProxyManager")
     }
 
+    func testReleaseCarriesDarwinArm64Target() async throws {
+        let latestURL = URL(string: "https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/latest")!
+        let checksumURL = URL(string: "https://downloads.example/checksums.txt")!
+        let archiveURL = URL(string: "https://downloads.example/CLIProxyAPI_7.2.42_darwin_aarch64.tar.gz")!
+        let http = StubReleaseHTTPClient(responses: [
+            latestURL: Data("""
+            {
+              "tag_name": "v7.2.42",
+              "prerelease": false,
+              "assets": [
+                { "name": "checksums.txt", "browser_download_url": "\(checksumURL.absoluteString)" },
+                { "name": "CLIProxyAPI_7.2.42_darwin_aarch64.tar.gz", "browser_download_url": "\(archiveURL.absoluteString)" }
+              ]
+            }
+            """.utf8),
+            checksumURL: Data("archive-sha  CLIProxyAPI_7.2.42_darwin_aarch64.tar.gz\n".utf8)
+        ])
+
+        let release = try await CLIProxyAPIReleaseClient(httpClient: http).latestRelease()
+
+        XCTAssertEqual(release.target, .darwinArm64)
+    }
+
     func testRejectsPrereleaseLatestRelease() async {
         let latestURL = URL(string: "https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/latest")!
         let http = StubReleaseHTTPClient(responses: [

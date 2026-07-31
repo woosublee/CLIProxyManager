@@ -469,7 +469,15 @@ final class APIUsageLedgerStoreTests: XCTestCase {
     func testFlushDoesNotOverwriteFutureSchemaInstalledAfterCacheLoad() async throws {
         let paths = try makePaths()
         let at = iso("2026-07-25T04:00:00Z")
-        let store = APIUsageLedgerStore(paths: paths, writeDelayNanoseconds: .max)
+        let store = APIUsageLedgerStore(
+            paths: paths,
+            sleep: { _ in
+                while !Task.isCancelled {
+                    try await Task.sleep(nanoseconds: 1_000_000_000)
+                }
+                throw CancellationError()
+            }
+        )
         try await store.prepareTracking(at: iso("2026-07-01T00:00:00Z"), reportingTimeZoneID: "UTC")
         try await store.flush()
         XCTAssertEqual(fileMode(paths.apiUsageDirectory.appendingPathComponent(".store.lock")), 0o600)

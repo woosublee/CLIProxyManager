@@ -9,6 +9,7 @@ public enum CLIProxyAPIBinaryStoreError: Error, Equatable {
     case binarySizeMismatch
     case missingPendingBinary
     case missingPendingManifest
+    case unsupportedArtifactTarget
 }
 
 public enum BundledProxyReconciliationResult: Equatable, Sendable {
@@ -40,12 +41,18 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
 
     private let paths: ManagedPaths
     private let fileManager: FileManager
+    private let compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
 
-    public init(paths: ManagedPaths, fileManager: FileManager = .default) {
+    public init(
+        paths: ManagedPaths,
+        fileManager: FileManager = .default,
+        compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing = RuntimeCompatibilityPreflight()
+    ) {
         self.paths = paths
         self.fileManager = fileManager
+        self.compatibilityAuthorizer = compatibilityAuthorizer
         self.encoder = JSONEncoder()
         self.encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         self.decoder = JSONDecoder()
@@ -80,10 +87,13 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
             guard fileManager.fileExists(atPath: paths.pendingClipProxyBinary.path) else {
                 throw CLIProxyAPIBinaryStoreError.missingPendingBinary
             }
-            guard let manifest = try pendingManifest() else {
+            guard var manifest = try pendingManifest() else {
                 throw CLIProxyAPIBinaryStoreError.missingPendingManifest
             }
+            try requireCompatibleTarget(manifest: manifest, action: .scheduleProxyUpdate)
             try validateBinary(at: paths.pendingClipProxyBinary, manifest: manifest)
+            inferLegacyTarget(in: &manifest)
+            try writeManifest(manifest, to: paths.pendingClipProxyManifest)
             try fileManager.createDirectory(at: paths.pendingClipProxyDirectory, withIntermediateDirectories: true)
             try Data("scheduled\n".utf8).write(
                 to: paths.pendingClipProxyApplyOnNextStartMarker,
@@ -122,8 +132,11 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
     }
 
     private func savePendingLocked(binaryURL: URL, manifest: CLIProxyAPIBinaryManifest, validate: Bool) throws {
+        try requireCompatibleTarget(manifest: manifest, action: .stageProxyUpdate)
+        var manifest = manifest
         if validate {
             try validateBinary(at: binaryURL, manifest: manifest)
+            inferLegacyTarget(in: &manifest)
         }
         try clearPendingApplyOnNextStartMarker()
         try fileManager.createDirectory(at: paths.pendingClipProxyDirectory, withIntermediateDirectories: true)
@@ -140,7 +153,12 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
             throw CLIProxyAPIBinaryStoreError.missingPendingManifest
         }
 
+        try requireCompatibleTarget(manifest: manifest, action: .applyProxyUpdate)
+        if let active = try activeManifest() {
+            try requireCompatibleTarget(manifest: active, action: .applyProxyUpdate)
+        }
         try validateBinary(at: paths.pendingClipProxyBinary, manifest: manifest)
+        inferLegacyTarget(in: &manifest)
         manifest.appliedAt = Self.iso8601Now()
         try fileManager.createDirectory(at: paths.clipProxyDirectory, withIntermediateDirectories: true)
 
@@ -181,29 +199,35 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
             throw CLIProxyAPIBinaryStoreError.missingBundledBinary
         }
         guard let bundledManifestURL,
-              let bundledManifest = try readManifestIfExists(bundledManifestURL) else {
+              var bundledManifest = try readManifestIfExists(bundledManifestURL) else {
             throw CLIProxyAPIBinaryStoreError.missingBundledManifest
         }
+        try requireCompatibleTarget(manifest: bundledManifest, action: .recoverProxyArtifact)
+        if let active = try? activeManifest() {
+            try requireCompatibleTarget(manifest: active, action: .recoverProxyArtifact)
+        }
+        try requireCompatiblePendingTargetIfPresent(action: .recoverProxyArtifact)
         guard let bundledVersion = bundledManifest.parsedVersion else {
             throw CLIProxyAPIBinaryStoreError.invalidManifestVersion(bundledManifest.version)
         }
         try validateBinary(at: bundledBinaryURL, manifest: bundledManifest)
+        inferLegacyTarget(in: &bundledManifest)
 
         let existingVersion = (try? activeManifest())?.parsedVersion
         guard let active = validActiveManifest(), let activeVersion = active.parsedVersion else {
             try installBundled(binaryURL: bundledBinaryURL, manifest: bundledManifest)
-            removePendingUnlessNewer(than: bundledVersion)
+            try removePendingUnlessNewer(than: bundledVersion)
             return .recoveredInvalidActive(newVersion: bundledVersion)
         }
 
         if activeVersion < bundledVersion {
             try installBundled(binaryURL: bundledBinaryURL, manifest: bundledManifest)
-            removePendingUnlessNewer(than: bundledVersion)
+            try removePendingUnlessNewer(than: bundledVersion)
             return .installed(previousVersion: existingVersion, newVersion: bundledVersion)
         }
 
         try ensureExecutable(paths.clipProxyBinary)
-        removePendingUnlessNewer(than: activeVersion)
+        try removePendingUnlessNewer(than: activeVersion)
         return .unchanged(version: activeVersion)
     }
 
@@ -214,12 +238,18 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
             }
             throw CLIProxyAPIBinaryStoreError.missingBundledBinary
         }
-        guard let bundledManifestURL, let bundledManifest = try readManifestIfExists(bundledManifestURL) else {
+        guard let bundledManifestURL, var bundledManifest = try readManifestIfExists(bundledManifestURL) else {
             throw CLIProxyAPIBinaryStoreError.missingBundledManifest
+        }
+        try requireCompatibleTarget(manifest: bundledManifest, action: .recoverProxyArtifact)
+        if let active = try? activeManifest() {
+            try requireCompatibleTarget(manifest: active, action: .recoverProxyArtifact)
         }
         guard let bundledVersion = bundledManifest.parsedVersion else {
             throw CLIProxyAPIBinaryStoreError.invalidManifestVersion(bundledManifest.version)
         }
+        try validateBinary(at: bundledBinaryURL, manifest: bundledManifest)
+        inferLegacyTarget(in: &bundledManifest)
 
         let active = validActiveManifest()
         let activeVersion = active?.parsedVersion
@@ -254,8 +284,12 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
         guard fileManager.fileExists(atPath: paths.pendingClipProxyBinary.path) || fileManager.fileExists(atPath: paths.pendingClipProxyManifest.path) else {
             return
         }
-        guard let pending = try? pendingManifest(),
-              let pendingVersion = pending.parsedVersion,
+        guard let pending = try? pendingManifest() else {
+            try? fileManager.removeItem(at: paths.pendingClipProxyDirectory)
+            return
+        }
+        try requireCompatibleTarget(manifest: pending, action: .applyProxyUpdate)
+        guard let pendingVersion = pending.parsedVersion,
               pendingVersion > bundledVersion,
               activeVersion.map({ pendingVersion > $0 }) ?? true,
               binaryMatches(paths.pendingClipProxyBinary, manifest: pending) else {
@@ -275,13 +309,17 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
         try fileManager.removeItem(at: paths.pendingClipProxyApplyOnNextStartMarker)
     }
 
-    private func removePendingUnlessNewer(than activeVersion: CLIProxyAPIVersion) {
+    private func removePendingUnlessNewer(than activeVersion: CLIProxyAPIVersion) throws {
         guard fileManager.fileExists(atPath: paths.pendingClipProxyBinary.path)
                 || fileManager.fileExists(atPath: paths.pendingClipProxyManifest.path) else {
             return
         }
-        guard let pending = try? pendingManifest(),
-              let pendingVersion = pending.parsedVersion,
+        guard let pending = try? pendingManifest() else {
+            try? fileManager.removeItem(at: paths.pendingClipProxyDirectory)
+            return
+        }
+        try requireCompatibleTarget(manifest: pending, action: .recoverProxyArtifact)
+        guard let pendingVersion = pending.parsedVersion,
               pendingVersion > activeVersion,
               binaryMatches(paths.pendingClipProxyBinary, manifest: pending) else {
             try? fileManager.removeItem(at: paths.pendingClipProxyDirectory)
@@ -307,6 +345,48 @@ public struct CLIProxyAPIBinaryStore: @unchecked Sendable {
     private func writeManifest(_ manifest: CLIProxyAPIBinaryManifest, to url: URL) throws {
         try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try encoder.encode(manifest).write(to: url, options: .atomic)
+    }
+
+    private func requireCompatiblePendingTargetIfPresent(action: CompatibilityAction) throws {
+        guard let pending = try? pendingManifest() else { return }
+        try requireCompatibleTarget(manifest: pending, action: action)
+    }
+
+    private func requireCompatibleTarget(
+        manifest: CLIProxyAPIBinaryManifest,
+        action: CompatibilityAction
+    ) throws {
+        let artifact: RuntimeCompatibilityArtifact
+        if let explicitTarget = manifest.target {
+            artifact = .explicit(explicitTarget)
+        } else if manifest.upstreamAsset == legacyProductionAsset(for: manifest) {
+            artifact = .legacy
+        } else {
+            throw CLIProxyAPIBinaryStoreError.unsupportedArtifactTarget
+        }
+
+        let artifacts = CompatibilityArtifacts(bundled: nil, active: nil, pending: artifact)
+        let report = compatibilityAuthorizer.staticReport(artifacts: artifacts)
+        if report.findings.contains(where: { finding in
+            if case .unsupportedArtifactTarget = finding {
+                return true
+            }
+            return false
+        }) {
+            throw CLIProxyAPIBinaryStoreError.unsupportedArtifactTarget
+        }
+        try compatibilityAuthorizer.require(action, artifacts: artifacts)
+    }
+
+    private func inferLegacyTarget(in manifest: inout CLIProxyAPIBinaryManifest) {
+        guard manifest.target == nil, manifest.upstreamAsset == legacyProductionAsset(for: manifest) else {
+            return
+        }
+        manifest.target = .darwinArm64
+    }
+
+    private func legacyProductionAsset(for manifest: CLIProxyAPIBinaryManifest) -> String {
+        "CLIProxyAPI_\(manifest.version)_darwin_aarch64.tar.gz"
     }
 
     private func validateBinary(at url: URL, manifest: CLIProxyAPIBinaryManifest) throws {

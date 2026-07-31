@@ -774,10 +774,10 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.config.oauthCommandProfiles.first { $0.provider == .codex }?.commandName, "mycodex")
     }
 
-    func testSaveCodexSettingsIgnoresClaudeZshrcConflict() throws {
+    func testSaveCodexSettingsIgnoresClaudeZshrcConflict() async throws {
         let store = StubConfigStore(config: .default)
         let installer = StubShellInstaller(conflictingFunctionNames: ["cc"])
-        let automaticInstaller = AutomaticShellInstallService(installer: installer)
+        let automaticInstaller = makeAutomaticShellInstaller(installer: installer)
         let viewModel = DashboardViewModel(
             configStore: store,
             shellInstaller: installer,
@@ -790,20 +790,21 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         installer.reset()
 
         try viewModel.saveCodexSettings(functionName: "ccd123", nickname: "", codex: testCodex(), dangerousPermissionsEnabled: false)
+        await waitForShellInstallation(installer, functionNames: ["ccd123"])
 
         XCTAssertEqual(installer.validatedFunctionNames, [["ccd123"]])
         XCTAssertEqual(store.savedConfigs.last?.oauthCommandProfiles.first { $0.provider == .codex }?.commandName, "ccd123")
         XCTAssertTrue(installer.installedScript?.contains("ccd123() {") == true)
     }
 
-    func testInitialShellInstallKeepsCodexFunctionWhenClaudeNameConflictsInZshrc() {
+    func testInitialShellInstallKeepsCodexFunctionWhenClaudeNameConflictsInZshrc() async {
         var config = AppConfig.default
         config.oauthCommandProfiles = [
             AppConfig.OAuthCommandProfile(id: "claude", provider: .claude, authProfileID: "claude.json", commandName: "cc"),
             AppConfig.OAuthCommandProfile(id: "codex", provider: .codex, authProfileID: "codex.json", commandName: "ccd123", codex: .default)
         ]
         let installer = StubShellInstaller(conflictingFunctionNames: ["cc"])
-        let automaticInstaller = AutomaticShellInstallService(installer: installer)
+        let automaticInstaller = makeAutomaticShellInstaller(installer: installer)
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: config),
             shellInstaller: installer,
@@ -814,13 +815,15 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             secretStore: InMemorySecretStore()
         )
 
+        await waitForShellInstallation(installer, functionNames: ["cc", "ccd123"])
+
         XCTAssertEqual(installer.validatedFunctionNames, [])
         XCTAssertEqual(installer.installedFunctionNames, ["cc", "ccd123"])
         XCTAssertTrue(installer.installedScript?.contains("ccd123() {") == true)
         XCTAssertFalse(viewModel.settingsMessage?.contains("Cannot install shell functions") == true)
     }
 
-    func testInitialShellInstallIncludesRoundRobinFunctionWhenOnlyRoundRobinCommandExists() {
+    func testInitialShellInstallIncludesRoundRobinFunctionWhenOnlyRoundRobinCommandExists() async {
         var config = AppConfig.default
         config.roundRobinProfiles = [
             AppConfig.RoundRobinProfile(
@@ -832,7 +835,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             )
         ]
         let installer = StubShellInstaller()
-        let automaticInstaller = AutomaticShellInstallService(installer: installer)
+        let automaticInstaller = makeAutomaticShellInstaller(installer: installer)
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: config),
             shellInstaller: installer,
@@ -845,6 +848,8 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
+
+        await waitForShellInstallation(installer, functionNames: ["ccodex"])
 
         XCTAssertEqual(installer.installedFunctionNames, ["ccodex"])
         XCTAssertTrue(installer.installedScript?.contains("ccodex() {") == true)
@@ -1428,7 +1433,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(try authStore.profiles().map(\.prefix), ["claude-old-work", "claude-new-work"])
     }
 
-    func testSaveClaudeOAuthSettingsShellInstallFailureRollsBackAuthProfilePrefix() throws {
+    func testSaveClaudeOAuthSettingsPersistsConfigWhenAutomaticShellInstallFails() async throws {
         var config = AppConfig.default
         config.oauthCommandProfiles = [
             AppConfig.OAuthCommandProfile(
@@ -1442,7 +1447,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         ]
         let store = StubConfigStore(config: config)
         let installer = StubShellInstaller(installError: NSError(domain: "shell", code: 1))
-        let automaticInstaller = AutomaticShellInstallService(installer: installer)
+        let automaticInstaller = makeAutomaticShellInstaller(installer: installer)
         let authStore = StubAuthProfileStore(profiles: [
             AuthProfile(fileName: "claude-work.json", type: .claude, email: "work@example.com", accountID: nil, expired: nil, disabled: false, prefix: "claude-old-team")
         ])
@@ -1458,22 +1463,22 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         let initialConfig = viewModel.config
         installer.reset()
 
-        XCTAssertThrowsError(try viewModel.saveClaudeOAuthSettings(
+        try viewModel.saveClaudeOAuthSettings(
             provider: ProviderRowState.ID(rawValue: "claude-work"),
             functionName: "ccwork",
             nickname: "Work Team",
             dangerousPermissionsEnabled: false
-        ))
+        )
+        await waitForShellInstallationAttempt(installer)
 
         XCTAssertNil(installer.installedScript)
-        XCTAssertEqual(store.savedConfigs, [])
-        XCTAssertEqual(store.config, config)
-        XCTAssertEqual(viewModel.config, initialConfig)
+        XCTAssertEqual(store.savedConfigs.count, 1)
+        XCTAssertNotEqual(store.config, config)
+        XCTAssertNotEqual(viewModel.config, initialConfig)
         XCTAssertEqual(authStore.prefixUpdates, [
-            PrefixUpdate(id: "claude-work.json", prefix: "claude-work-team"),
-            PrefixUpdate(id: "claude-work.json", prefix: "claude-old-team")
+            PrefixUpdate(id: "claude-work.json", prefix: "claude-work-team")
         ])
-        XCTAssertEqual(try authStore.profiles().first?.prefix, "claude-old-team")
+        XCTAssertEqual(try authStore.profiles().first?.prefix, "claude-work-team")
     }
 
     func testSaveCodexSettingsDoesNotLeaveNewShellFunctionWhenPersistenceFails() {
@@ -1495,7 +1500,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertFalse(installer.installedScript?.contains("mycodex() {") == true)
     }
 
-    func testSaveCodexSettingsKeepsCurrentConfigWhenShellApplyFails() {
+    func testSaveCodexSettingsPersistsConfigWhenAutomaticShellInstallFails() async throws {
         var config = AppConfig.default
         config.oauthCommandProfiles = [
             AppConfig.OAuthCommandProfile(
@@ -1508,7 +1513,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         ]
         let store = StubConfigStore(config: config)
         let installer = StubShellInstaller(installError: NSError(domain: "shell", code: 1))
-        let automaticInstaller = AutomaticShellInstallService(installer: installer)
+        let automaticInstaller = makeAutomaticShellInstaller(installer: installer)
         let viewModel = DashboardViewModel(
             configStore: store,
             shellInstaller: installer,
@@ -1522,12 +1527,14 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         let codex = testCodex()
         installer.reset()
 
-        XCTAssertThrowsError(try viewModel.saveCodexSettings(functionName: "mycodex", nickname: "team", codex: codex, dangerousPermissionsEnabled: true))
+        try viewModel.saveCodexSettings(functionName: "mycodex", nickname: "team", codex: codex, dangerousPermissionsEnabled: true)
+        await waitForShellInstallationAttempt(installer)
 
-        XCTAssertEqual(store.savedConfigs, [])
-        XCTAssertEqual(store.config, config)
-        XCTAssertEqual(viewModel.config, initialConfig)
-        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.functionName, "")
+        XCTAssertNil(installer.installedScript)
+        XCTAssertEqual(store.savedConfigs.count, 1)
+        XCTAssertNotEqual(store.config, config)
+        XCTAssertNotEqual(viewModel.config, initialConfig)
+        XCTAssertEqual(viewModel.providerRows.first { $0.id == .codex }?.functionName, "mycodex")
     }
 
     func testSaveCodexSettingsKeepsCurrentConfigWhenPersistenceFails() {
@@ -1629,7 +1636,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertNil(store.savedConfigs.last?.oauthCommandProfiles.first { $0.provider == .codex })
     }
 
-    func testRemoveProviderRewritesShellFunctionsWithoutDeletedProvider() {
+    func testRemoveProviderRewritesShellFunctionsWithoutDeletedProvider() async {
         let installer = StubShellInstaller()
         let authStore = StubAuthProfileStore(profiles: [claudeProfile(), codexProfile()])
         var config = AppConfig.default
@@ -1637,7 +1644,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
             AppConfig.OAuthCommandProfile(id: "claude", provider: .claude, authProfileID: "claude.json", commandName: "cc"),
             AppConfig.OAuthCommandProfile(id: "codex", provider: .codex, authProfileID: "codex.json", commandName: "ccodex", codex: .default)
         ]
-        let automaticInstaller = AutomaticShellInstallService(installer: installer)
+        let automaticInstaller = makeAutomaticShellInstaller(installer: installer)
         _ = DashboardViewModel(
             configStore: StubConfigStore(config: config),
             shellInstaller: installer,
@@ -1661,6 +1668,7 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         installer.reset()
 
         viewModel.removeProvider(.claude)
+        await waitForShellInstallation(installer, functionNames: ["ccodex"])
 
         XCTAssertEqual(installer.installedFunctionNames, ["ccodex"])
         XCTAssertFalse(installer.installedScript?.contains("cc() {") == true)
@@ -2017,6 +2025,34 @@ final class ProviderSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(availability, .unavailable("Command name `ccpersonal` is already used by another provider."))
     }
 
+    private func makeAutomaticShellInstaller(
+        installer: any ShellFunctionInstalling
+    ) -> AutomaticShellInstallService {
+        AutomaticShellInstallService(
+            installer: installer,
+            compatibilityAuthorizer: AllowingShellCompatibilityAuthorizer()
+        )
+    }
+
+    private func waitForShellInstallation(
+        _ installer: StubShellInstaller,
+        functionNames: [String]
+    ) async {
+        for _ in 0..<1_000 {
+            if installer.installedFunctionNames == functionNames { return }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTFail("Timed out waiting for shell installation")
+    }
+
+    private func waitForShellInstallationAttempt(_ installer: StubShellInstaller) async {
+        for _ in 0..<1_000 {
+            if installer.installationAttempts > 0 { return }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTFail("Timed out waiting for shell installation attempt")
+    }
+
     private func testCodex(model: String = "gpt-5.5") -> AppConfig.Codex {
         AppConfig.Codex(
             opus: AppConfig.CodexRole(model: model, reasoning: .xhigh),
@@ -2070,6 +2106,7 @@ private final class StubShellInstaller: ShellFunctionInstalling, @unchecked Send
     private let conflictingFunctionNames: Set<String>
     private(set) var installedScript: String?
     private(set) var installedFunctionNames: [String] = []
+    private(set) var installationAttempts = 0
     private(set) var validatedFunctionNames: [[String]] = []
 
     init(validationError: Error? = nil, installError: Error? = nil, conflictingFunctionNames: Set<String> = []) {
@@ -2079,6 +2116,7 @@ private final class StubShellInstaller: ShellFunctionInstalling, @unchecked Send
     }
 
     func install(functionScript: String, functionNames: [String]) throws {
+        installationAttempts += 1
         if let installError { throw installError }
         installedScript = functionScript
         installedFunctionNames = functionNames
@@ -2096,9 +2134,26 @@ private final class StubShellInstaller: ShellFunctionInstalling, @unchecked Send
     func reset() {
         installedScript = nil
         installedFunctionNames = []
+        installationAttempts = 0
         validatedFunctionNames = []
     }
 }
+
+private struct AllowingShellCompatibilityAuthorizer: RuntimeCompatibilityAuthorizing {
+    private let reportValue = RuntimeCompatibilityReport(
+        findings: [],
+        decisions: Dictionary(uniqueKeysWithValues: CompatibilityAction.allCases.map { action in
+            (action, CompatibilityDecision(action: action, disposition: .allowed))
+        })
+    )
+
+    func staticReport(artifacts _: CompatibilityArtifacts) -> RuntimeCompatibilityReport { reportValue }
+
+    func report(artifacts _: CompatibilityArtifacts) async -> RuntimeCompatibilityReport { reportValue }
+
+    func require(_: CompatibilityAction, artifacts _: CompatibilityArtifacts) throws {}
+}
+
 
 private final class StubAuthProfileStore: AuthProfileManaging, @unchecked Sendable {
     private var profilesValue: [AuthProfile]
