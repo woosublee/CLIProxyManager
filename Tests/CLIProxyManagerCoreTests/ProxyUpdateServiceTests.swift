@@ -36,6 +36,37 @@ final class ProxyUpdateServiceTests: XCTestCase {
 
     // MARK: - stage() tests
 
+    func testSupportedUpdateFactoryStagesWhenUnsupportedHostPreflightWouldBlock() async throws {
+        let paths = try makePaths(activeVersion: "7.2.41")
+        let (binaryURL, manifest) = try makeVerificationFixture(version: "7.2.50")
+        let release = makeRelease(version: "7.2.50")
+        let blockedService = ProxyUpdateService(
+            paths: paths,
+            checker: ReleaseCheckerDouble(release: release),
+            downloader: DownloaderDouble(result: .init(binaryURL: binaryURL, manifest: manifest)),
+            bundledManifestURL: paths.activeClipProxyManifest,
+            compatibilityAuthorizer: RuntimeCompatibilityPreflight(environment: UnsupportedMacOSEnvironment())
+        )
+
+        do {
+            _ = try await blockedService.stage()
+            XCTFail("Expected unsupported macOS compatibility block")
+        } catch let error as CLIProxyManagerCommandError {
+            XCTAssertEqual(error, .prerequisite(RuntimeCompatibilityBlocker.unsupportedOperatingSystem.recoveryMessage))
+        }
+
+        let downloader = DownloaderDouble(result: .init(binaryURL: binaryURL, manifest: manifest))
+        let service = makeService(
+            paths: paths,
+            checker: ReleaseCheckerDouble(release: release),
+            downloader: downloader
+        )
+        let result = try await service.stage()
+
+        XCTAssertEqual(result, .init(version: "7.2.50", staged: true))
+        XCTAssertEqual(downloader.requests, [release])
+    }
+
     func testStageDownloadsVerifiesAndStoresPendingBinary() async throws {
         let paths = try makePaths(activeVersion: "7.2.41")
         let (binaryURL, manifest) = try makeVerificationFixture(version: "7.2.50")
@@ -349,7 +380,7 @@ final class ProxyUpdateServiceTests: XCTestCase {
         compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing = RejectingCompatibilityAuthorizer()
     ) -> ProxyUpdateService {
         ProxyUpdateService(
-            store: CLIProxyAPIBinaryStore(paths: paths),
+            store: CLIProxyAPIBinaryStore(paths: paths, compatibilityAuthorizer: compatibilityAuthorizer),
             checker: checker,
             downloader: downloader,
             runtime: runtime,
@@ -360,6 +391,16 @@ final class ProxyUpdateServiceTests: XCTestCase {
 }
 
 // MARK: - Test doubles
+
+private struct UnsupportedMacOSEnvironment: RuntimeEnvironmentProviding {
+    func snapshot() -> RuntimeEnvironmentSnapshot {
+        RuntimeEnvironmentSnapshot(
+            operatingSystem: .macOS(major: 14, minor: 0),
+            architecture: .arm64,
+            loginShell: "/bin/zsh"
+        )
+    }
+}
 
 private struct RejectingCompatibilityAuthorizer: RuntimeCompatibilityAuthorizing {
     let action: CompatibilityAction?
