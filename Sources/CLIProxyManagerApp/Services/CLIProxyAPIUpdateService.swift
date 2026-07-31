@@ -251,10 +251,20 @@ final class CLIProxyAPIUpdateService: ObservableObject {
     }
 
     func applyPendingNow() throws {
-        refreshStoredStatus()
-        if let pendingUpdate {
-            try requireCompatibility(for: .applyProxyUpdate, candidate: try compatibilityArtifact(forCandidate: pendingUpdate))
+        let pending: CLIProxyAPIBinaryManifest?
+        do {
+            pending = try store.pendingManifest()
+        } catch {
+            throw CLIProxyManagerCommandError.prerequisite(
+                "Unable to read the staged CLIProxyAPI update. Refresh status and try again."
+            )
         }
+        guard let pending else {
+            throw CLIProxyManagerCommandError.prerequisite(
+                "No staged CLIProxyAPI update is available. Run cpm update stage proxy first."
+            )
+        }
+        try requireCompatibility(for: .applyProxyUpdate, candidate: try compatibilityArtifact(forCandidate: pending))
         appLogger.record(.update(target: .proxy, action: .apply, result: .started))
         do {
             try store.applyPending()

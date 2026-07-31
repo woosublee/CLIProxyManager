@@ -386,6 +386,35 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         XCTAssertEqual(store.applyPendingCallCount, 0)
     }
 
+    func testApplyPendingNowRejectsUnreadablePendingManifestWithoutMutating() throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        let store = StubUpdateBinaryStore(currentVersion: "7.2.41", pending: manifest("7.2.42"))
+        let service = CLIProxyAPIUpdateService(
+            paths: paths,
+            checker: StubUpdateChecking(release: release("7.2.42")),
+            downloader: StubUpdateDownloading(),
+            store: store,
+            now: { Date() },
+            compatibilityAuthorizer: supportedCompatibilityAuthorizer()
+        )
+        store.setPendingReadError(NSError(
+            domain: "test",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "/Users/sensitive-user/pending-manifest.json"]
+        ))
+
+        XCTAssertThrowsError(try service.applyPendingNow()) { error in
+            XCTAssertEqual(
+                error as? CLIProxyManagerCommandError,
+                .prerequisite("Unable to read the staged CLIProxyAPI update. Refresh status and try again.")
+            )
+        }
+
+        XCTAssertEqual(store.applyPendingCallCount, 0)
+        XCTAssertEqual(service.pendingUpdate?.version, "7.2.42")
+    }
+
     func testBlockedApplyDoesNotMutateStoreWhenActiveArtifactMismatches() throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
@@ -553,15 +582,20 @@ final class CLIProxyAPIUpdateServiceTests: XCTestCase {
         XCTAssertTrue(store.savedPendingVersions.isEmpty)
     }
 
-    func testApplyPendingNowCallsStore() throws {
+    func testApplyPendingNowRejectsNoPendingUpdateWithoutApplying() throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         let store = StubUpdateBinaryStore(currentVersion: "7.2.41")
         let service = CLIProxyAPIUpdateService(paths: paths, checker: StubUpdateChecking(release: release("7.2.42")), downloader: StubUpdateDownloading(), store: store, now: { Date() }, compatibilityAuthorizer: supportedCompatibilityAuthorizer())
 
-        try service.applyPendingNow()
+        XCTAssertThrowsError(try service.applyPendingNow()) { error in
+            XCTAssertEqual(
+                error as? CLIProxyManagerCommandError,
+                .prerequisite("No staged CLIProxyAPI update is available. Run cpm update stage proxy first.")
+            )
+        }
 
-        XCTAssertEqual(store.applyPendingCallCount, 1)
+        XCTAssertEqual(store.applyPendingCallCount, 0)
     }
 
     private func makeSandbox() throws -> URL {
@@ -754,6 +788,7 @@ private final class StubUpdateBinaryStore: CLIProxyAPIUpdateBinaryStoring, @unch
     private var current: CLIProxyAPIVersion?
     private var active: CLIProxyAPIBinaryManifest?
     private var pending: CLIProxyAPIBinaryManifest?
+    private var pendingReadError: Error?
     private let currentAfterApply: CLIProxyAPIVersion?
     private let scheduleError: Error?
     private let saveError: Error?
@@ -783,7 +818,16 @@ private final class StubUpdateBinaryStore: CLIProxyAPIUpdateBinaryStoring, @unch
 
     func validatedCurrentVersion(bundledManifestURL: URL?) throws -> CLIProxyAPIVersion? { lock.withLock { current } }
     func activeManifest() throws -> CLIProxyAPIBinaryManifest? { lock.withLock { active } }
-    func pendingManifest() throws -> CLIProxyAPIBinaryManifest? { lock.withLock { pending } }
+    func pendingManifest() throws -> CLIProxyAPIBinaryManifest? {
+        try lock.withLock {
+            if let pendingReadError { throw pendingReadError }
+            return pending
+        }
+    }
+
+    func setPendingReadError(_ error: Error?) {
+        lock.withLock { pendingReadError = error }
+    }
 
     func replaceState(currentVersion: String?, pending: CLIProxyAPIBinaryManifest?) {
         lock.withLock {

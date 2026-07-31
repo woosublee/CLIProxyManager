@@ -11962,6 +11962,23 @@ private struct DashboardUpdateChecker: CLIProxyAPIUpdateChecking {
 
 private final class DashboardUpdateBinaryStore: CLIProxyAPIUpdateBinaryStoring, @unchecked Sendable {
     private let lock = NSLock()
+    private var pending: CLIProxyAPIBinaryManifest? = CLIProxyAPIBinaryManifest(
+        name: "cliproxyapi",
+        version: "7.2.43",
+        commit: "commit",
+        builtAt: "2026-07-01T00:00:00Z",
+        sourceKind: .userUpdated,
+        source: "https://example.com/archive.tar.gz",
+        upstreamRepository: "router-for-me/CLIProxyAPI",
+        upstreamTag: "v7.2.43",
+        upstreamAsset: "CLIProxyAPI_7.2.43_darwin_aarch64.tar.gz",
+        upstreamAssetSha256: "archive-sha",
+        vendoredBinaryName: "cliproxyapi",
+        vendoredBinarySha256: "binary-sha",
+        vendoredBinarySizeBytes: 1,
+        vendoredFromArchivePath: "cli-proxy-api",
+        target: .darwinArm64
+    )
     private(set) var applyPendingCallCount = 0
 
     func validatedCurrentVersion(bundledManifestURL: URL?) throws -> CLIProxyAPIVersion? {
@@ -11970,12 +11987,17 @@ private final class DashboardUpdateBinaryStore: CLIProxyAPIUpdateBinaryStoring, 
 
     func savePending(binaryURL: URL, manifest: CLIProxyAPIBinaryManifest) throws {}
 
-    func pendingManifest() throws -> CLIProxyAPIBinaryManifest? { nil }
+    func pendingManifest() throws -> CLIProxyAPIBinaryManifest? {
+        lock.withLock { pending }
+    }
 
     func schedulePendingForNextStart() throws {}
 
     func applyPending() throws {
-        lock.withLock { applyPendingCallCount += 1 }
+        lock.withLock {
+            applyPendingCallCount += 1
+            pending = nil
+        }
     }
 }
 

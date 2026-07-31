@@ -170,12 +170,12 @@ public struct CPMStatus: Codable, Equatable, Sendable {
 
         public init(report: RuntimeCompatibilityReport) {
             disposition = report.decision(for: .startProxy).disposition
-            findings = report.findings.map(Self.finding)
+            findings = report.findings.map { Self.finding($0, report: report) }
         }
 
         public static let allowed = Self(disposition: .allowed, findings: [])
 
-        private static func finding(_ finding: CompatibilityFinding) -> Finding {
+        private static func finding(_ finding: CompatibilityFinding, report: RuntimeCompatibilityReport) -> Finding {
             switch finding {
             case .unsupportedOperatingSystem:
                 Finding(
@@ -210,13 +210,13 @@ public struct CPMStatus: Codable, Equatable, Sendable {
             case .unsupportedLoginShell:
                 Finding(
                     code: "unsupportedLoginShell",
-                    disposition: .allowedWithWarnings,
+                    disposition: report.decision(for: .installShellFunctions).disposition,
                     recovery: "Use zsh as the login shell before installing generated functions."
                 )
             case .unavailableClaudeCode:
                 Finding(
                     code: "unavailableClaudeCode",
-                    disposition: .allowedWithWarnings,
+                    disposition: report.decision(for: .installShellFunctions).disposition,
                     recovery: "Install Claude Code, then refresh compatibility status."
                 )
             case .unverifiedClaudeCode:

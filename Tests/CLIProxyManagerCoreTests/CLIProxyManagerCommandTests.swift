@@ -641,7 +641,7 @@ final class CLIProxyManagerCommandTests: XCTestCase {
                 loginShell: "/bin/zsh"
             ),
             artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil),
-            claude: .version("2.1.221")
+            claude: .version("sensitive-version.example.com")
         )
         let services = RuntimeServicesDouble(compatibility: CPMStatus.Compatibility(report: report))
         let command = makeRuntimeCommand(output: output, services: services)
@@ -652,8 +652,32 @@ final class CLIProxyManagerCommandTests: XCTestCase {
         XCTAssertTrue(text.contains("compatibility"))
         XCTAssertTrue(text.contains("unverifiedClaudeCodeVersion"))
         XCTAssertFalse(text.contains("/Users/"))
-        XCTAssertFalse(text.contains("example.com"))
+        XCTAssertFalse(text.contains("sensitive-version.example.com"))
         XCTAssertTrue(output.stderr.isEmpty)
+    }
+
+    func testStatusCompatibilityFindingsUseShellInstallationDisposition() {
+        let report = RuntimeCompatibilityPolicy.current.report(
+            environment: .init(
+                operatingSystem: .macOS(major: 15, minor: 0),
+                architecture: .arm64,
+                loginShell: "/bin/bash"
+            ),
+            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil),
+            claude: .unavailable
+        )
+
+        let compatibility = CPMStatus.Compatibility(report: report)
+
+        XCTAssertEqual(compatibility.disposition, .allowedWithWarnings)
+        XCTAssertEqual(
+            compatibility.findings.first(where: { $0.code == "unsupportedLoginShell" })?.disposition,
+            .blocked
+        )
+        XCTAssertEqual(
+            compatibility.findings.first(where: { $0.code == "unavailableClaudeCode" })?.disposition,
+            .blocked
+        )
     }
 
     func testRootUserIsRejectedBeforeStart() async throws {

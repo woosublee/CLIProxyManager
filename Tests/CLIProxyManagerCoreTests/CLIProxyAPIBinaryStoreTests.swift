@@ -576,7 +576,9 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         )
         let store = makeStore(paths: paths)
 
-        XCTAssertThrowsError(try store.schedulePendingForNextStart())
+        XCTAssertThrowsError(try store.schedulePendingForNextStart()) { error in
+            XCTAssertEqual(error as? CLIProxyAPIBinaryStoreError, .unsupportedArtifactTarget)
+        }
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: paths.pendingClipProxyBinary.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: paths.pendingClipProxyManifest.path))
@@ -608,7 +610,9 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         let activeBefore = try Data(contentsOf: paths.clipProxyBinary)
         let store = makeStore(paths: paths)
 
-        XCTAssertThrowsError(try store.applyPending())
+        XCTAssertThrowsError(try store.applyPending()) { error in
+            XCTAssertEqual(error as? CLIProxyAPIBinaryStoreError, .unsupportedArtifactTarget)
+        }
 
         XCTAssertEqual(try Data(contentsOf: paths.clipProxyBinary), activeBefore)
         XCTAssertTrue(FileManager.default.fileExists(atPath: paths.pendingClipProxyBinary.path))
@@ -632,7 +636,9 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         )
         let store = makeStore(paths: paths)
 
-        XCTAssertThrowsError(try store.prepareActiveBinary(bundledBinaryURL: bundled, bundledManifestURL: bundledManifest))
+        XCTAssertThrowsError(try store.prepareActiveBinary(bundledBinaryURL: bundled, bundledManifestURL: bundledManifest)) { error in
+            XCTAssertEqual(error as? CLIProxyAPIBinaryStoreError, .unsupportedArtifactTarget)
+        }
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: paths.clipProxyBinary.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: paths.activeClipProxyManifest.path))
@@ -665,7 +671,9 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         let activeBefore = try Data(contentsOf: paths.clipProxyBinary)
         let store = makeStore(paths: paths)
 
-        XCTAssertThrowsError(try store.reconcileBundledBinary(bundledBinaryURL: bundled, bundledManifestURL: bundledManifest))
+        XCTAssertThrowsError(try store.reconcileBundledBinary(bundledBinaryURL: bundled, bundledManifestURL: bundledManifest)) { error in
+            XCTAssertEqual(error as? CLIProxyAPIBinaryStoreError, .unsupportedArtifactTarget)
+        }
 
         XCTAssertEqual(try Data(contentsOf: paths.clipProxyBinary), activeBefore)
         XCTAssertEqual(try store.activeManifest()?.version, "7.2.41")
@@ -707,7 +715,9 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         let activeBefore = try Data(contentsOf: paths.clipProxyBinary)
         let store = makeStore(paths: paths)
 
-        XCTAssertThrowsError(try store.reconcileBundledBinary(bundledBinaryURL: bundled, bundledManifestURL: bundledManifest))
+        XCTAssertThrowsError(try store.reconcileBundledBinary(bundledBinaryURL: bundled, bundledManifestURL: bundledManifest)) { error in
+            XCTAssertEqual(error as? CLIProxyAPIBinaryStoreError, .unsupportedArtifactTarget)
+        }
 
         XCTAssertEqual(try Data(contentsOf: paths.clipProxyBinary), activeBefore)
         XCTAssertEqual(try store.activeManifest()?.version, "7.2.41")
@@ -741,7 +751,9 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         try Data("scheduled\n".utf8).write(to: paths.pendingClipProxyApplyOnNextStartMarker)
         let store = makeStore(paths: paths)
 
-        XCTAssertThrowsError(try store.prepareActiveBinary(bundledBinaryURL: bundled, bundledManifestURL: bundledManifest))
+        XCTAssertThrowsError(try store.prepareActiveBinary(bundledBinaryURL: bundled, bundledManifestURL: bundledManifest)) { error in
+            XCTAssertEqual(error as? CLIProxyAPIBinaryStoreError, .unsupportedArtifactTarget)
+        }
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: paths.clipProxyBinary.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: paths.pendingClipProxyBinary.path))
