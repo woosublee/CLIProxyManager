@@ -54,6 +54,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: ClaudeConnector(runner: StubProcessRunner(results: [
                 ProcessResult(exitCode: 0, stdout: "/usr/local/bin/claude\n", stderr: ""),
                 ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: ""),
@@ -180,6 +181,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: ClaudeConnector(runner: StubProcessRunner(results: [
                 ProcessResult(exitCode: 0, stdout: "/usr/local/bin/claude\n", stderr: ""),
                 ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: ""),
@@ -208,6 +210,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: httpClient, timeout: 0.1),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             serverStatusRetryDelayNanoseconds: 0
         )
@@ -234,6 +237,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: httpClient, timeout: 0.1),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             serverStatusRetryDelayNanoseconds: 0
         )
@@ -261,6 +265,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             serverStatusRetryDelayNanoseconds: 0
         )
@@ -283,6 +288,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -297,6 +303,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -313,6 +320,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -330,6 +338,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             settingsMessageAutoClearDelayNanoseconds: 1_000_000
         )
@@ -352,6 +361,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -386,6 +396,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -414,6 +425,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -432,6 +444,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: profiles),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -468,6 +481,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -486,6 +500,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -517,6 +532,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -544,6 +560,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -574,6 +591,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             subscriptionUsageKeyStore: keyStore,
             secretStore: InMemorySecretStore()
@@ -635,6 +653,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -659,6 +678,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -689,6 +709,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -713,6 +734,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -737,6 +759,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             serverStatusRetryDelayNanoseconds: 0
         )
@@ -759,6 +782,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .failure(HTTPClientError.timedOut)), timeout: 0.1),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -788,6 +812,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -809,6 +834,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -827,6 +853,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -845,6 +872,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: ClaudeConnector(runner: StubProcessRunner(results: [
                 ProcessResult(exitCode: 1, stdout: "", stderr: "")
             ])),
@@ -871,6 +899,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: oauth,
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -913,6 +942,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             subscriptionQuotaClient: quotaClient,
             subscriptionUsageKeyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
@@ -961,6 +991,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
                 httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))
             ),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             subscriptionQuotaClient: quotaClient,
             subscriptionUsageKeyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
@@ -1055,6 +1086,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
                 httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))
             ),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             subscriptionQuotaClient: quotaClient,
             subscriptionUsageKeyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
@@ -1125,6 +1157,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
                 httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))
             ),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             subscriptionQuotaClient: quotaClient,
             subscriptionUsageKeyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
@@ -1175,6 +1208,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             subscriptionQuotaClient: quotaClient,
             subscriptionUsageKeyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
@@ -1639,6 +1673,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
                 httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))
             ),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             subscriptionQuotaClient: quotaClient,
             subscriptionUsageKeyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
@@ -1757,6 +1792,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
                 httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))
             ),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             subscriptionQuotaClient: quotaClient,
             subscriptionUsageKeyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
@@ -1903,6 +1939,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
                 httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))
             ),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             subscriptionQuotaClient: quotaClient,
             subscriptionUsageKeyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
@@ -2001,6 +2038,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
                 httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))
             ),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             subscriptionQuotaClient: quotaClient,
             subscriptionUsageKeyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
@@ -2141,6 +2179,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -2173,6 +2212,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -2208,6 +2248,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -2238,6 +2279,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -2276,6 +2318,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -2357,6 +2400,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             subscriptionUsageSnapshotCache: cache,
             codexResetCreditsSnapshotCache: resetCache,
@@ -2438,6 +2482,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             subscriptionQuotaClient: quotaClient,
             subscriptionUsageKeyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
@@ -2494,6 +2539,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -2639,6 +2685,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             subscriptionUsageSnapshotCache: cache,
             codexResetCreditsSnapshotCache: resetCache,
@@ -2677,6 +2724,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -2705,6 +2753,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -2777,6 +2826,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -2805,6 +2855,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -2824,6 +2875,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -2849,6 +2901,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: oauth,
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -2886,6 +2939,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: oauth,
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -2912,6 +2966,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: oauth,
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -2937,6 +2992,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: oauth,
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -2962,6 +3018,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: oauth,
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -2996,6 +3053,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -3033,6 +3091,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -3067,6 +3126,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -3098,6 +3158,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -3127,6 +3188,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -3156,6 +3218,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -3177,6 +3240,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -3193,6 +3257,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -3227,6 +3292,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -3252,6 +3318,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: authStore,
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -3306,7 +3373,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         ])
         let automaticInstaller = AutomaticShellInstallService(
             installer: installer,
-            compatibilityAuthorizer: AllowingShellCompatibilityAuthorizer()
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer()
         )
         let viewModel = DashboardViewModel(
             configStore: store,
@@ -3315,6 +3382,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             automaticShellInstallService: automaticInstaller,
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -3365,7 +3433,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let installer = StubShellInstaller()
         let automaticInstaller = AutomaticShellInstallService(
             installer: installer,
-            compatibilityAuthorizer: AllowingShellCompatibilityAuthorizer()
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer()
         )
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: config, saveError: NSError(domain: "test", code: 1)),
@@ -3374,6 +3442,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             automaticShellInstallService: automaticInstaller,
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -3406,7 +3475,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let installer = StubShellInstaller(installError: NSError(domain: "test", code: 2))
         let automaticInstaller = AutomaticShellInstallService(
             installer: installer,
-            compatibilityAuthorizer: AllowingShellCompatibilityAuthorizer()
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer()
         )
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: config),
@@ -3415,6 +3484,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             automaticShellInstallService: automaticInstaller,
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -3439,6 +3509,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -3458,6 +3529,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -3480,7 +3552,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let automaticInstaller = AutomaticShellInstallService(
             installer: installer,
             helperCommand: "/usr/local/bin/cliproxy-manager",
-            compatibilityAuthorizer: AllowingShellCompatibilityAuthorizer()
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer()
         )
         let viewModel = DashboardViewModel(
             configStore: store,
@@ -3492,6 +3564,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             automaticShellInstallService: automaticInstaller,
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -3512,7 +3585,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             installer: installer,
             secretStore: InMemorySecretStore(values: [.claudeAPIKey: "sk-test"]),
             helperCommand: "/usr/local/bin/cliproxy-manager",
-            compatibilityAuthorizer: AllowingShellCompatibilityAuthorizer()
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer()
         )
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: config),
@@ -3523,6 +3596,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             automaticShellInstallService: automaticInstaller,
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -3539,7 +3613,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let installer = StubShellInstaller()
         let automaticInstaller = AutomaticShellInstallService(
             installer: installer,
-            compatibilityAuthorizer: AllowingShellCompatibilityAuthorizer()
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer()
         )
         let viewModel = DashboardViewModel(
             configStore: StubConfigStore(config: .default),
@@ -3551,6 +3625,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             automaticShellInstallService: automaticInstaller,
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -3591,6 +3666,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             automaticShellInstallService: automaticInstaller,
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -3615,6 +3691,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore(),
             serverStatusRetryDelayNanoseconds: 0
@@ -3653,6 +3730,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             serverStatusRetryDelayNanoseconds: 0
         )
@@ -3690,6 +3768,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
                 timeout: 0.1
             ),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             serverStatusRetryDelayNanoseconds: 0,
             settingsMessageAutoClearDelayNanoseconds: 60_000_000_000
@@ -3735,6 +3814,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             serverStatusRetryDelayNanoseconds: 0,
             settingsMessageAutoClearDelayNanoseconds: 60_000_000_000
@@ -3796,6 +3876,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             serverStatusRetryDelayNanoseconds: 0
         )
@@ -3839,6 +3920,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             serverStatusRetryDelayNanoseconds: 0
         )
@@ -3880,6 +3962,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: codexAuthProfileStore(),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector()
         )
         var codex = config.oauthCommandProfiles[0].codex!
@@ -3910,6 +3993,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: codexAuthProfileStore(),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector()
         )
         viewModel.serverControlState = .running
@@ -3944,6 +4028,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore(),
             serverStatusRetryDelayNanoseconds: 0
@@ -3987,6 +4072,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore(),
             serverStatusRetryDelayNanoseconds: 0
@@ -4032,6 +4118,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore(),
             serverStatusRetryDelayNanoseconds: 0
@@ -4086,6 +4173,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore(),
             serverStatusRetryDelayNanoseconds: 0,
@@ -4146,6 +4234,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             serverStatusRetryDelayNanoseconds: 0,
             settingsMessageAutoClearDelayNanoseconds: 60_000_000_000
@@ -4202,6 +4291,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             serverStatusRetryDelayNanoseconds: 0,
             settingsMessageAutoClearDelayNanoseconds: 60_000_000_000
@@ -4262,6 +4352,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: healthClient,
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             serverStatusRetryDelayNanoseconds: 0,
             settingsMessageAutoClearDelayNanoseconds: 60_000_000_000
@@ -4303,6 +4394,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: codexAuthProfileStore(),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             settingsMessageAutoClearDelayNanoseconds: 60_000_000_000
         )
@@ -4333,6 +4425,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: secretStore
         )
@@ -4366,6 +4459,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: secretStore
         )
@@ -4402,6 +4496,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: secretStore
         )
@@ -4444,6 +4539,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: codexAuthProfileStore(),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector()
         )
         viewModel.serverControlState = .running
@@ -4486,6 +4582,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             serverStatusRetryDelayNanoseconds: 0
         )
@@ -4520,6 +4617,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: codexAuthProfileStore(),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector()
         )
         var invalid = config.oauthCommandProfiles[0].codex!
@@ -4546,6 +4644,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             appLogger: logger
         )
@@ -4572,6 +4671,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
                 timeout: 0.1
             ),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             appLogger: logger,
             serverStatusRetryDelayNanoseconds: 0
@@ -4603,6 +4703,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             appLogger: logger,
             settingsMessageAutoClearDelayNanoseconds: 60_000_000_000
@@ -4646,6 +4747,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: codexAuthProfileStore(),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector()
         )
 
@@ -4671,6 +4773,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -4696,6 +4799,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -4744,6 +4848,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             claudeModelOptionsCache: EmptyClaudeModelOptionsCache(),
             serverStatusRetryDelayNanoseconds: 0
@@ -4781,6 +4886,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             claudeModelOptionsCache: EmptyClaudeModelOptionsCache(),
             serverStatusRetryDelayNanoseconds: 0
@@ -4821,6 +4927,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore(),
             serverStatusRetryDelayNanoseconds: 0
@@ -4866,6 +4973,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: codexAuthProfileStore(),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore(values: [.claudeAPIKey: "initial-key"])
         )
@@ -4913,6 +5021,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             serverStatusRetryDelayNanoseconds: 0
         )
@@ -4948,6 +5057,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             serverStatusRetryDelayNanoseconds: 0
         )
@@ -4973,6 +5083,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             serverStatusRetryDelayNanoseconds: 0
         )
@@ -4996,6 +5107,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             serverStatusRetryDelayNanoseconds: 0
         )
@@ -5023,6 +5135,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             serverStatusRetryDelayNanoseconds: 0
         )
@@ -5047,6 +5160,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             serverStatusRetryDelayNanoseconds: 0
         )
@@ -5070,6 +5184,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -5088,6 +5203,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -5128,6 +5244,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -5163,6 +5280,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
                 AuthProfile(fileName: "claude-work.json", type: .claude, email: "work@example.com", accountID: nil, expired: nil, disabled: false, prefix: "claude-work")
             ]),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -5198,6 +5316,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -5240,6 +5359,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -5300,6 +5420,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -5352,6 +5473,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -5386,6 +5508,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -5416,6 +5539,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             ]),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -5451,6 +5575,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -5469,6 +5594,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             serverStatusRetryDelayNanoseconds: 0
         )
@@ -5489,6 +5615,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             serverStatusRetryDelayNanoseconds: 0
         )
@@ -5515,6 +5642,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: httpClient, timeout: 0.1),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             serverStatusRetryDelayNanoseconds: 0
         )
@@ -5550,6 +5678,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: ClaudeConnector(runner: StubProcessRunner(results: [
                 ProcessResult(exitCode: 0, stdout: "/usr/local/bin/claude\n", stderr: ""),
                 ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: ""),
@@ -5589,6 +5718,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: httpClient),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: ClaudeConnector(runner: StubProcessRunner(results: [
                 ProcessResult(exitCode: 0, stdout: "/usr/local/bin/claude\n", stderr: ""),
                 ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: ""),
@@ -5626,6 +5756,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: ClaudeConnector(runner: StubProcessRunner(results: [
                 ProcessResult(exitCode: 0, stdout: "/usr/local/bin/claude\n", stderr: ""),
                 ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: ""),
@@ -5661,6 +5792,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: ClaudeConnector(runner: StubProcessRunner(results: [
                 ProcessResult(exitCode: 0, stdout: "/usr/local/bin/claude\n", stderr: ""),
                 ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: ""),
@@ -5700,6 +5832,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: httpClient),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: ClaudeConnector(runner: StubProcessRunner(results: [
                 ProcessResult(exitCode: 0, stdout: "/usr/local/bin/claude\n", stderr: ""),
                 ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: ""),
@@ -5739,6 +5872,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: ClaudeConnector(runner: StubProcessRunner(results: []))
         )
 
@@ -5767,6 +5901,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             serverStatusRetryDelayNanoseconds: 0
         )
@@ -6212,6 +6347,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: InMemorySecretStore()
         )
@@ -6791,6 +6927,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             oauthLoginService: StubOAuthLoginService(),
             proxyHealthClient: stoppedHealthClient,
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             subscriptionQuotaClient: quotaClient,
             subscriptionUsageKeyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
@@ -9489,6 +9626,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             cpmInstallationService: cpm
         )
@@ -9508,6 +9646,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             authProfileStore: StubAuthProfileStore(profiles: []),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             cpmInstallationService: cpm
         )
@@ -9532,7 +9671,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         codexResetCreditsNow: @escaping @Sendable () -> Date = { Date() },
         appAppearanceService: (any AppAppearanceApplying)? = nil,
         proxyHealthClient: (any ProxyHealthChecking)? = nil,
-        compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing = AllowingShellCompatibilityAuthorizer(),
+        compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing = SupportedCompatibilityAuthorizer(),
         bundledProxyReconciler: any BundledProxyReconciling = BundledProxyReconcilerDouble(
             result: .unchanged(version: CLIProxyAPIVersion("7.2.91")!)
         ),
@@ -9680,6 +9819,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
                 httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))
             ),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             subscriptionQuotaClient: quotaClient,
             subscriptionUsageKeyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
@@ -9786,6 +9926,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
                 httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))
             ),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             subscriptionQuotaClient: quotaClient,
             subscriptionUsageKeyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
@@ -9886,6 +10027,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
                 httpClient: StubHTTPClient(result: .success(Data("{}".utf8)))
             ),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             subscriptionQuotaClient: quotaClient,
             subscriptionUsageKeyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
@@ -10373,6 +10515,7 @@ final class DashboardAccountOrderingTests: XCTestCase {
             authProfileStore: authProfileStore ?? StubAuthProfileStore(profiles: profiles),
             oauthLoginService: StubOAuthLoginService(),
             proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
             claudeConnector: connectedClaudeConnector(),
             secretStore: secretStore
         )
@@ -11952,7 +12095,7 @@ private final class BlockingShellCompatibilityAuthorizer: RuntimeCompatibilityAu
     }
 }
 
-private struct AllowingShellCompatibilityAuthorizer: RuntimeCompatibilityAuthorizing {
+private struct SupportedCompatibilityAuthorizer: RuntimeCompatibilityAuthorizing {
     private let reportValue = RuntimeCompatibilityReport(
         findings: [],
         decisions: Dictionary(uniqueKeysWithValues: CompatibilityAction.allCases.map { action in

@@ -10,7 +10,7 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         let bundledManifest = sandbox.appendingPathComponent("bundle/cliproxyapi.manifest.json")
         try writeExecutable("#!/bin/sh\necho bundled\n", to: bundledBinary)
         try writeManifest(version: "7.2.41", sourceKind: .bundled, binarySha: sha256(bundledBinary), size: fileSize(bundledBinary), to: bundledManifest)
-        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let store = makeStore(paths: paths)
 
         try store.prepareActiveBinary(bundledBinaryURL: bundledBinary, bundledManifestURL: bundledManifest)
 
@@ -30,7 +30,7 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         try writeManifest(version: "7.2.41", sourceKind: .bundled, binarySha: sha256(bundledBinary), size: fileSize(bundledBinary), to: bundledManifest)
         try writeExecutable("#!/bin/sh\necho pending\n", to: pendingBinary)
         let pendingManifest = try manifest(version: "7.2.42", sourceKind: .userUpdated, binarySha: sha256(pendingBinary), size: fileSize(pendingBinary))
-        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let store = makeStore(paths: paths)
         try store.savePending(binaryURL: pendingBinary, manifest: pendingManifest)
         try store.schedulePendingForNextStart()
 
@@ -54,7 +54,7 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         try writeManifest(version: "7.2.41", sourceKind: .bundled, binarySha: sha256(bundledBinary), size: fileSize(bundledBinary), to: bundledManifest)
         try writeExecutable("#!/bin/sh\necho pending\n", to: pendingBinary)
         let pendingManifest = try manifest(version: "7.2.42", sourceKind: .userUpdated, binarySha: sha256(pendingBinary), size: fileSize(pendingBinary))
-        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let store = makeStore(paths: paths)
         try store.savePending(binaryURL: pendingBinary, manifest: pendingManifest)
 
         try store.prepareActiveBinary(bundledBinaryURL: bundledBinary, bundledManifestURL: bundledManifest)
@@ -74,7 +74,7 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         try writeManifest(version: "7.2.42", sourceKind: .userUpdated, binarySha: sha256(activeBinary), size: fileSize(activeBinary), to: paths.activeClipProxyManifest)
         try writeExecutable("#!/bin/sh\necho bundled\n", to: bundledBinary)
         try writeManifest(version: "7.2.41", sourceKind: .bundled, binarySha: sha256(bundledBinary), size: fileSize(bundledBinary), to: bundledManifest)
-        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let store = makeStore(paths: paths)
 
         try store.prepareActiveBinary(bundledBinaryURL: bundledBinary, bundledManifestURL: bundledManifest)
 
@@ -92,7 +92,7 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         try writeManifest(version: "7.2.41", sourceKind: .userUpdated, binarySha: sha256(activeBinary), size: fileSize(activeBinary), to: paths.activeClipProxyManifest)
         try writeExecutable("#!/bin/sh\necho bundled\n", to: bundledBinary)
         try writeManifest(version: "7.2.42", sourceKind: .bundled, binarySha: sha256(bundledBinary), size: fileSize(bundledBinary), to: bundledManifest)
-        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let store = makeStore(paths: paths)
 
         try store.prepareActiveBinary(bundledBinaryURL: bundledBinary, bundledManifestURL: bundledManifest)
 
@@ -113,7 +113,7 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         try writeExecutable("bundled", to: bundled)
         try writeManifest(version: "7.2.91", sourceKind: .bundled, binarySha: sha256(bundled), size: fileSize(bundled), to: bundledManifest)
         try writeExecutable("pending", to: pending)
-        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let store = makeStore(paths: paths)
         try store.savePending(
             binaryURL: pending,
             manifest: try manifest(version: "7.2.92", sourceKind: .userUpdated, binarySha: sha256(pending), size: fileSize(pending))
@@ -139,7 +139,7 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         try writeManifest(version: "7.2.92", sourceKind: .userUpdated, binarySha: sha256(active), size: fileSize(active), to: paths.activeClipProxyManifest)
         try writeExecutable("bundled", to: bundled)
         try writeManifest(version: "7.2.91", sourceKind: .bundled, binarySha: sha256(bundled), size: fileSize(bundled), to: bundledManifest)
-        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let store = makeStore(paths: paths)
 
         XCTAssertEqual(
             try store.reconcileBundledBinary(bundledBinaryURL: bundled, bundledManifestURL: bundledManifest),
@@ -155,7 +155,7 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         let bundledManifest = sandbox.appendingPathComponent("bundle/cliproxyapi.manifest.json")
         try writeExecutable("bundled", to: bundled)
         try writeManifest(version: "7.2.91", sourceKind: .bundled, binarySha: sha256(bundled), size: fileSize(bundled), to: bundledManifest)
-        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let store = makeStore(paths: paths)
 
         XCTAssertEqual(
             try store.reconcileBundledBinary(bundledBinaryURL: bundled, bundledManifestURL: bundledManifest),
@@ -174,7 +174,7 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         try writeManifest(version: "7.2.72", sourceKind: .bundled, binarySha: sha256(active), size: fileSize(active), to: paths.activeClipProxyManifest)
         try writeExecutable("bundled", to: bundled)
         try writeManifest(version: "7.2.91", sourceKind: .bundled, binarySha: "invalid-sha", size: fileSize(bundled), to: bundledManifest)
-        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let store = makeStore(paths: paths)
 
         XCTAssertThrowsError(
             try store.reconcileBundledBinary(bundledBinaryURL: bundled, bundledManifestURL: bundledManifest)
@@ -196,7 +196,7 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         try writeExecutable("bundled", to: bundled)
         try writeManifest(version: "7.2.91", sourceKind: .bundled, binarySha: sha256(bundled), size: fileSize(bundled), to: bundledManifest)
         try writeExecutable("pending", to: pending)
-        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let store = makeStore(paths: paths)
         try store.savePending(
             binaryURL: pending,
             manifest: try manifest(version: "7.2.80", sourceKind: .userUpdated, binarySha: sha256(pending), size: fileSize(pending))
@@ -220,7 +220,7 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         try writeExecutable("bundled", to: bundled)
         try writeManifest(version: "7.2.91", sourceKind: .bundled, binarySha: sha256(bundled), size: fileSize(bundled), to: bundledManifest)
         try writeExecutable("pending", to: pending)
-        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let store = makeStore(paths: paths)
         try store.savePending(
             binaryURL: pending,
             manifest: try manifest(version: "7.2.92", sourceKind: .userUpdated, binarySha: sha256(pending), size: fileSize(pending))
@@ -244,7 +244,7 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         try writeManifest(version: "7.2.41", sourceKind: .bundled, binarySha: sha256(bundledBinary), size: fileSize(bundledBinary), to: bundledManifest)
         try writeExecutable("#!/bin/sh\necho pending\n", to: pendingBinary)
         let badManifest = try manifest(version: "7.2.42", sourceKind: .userUpdated, binarySha: "bad-sha", size: fileSize(pendingBinary))
-        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let store = makeStore(paths: paths)
         try store.savePending(binaryURL: pendingBinary, manifest: badManifest, validate: false)
 
         try store.prepareActiveBinary(bundledBinaryURL: bundledBinary, bundledManifestURL: bundledManifest)
@@ -262,7 +262,7 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         try writeExecutable("#!/bin/sh\necho bundled\n", to: bundledBinary)
         try writeManifest(version: "7.2.41", sourceKind: .bundled, binarySha: sha256(bundledBinary), size: fileSize(bundledBinary), to: bundledManifest)
         try writeManifest(version: "7.2.42", sourceKind: .userUpdated, binarySha: "missing", size: 7, to: paths.pendingClipProxyManifest)
-        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let store = makeStore(paths: paths)
 
         try store.prepareActiveBinary(bundledBinaryURL: bundledBinary, bundledManifestURL: bundledManifest)
 
@@ -280,7 +280,7 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         try writeManifest(version: "7.2.43", sourceKind: .bundled, binarySha: sha256(bundledBinary), size: fileSize(bundledBinary), to: bundledManifest)
         try writeExecutable("#!/bin/sh\necho pending\n", to: pendingBinary)
         let pendingManifest = try manifest(version: "7.2.42", sourceKind: .userUpdated, binarySha: sha256(pendingBinary), size: fileSize(pendingBinary))
-        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let store = makeStore(paths: paths)
         try store.savePending(binaryURL: pendingBinary, manifest: pendingManifest)
 
         try store.prepareActiveBinary(bundledBinaryURL: bundledBinary, bundledManifestURL: bundledManifest)
@@ -303,7 +303,7 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         try writeManifest(version: "7.2.41", sourceKind: .bundled, binarySha: sha256(bundledBinary), size: fileSize(bundledBinary), to: bundledManifest)
         try writeExecutable("#!/bin/sh\necho pending\n", to: pendingBinary)
         let pendingManifest = try manifest(version: "7.2.42", sourceKind: .userUpdated, binarySha: sha256(pendingBinary), size: fileSize(pendingBinary))
-        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let store = makeStore(paths: paths)
         try store.savePending(binaryURL: pendingBinary, manifest: pendingManifest)
 
         try store.prepareActiveBinary(bundledBinaryURL: bundledBinary, bundledManifestURL: bundledManifest)
@@ -324,7 +324,7 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         try Data("tampered".utf8).write(to: activeBinary)
         try writeExecutable("#!/bin/sh\necho bundled\n", to: bundledBinary)
         try writeManifest(version: "7.2.41", sourceKind: .bundled, binarySha: sha256(bundledBinary), size: fileSize(bundledBinary), to: bundledManifest)
-        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let store = makeStore(paths: paths)
 
         try store.prepareActiveBinary(bundledBinaryURL: bundledBinary, bundledManifestURL: bundledManifest)
 
@@ -344,7 +344,7 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         try Data("{not valid json".utf8).write(to: paths.activeClipProxyManifest)
         try writeExecutable("#!/bin/sh\necho bundled\n", to: bundledBinary)
         try writeManifest(version: "7.2.41", sourceKind: .bundled, binarySha: sha256(bundledBinary), size: fileSize(bundledBinary), to: bundledManifest)
-        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let store = makeStore(paths: paths)
 
         try store.prepareActiveBinary(bundledBinaryURL: bundledBinary, bundledManifestURL: bundledManifest)
 
@@ -364,7 +364,7 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: activeBinary.path)
         try writeExecutable("#!/bin/sh\necho bundled\n", to: bundledBinary)
         try writeManifest(version: "7.2.41", sourceKind: .bundled, binarySha: sha256(bundledBinary), size: fileSize(bundledBinary), to: bundledManifest)
-        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let store = makeStore(paths: paths)
 
         try store.prepareActiveBinary(bundledBinaryURL: bundledBinary, bundledManifestURL: bundledManifest)
 
@@ -379,7 +379,7 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         let second = sandbox.appendingPathComponent("download/second")
         try writeExecutable("first", to: first)
         try writeExecutable("second", to: second)
-        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let store = makeStore(paths: paths)
         try store.savePending(
             binaryURL: first,
             manifest: try manifest(version: "7.2.42", sourceKind: .userUpdated, binarySha: sha256(first), size: fileSize(first))
@@ -398,7 +398,7 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
     func testSchedulePendingForNextStartRejectsMissingPendingBinary() throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
-        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let store = makeStore(paths: paths)
 
         XCTAssertThrowsError(try store.schedulePendingForNextStart()) { error in
             XCTAssertEqual(error as? CLIProxyAPIBinaryStoreError, .missingPendingBinary)
@@ -415,7 +415,7 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         try writeManifest(version: "7.2.41", sourceKind: .userUpdated, binarySha: sha256(activeBinary), size: fileSize(activeBinary), to: paths.activeClipProxyManifest)
         try writeExecutable("#!/bin/sh\necho pending\n", to: pendingBinary)
         let pendingManifest = try manifest(version: "7.2.42", sourceKind: .userUpdated, binarySha: sha256(pendingBinary), size: fileSize(pendingBinary))
-        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let store = makeStore(paths: paths)
         try store.savePending(binaryURL: pendingBinary, manifest: pendingManifest)
         try FileManager.default.removeItem(at: paths.activeClipProxyManifest)
         try FileManager.default.createDirectory(at: paths.activeClipProxyManifest, withIntermediateDirectories: true)
@@ -433,7 +433,7 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         let pendingBinary = sandbox.appendingPathComponent("download/cliproxyapi")
         try writeExecutable("#!/bin/sh\necho pending\n", to: pendingBinary)
         let pendingManifest = try manifest(version: "7.2.42", sourceKind: .userUpdated, binarySha: sha256(pendingBinary), size: fileSize(pendingBinary))
-        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let store = makeStore(paths: paths)
         try store.savePending(binaryURL: pendingBinary, manifest: pendingManifest)
         try FileManager.default.createDirectory(at: paths.activeClipProxyManifest, withIntermediateDirectories: true)
 
@@ -452,7 +452,7 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         let candidate = sandbox.appendingPathComponent("download/candidate")
         try writeExecutable("existing pending", to: existingPending)
         try writeExecutable("mismatched candidate", to: candidate)
-        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let store = makeStore(paths: paths)
         try store.savePending(
             binaryURL: existingPending,
             manifest: try manifest(
@@ -494,7 +494,7 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         let candidate = sandbox.appendingPathComponent("download/candidate")
         try writeExecutable("unknown legacy candidate", to: candidate)
-        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let store = makeStore(paths: paths)
 
         XCTAssertThrowsError(
             try store.savePending(
@@ -522,7 +522,7 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         let candidate = sandbox.appendingPathComponent("download/candidate")
         try writeExecutable("legacy candidate", to: candidate)
-        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let store = makeStore(paths: paths)
 
         try store.savePending(
             binaryURL: candidate,
@@ -574,7 +574,7 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
             target: .init(operatingSystem: .darwin, architecture: .x86_64),
             to: paths.pendingClipProxyManifest
         )
-        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let store = makeStore(paths: paths)
 
         XCTAssertThrowsError(try store.schedulePendingForNextStart())
 
@@ -606,7 +606,7 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
             to: paths.pendingClipProxyManifest
         )
         let activeBefore = try Data(contentsOf: paths.clipProxyBinary)
-        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let store = makeStore(paths: paths)
 
         XCTAssertThrowsError(try store.applyPending())
 
@@ -630,7 +630,7 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
             target: .init(operatingSystem: .darwin, architecture: .x86_64),
             to: bundledManifest
         )
-        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let store = makeStore(paths: paths)
 
         XCTAssertThrowsError(try store.prepareActiveBinary(bundledBinaryURL: bundled, bundledManifestURL: bundledManifest))
 
@@ -663,7 +663,7 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
             to: bundledManifest
         )
         let activeBefore = try Data(contentsOf: paths.clipProxyBinary)
-        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let store = makeStore(paths: paths)
 
         XCTAssertThrowsError(try store.reconcileBundledBinary(bundledBinaryURL: bundled, bundledManifestURL: bundledManifest))
 
@@ -705,7 +705,7 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
             to: paths.pendingClipProxyManifest
         )
         let activeBefore = try Data(contentsOf: paths.clipProxyBinary)
-        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let store = makeStore(paths: paths)
 
         XCTAssertThrowsError(try store.reconcileBundledBinary(bundledBinaryURL: bundled, bundledManifestURL: bundledManifest))
 
@@ -739,7 +739,7 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
             to: paths.pendingClipProxyManifest
         )
         try Data("scheduled\n".utf8).write(to: paths.pendingClipProxyApplyOnNextStartMarker)
-        let store = CLIProxyAPIBinaryStore(paths: paths)
+        let store = makeStore(paths: paths)
 
         XCTAssertThrowsError(try store.prepareActiveBinary(bundledBinaryURL: bundled, bundledManifestURL: bundledManifest))
 
@@ -757,6 +757,13 @@ final class CLIProxyAPIBinaryStoreTests: XCTestCase {
         XCTAssertTrue(source.contains("private func applyPendingLocked() throws"))
         XCTAssertTrue(source.contains("private func prepareActiveBinaryLocked(bundledBinaryURL: URL?, bundledManifestURL: URL?) throws"))
         XCTAssertTrue(source.contains("func sha256HexDigest() throws -> String"))
+    }
+
+    private func makeStore(paths: ManagedPaths) -> CLIProxyAPIBinaryStore {
+        CLIProxyAPIBinaryStore(
+            paths: paths,
+            compatibilityAuthorizer: RuntimeCompatibilityPreflight(environment: SupportedMacOSEnvironment())
+        )
     }
 
     private func makeSandbox() throws -> URL {
@@ -866,4 +873,14 @@ private final class ArtifactRecordingAuthorizer: RuntimeCompatibilityAuthorizing
             ($0, CompatibilityDecision(action: $0, disposition: .allowed))
         })
     )
+}
+
+private struct SupportedMacOSEnvironment: RuntimeEnvironmentProviding {
+    func snapshot() -> RuntimeEnvironmentSnapshot {
+        RuntimeEnvironmentSnapshot(
+            operatingSystem: .macOS(major: 15, minor: 0),
+            architecture: .arm64,
+            loginShell: "/bin/zsh"
+        )
+    }
 }
