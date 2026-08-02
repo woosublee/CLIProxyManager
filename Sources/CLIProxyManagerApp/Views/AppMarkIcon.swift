@@ -132,20 +132,5 @@ enum AppMarkRenderer {
         renderer.scale = 1
         return renderer.nsImage
     }
-
-    /// Renders a monochrome template version of the waveform for the menu bar.
-    static func menuBarTemplate(size: CGFloat = 18) -> NSImage? {
-        let inset: CGFloat = 2
-        let view = AppMarkMenuBarPath()
-            .stroke(Color.black, style: StrokeStyle(lineWidth: 1.55, lineCap: .round, lineJoin: .round))
-            .frame(width: max(0, size - inset * 2), height: max(0, size - inset * 2))
-            .frame(width: size, height: size)
-        let renderer = ImageRenderer(content: view)
-        renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
-        guard let image = renderer.nsImage else { return nil }
-        image.size = NSSize(width: size, height: size)
-        image.isTemplate = true
-        return image
-    }
 }
 #endif

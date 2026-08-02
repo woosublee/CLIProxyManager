@@ -10,11 +10,22 @@ struct CLIProxyManagerApp: App {
     @StateObject private var updaterService: UpdaterService
     @StateObject private var cliProxyAPIUpdateService: CLIProxyAPIUpdateService
     @StateObject private var usageOverlayWindowController: UsageOverlayWindowController
+    private let buildFlavor: AppBuildFlavor
 
     init() {
-        let config = LaunchAppearanceBootstrapper().applySavedDockVisibility()
+        let buildFlavor = AppBuildFlavor.current
+        let appAppearanceService = AppAppearanceService(buildFlavor: buildFlavor)
+        self.buildFlavor = buildFlavor
+
+        let config = LaunchAppearanceBootstrapper(
+            appAppearanceService: appAppearanceService
+        ).applySavedDockVisibility()
         let appLogger = AppLogger(minimumLevel: config.runtimeLogConfiguration.appMinimumLevel)
-        let viewModel = DashboardViewModel(config: config, appLogger: appLogger)
+        let viewModel = DashboardViewModel(
+            config: config,
+            appAppearanceService: appAppearanceService,
+            appLogger: appLogger
+        )
         let cliProxyAPIUpdateService = CLIProxyAPIUpdateService(appLogger: appLogger)
         _viewModel = StateObject(wrappedValue: viewModel)
         _cliProxyAPIUpdateService = StateObject(wrappedValue: cliProxyAPIUpdateService)
@@ -114,11 +125,13 @@ struct CLIProxyManagerApp: App {
                 quit: { quitCoordinator.requestQuit() }
             )
         } label: {
-            if let image = AppMarkRenderer.menuBarTemplate() {
-                Image(nsImage: image)
-            } else {
-                Image(systemName: "waveform.path")
-            }
+            MenuBarAppIcon(
+                state: MenuBarIconState(
+                    serverControlState: viewModel.serverControlState,
+                    severity: viewModel.serverStatus.severity
+                ),
+                buildFlavor: buildFlavor
+            )
         }
         .menuBarExtraStyle(.window)
     }
