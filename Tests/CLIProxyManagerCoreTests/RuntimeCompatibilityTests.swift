@@ -127,10 +127,9 @@ final class RuntimeCompatibilityTests: XCTestCase {
 
         XCTAssertEqual(legacy.decision(for: .startProxy).disposition, .allowedWithWarnings)
         XCTAssertTrue(legacy.findings.contains(.legacyArtifactTargetInferred))
-        XCTAssertEqual(
-            CPMStatus.Compatibility(report: legacy).findings.map(\.code),
-            ["legacyArtifactTargetInferred"]
-        )
+        let compatibility = CPMStatus.Compatibility(report: legacy)
+        XCTAssertEqual(compatibility.disposition, .allowed)
+        XCTAssertTrue(compatibility.findings.isEmpty)
 
         let explicit = RuntimeCompatibilityPolicy.current.report(
             environment: environment,
@@ -140,5 +139,22 @@ final class RuntimeCompatibilityTests: XCTestCase {
 
         XCTAssertEqual(explicit.decision(for: .startProxy).disposition, .allowed)
         XCTAssertFalse(explicit.findings.contains(.legacyArtifactTargetInferred))
+    }
+
+    func testStatusCompatibilityHidesLegacyFindingButKeepsBlocker() {
+        let report = RuntimeCompatibilityReport(
+            findings: [
+                .legacyArtifactTargetInferred,
+                .unsupportedArchitecture(expected: .arm64, actual: .x86_64),
+            ],
+            decisions: Dictionary(uniqueKeysWithValues: CompatibilityAction.allCases.map { action in
+                (action, CompatibilityDecision(action: action, disposition: .blocked))
+            })
+        )
+
+        let compatibility = CPMStatus.Compatibility(report: report)
+
+        XCTAssertEqual(compatibility.disposition, .blocked)
+        XCTAssertEqual(compatibility.findings.map(\.code), ["unsupportedArchitecture"])
     }
 }

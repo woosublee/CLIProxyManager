@@ -632,6 +632,33 @@ final class CLIProxyManagerCommandTests: XCTestCase {
         XCTAssertTrue(output.stderr.isEmpty)
     }
 
+    func testStatusJSONHidesLegacyArtifactTargetInference() async throws {
+        let output = OutputDouble(isInteractive: false)
+        let report = RuntimeCompatibilityPolicy.current.report(
+            environment: .init(
+                operatingSystem: .macOS(major: 15, minor: 0),
+                architecture: .arm64,
+                loginShell: "/bin/zsh"
+            ),
+            artifacts: .init(bundled: .legacy, active: nil, pending: nil),
+            claude: .notChecked
+        )
+        let command = makeRuntimeCommand(
+            output: output,
+            services: RuntimeServicesDouble(compatibility: CPMStatus.Compatibility(report: report))
+        )
+
+        try await command.run(arguments: ["status", "--json"])
+
+        let data = Data(output.stdout.joined().utf8)
+        let status = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let compatibility = try XCTUnwrap(status["compatibility"] as? [String: Any])
+        XCTAssertEqual(compatibility["disposition"] as? String, CompatibilityDisposition.allowed.rawValue)
+        XCTAssertTrue((compatibility["findings"] as? [Any])?.isEmpty == true)
+        XCTAssertFalse(output.stdout.joined().contains("legacyArtifactTargetInferred"))
+        XCTAssertTrue(output.stderr.isEmpty)
+    }
+
     func testStatusJSONContainsSanitizedCompatibilitySummary() async throws {
         let output = OutputDouble(isInteractive: false)
         let report = RuntimeCompatibilityPolicy.current.report(
