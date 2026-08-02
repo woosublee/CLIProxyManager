@@ -99,7 +99,6 @@ final class MenuBarAppIconTests: XCTestCase {
         XCTAssertEqual(MenuBarIconMetrics.officialMarkInset, 2)
         XCTAssertEqual(MenuBarIconMetrics.developmentMarkInset, 3)
         XCTAssertEqual(MenuBarIconMetrics.developmentCornerRadius, 4)
-        XCTAssertEqual(MenuBarIconMetrics.developmentBorderWidth, 1)
     }
 
     func testMenuBarRendererProducesTemplateImagesForEveryVariant() throws {

@@ -57,7 +57,6 @@ enum MenuBarIconMetrics {
     static let markLineWidth: CGFloat = 1.55
     static let slashLineWidth: CGFloat = 1.45
     static let developmentCornerRadius: CGFloat = 4
-    static let developmentBorderWidth: CGFloat = 1
     static let officialSlashInset: CGFloat = 3.5
     static let developmentSlashInset: CGFloat = 4.25
 }

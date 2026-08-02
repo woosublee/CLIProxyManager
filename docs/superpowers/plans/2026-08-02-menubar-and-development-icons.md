@@ -15,8 +15,8 @@
 - Connecting motion은 총 1.4초다: draw 0.9초, hold 0.2초, fade 0.15초, blank/reset 0.15초.
 - Connecting motion은 약 15fps로 갱신하고, Connecting이 아닐 때 animation schedule을 pause한다.
 - Reduce Motion에서는 Connecting을 trim 0.65의 정적 partial waveform으로 표시한다.
-- Development 메뉴바 variant는 corner radius 4pt, line width 1pt의 continuous rounded-square 외곽선을 사용한다.
-- Development Dock variant는 `#FF9500`→`#FF2D55` gradient와 우측 하단 `D` badge를 사용한다.
+- Development 메뉴바 variant는 corner radius 4pt의 채운 rounded-square 배경에서 파형을 `destinationOut` blend로 투명하게 cutout한다(negative space).
+- Development Dock variant는 기존 blue–purple gradient를 유지하되 파형을 반투명 검정(`Color.black.opacity(0.34)`)으로 바꾸고, 얇은 주황색(`Color.orange.opacity(0.82)`) rounded-square 테두리를 추가한다. 새 gradient나 badge는 추가하지 않는다.
 - Build flavor는 `CLIProxyManagerReleaseChannel == "development"`일 때만 Development이며, 누락 또는 예상하지 않은 값은 Official이다.
 - `AppConfig`, 사용자 설정, proxy polling/lifecycle, 앱 이름, bundle identifier, Finder용 정적 `.icns`, Makefile의 channel 생성 방식은 변경하지 않는다.
 - 새 외부 dependency를 추가하지 않는다.
@@ -27,7 +27,7 @@
 - Create `Sources/CLIProxyManagerApp/Models/AppBuildFlavor.swift`: bundle marker를 Official/Development로 해석하는 순수 모델.
 - Create `Sources/CLIProxyManagerApp/Models/MenuBarIconState.swift`: runtime server 상태를 Connected/Connecting/Stopped로 축약하고 accessibility 상태 문구를 제공하는 순수 모델.
 - Create `Sources/CLIProxyManagerApp/Views/MenuBarAppIcon.swift`: menu bar geometry, animation phase, Reduce Motion fallback, build 외곽선, accessibility label을 소유하는 SwiftUI view.
-- Modify `Sources/CLIProxyManagerApp/Views/AppMarkIcon.swift`: 기존 Dock icon view/renderer에 build flavor별 gradient와 `D` badge를 추가한다.
+- Modify `Sources/CLIProxyManagerApp/Views/AppMarkIcon.swift`: 기존 Dock icon view/renderer에 build flavor별 파형 tint와 외곽선을 추가한다.
 - Modify `Sources/CLIProxyManagerApp/Services/AppAppearanceService.swift`: 주입된 build flavor로 runtime Dock icon을 렌더링한다.
 - Modify `Sources/CLIProxyManagerApp/CLIProxyManagerApp.swift`: 하나의 current build flavor와 appearance service를 생성하고 menu bar 및 Dock 흐름에 공유한다.
 - Create `Tests/CLIProxyManagerAppTests/MenuBarIconStateTests.swift`: 상태 매핑과 build marker 해석을 검증한다.
@@ -483,36 +483,37 @@ enum MenuBarIconMetrics {
 
 - [ ] **Step 5: Implement static menu bar artwork**
 
-Append `MenuBarIconArtwork` to the same file:
+Append `MenuBarIconArtwork` to the same file. Development is drawn as negative space: a filled rounded-square background with the waveform (and slash) punched out via a `destinationOut` blend, not an outline:
 
 ```swift
 struct MenuBarIconArtwork: View {
     let presentation: MenuBarIconPresentation
     let buildFlavor: AppBuildFlavor
 
-    private var markInset: CGFloat {
+    private var isDevelopment: Bool {
         buildFlavor == .development
+    }
+
+    private var markInset: CGFloat {
+        isDevelopment
             ? MenuBarIconMetrics.developmentMarkInset
             : MenuBarIconMetrics.officialMarkInset
     }
 
     private var slashInset: CGFloat {
-        buildFlavor == .development
+        isDevelopment
             ? MenuBarIconMetrics.developmentSlashInset
             : MenuBarIconMetrics.officialSlashInset
     }
 
     var body: some View {
         ZStack {
-            if buildFlavor == .development {
+            if isDevelopment {
                 RoundedRectangle(
                     cornerRadius: MenuBarIconMetrics.developmentCornerRadius,
                     style: .continuous
                 )
-                .strokeBorder(
-                    Color.primary,
-                    lineWidth: MenuBarIconMetrics.developmentBorderWidth
-                )
+                .fill(Color.primary)
             }
 
             AppMarkMenuBarPath()
@@ -525,6 +526,7 @@ struct MenuBarIconArtwork: View {
                         lineJoin: .round
                     )
                 )
+                .blendMode(isDevelopment ? .destinationOut : .normal)
                 .opacity(presentation.opacity)
                 .frame(
                     width: MenuBarIconMetrics.size - markInset * 2,
@@ -553,8 +555,10 @@ struct MenuBarIconArtwork: View {
                         lineCap: .round
                     )
                 )
+                .blendMode(isDevelopment ? .destinationOut : .normal)
             }
         }
+        .compositingGroup()
         .frame(width: MenuBarIconMetrics.size, height: MenuBarIconMetrics.size)
     }
 }
@@ -715,48 +719,38 @@ Expected: compile failures because the build-flavor initializers and renderer me
 
 - [ ] **Step 4: Add build-flavor styling to `AppIconView`**
 
-Modify `AppIconView` in `Sources/CLIProxyManagerApp/Views/AppMarkIcon.swift` to add the property and use build-specific gradient values:
+Modify `AppIconView` in `Sources/CLIProxyManagerApp/Views/AppMarkIcon.swift` to add the property. Both build flavors keep the existing gradient; only the waveform tint and an added outline distinguish Development:
 
 ```swift
+private let officialGradientColors = [
+    Color(red: 0.0, green: 0.478, blue: 1.0),
+    Color(red: 0.345, green: 0.337, blue: 0.839)
+]
+
 struct AppIconView: View {
     var size: CGFloat = 72
     var dropsShadow: Bool = true
     var buildFlavor: AppBuildFlavor = .official
-
-    private var gradientColors: [Color] {
-        switch buildFlavor {
-        case .official:
-            [
-                Color(red: 0.0, green: 0.478, blue: 1.0),
-                Color(red: 0.345, green: 0.337, blue: 0.839)
-            ]
-        case .development:
-            [
-                Color(red: 1.0, green: 149.0 / 255.0, blue: 0.0),
-                Color(red: 1.0, green: 45.0 / 255.0, blue: 85.0 / 255.0)
-            ]
-        }
-    }
 
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
                 .fill(
                     LinearGradient(
-                        colors: gradientColors,
+                        colors: officialGradientColors,
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
                 )
                 .shadow(
-                    color: dropsShadow ? gradientColors[0].opacity(0.36) : .clear,
+                    color: dropsShadow ? officialGradientColors[0].opacity(0.36) : .clear,
                     radius: dropsShadow ? size * 0.16 : 0,
                     y: dropsShadow ? size * 0.08 : 0
                 )
 
             AppMarkPath()
                 .stroke(
-                    .white,
+                    buildFlavor == .development ? Color.black.opacity(0.34) : .white,
                     style: StrokeStyle(
                         lineWidth: size * 0.06,
                         lineCap: .round,
@@ -765,18 +759,11 @@ struct AppIconView: View {
                 )
                 .frame(width: size, height: size)
         }
-        .overlay(alignment: .bottomTrailing) {
+        .overlay {
             if buildFlavor == .development {
-                Text("D")
-                    .font(.system(size: size * 0.16, weight: .black, design: .rounded))
-                    .foregroundStyle(.white)
-                    .frame(width: size * 0.25, height: size * 0.25)
-                    .background(Circle().fill(Color.black.opacity(0.72)))
-                    .overlay {
-                        Circle()
-                            .strokeBorder(Color.white.opacity(0.92), lineWidth: size * 0.018)
-                    }
-                    .padding(size * 0.075)
+                RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
+                    .strokeBorder(Color.orange.opacity(0.82), lineWidth: size * 0.035)
+                    .padding(size * 0.025)
             }
         }
         .frame(width: size, height: size)
@@ -784,7 +771,7 @@ struct AppIconView: View {
 }
 ```
 
-Preserve the existing comment and 1024×1024 / 824×824 Dock grid constants.
+Preserve the existing comment and 1024×1024 / 824×824 Dock grid constants. Keep the official gradient identical for both flavors — Development is distinguished only by the waveform tint and the added outline, not by a different gradient or badge.
 
 - [ ] **Step 5: Make `AppMarkRenderer` accept build flavor**
 
@@ -1139,6 +1126,6 @@ Ask the user to verify these exact cases by running the app themselves:
 2. Starting: waveform draws left-to-right over the approved 1.4-second cycle.
 3. Stopped and Error: full waveform with `/` slash.
 4. Reduce Motion: Connecting shows a static 65% partial waveform.
-5. Development menu bar: 1pt rounded-square frame remains visible in Light and Dark mode.
-6. Development Dock/App Switcher: orange-to-pink gradient and bottom-right `D` badge are immediately distinguishable.
+5. Development menu bar: filled rounded-square background with the waveform (and slash) punched out as negative space remains visible in Light and Dark mode.
+6. Development Dock/App Switcher: existing gradient with a semi-transparent black waveform and a thin orange rounded-square outline are immediately distinguishable from Official.
 7. State transitions update the menu bar icon without opening the menu or triggering a separate refresh.

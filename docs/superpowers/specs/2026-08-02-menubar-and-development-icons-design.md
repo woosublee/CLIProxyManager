@@ -42,7 +42,7 @@
 | Build | 메뉴바 | Dock / App Switcher |
 | --- | --- | --- |
 | Official | 상태별 파형만 표시 | 기존 blue–purple gradient icon 유지 |
-| Development | 상태별 파형을 1pt continuous rounded-square 외곽선으로 감쌈 | `#FF9500`→`#FF2D55` gradient와 우측 하단 `D` badge 추가 |
+| Development | 채운 4pt continuous rounded-square 배경에서 상태별 파형을 negative space(투명 cutout)로 표시 | 기존 blue–purple gradient를 유지하되 파형을 반투명 검정으로, 얇은 주황색 rounded-square 테두리를 추가 |
 
 Development variant도 Connected, Connecting, Stopped의 상태 의미를 동일하게 유지한다. Build 표식이 상태 표식을 대체하지 않는다.
 
@@ -121,9 +121,10 @@ Official과 Development를 판별한다. runtime metadata 해석만 담당하며
 
 Dock icon 렌더링 API가 `AppBuildFlavor`를 받는다.
 
-- Official은 현재 blue–purple gradient, white waveform, 기존 padding과 corner radius를 유지한다.
-- Development는 Apple system orange `#FF9500`에서 system pink `#FF2D55`로 이어지는 gradient를 사용한다.
-- Development의 `D` badge는 active artwork의 우측 하단에 배치하고, 밝고 어두운 배경 모두에서 읽히는 고대비 원형 badge로 렌더링한다.
+- Official과 Development 모두 현재 blue–purple gradient, 기존 padding과 corner radius를 유지한다. 새로운 gradient나 badge는 추가하지 않는다.
+- Official의 파형은 불투명 흰색을 유지한다.
+- Development는 파형만 반투명 검정(`Color.black.opacity(0.34)`)으로 바꿔 official과 실루엣이 구분되게 한다.
+- Development는 active artwork 전체에 얇은 주황색(`Color.orange.opacity(0.82)`) rounded-square 테두리를 추가로 그린다.
 - 두 variant 모두 현재 1024×1024 canvas와 824×824 active artwork 규칙을 유지한다.
 
 ### `AppAppearanceService`
@@ -167,7 +168,7 @@ Connecting은 `AppMarkMenuBarPath.trim(from: 0, to: progress)`를 사용한다.
 - 기준 크기는 현재와 같은 18×18pt다.
 - 기존 파형의 비율과 round line cap/join을 유지한다.
 - Stopped 사선은 파형을 가로지르는 `/` 방향이며 파형과 동일 계열의 선 두께를 사용한다.
-- Development rounded-square는 4pt continuous corner radius와 1pt pixel-aligned stroke를 사용한다.
+- Development의 채운 rounded-square 배경은 4pt continuous corner radius를 사용하고, 파형은 `destinationOut` blend로 배경에서 투명하게 cutout된다.
 - Development variant의 파형은 외곽선과 충돌하지 않을 정도로만 소폭 축소한다.
 - Official Connected는 현재 menu bar icon과 시각적으로 동일해야 한다.
 - Light/Dark mode에서 색상에 의존하지 않고 shape 차이만으로 상태와 build를 구분한다.
@@ -226,7 +227,7 @@ Menu bar label에는 상태와 build를 함께 설명하는 label을 제공한�
 - Official과 Development가 모두 1024×1024 canvas image를 생성함
 - Official과 Development render data가 서로 다름
 - Official style이 기존 gradient와 active artwork geometry를 유지함
-- Development style에 warm palette와 `D` badge가 포함됨
+- 기본 `AppIconView()`는 Official style로 렌더링됨
 
 ### 회귀 검증
 
@@ -244,8 +245,8 @@ Menu bar label에는 상태와 build를 함께 설명하는 label을 제공한�
 - 서버 시작 중 파형이 순차적으로 그려짐
 - Stopped 및 Error에서 사선이 보임
 - Reduce Motion에서 Connecting이 정적 partial path로 보임
-- Development 메뉴바 icon에 rounded-square 외곽선이 보임
-- Development Dock 및 App Switcher icon이 `#FF9500`→`#FF2D55` gradient와 우측 하단 `D` badge로 보임
+- Development 메뉴바 icon이 채운 rounded-square 배경과 투명 파형 cutout으로 보임
+- Development Dock 및 App Switcher icon이 기존 gradient에 반투명 검정 파형과 얇은 주황색 테두리로 보임
 - Light/Dark appearance 양쪽에서 icon이 선명함
 - 상태 변경 후 menu bar icon이 지연 없이 갱신됨
 
