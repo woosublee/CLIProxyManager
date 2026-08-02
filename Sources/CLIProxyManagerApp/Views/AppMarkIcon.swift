@@ -9,6 +9,10 @@ private let appMarkPoints: [(CGFloat, CGFloat)] = [
 
 private let appMarkViewportBounds = CGRect(x: 0, y: 0, width: 100, height: 100)
 private let appMarkMenuBarBounds = CGRect(x: 22, y: 15, width: 58, height: 58)
+private let officialGradientColors = [
+    Color(red: 0.0, green: 0.478, blue: 1.0),
+    Color(red: 0.345, green: 0.337, blue: 0.839)
+]
 
 private func appMarkPath(in rect: CGRect, fitting sourceBounds: CGRect) -> Path {
     guard sourceBounds.width > 0, sourceBounds.height > 0 else { return Path() }
@@ -46,40 +50,25 @@ struct AppIconView: View {
     var dropsShadow: Bool = true
     var buildFlavor: AppBuildFlavor = .official
 
-    private var gradientColors: [Color] {
-        switch buildFlavor {
-        case .official:
-            [
-                Color(red: 0.0, green: 0.478, blue: 1.0),
-                Color(red: 0.345, green: 0.337, blue: 0.839)
-            ]
-        case .development:
-            [
-                Color(red: 1.0, green: 149.0 / 255.0, blue: 0.0),
-                Color(red: 1.0, green: 45.0 / 255.0, blue: 85.0 / 255.0)
-            ]
-        }
-    }
-
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
                 .fill(
                     LinearGradient(
-                        colors: gradientColors,
+                        colors: officialGradientColors,
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
                 )
                 .shadow(
-                    color: dropsShadow ? gradientColors[0].opacity(0.36) : .clear,
+                    color: dropsShadow ? officialGradientColors[0].opacity(0.36) : .clear,
                     radius: dropsShadow ? size * 0.16 : 0,
                     y: dropsShadow ? size * 0.08 : 0
                 )
 
             AppMarkPath()
                 .stroke(
-                    .white,
+                    buildFlavor == .development ? Color.black.opacity(0.34) : .white,
                     style: StrokeStyle(
                         lineWidth: size * 0.06,
                         lineCap: .round,
@@ -88,18 +77,11 @@ struct AppIconView: View {
                 )
                 .frame(width: size, height: size)
         }
-        .overlay(alignment: .bottomTrailing) {
+        .overlay {
             if buildFlavor == .development {
-                Text("D")
-                    .font(.system(size: size * 0.16, weight: .black, design: .rounded))
-                    .foregroundStyle(.white)
-                    .frame(width: size * 0.25, height: size * 0.25)
-                    .background(Circle().fill(Color.black.opacity(0.72)))
-                    .overlay {
-                        Circle()
-                            .strokeBorder(Color.white.opacity(0.92), lineWidth: size * 0.018)
-                    }
-                    .padding(size * 0.075)
+                RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
+                    .strokeBorder(Color.orange.opacity(0.82), lineWidth: size * 0.035)
+                    .padding(size * 0.025)
             }
         }
         .frame(width: size, height: size)
@@ -131,6 +113,26 @@ enum AppMarkRenderer {
         let renderer = ImageRenderer(content: view)
         renderer.scale = 1
         return renderer.nsImage
+    }
+
+    static func menuBarIcon(
+        presentation: MenuBarIconPresentation,
+        buildFlavor: AppBuildFlavor,
+        size: CGFloat = MenuBarIconMetrics.size
+    ) -> NSImage? {
+        let view = MenuBarIconArtwork(
+            presentation: presentation,
+            buildFlavor: buildFlavor
+        )
+        .environment(\.colorScheme, .light)
+        .frame(width: size, height: size)
+
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
+        guard let image = renderer.nsImage else { return nil }
+        image.size = NSSize(width: size, height: size)
+        image.isTemplate = true
+        return image
     }
 }
 #endif

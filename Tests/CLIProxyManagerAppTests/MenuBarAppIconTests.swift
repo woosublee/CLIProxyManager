@@ -102,17 +102,92 @@ final class MenuBarAppIconTests: XCTestCase {
         XCTAssertEqual(MenuBarIconMetrics.developmentBorderWidth, 1)
     }
 
-    func testAnimatedViewUsesPausedTimelineAndReduceMotion() throws {
+    func testMenuBarRendererProducesTemplateImagesForEveryVariant() throws {
+        let connected = try XCTUnwrap(
+            AppMarkRenderer.menuBarIcon(
+                presentation: .connected,
+                buildFlavor: .official
+            )
+        )
+        let connecting = try XCTUnwrap(
+            AppMarkRenderer.menuBarIcon(
+                presentation: .reducedMotionConnecting,
+                buildFlavor: .official
+            )
+        )
+        let stopped = try XCTUnwrap(
+            AppMarkRenderer.menuBarIcon(
+                presentation: .stopped,
+                buildFlavor: .official
+            )
+        )
+        let development = try XCTUnwrap(
+            AppMarkRenderer.menuBarIcon(
+                presentation: .connected,
+                buildFlavor: .development
+            )
+        )
+
+        for image in [connected, connecting, stopped, development] {
+            XCTAssertTrue(image.isTemplate)
+            XCTAssertEqual(image.size.width, MenuBarIconMetrics.size, accuracy: 0.01)
+            XCTAssertEqual(image.size.height, MenuBarIconMetrics.size, accuracy: 0.01)
+        }
+        XCTAssertNotEqual(connected.tiffRepresentation, connecting.tiffRepresentation)
+        XCTAssertNotEqual(connected.tiffRepresentation, stopped.tiffRepresentation)
+        XCTAssertNotEqual(connected.tiffRepresentation, development.tiffRepresentation)
+    }
+
+    func testAnimatorPreRendersImagesAndStartsOnlyForUnreducedConnectingState() throws {
+        let animator = MenuBarIconAnimator(buildFlavor: .development)
+        let now = Date(timeIntervalSinceReferenceDate: 1_000)
+
+        animator.update(state: .connected, reduceMotion: false, now: now)
+        XCTAssertEqual(animator.presentation, .connected)
+        XCTAssertTrue(try XCTUnwrap(animator.image).isTemplate)
+        XCTAssertFalse(animator.isAnimating)
+
+        animator.update(state: .connecting, reduceMotion: true, now: now)
+        XCTAssertEqual(animator.presentation, .reducedMotionConnecting)
+        XCTAssertTrue(try XCTUnwrap(animator.image).isTemplate)
+        XCTAssertFalse(animator.isAnimating)
+
+        animator.update(state: .connecting, reduceMotion: false, now: now)
+        XCTAssertEqual(animator.presentation, MenuBarIconAnimation.presentation(elapsed: 0))
+        XCTAssertTrue(try XCTUnwrap(animator.image).isTemplate)
+        XCTAssertTrue(animator.isAnimating)
+
+        animator.update(state: .stopped, reduceMotion: false, now: now)
+        XCTAssertEqual(animator.presentation, .stopped)
+        XCTAssertTrue(try XCTUnwrap(animator.image).isTemplate)
+        XCTAssertFalse(animator.isAnimating)
+    }
+
+    func testMenuBarLabelUsesPreRenderedImageInsteadOfRawTimelineArtwork() throws {
         let source = try String(
             contentsOf: repositoryRoot()
                 .appendingPathComponent("Sources/CLIProxyManagerApp/Views/MenuBarAppIcon.swift"),
             encoding: .utf8
         )
 
-        XCTAssertTrue(source.contains("TimelineView"))
+        XCTAssertTrue(source.contains("Image(nsImage: animator.image"))
         XCTAssertTrue(source.contains("accessibilityReduceMotion"))
-        XCTAssertTrue(source.contains("paused: state != .connecting || reduceMotion"))
+        XCTAssertTrue(source.contains("Timer.scheduledTimer"))
         XCTAssertTrue(source.contains(".onChange(of: state)"))
+        XCTAssertFalse(source.contains("TimelineView"))
+        XCTAssertFalse(source.contains("AppMarkRenderer.menuBarIcon(\n                presentation: animator.presentation"))
+    }
+
+    func testDevelopmentMenuBarUsesNegativeSpaceWaveform() throws {
+        let source = try String(
+            contentsOf: repositoryRoot()
+                .appendingPathComponent("Sources/CLIProxyManagerApp/Views/MenuBarAppIcon.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains(".fill(Color.primary)"))
+        XCTAssertTrue(source.contains(".blendMode(isDevelopment ? .destinationOut : .normal)"))
+        XCTAssertTrue(source.contains(".compositingGroup()"))
     }
 
     private func assertPresentation(

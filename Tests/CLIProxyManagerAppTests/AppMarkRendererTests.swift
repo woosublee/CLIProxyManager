@@ -18,5 +18,26 @@ final class AppMarkRendererTests: XCTestCase {
     func testDefaultAppIconViewRemainsOfficial() {
         XCTAssertEqual(AppIconView().buildFlavor, .official)
     }
+
+    func testDevelopmentDockKeepsOfficialGradientWithoutLetterBadge() throws {
+        let source = try String(
+            contentsOf: repositoryRoot()
+                .appendingPathComponent("Sources/CLIProxyManagerApp/Views/AppMarkIcon.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains("private let officialGradientColors"))
+        XCTAssertTrue(source.contains("Color.orange.opacity"))
+        XCTAssertTrue(source.contains("buildFlavor == .development ? Color.black.opacity"))
+        XCTAssertFalse(source.contains("Text(\"D\")"))
+        XCTAssertFalse(source.contains("45.0 / 255.0"))
+    }
+
+    private func repositoryRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
 }
 #endif

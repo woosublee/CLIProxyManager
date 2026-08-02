@@ -1,3 +1,7 @@
+#if canImport(AppKit)
+import AppKit
+#endif
+import Foundation
 import SwiftUI
 
 struct MenuBarIconPresentation: Equatable {
@@ -62,29 +66,30 @@ struct MenuBarIconArtwork: View {
     let presentation: MenuBarIconPresentation
     let buildFlavor: AppBuildFlavor
 
-    private var markInset: CGFloat {
+    private var isDevelopment: Bool {
         buildFlavor == .development
+    }
+
+    private var markInset: CGFloat {
+        isDevelopment
             ? MenuBarIconMetrics.developmentMarkInset
             : MenuBarIconMetrics.officialMarkInset
     }
 
     private var slashInset: CGFloat {
-        buildFlavor == .development
+        isDevelopment
             ? MenuBarIconMetrics.developmentSlashInset
             : MenuBarIconMetrics.officialSlashInset
     }
 
     var body: some View {
         ZStack {
-            if buildFlavor == .development {
+            if isDevelopment {
                 RoundedRectangle(
                     cornerRadius: MenuBarIconMetrics.developmentCornerRadius,
                     style: .continuous
                 )
-                .strokeBorder(
-                    Color.primary,
-                    lineWidth: MenuBarIconMetrics.developmentBorderWidth
-                )
+                .fill(Color.primary)
             }
 
             AppMarkMenuBarPath()
@@ -97,6 +102,7 @@ struct MenuBarIconArtwork: View {
                         lineJoin: .round
                     )
                 )
+                .blendMode(isDevelopment ? .destinationOut : .normal)
                 .opacity(presentation.opacity)
                 .frame(
                     width: MenuBarIconMetrics.size - markInset * 2,
@@ -125,9 +131,99 @@ struct MenuBarIconArtwork: View {
                         lineCap: .round
                     )
                 )
+                .blendMode(isDevelopment ? .destinationOut : .normal)
             }
         }
+        .compositingGroup()
         .frame(width: MenuBarIconMetrics.size, height: MenuBarIconMetrics.size)
+    }
+}
+
+@MainActor
+final class MenuBarIconAnimator: ObservableObject {
+    @Published private(set) var presentation = MenuBarIconPresentation.connected
+    @Published private(set) var image: NSImage?
+
+    private let buildFlavor: AppBuildFlavor
+    private var timer: Timer?
+    private var animationStartedAt = Date()
+    private var currentState: MenuBarIconState?
+    private var currentReduceMotion = false
+
+    init(buildFlavor: AppBuildFlavor) {
+        self.buildFlavor = buildFlavor
+        image = AppMarkRenderer.menuBarIcon(
+            presentation: presentation,
+            buildFlavor: buildFlavor
+        )
+    }
+
+    var isAnimating: Bool {
+        timer != nil
+    }
+
+    func update(
+        state: MenuBarIconState,
+        reduceMotion: Bool,
+        now: Date = Date()
+    ) {
+        defer {
+            currentState = state
+            currentReduceMotion = reduceMotion
+        }
+
+        switch state {
+        case .connected:
+            stopAnimation()
+            setPresentation(.connected)
+        case .stopped:
+            stopAnimation()
+            setPresentation(.stopped)
+        case .connecting where reduceMotion:
+            stopAnimation()
+            setPresentation(.reducedMotionConnecting)
+        case .connecting:
+            let shouldRestart = currentState != .connecting || currentReduceMotion || timer == nil
+            if shouldRestart {
+                animationStartedAt = now
+                setPresentation(MenuBarIconAnimation.presentation(elapsed: 0))
+                startAnimation()
+            }
+        }
+    }
+
+    private func setPresentation(_ presentation: MenuBarIconPresentation) {
+        self.presentation = presentation
+        image = AppMarkRenderer.menuBarIcon(
+            presentation: presentation,
+            buildFlavor: buildFlavor
+        )
+    }
+
+    private func startAnimation() {
+        timer?.invalidate()
+        let interval = 1 / MenuBarIconAnimation.framesPerSecond
+        let timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.setPresentation(
+                    MenuBarIconAnimation.presentation(
+                        elapsed: Date().timeIntervalSince(self.animationStartedAt)
+                    )
+                )
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
+    private func stopAnimation() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    deinit {
+        timer?.invalidate()
     }
 }
 
@@ -136,34 +232,34 @@ struct MenuBarAppIcon: View {
     let buildFlavor: AppBuildFlavor
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var animationStartedAt = Date()
+    @StateObject private var animator: MenuBarIconAnimator
+
+    init(state: MenuBarIconState, buildFlavor: AppBuildFlavor) {
+        self.state = state
+        self.buildFlavor = buildFlavor
+        _animator = StateObject(
+            wrappedValue: MenuBarIconAnimator(buildFlavor: buildFlavor)
+        )
+    }
 
     var body: some View {
-        TimelineView(
-            .animation(
-                minimumInterval: 1 / MenuBarIconAnimation.framesPerSecond,
-                paused: state != .connecting || reduceMotion
-            )
-        ) { context in
-            MenuBarIconArtwork(
-                presentation: presentation(at: context.date),
-                buildFlavor: buildFlavor
-            )
-        }
-        .frame(width: MenuBarIconMetrics.size, height: MenuBarIconMetrics.size)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Self.accessibilityLabel(state: state, buildFlavor: buildFlavor))
-        .onAppear {
-            if state == .connecting {
-                animationStartedAt = Date()
+        Image(nsImage: animator.image ?? Self.fallbackImage)
+            .frame(width: MenuBarIconMetrics.size, height: MenuBarIconMetrics.size)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Self.accessibilityLabel(state: state, buildFlavor: buildFlavor))
+            .onAppear(perform: updateAnimator)
+            .onChange(of: state) { _, _ in
+                updateAnimator()
             }
-        }
-        .onChange(of: state) { _, updatedState in
-            if updatedState == .connecting {
-                animationStartedAt = Date()
+            .onChange(of: reduceMotion) { _, _ in
+                updateAnimator()
             }
-        }
     }
+
+    private static let fallbackImage = NSImage(
+        systemSymbolName: "waveform.path",
+        accessibilityDescription: nil
+    ) ?? NSImage(size: NSSize(width: MenuBarIconMetrics.size, height: MenuBarIconMetrics.size))
 
     static func accessibilityLabel(
         state: MenuBarIconState,
@@ -173,18 +269,7 @@ struct MenuBarAppIcon: View {
         return "CLIProxyManager \(state.accessibilityStatus)\(buildSuffix)"
     }
 
-    private func presentation(at date: Date) -> MenuBarIconPresentation {
-        switch state {
-        case .connected:
-            return .connected
-        case .stopped:
-            return .stopped
-        case .connecting where reduceMotion:
-            return .reducedMotionConnecting
-        case .connecting:
-            return MenuBarIconAnimation.presentation(
-                elapsed: date.timeIntervalSince(animationStartedAt)
-            )
-        }
+    private func updateAnimator() {
+        animator.update(state: state, reduceMotion: reduceMotion)
     }
 }
