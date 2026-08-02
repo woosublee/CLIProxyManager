@@ -319,14 +319,17 @@ final class DashboardViewModel: ObservableObject {
     private let secretStore: any SecretStore
     private let appLogger: any AppLogging
     private let subscriptionUsageSleep: @Sendable (UInt64) async throws -> Void
+    private let serverStatusPollingSleep: @Sendable (UInt64) async throws -> Void
     private let serverStatusRetryDelayNanoseconds: UInt64
     private let settingsMessageAutoClearDelayNanoseconds: UInt64
+    private static let serverStatusPollingInterval: TimeInterval = 5
     private var authProfiles: [AuthProfile] = []
     private var oauthLoginTask: Task<Void, Never>?
     private var settingsMessageAutoClearTask: Task<Void, Never>?
     private var configWriteProtectionMessage: String?
     private var applicationLaunchTask: Task<Void, Never>?
     private var applicationLaunchGeneration = 0
+    private var serverStatusPollingTask: Task<Void, Never>?
     private var lastClaudeStatus: DiagnosticStatus?
     private var lastCodexStatus: DiagnosticStatus?
     private var lastPersistedConfig: AppConfig
@@ -612,6 +615,9 @@ final class DashboardViewModel: ObservableObject {
         subscriptionUsageSleep: @escaping @Sendable (UInt64) async throws -> Void = { delay in
             try await Task.sleep(nanoseconds: delay)
         },
+        serverStatusPollingSleep: @escaping @Sendable (UInt64) async throws -> Void = { delay in
+            try await Task.sleep(nanoseconds: delay)
+        },
         serverStatusRetryDelayNanoseconds: UInt64 = 500_000_000,
         settingsMessageAutoClearDelayNanoseconds: UInt64 = 3_000_000_000
     ) {
@@ -646,6 +652,7 @@ final class DashboardViewModel: ObservableObject {
         self.secretStore = secretStore
         self.appLogger = appLogger
         self.subscriptionUsageSleep = subscriptionUsageSleep
+        self.serverStatusPollingSleep = serverStatusPollingSleep
         self.serverStatusRetryDelayNanoseconds = serverStatusRetryDelayNanoseconds
         self.settingsMessageAutoClearDelayNanoseconds = settingsMessageAutoClearDelayNanoseconds
         let loadedDocument: AppConfigLoadResult
@@ -1020,6 +1027,8 @@ final class DashboardViewModel: ObservableObject {
         if !attemptedReconciliationRestart {
             await performAutostartIfEnabled()
         }
+        guard isCurrentApplicationLaunch(generation: generation) else { return }
+        startServerStatusPolling()
         launchResult = launchWasDegraded ? .degraded(.process) : .succeeded
     }
 
@@ -1043,6 +1052,49 @@ final class DashboardViewModel: ObservableObject {
         let claudeStatus = await claudeConnector.status()
         compatibilityReport = await updatedCompatibilityReport
         updateStatuses(serverStatus: updatedServerStatus, claudeStatus: claudeStatus)
+        if wasProxyReady != (updatedServerStatus.severity == .ready) {
+            scheduleAPIUsageCollectorUpdateIfStarted()
+        }
+    }
+
+    /// Keeps `serverStatus`/`serverControlState` converged with the real CLIProxyAPI process
+    /// while the app is running, independent of any window or menu bar dropdown being open.
+    /// Without this, state changes made outside the app (killing the process, restarting it
+    /// via the `cpm` CLI) are invisible until the user happens to open a window that calls
+    /// `refresh()`.
+    private func startServerStatusPolling() {
+        guard serverStatusPollingTask == nil else { return }
+        let sleep = serverStatusPollingSleep
+        serverStatusPollingTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await sleep(UInt64(Self.serverStatusPollingInterval * 1_000_000_000))
+                } catch {
+                    return
+                }
+                guard let self, !Task.isCancelled else { return }
+                await self.pollServerStatusIfIdle()
+            }
+        }
+    }
+
+    private func stopServerStatusPolling() {
+        serverStatusPollingTask?.cancel()
+        serverStatusPollingTask = nil
+    }
+
+    private func pollServerStatusIfIdle() async {
+        guard !isPreparingAPIUsageForTermination,
+              !isServerActionInProgress,
+              !serverControlState.isTransitioning,
+              proxyConfigurationRestartTask == nil,
+              pendingProxyConfigurationRestartReasons.isEmpty else { return }
+        let wasProxyReady = serverStatus.severity == .ready
+        let rawServerStatus = await stableServerStatus()
+        updateProxyRuntimeCertainty(from: rawServerStatus)
+        let updatedServerStatus = passiveRefreshPresentationStatus(from: rawServerStatus)
+        guard updatedServerStatus != serverStatus else { return }
+        updateStatuses(serverStatus: updatedServerStatus, claudeStatus: nil)
         if wasProxyReady != (updatedServerStatus.severity == .ready) {
             scheduleAPIUsageCollectorUpdateIfStarted()
         }
@@ -1249,6 +1301,7 @@ final class DashboardViewModel: ObservableObject {
         isPreparingAPIUsageForTermination = true
         applicationLaunchGeneration &+= 1
         applicationLaunchTask?.cancel()
+        stopServerStatusPolling()
         _ = invalidateAPIUsageLifecycle()
         apiUsageLifecycleTasks.values.forEach { $0.cancel() }
     }
@@ -1320,6 +1373,7 @@ final class DashboardViewModel: ObservableObject {
     private func recoverAfterCancelledTermination() {
         resetTerminationPreparationState()
         restartAPIUsageAfterCancelledTermination()
+        startServerStatusPolling()
     }
 
     private func restartAPIUsageAfterCancelledTermination() {

@@ -9,6 +9,10 @@ private let appMarkPoints: [(CGFloat, CGFloat)] = [
 
 private let appMarkViewportBounds = CGRect(x: 0, y: 0, width: 100, height: 100)
 private let appMarkMenuBarBounds = CGRect(x: 22, y: 15, width: 58, height: 58)
+private let officialGradientColors = [
+    Color(red: 0.0, green: 0.478, blue: 1.0),
+    Color(red: 0.345, green: 0.337, blue: 0.839)
+]
 
 private func appMarkPath(in rect: CGRect, fitting sourceBounds: CGRect) -> Path {
     guard sourceBounds.width > 0, sourceBounds.height > 0 else { return Path() }
@@ -44,28 +48,41 @@ struct AppMarkMenuBarPath: Shape {
 struct AppIconView: View {
     var size: CGFloat = 72
     var dropsShadow: Bool = true
+    var buildFlavor: AppBuildFlavor = .official
 
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
                 .fill(
                     LinearGradient(
-                        colors: [
-                            Color(red: 0.0, green: 0.478, blue: 1.0),    // #007AFF
-                            Color(red: 0.345, green: 0.337, blue: 0.839) // #5856D6
-                        ],
+                        colors: officialGradientColors,
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
                 )
                 .shadow(
-                    color: dropsShadow ? Color(red: 0.0, green: 0.478, blue: 1.0).opacity(0.36) : .clear,
+                    color: dropsShadow ? officialGradientColors[0].opacity(0.36) : .clear,
                     radius: dropsShadow ? size * 0.16 : 0,
                     y: dropsShadow ? size * 0.08 : 0
                 )
+
             AppMarkPath()
-                .stroke(.white, style: StrokeStyle(lineWidth: size * 0.06, lineCap: .round, lineJoin: .round))
+                .stroke(
+                    buildFlavor == .development ? Color.black.opacity(0.34) : .white,
+                    style: StrokeStyle(
+                        lineWidth: size * 0.06,
+                        lineCap: .round,
+                        lineJoin: .round
+                    )
+                )
                 .frame(width: size, height: size)
+        }
+        .overlay {
+            if buildFlavor == .development {
+                RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
+                    .strokeBorder(Color.orange.opacity(0.82), lineWidth: size * 0.035)
+                    .padding(size * 0.025)
+            }
         }
         .frame(width: size, height: size)
     }
@@ -79,13 +96,17 @@ enum AppMarkRenderer {
     /// 1024×1024 canvas. Without that margin the icon visually appears larger
     /// than other Dock apps. Active artwork sits in 824×824, with corner radius
     /// scaled accordingly (185pt at the active size).
-    static func dockIcon() -> NSImage? {
+    static func dockIcon(buildFlavor: AppBuildFlavor) -> NSImage? {
         let canvasPoints: CGFloat = 1024
         let activePoints: CGFloat = 824
 
         let view = ZStack {
             Color.clear
-            AppIconView(size: activePoints, dropsShadow: false)
+            AppIconView(
+                size: activePoints,
+                dropsShadow: false,
+                buildFlavor: buildFlavor
+            )
         }
         .frame(width: canvasPoints, height: canvasPoints)
 
@@ -94,13 +115,18 @@ enum AppMarkRenderer {
         return renderer.nsImage
     }
 
-    /// Renders a monochrome template version of the waveform for the menu bar.
-    static func menuBarTemplate(size: CGFloat = 18) -> NSImage? {
-        let inset: CGFloat = 2
-        let view = AppMarkMenuBarPath()
-            .stroke(Color.black, style: StrokeStyle(lineWidth: 1.55, lineCap: .round, lineJoin: .round))
-            .frame(width: max(0, size - inset * 2), height: max(0, size - inset * 2))
-            .frame(width: size, height: size)
+    static func menuBarIcon(
+        presentation: MenuBarIconPresentation,
+        buildFlavor: AppBuildFlavor,
+        size: CGFloat = MenuBarIconMetrics.size
+    ) -> NSImage? {
+        let view = MenuBarIconArtwork(
+            presentation: presentation,
+            buildFlavor: buildFlavor
+        )
+        .environment(\.colorScheme, .light)
+        .frame(width: size, height: size)
+
         let renderer = ImageRenderer(content: view)
         renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
         guard let image = renderer.nsImage else { return nil }

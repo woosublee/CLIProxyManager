@@ -4,22 +4,40 @@ import XCTest
 #if canImport(AppKit)
 @MainActor
 final class AppMarkRendererTests: XCTestCase {
-    func testMenuBarTemplateRendersSquareTemplateImage() {
-        let image = AppMarkRenderer.menuBarTemplate(size: 18)
+    func testDockIconsRenderAtCanvasSizeAndDifferByBuildFlavor() throws {
+        let official = try XCTUnwrap(AppMarkRenderer.dockIcon(buildFlavor: .official))
+        let development = try XCTUnwrap(AppMarkRenderer.dockIcon(buildFlavor: .development))
 
-        XCTAssertNotNil(image)
-        XCTAssertEqual(image?.isTemplate, true)
-        XCTAssertEqual(image?.size.width ?? 0, 18, accuracy: 0.01)
-        XCTAssertEqual(image?.size.height ?? 0, 18, accuracy: 0.01)
+        XCTAssertEqual(official.size.width, 1024, accuracy: 0.01)
+        XCTAssertEqual(official.size.height, 1024, accuracy: 0.01)
+        XCTAssertEqual(development.size.width, 1024, accuracy: 0.01)
+        XCTAssertEqual(development.size.height, 1024, accuracy: 0.01)
+        XCTAssertNotEqual(official.tiffRepresentation, development.tiffRepresentation)
     }
 
-    func testMenuBarTemplateHandlesVerySmallSizes() {
-        let image = AppMarkRenderer.menuBarTemplate(size: 1)
+    func testDefaultAppIconViewRemainsOfficial() {
+        XCTAssertEqual(AppIconView().buildFlavor, .official)
+    }
 
-        XCTAssertNotNil(image)
-        XCTAssertEqual(image?.isTemplate, true)
-        XCTAssertEqual(image?.size.width ?? 0, 1, accuracy: 0.01)
-        XCTAssertEqual(image?.size.height ?? 0, 1, accuracy: 0.01)
+    func testDevelopmentDockKeepsOfficialGradientWithoutLetterBadge() throws {
+        let source = try String(
+            contentsOf: repositoryRoot()
+                .appendingPathComponent("Sources/CLIProxyManagerApp/Views/AppMarkIcon.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains("private let officialGradientColors"))
+        XCTAssertTrue(source.contains("Color.orange.opacity"))
+        XCTAssertTrue(source.contains("buildFlavor == .development ? Color.black.opacity"))
+        XCTAssertFalse(source.contains("Text(\"D\")"))
+        XCTAssertFalse(source.contains("45.0 / 255.0"))
+    }
+
+    private func repositoryRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
     }
 }
 #endif

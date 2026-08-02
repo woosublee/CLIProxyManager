@@ -2,8 +2,10 @@ import AppKit
 import SwiftUI
 
 struct MenuBarWindowBridge: NSViewRepresentable {
+    var onWindowDidBecomeKey: () -> Void = {}
+
     func makeCoordinator() -> Coordinator {
-        Coordinator()
+        Coordinator(onWindowDidBecomeKey: onWindowDidBecomeKey)
     }
 
     func makeNSView(context: Context) -> WindowBridgeView {
@@ -13,14 +15,48 @@ struct MenuBarWindowBridge: NSViewRepresentable {
     }
 
     func updateNSView(_ view: WindowBridgeView, context: Context) {
+        context.coordinator.onWindowDidBecomeKey = onWindowDidBecomeKey
         context.coordinator.configure(window: view.window)
     }
 
     final class Coordinator {
         private let configurator = MenuBarWindowConfigurator()
+        var onWindowDidBecomeKey: () -> Void
+        private weak var observedWindow: NSWindow?
+        private var keyObserver: NSObjectProtocol?
+
+        init(onWindowDidBecomeKey: @escaping () -> Void) {
+            self.onWindowDidBecomeKey = onWindowDidBecomeKey
+        }
 
         func configure(window: NSWindow?) {
             configurator.configure(window: window)
+            observeWindowDidBecomeKey(window)
+        }
+
+        private func observeWindowDidBecomeKey(_ window: NSWindow?) {
+            guard window !== observedWindow else { return }
+            if let keyObserver {
+                NotificationCenter.default.removeObserver(keyObserver)
+            }
+            observedWindow = window
+            guard let window else {
+                keyObserver = nil
+                return
+            }
+            keyObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.didBecomeKeyNotification,
+                object: window,
+                queue: nil
+            ) { [weak self] _ in
+                self?.onWindowDidBecomeKey()
+            }
+        }
+
+        deinit {
+            if let keyObserver {
+                NotificationCenter.default.removeObserver(keyObserver)
+            }
         }
     }
 }

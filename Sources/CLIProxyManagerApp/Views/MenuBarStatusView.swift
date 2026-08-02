@@ -84,12 +84,13 @@ struct MenuBarStatusView: View {
         .padding(.vertical, 5)
         .frame(width: AppWindowMetrics.menuBarWidth)
         .fixedSize(horizontal: false, vertical: true)
-        .background(MenuBarWindowBridge())
+        .background(
+            MenuBarWindowBridge(onWindowDidBecomeKey: {
+                Task { await viewModel.refresh() }
+            })
+        )
         .onAppear {
             refreshAgeReferenceDate = Date()
-        }
-        .task {
-            await viewModel.refresh()
         }
         .task {
             while !Task.isCancelled {
