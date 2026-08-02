@@ -169,8 +169,16 @@ public struct CPMStatus: Codable, Equatable, Sendable {
         }
 
         public init(report: RuntimeCompatibilityReport) {
-            disposition = report.decision(for: .startProxy).disposition
-            findings = report.findings.map { Self.finding($0, report: report) }
+            let visibleFindings = report.findings.filter { finding in
+                if case .legacyArtifactTargetInferred = finding {
+                    return false
+                }
+                return true
+            }
+            disposition = visibleFindings.isEmpty
+                ? .allowed
+                : report.decision(for: .startProxy).disposition
+            findings = visibleFindings.map { Self.finding($0, report: report) }
         }
 
         public static let allowed = Self(disposition: .allowed, findings: [])
@@ -202,11 +210,7 @@ public struct CPMStatus: Codable, Equatable, Sendable {
                     recovery: RuntimeCompatibilityBlocker.unsupportedArtifactTarget.recoveryMessage
                 )
             case .legacyArtifactTargetInferred:
-                Finding(
-                    code: "legacyArtifactTargetInferred",
-                    disposition: .allowedWithWarnings,
-                    recovery: "The CLIProxyAPI target was inferred from legacy metadata. A verified update will record explicit target metadata."
-                )
+                preconditionFailure("Legacy artifact target findings must be filtered before presentation")
             case .unsupportedLoginShell:
                 Finding(
                     code: "unsupportedLoginShell",
