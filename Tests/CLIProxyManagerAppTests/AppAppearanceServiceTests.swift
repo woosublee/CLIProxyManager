@@ -19,6 +19,17 @@ final class AppAppearanceServiceTests: XCTestCase {
         XCTAssertEqual(appearanceService.showDockIconValues, [true])
     }
 
+    func testAppearanceServiceRendersInjectedBuildFlavor() throws {
+        let official = try XCTUnwrap(
+            AppAppearanceService(buildFlavor: .official).renderedDockIcon()
+        )
+        let development = try XCTUnwrap(
+            AppAppearanceService(buildFlavor: .development).renderedDockIcon()
+        )
+
+        XCTAssertNotEqual(official.tiffRepresentation, development.tiffRepresentation)
+    }
+
     func testLaunchBootstrapperAppliesSavedDockVisibilityBeforeDashboardStartup() {
         var config = AppConfig.default
         config.showDockIcon = false

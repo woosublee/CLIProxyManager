@@ -44,28 +44,63 @@ struct AppMarkMenuBarPath: Shape {
 struct AppIconView: View {
     var size: CGFloat = 72
     var dropsShadow: Bool = true
+    var buildFlavor: AppBuildFlavor = .official
+
+    private var gradientColors: [Color] {
+        switch buildFlavor {
+        case .official:
+            [
+                Color(red: 0.0, green: 0.478, blue: 1.0),
+                Color(red: 0.345, green: 0.337, blue: 0.839)
+            ]
+        case .development:
+            [
+                Color(red: 1.0, green: 149.0 / 255.0, blue: 0.0),
+                Color(red: 1.0, green: 45.0 / 255.0, blue: 85.0 / 255.0)
+            ]
+        }
+    }
 
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
                 .fill(
                     LinearGradient(
-                        colors: [
-                            Color(red: 0.0, green: 0.478, blue: 1.0),    // #007AFF
-                            Color(red: 0.345, green: 0.337, blue: 0.839) // #5856D6
-                        ],
+                        colors: gradientColors,
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
                 )
                 .shadow(
-                    color: dropsShadow ? Color(red: 0.0, green: 0.478, blue: 1.0).opacity(0.36) : .clear,
+                    color: dropsShadow ? gradientColors[0].opacity(0.36) : .clear,
                     radius: dropsShadow ? size * 0.16 : 0,
                     y: dropsShadow ? size * 0.08 : 0
                 )
+
             AppMarkPath()
-                .stroke(.white, style: StrokeStyle(lineWidth: size * 0.06, lineCap: .round, lineJoin: .round))
+                .stroke(
+                    .white,
+                    style: StrokeStyle(
+                        lineWidth: size * 0.06,
+                        lineCap: .round,
+                        lineJoin: .round
+                    )
+                )
                 .frame(width: size, height: size)
+        }
+        .overlay(alignment: .bottomTrailing) {
+            if buildFlavor == .development {
+                Text("D")
+                    .font(.system(size: size * 0.16, weight: .black, design: .rounded))
+                    .foregroundStyle(.white)
+                    .frame(width: size * 0.25, height: size * 0.25)
+                    .background(Circle().fill(Color.black.opacity(0.72)))
+                    .overlay {
+                        Circle()
+                            .strokeBorder(Color.white.opacity(0.92), lineWidth: size * 0.018)
+                    }
+                    .padding(size * 0.075)
+            }
         }
         .frame(width: size, height: size)
     }
@@ -79,13 +114,17 @@ enum AppMarkRenderer {
     /// 1024×1024 canvas. Without that margin the icon visually appears larger
     /// than other Dock apps. Active artwork sits in 824×824, with corner radius
     /// scaled accordingly (185pt at the active size).
-    static func dockIcon() -> NSImage? {
+    static func dockIcon(buildFlavor: AppBuildFlavor) -> NSImage? {
         let canvasPoints: CGFloat = 1024
         let activePoints: CGFloat = 824
 
         let view = ZStack {
             Color.clear
-            AppIconView(size: activePoints, dropsShadow: false)
+            AppIconView(
+                size: activePoints,
+                dropsShadow: false,
+                buildFlavor: buildFlavor
+            )
         }
         .frame(width: canvasPoints, height: canvasPoints)
 

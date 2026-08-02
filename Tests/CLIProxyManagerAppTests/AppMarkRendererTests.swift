@@ -21,5 +21,20 @@ final class AppMarkRendererTests: XCTestCase {
         XCTAssertEqual(image?.size.width ?? 0, 1, accuracy: 0.01)
         XCTAssertEqual(image?.size.height ?? 0, 1, accuracy: 0.01)
     }
+
+    func testDockIconsRenderAtCanvasSizeAndDifferByBuildFlavor() throws {
+        let official = try XCTUnwrap(AppMarkRenderer.dockIcon(buildFlavor: .official))
+        let development = try XCTUnwrap(AppMarkRenderer.dockIcon(buildFlavor: .development))
+
+        XCTAssertEqual(official.size.width, 1024, accuracy: 0.01)
+        XCTAssertEqual(official.size.height, 1024, accuracy: 0.01)
+        XCTAssertEqual(development.size.width, 1024, accuracy: 0.01)
+        XCTAssertEqual(development.size.height, 1024, accuracy: 0.01)
+        XCTAssertNotEqual(official.tiffRepresentation, development.tiffRepresentation)
+    }
+
+    func testDefaultAppIconViewRemainsOfficial() {
+        XCTAssertEqual(AppIconView().buildFlavor, .official)
+    }
 }
 #endif
