@@ -93,9 +93,6 @@ struct MenuBarStatusView: View {
             refreshAgeReferenceDate = Date()
         }
         .task {
-            await viewModel.refresh()
-        }
-        .task {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 60_000_000_000)
                 refreshAgeReferenceDate = Date()

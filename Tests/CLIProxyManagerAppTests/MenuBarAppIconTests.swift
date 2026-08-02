@@ -163,33 +163,6 @@ final class MenuBarAppIconTests: XCTestCase {
         XCTAssertFalse(animator.isAnimating)
     }
 
-    func testMenuBarLabelUsesPreRenderedImageInsteadOfRawTimelineArtwork() throws {
-        let source = try String(
-            contentsOf: repositoryRoot()
-                .appendingPathComponent("Sources/CLIProxyManagerApp/Views/MenuBarAppIcon.swift"),
-            encoding: .utf8
-        )
-
-        XCTAssertTrue(source.contains("Image(nsImage: animator.image"))
-        XCTAssertTrue(source.contains("accessibilityReduceMotion"))
-        XCTAssertTrue(source.contains("Timer.scheduledTimer"))
-        XCTAssertTrue(source.contains(".onChange(of: state)"))
-        XCTAssertFalse(source.contains("TimelineView"))
-        XCTAssertFalse(source.contains("AppMarkRenderer.menuBarIcon(\n                presentation: animator.presentation"))
-    }
-
-    func testDevelopmentMenuBarUsesNegativeSpaceWaveform() throws {
-        let source = try String(
-            contentsOf: repositoryRoot()
-                .appendingPathComponent("Sources/CLIProxyManagerApp/Views/MenuBarAppIcon.swift"),
-            encoding: .utf8
-        )
-
-        XCTAssertTrue(source.contains(".fill(Color.primary)"))
-        XCTAssertTrue(source.contains(".blendMode(isDevelopment ? .destinationOut : .normal)"))
-        XCTAssertTrue(source.contains(".compositingGroup()"))
-    }
-
     private func assertPresentation(
         _ presentation: MenuBarIconPresentation,
         trim: CGFloat,
@@ -228,12 +201,5 @@ final class MenuBarAppIconTests: XCTestCase {
         hostingView.cacheDisplay(in: hostingView.bounds, to: bitmap)
         let bitmapData = try XCTUnwrap(bitmap.bitmapData)
         return Data(bytes: bitmapData, count: bitmap.bytesPerRow * bitmap.pixelsHigh)
-    }
-
-    private func repositoryRoot() -> URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
     }
 }

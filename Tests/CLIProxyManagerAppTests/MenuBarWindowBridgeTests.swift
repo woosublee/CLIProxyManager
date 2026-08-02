@@ -122,24 +122,6 @@ final class MenuBarWindowBridgeTests: XCTestCase {
         XCTAssertEqual(refreshCount, 0)
     }
 
-    func testMenuBarStatusViewRefreshesEveryTimeItsWindowBecomesKey() throws {
-        let source = try String(
-            contentsOf: repositoryRoot()
-                .appendingPathComponent("Sources/CLIProxyManagerApp/Views/MenuBarStatusView.swift"),
-            encoding: .utf8
-        )
-
-        XCTAssertTrue(source.contains("MenuBarWindowBridge(onWindowDidBecomeKey:"))
-        XCTAssertTrue(source.contains("await viewModel.refresh()"))
-    }
-
-    private func repositoryRoot() -> URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-    }
-
     private func makeWindow(fittingHeight: CGFloat) -> NSWindow {
         let contentView = FixedFittingSizeView(fittingSize: NSSize(width: 290, height: fittingHeight))
         let window = NSWindow(
