@@ -6688,6 +6688,52 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(healthClient.currentCallCount(), callCountAtTermination)
     }
 
+    func testBackgroundPollingDoesNotCorruptStateDuringInFlightConfigurationRestart() async throws {
+        let config = AppConfig.default
+        let healthClient = MutableProxyHealthClientDouble(
+            status: DiagnosticStatus(severity: .ready, title: "CLIProxyAPI Running", message: "Ready")
+        )
+        let proxyService = StubProxyServiceStarter(suspendedRestartCount: 1)
+        let sleepGate = ServerStatusPollingSleepGate()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(),
+            proxyService: proxyService,
+            proxyHealthClient: healthClient,
+            serverStatusPollingSleep: { delay in try await sleepGate.sleep(delay) }
+        )
+
+        let launch = viewModel.beginApplicationLaunch()
+        await launch.value
+        XCTAssertTrue(viewModel.serverControlState.isRunning)
+
+        try viewModel.saveLogLevel(.debug)
+        let reachedRestart = await proxyService.reachesRestartCount(1)
+        XCTAssertTrue(reachedRestart)
+
+        healthClient.setStatus(
+            DiagnosticStatus(severity: .error, title: "CLIProxyAPI Stopped", message: "Restarting")
+        )
+        await sleepGate.waitForSleeps(expectedCount: 1)
+        await sleepGate.resumeNext()
+        for _ in 0..<200 { await Task.yield() }
+
+        XCTAssertTrue(
+            viewModel.serverControlState.isRunning,
+            "Polling must not overwrite state while a configuration restart is in flight"
+        )
+
+        healthClient.setStatus(
+            DiagnosticStatus(severity: .ready, title: "CLIProxyAPI Running", message: "Ready")
+        )
+        proxyService.releaseRestart(1)
+        for _ in 0..<2_000 where !viewModel.serverControlState.isRunning {
+            await Task.yield()
+        }
+        try? await viewModel.prepareForTermination()
+    }
+
     func testTerminationCancelsOwnedLaunchDuringSuspendedHealthCheck() async {
         let config = AppConfig.default
         let healthClient = CancellableProxyHealthClientDouble(

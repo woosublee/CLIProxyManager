@@ -1086,11 +1086,14 @@ final class DashboardViewModel: ObservableObject {
     private func pollServerStatusIfIdle() async {
         guard !isPreparingAPIUsageForTermination,
               !isServerActionInProgress,
-              !serverControlState.isTransitioning else { return }
+              !serverControlState.isTransitioning,
+              proxyConfigurationRestartTask == nil,
+              pendingProxyConfigurationRestartReasons.isEmpty else { return }
         let wasProxyReady = serverStatus.severity == .ready
-        let rawServerStatus = await proxyHealthClient.status(port: config.port)
+        let rawServerStatus = await stableServerStatus()
         updateProxyRuntimeCertainty(from: rawServerStatus)
         let updatedServerStatus = passiveRefreshPresentationStatus(from: rawServerStatus)
+        guard updatedServerStatus != serverStatus else { return }
         updateStatuses(serverStatus: updatedServerStatus, claudeStatus: nil)
         if wasProxyReady != (updatedServerStatus.severity == .ready) {
             scheduleAPIUsageCollectorUpdateIfStarted()
