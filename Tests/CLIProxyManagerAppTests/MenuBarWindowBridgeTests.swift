@@ -82,6 +82,64 @@ final class MenuBarWindowBridgeTests: XCTestCase {
         XCTAssertEqual(window.frame, currentFrame)
     }
 
+    func testWindowBridgeCoordinatorInvokesCallbackOnEveryWindowKeyNotification() {
+        let window = makeWindow(fittingHeight: 120)
+        var refreshCount = 0
+        let bridge = MenuBarWindowBridge(onWindowDidBecomeKey: { refreshCount += 1 })
+        let coordinator = bridge.makeCoordinator()
+
+        coordinator.configure(window: window)
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
+
+        XCTAssertEqual(refreshCount, 2)
+    }
+
+    func testWindowBridgeCoordinatorDoesNotDuplicateObserverOnRepeatedConfigure() {
+        let window = makeWindow(fittingHeight: 120)
+        var refreshCount = 0
+        let bridge = MenuBarWindowBridge(onWindowDidBecomeKey: { refreshCount += 1 })
+        let coordinator = bridge.makeCoordinator()
+
+        coordinator.configure(window: window)
+        coordinator.configure(window: window)
+        coordinator.configure(window: window)
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
+
+        XCTAssertEqual(refreshCount, 1)
+    }
+
+    func testWindowBridgeCoordinatorIgnoresNotificationsFromOtherWindows() {
+        let window = makeWindow(fittingHeight: 120)
+        let otherWindow = makeWindow(fittingHeight: 120)
+        var refreshCount = 0
+        let bridge = MenuBarWindowBridge(onWindowDidBecomeKey: { refreshCount += 1 })
+        let coordinator = bridge.makeCoordinator()
+
+        coordinator.configure(window: window)
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: otherWindow)
+
+        XCTAssertEqual(refreshCount, 0)
+    }
+
+    func testMenuBarStatusViewRefreshesEveryTimeItsWindowBecomesKey() throws {
+        let source = try String(
+            contentsOf: repositoryRoot()
+                .appendingPathComponent("Sources/CLIProxyManagerApp/Views/MenuBarStatusView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains("MenuBarWindowBridge(onWindowDidBecomeKey:"))
+        XCTAssertTrue(source.contains("await viewModel.refresh()"))
+    }
+
+    private func repositoryRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
     private func makeWindow(fittingHeight: CGFloat) -> NSWindow {
         let contentView = FixedFittingSizeView(fittingSize: NSSize(width: 290, height: fittingHeight))
         let window = NSWindow(
