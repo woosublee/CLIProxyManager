@@ -245,9 +245,9 @@ checksum_after_replace="$(shasum -a 256 "$sync_repo/Info.plist" | cut -d' ' -f1)
 makefile="$REPO_ROOT/Makefile"
 ! grep -Eq '^VERSION[[:space:]]*\?=' "$makefile" || fail "Makefile must not own VERSION"
 ! grep -Eq '^BUILD_NUMBER[[:space:]]*\?=' "$makefile" || fail "Makefile must not own BUILD_NUMBER"
-[[ "$(make -s -C "$REPO_ROOT" print-app-version)" == '0.1.32' ]] || fail "Makefile version must delegate to resolver"
-[[ "$(make -s -C "$REPO_ROOT" print-build-number)" == '35' ]] || fail "Makefile build must delegate to resolver"
-[[ "$(make -s -C "$REPO_ROOT" print-build-tag)" == 'v0.1.32' ]] || fail "Makefile tag must delegate to resolver"
+[[ "$(make -s -C "$REPO_ROOT" print-app-version)" == '0.1.33' ]] || fail "Makefile version must delegate to resolver"
+[[ "$(make -s -C "$REPO_ROOT" print-build-number)" == '36' ]] || fail "Makefile build must delegate to resolver"
+[[ "$(make -s -C "$REPO_ROOT" print-build-tag)" == 'v0.1.33' ]] || fail "Makefile tag must delegate to resolver"
 assert_failure_contains 'VERSION is derived from release/version.json' make -s -C "$REPO_ROOT" VERSION=9.9.9 print-app-version
 assert_failure_contains 'BUILD_NUMBER is derived from release/version.json' make -s -C "$REPO_ROOT" BUILD_NUMBER=999 print-build-number
 assert_failure_contains 'DMG_PATH is derived from release/version.json' make -s -C "$REPO_ROOT" DMG_PATH=alternate.dmg print-app-version
@@ -255,14 +255,14 @@ assert_failure_contains 'DMG_PATH is derived from release/version.json' env DMG_
 assert_failure_contains 'BUNDLE_ID is fixed to com.woosublee.CLIProxyManager' make -s -C "$REPO_ROOT" BUNDLE_ID=com.example.override print-app-version
 grep -F 'swift-build: release-metadata-check' "$makefile" >/dev/null || fail "release metadata must gate Swift compilation before bundle"
 canonical_dmg_dry_run="$(make -n -C "$REPO_ROOT" BUILD_DIR=release-output sign-dmg)"
-printf '%s\n' "$canonical_dmg_dry_run" | grep -F 'release-output/CLIProxyManager-0.1.32.dmg' >/dev/null ||
+printf '%s\n' "$canonical_dmg_dry_run" | grep -F 'release-output/CLIProxyManager-0.1.33.dmg' >/dev/null ||
   fail "DMG path must use the permitted build directory and resolver basename"
 [[ "$(make -s -C "$REPO_ROOT" ARTIFACT_CHANNEL=development DEVELOPMENT_VERSION=0.2.0 DEVELOPMENT_BUILD_NUMBER=9001 print-app-version)" == '0.2.0' ]] || fail "development version should be explicit"
 
 development_bundle_dry_run="$(make -n -C "$REPO_ROOT" development-bundle)" ||
   fail "development-bundle target should support a dry run"
 printf '%s\n' "$development_bundle_dry_run" | grep -F \
-  'make verify-app-structure ARTIFACT_CHANNEL=development CONFIGURATION=debug DEVELOPMENT_VERSION="0.1.32" DEVELOPMENT_BUILD_NUMBER="35"' \
+  'make verify-app-structure ARTIFACT_CHANNEL=development CONFIGURATION=debug DEVELOPMENT_VERSION="0.1.33" DEVELOPMENT_BUILD_NUMBER="36"' \
   >/dev/null || fail "development bundle must derive canonical development metadata"
 development_override_dry_run="$(
   make -n -C "$REPO_ROOT" development-bundle \
@@ -270,7 +270,7 @@ development_override_dry_run="$(
     DEVELOPMENT_BUILD_NUMBER=9999
 )" || fail "development-bundle must handle caller metadata overrides"
 printf '%s\n' "$development_override_dry_run" | grep -F \
-  'make verify-app-structure ARTIFACT_CHANNEL=development CONFIGURATION=debug DEVELOPMENT_VERSION="0.1.32" DEVELOPMENT_BUILD_NUMBER="35"' \
+  'make verify-app-structure ARTIFACT_CHANNEL=development CONFIGURATION=debug DEVELOPMENT_VERSION="0.1.33" DEVELOPMENT_BUILD_NUMBER="36"' \
   >/dev/null || fail "development bundle must not accept caller metadata overrides"
 development_metadata_line="$(printf '%s\n' "$development_bundle_dry_run" | grep -n -m 1 -F 'scripts/resolve-release-version.sh validate' | cut -d: -f1)"
 development_compile_line="$(printf '%s\n' "$development_bundle_dry_run" | grep -n -m 1 -E 'swift build -c debug[[:space:]]+--product CLIProxyManager' | cut -d: -f1)"
@@ -279,28 +279,28 @@ development_compile_line="$(printf '%s\n' "$development_bundle_dry_run" | grep -
 ! printf '%s\n' "$development_bundle_dry_run" | grep -E '(^|[[:space:]])(sign|release-sign|dmg|verify-dmg|sign-dmg|codesign|hdiutil)([[:space:]]|$)' >/dev/null ||
   fail "development bundle must not sign or create a DMG"
 printf '%s\n' "$development_bundle_dry_run" | grep -F \
-  'scripts/verify-app-structure.sh --app "build/CLIProxyManager.app" --version "0.1.32" --build "35" --channel "development"' \
+  'scripts/verify-app-structure.sh --app "build/CLIProxyManager.app" --version "0.1.33" --build "36" --channel "development"' \
   >/dev/null || fail "development bundle must verify its structure with development metadata"
 
 verify_bundle_structure_dry_run="$(make -n -C "$REPO_ROOT" verify-bundle-structure)" ||
   fail "verify-bundle-structure target should support a dry run"
 printf '%s\n' "$verify_bundle_structure_dry_run" | grep -F \
-  'make verify-app-structure ARTIFACT_CHANNEL=development CONFIGURATION=debug DEVELOPMENT_VERSION="0.1.32" DEVELOPMENT_BUILD_NUMBER="35"' \
+  'make verify-app-structure ARTIFACT_CHANNEL=development CONFIGURATION=debug DEVELOPMENT_VERSION="0.1.33" DEVELOPMENT_BUILD_NUMBER="36"' \
   >/dev/null || fail "verify-bundle-structure must reuse development bundle validation"
 
 sign_dry_run="$(make -n -C "$REPO_ROOT" sign)" || fail "sign target should support a dry run"
-sign_structure_line="$(printf '%s\n' "$sign_dry_run" | grep -n -m 1 -F 'scripts/verify-app-structure.sh --app "build/CLIProxyManager.app" --version "0.1.32" --build "35" --channel "official"' | cut -d: -f1)"
+sign_structure_line="$(printf '%s\n' "$sign_dry_run" | grep -n -m 1 -F 'scripts/verify-app-structure.sh --app "build/CLIProxyManager.app" --version "0.1.33" --build "36" --channel "official"' | cut -d: -f1)"
 sign_codesign_line="$(printf '%s\n' "$sign_dry_run" | grep -n -m 1 -F 'codesign --force --options runtime --sign' | cut -d: -f1)"
 [[ -n "$sign_structure_line" && -n "$sign_codesign_line" && "$sign_structure_line" -lt "$sign_codesign_line" ]] ||
   fail "sign must validate official app structure before codesign"
 development_verify_dry_run="$(
   make -n -C "$REPO_ROOT" verify \
     ARTIFACT_CHANNEL=development \
-    DEVELOPMENT_VERSION=0.1.32 \
-    DEVELOPMENT_BUILD_NUMBER=35
+    DEVELOPMENT_VERSION=0.1.33 \
+    DEVELOPMENT_BUILD_NUMBER=36
 )" || fail "verify must support local signed development artifacts"
 printf '%s\n' "$development_verify_dry_run" | grep -F \
-  'scripts/verify-app-structure.sh --app "build/CLIProxyManager.app" --version "0.1.32" --build "35" --channel "development"' \
+  'scripts/verify-app-structure.sh --app "build/CLIProxyManager.app" --version "0.1.33" --build "36" --channel "development"' \
   >/dev/null || fail "development verify must validate development app structure before codesign"
 printf '%s\n' "$development_verify_dry_run" | grep -F \
   'scripts/verify-release-artifacts.sh --app "build/CLIProxyManager.app"' \
