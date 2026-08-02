@@ -6629,6 +6629,65 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertTrue(viewModel.settingsMessage?.contains("Bundled CLIProxyAPI update failed") == true)
     }
 
+    func testBackgroundPollingSyncsServerStateWithoutAnyWindowOpening() async throws {
+        let config = AppConfig.default
+        let healthClient = MutableProxyHealthClientDouble(
+            status: DiagnosticStatus(severity: .ready, title: "CLIProxyAPI Running", message: "Ready")
+        )
+        let sleepGate = ServerStatusPollingSleepGate()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(),
+            proxyService: StubProxyServiceStarter(),
+            proxyHealthClient: healthClient,
+            serverStatusPollingSleep: { delay in try await sleepGate.sleep(delay) }
+        )
+
+        let launch = viewModel.beginApplicationLaunch()
+        await launch.value
+        XCTAssertTrue(viewModel.serverControlState.isRunning)
+
+        healthClient.setStatus(
+            DiagnosticStatus(severity: .warning, title: "CLIProxyAPI Stopped", message: "Stopped externally")
+        )
+        await sleepGate.waitForSleeps(expectedCount: 1)
+        await sleepGate.resumeNext()
+
+        for _ in 0..<2_000 where viewModel.serverControlState.isRunning {
+            await Task.yield()
+        }
+
+        XCTAssertFalse(viewModel.serverControlState.isRunning)
+        try? await viewModel.prepareForTermination()
+    }
+
+    func testBackgroundPollingStopsDuringTerminationAndDoesNotFireAfterCancellation() async throws {
+        let config = AppConfig.default
+        let healthClient = MutableProxyHealthClientDouble(
+            status: DiagnosticStatus(severity: .ready, title: "CLIProxyAPI Running", message: "Ready")
+        )
+        let sleepGate = ServerStatusPollingSleepGate()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(),
+            proxyService: StubProxyServiceStarter(),
+            proxyHealthClient: healthClient,
+            serverStatusPollingSleep: { delay in try await sleepGate.sleep(delay) }
+        )
+
+        let launch = viewModel.beginApplicationLaunch()
+        await launch.value
+        await sleepGate.waitForSleeps(expectedCount: 1)
+
+        try? await viewModel.prepareForTermination()
+
+        let callCountAtTermination = healthClient.currentCallCount()
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(healthClient.currentCallCount(), callCountAtTermination)
+    }
+
     func testTerminationCancelsOwnedLaunchDuringSuspendedHealthCheck() async {
         let config = AppConfig.default
         let healthClient = CancellableProxyHealthClientDouble(
@@ -9682,6 +9741,9 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         serverStatusRetryDelayNanoseconds: UInt64 = 500_000_000,
         subscriptionUsageSleep: @escaping @Sendable (UInt64) async throws -> Void = { delay in
             try await Task.sleep(nanoseconds: delay)
+        },
+        serverStatusPollingSleep: @escaping @Sendable (UInt64) async throws -> Void = { delay in
+            try await Task.sleep(nanoseconds: delay)
         }
     ) -> DashboardViewModel {
         DashboardViewModel(
@@ -9705,6 +9767,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             apiUsageCollector: apiUsageCollector,
             secretStore: secretStore,
             subscriptionUsageSleep: subscriptionUsageSleep,
+            serverStatusPollingSleep: serverStatusPollingSleep,
             serverStatusRetryDelayNanoseconds: serverStatusRetryDelayNanoseconds
         )
     }
@@ -12686,6 +12749,78 @@ private final class DeferredCancellationOAuthLoginService: OAuthLoginStarting, @
         invocation.continuation = nil
         invocation.lock.unlock()
         continuation?.resume()
+    }
+}
+
+private final class MutableProxyHealthClientDouble: ProxyHealthChecking, @unchecked Sendable {
+    private let lock = NSLock()
+    private var current: DiagnosticStatus
+    private var callCount = 0
+
+    init(status: DiagnosticStatus) {
+        current = status
+    }
+
+    func status(port: Int) async -> DiagnosticStatus {
+        lock.withLock {
+            callCount += 1
+            return current
+        }
+    }
+
+    func setStatus(_ status: DiagnosticStatus) {
+        lock.withLock { current = status }
+    }
+
+    func currentCallCount() -> Int {
+        lock.withLock { callCount }
+    }
+}
+
+private final class ServerStatusPollingSleepGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedDelays: [UInt64] = []
+    private var continuations: [CheckedContinuation<Void, Never>] = []
+
+    func sleep(_ delay: UInt64) async throws {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                let shouldResume = lock.withLock {
+                    recordedDelays.append(delay)
+                    if Task.isCancelled { return true }
+                    continuations.append(continuation)
+                    return false
+                }
+                if shouldResume { continuation.resume() }
+            }
+        } onCancel: {
+            self.resumeAll()
+        }
+        try Task.checkCancellation()
+    }
+
+    func waitForSleeps(expectedCount: Int) async {
+        for _ in 0..<1_000 {
+            if lock.withLock({ recordedDelays.count >= expectedCount }) { return }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTFail("Expected server status polling sleep.")
+    }
+
+    func resumeNext() async {
+        let continuation = lock.withLock {
+            continuations.isEmpty ? nil : continuations.removeFirst()
+        }
+        continuation?.resume()
+    }
+
+    private func resumeAll() {
+        let pending = lock.withLock {
+            let pending = continuations
+            continuations.removeAll()
+            return pending
+        }
+        pending.forEach { $0.resume() }
     }
 }
 
