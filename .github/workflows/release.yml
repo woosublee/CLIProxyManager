@@ -36,6 +36,7 @@ jobs:
         id: version
         env:
           INPUT_TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           scripts/resolve-release-version.sh validate
@@ -152,6 +153,8 @@ jobs:
             --official
 
       - name: Recheck published build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           scripts/check-release-monotonic.sh \
             --repository "$GITHUB_REPOSITORY" \
