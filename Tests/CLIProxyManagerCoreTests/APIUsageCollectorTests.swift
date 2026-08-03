@@ -853,7 +853,12 @@ final class APIUsageCollectorTests: XCTestCase {
             initiallyInitialized: false
         )
         let queue = RecordingQueueClient(results: [.success([makeQueueRecord()])])
-        let collector = APIUsageCollector(queueClient: queue, ledgerStore: ledger)
+        let clock = SynchronousDateCallCounter()
+        let collector = APIUsageCollector(
+            queueClient: queue,
+            ledgerStore: ledger,
+            now: { clock.now() }
+        )
 
         let reloadTask = Task {
             await collector.reload(configuration: enabledConfiguration())
@@ -862,7 +867,7 @@ final class APIUsageCollectorTests: XCTestCase {
         let startTask = Task {
             _ = await collector.start(configuration: enabledConfiguration())
         }
-        for _ in 0..<20 { await Task.yield() }
+        try await waitUntil { clock.callCount() >= 2 }
         let stopTask = Task {
             try? await collector.stop(reason: .applicationTermination, at: Date())
         }
@@ -1620,6 +1625,23 @@ private actor RecordingLedgerStore: APIUsageLedgerStoring {
     func resumeFlush() {
         flushContinuation?.resume()
         flushContinuation = nil
+    }
+}
+
+private final class SynchronousDateCallCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private let date = Date(timeIntervalSince1970: 100)
+    private var calls = 0
+
+    func now() -> Date {
+        lock.withLock {
+            calls += 1
+            return date
+        }
+    }
+
+    func callCount() -> Int {
+        lock.withLock { calls }
     }
 }
 

@@ -7671,6 +7671,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let didStartReset = await quotaClient.waitForResetRequests(expectedCount: 1)
         XCTAssertTrue(didStartReset)
         await action.value
+        let didScheduleUsagePolling = await sleeper.waitForDelays(expectedCount: 1)
+        XCTAssertTrue(didScheduleUsagePolling)
         let usageCountBeforeResetCompletion = await quotaClient.usageRequestCount()
         let delaysBeforeResetCompletion = await sleeper.delays()
         XCTAssertEqual(usageCountBeforeResetCompletion, 1)
@@ -7688,6 +7690,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             await Task.yield()
         }
 
+        let didReschedulePolling = await sleeper.waitForDelays(expectedCount: 2)
+        XCTAssertTrue(didReschedulePolling)
         XCTAssertEqual(viewModel.codexResetCreditsSnapshots[profile.id], resetSnapshot)
         XCTAssertEqual(resetCache.load()[profile.id], resetSnapshot)
         let finalUsageCount = await quotaClient.usageRequestCount()
