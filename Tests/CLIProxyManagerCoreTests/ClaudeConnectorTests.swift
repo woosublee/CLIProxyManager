@@ -221,6 +221,26 @@ final class ClaudeConnectorTests: XCTestCase {
         XCTAssertEqual(observation, .unverified)
     }
 
+    func testFallbackSearchPathOmitsCurrentDirectoryWhenInheritedPathIsEmpty() {
+        XCTAssertEqual(
+            claudeExecutableSearchPath(
+                executable: "/Users/example/.local/bin/claude",
+                inheritedPath: ""
+            ),
+            "/Users/example/.local/bin"
+        )
+    }
+
+    func testFallbackSearchPathPrependsExecutableDirectoryToInheritedPath() {
+        XCTAssertEqual(
+            claudeExecutableSearchPath(
+                executable: "/opt/homebrew/bin/claude",
+                inheritedPath: "/usr/bin:/bin"
+            ),
+            "/opt/homebrew/bin:/usr/bin:/bin"
+        )
+    }
+
     func testLoginCommandUsesOfficialClaudeAuthLogin() {
         let connector = ClaudeConnector(runner: FakeProcessRunner(results: []))
 

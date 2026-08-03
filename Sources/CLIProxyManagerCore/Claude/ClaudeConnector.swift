@@ -25,6 +25,14 @@ private func claudeExecutableCandidates(
     return candidates
 }
 
+func claudeExecutableSearchPath(
+    executable: String,
+    inheritedPath: String
+) -> String {
+    let directory = URL(fileURLWithPath: executable).deletingLastPathComponent().path
+    return inheritedPath.isEmpty ? directory : "\(directory):\(inheritedPath)"
+}
+
 private func runClaude(
     using runner: any ProcessRunning,
     executable: String,
@@ -33,11 +41,13 @@ private func runClaude(
     guard executable.contains("/") else {
         return await runner.run("/usr/bin/env", [executable] + arguments)
     }
-    let directory = URL(fileURLWithPath: executable).deletingLastPathComponent().path
-    let inheritedPath = ProcessInfo.processInfo.environment["PATH"] ?? ""
+    let searchPath = claudeExecutableSearchPath(
+        executable: executable,
+        inheritedPath: ProcessInfo.processInfo.environment["PATH"] ?? ""
+    )
     return await runner.run(
         "/usr/bin/env",
-        ["PATH=\(directory):\(inheritedPath)", executable] + arguments
+        ["PATH=\(searchPath)", executable] + arguments
     )
 }
 

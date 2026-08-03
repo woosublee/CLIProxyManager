@@ -1256,9 +1256,10 @@ final class ProxyServiceManagerTests: XCTestCase {
             encoding: .utf8
         )
         let launchctl = RunningLabelsLaunchctl(labels: ["com.cliproxymanager.port.8317"])
+        let launcher = FakeProcessLauncher(usesManagedLaunchdJobs: true)
         let manager = makeProxyServiceManager(
             paths: paths,
-            launcher: FakeProcessLauncher(usesManagedLaunchdJobs: true),
+            launcher: launcher,
             launchctl: launchctl,
             inspectSystemProcesses: false
         )
@@ -1266,6 +1267,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         try manager.prepare(port: 28_317)
 
         XCTAssertTrue(launchctl.removedLabels.contains("com.cliproxymanager.port.8317"))
+        XCTAssertEqual(launcher.invocations.count, 1)
         let config = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
         XCTAssertTrue(config.contains("host: \"127.0.0.1\""))
         XCTAssertTrue(config.contains("port: 28317"))

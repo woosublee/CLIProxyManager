@@ -273,15 +273,7 @@ public struct RuntimeCompatibilityPolicy: Equatable, Sendable {
             }
         }
 
-        if isBlocking(finding) {
-            return true
-        }
-
-        if case .unsupportedLoginShell = finding {
-            return action == .installShellFunctions
-        }
-
-        return false
+        return isBlocking(finding)
     }
 
     private func allowsRecovery(_ action: CompatibilityAction) -> Bool {
