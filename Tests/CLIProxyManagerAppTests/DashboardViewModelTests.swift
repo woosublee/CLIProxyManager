@@ -77,7 +77,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
                 architecture: .x86_64,
                 loginShell: "/bin/zsh"
             ),
-            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil),
+            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil)
         )
         let viewModel = DashboardViewModel(
             config: .default,
@@ -105,7 +105,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
                 architecture: .arm64,
                 loginShell: "/bin/zsh"
             ),
-            artifacts: .init(bundled: .legacy, active: nil, pending: nil),
+            artifacts: .init(bundled: .legacy, active: nil, pending: nil)
         )
         let viewModel = DashboardViewModel(
             config: .default,
@@ -136,7 +136,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
                 architecture: .x86_64,
                 loginShell: "/bin/zsh"
             ),
-            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil),
+            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil)
         )
         let viewModel = DashboardViewModel(
             config: .default,
@@ -168,7 +168,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
                 architecture: .arm64,
                 loginShell: "/bin/zsh"
             ),
-            artifacts: artifacts,
+            artifacts: artifacts
         ))
         let viewModel = DashboardViewModel(
             config: .default,

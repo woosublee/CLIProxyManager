@@ -640,7 +640,7 @@ final class CLIProxyManagerCommandTests: XCTestCase {
                 architecture: .arm64,
                 loginShell: "/bin/zsh"
             ),
-            artifacts: .init(bundled: .legacy, active: nil, pending: nil),
+            artifacts: .init(bundled: .legacy, active: nil, pending: nil)
         )
         let command = makeRuntimeCommand(
             output: output,
@@ -666,7 +666,7 @@ final class CLIProxyManagerCommandTests: XCTestCase {
                 architecture: .arm64,
                 loginShell: "/bin/zsh"
             ),
-            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil),
+            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil)
         )
         let services = RuntimeServicesDouble(compatibility: CPMStatus.Compatibility(report: report))
         let command = makeRuntimeCommand(output: output, services: services)
@@ -688,7 +688,7 @@ final class CLIProxyManagerCommandTests: XCTestCase {
                 architecture: .arm64,
                 loginShell: "/bin/bash"
             ),
-            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil),
+            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil)
         )
 
         let compatibility = CPMStatus.Compatibility(report: report)

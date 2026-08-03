@@ -26,7 +26,7 @@ final class StatusServiceTests: XCTestCase {
                 architecture: .x86_64,
                 loginShell: "/Users/example.com/bin/zsh"
             ),
-            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil),
+            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil)
         )
         let artifacts = CompatibilityArtifacts(bundled: .legacy, active: .explicit(.darwinArm64), pending: .legacy)
         let authorizer = RecordingStatusCompatibilityAuthorizer(report: report)

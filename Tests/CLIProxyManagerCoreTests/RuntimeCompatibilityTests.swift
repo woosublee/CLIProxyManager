@@ -9,7 +9,7 @@ final class RuntimeCompatibilityTests: XCTestCase {
                 architecture: .x86_64,
                 loginShell: "/bin/zsh"
             ),
-            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil),
+            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil)
         )
 
         XCTAssertEqual(report.decision(for: .startProxy).disposition, .blocked)
@@ -27,7 +27,7 @@ final class RuntimeCompatibilityTests: XCTestCase {
                 bundled: .explicit(.darwinArm64),
                 active: .explicit(.init(operatingSystem: .darwin, architecture: .x86_64)),
                 pending: nil
-            ),
+            )
         )
 
         XCTAssertTrue(report.findings.contains(.unsupportedArtifactTarget(
@@ -44,7 +44,7 @@ final class RuntimeCompatibilityTests: XCTestCase {
                 architecture: .arm64,
                 loginShell: "/bin/bash"
             ),
-            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil),
+            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil)
         )
 
         XCTAssertEqual(report.decision(for: .installShellFunctions).disposition, .blocked)
@@ -58,7 +58,7 @@ final class RuntimeCompatibilityTests: XCTestCase {
                 architecture: .arm64,
                 loginShell: "/bin/bash"
             ),
-            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil),
+            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil)
         )
 
         XCTAssertEqual(report.decision(for: .startProxy).disposition, .allowedWithWarnings)
@@ -73,7 +73,7 @@ final class RuntimeCompatibilityTests: XCTestCase {
                 isTranslated: true,
                 loginShell: "/bin/zsh"
             ),
-            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil),
+            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil)
         )
 
         XCTAssertTrue(report.findings.contains(.translatedExecution))
@@ -101,7 +101,7 @@ final class RuntimeCompatibilityTests: XCTestCase {
         )
         let legacy = RuntimeCompatibilityPolicy.current.report(
             environment: environment,
-            artifacts: .init(bundled: .legacy, active: nil, pending: nil),
+            artifacts: .init(bundled: .legacy, active: nil, pending: nil)
         )
 
         XCTAssertEqual(legacy.decision(for: .startProxy).disposition, .allowedWithWarnings)
@@ -112,7 +112,7 @@ final class RuntimeCompatibilityTests: XCTestCase {
 
         let explicit = RuntimeCompatibilityPolicy.current.report(
             environment: environment,
-            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil),
+            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil)
         )
 
         XCTAssertEqual(explicit.decision(for: .startProxy).disposition, .allowed)
