@@ -98,8 +98,6 @@ public enum ClaudeCodeObservation: Codable, Equatable, Sendable {
     case unverified
 }
 
-public typealias RuntimeCompatibilityClaude = ClaudeCodeObservation
-
 public enum CompatibilityFinding: Codable, Equatable, Sendable {
     case unsupportedOperatingSystem(minimumMajor: Int, actualMajor: Int)
     case unsupportedArchitecture(
@@ -113,9 +111,6 @@ public enum CompatibilityFinding: Codable, Equatable, Sendable {
     )
     case legacyArtifactTargetInferred
     case unsupportedLoginShell(expectedBasename: String, actualBasename: String)
-    case unavailableClaudeCode
-    case unverifiedClaudeCode
-    case unverifiedClaudeCodeVersion(expected: String, actual: String)
 }
 
 public struct CompatibilityDecision: Codable, Equatable, Sendable {
@@ -149,36 +144,30 @@ public struct RuntimeCompatibilityPolicy: Equatable, Sendable {
     public let minimumMacOSMajor: Int
     public let supportedArtifactTarget: CLIProxyAPIArtifactTarget
     public let requiredLoginShellPath: String
-    public let lastVerifiedClaudeCodeVersion: String
 
     public init(
         minimumMacOSMajor: Int,
         supportedArtifactTarget: CLIProxyAPIArtifactTarget,
-        requiredLoginShellPath: String,
-        lastVerifiedClaudeCodeVersion: String
+        requiredLoginShellPath: String
     ) {
         self.minimumMacOSMajor = minimumMacOSMajor
         self.supportedArtifactTarget = supportedArtifactTarget
         self.requiredLoginShellPath = requiredLoginShellPath
-        self.lastVerifiedClaudeCodeVersion = lastVerifiedClaudeCodeVersion
     }
 
     public static let current = Self(
         minimumMacOSMajor: 15,
         supportedArtifactTarget: .darwinArm64,
-        requiredLoginShellPath: "/bin/zsh",
-        lastVerifiedClaudeCodeVersion: "2.1.220"
+        requiredLoginShellPath: "/bin/zsh"
     )
 
     public func report(
         environment: RuntimeCompatibilityEnvironment,
-        artifacts: RuntimeCompatibilityArtifacts,
-        claude: RuntimeCompatibilityClaude
+        artifacts: RuntimeCompatibilityArtifacts
     ) -> RuntimeCompatibilityReport {
         let findings = findings(
             environment: environment,
-            artifacts: artifacts,
-            claude: claude
+            artifacts: artifacts
         )
         let hasWarnings = !findings.isEmpty
         let decisions = Dictionary(uniqueKeysWithValues: CompatibilityAction.allCases.map { action in
@@ -200,8 +189,7 @@ public struct RuntimeCompatibilityPolicy: Equatable, Sendable {
 
     private func findings(
         environment: RuntimeCompatibilityEnvironment,
-        artifacts: RuntimeCompatibilityArtifacts,
-        claude: RuntimeCompatibilityClaude
+        artifacts: RuntimeCompatibilityArtifacts
     ) -> [CompatibilityFinding] {
         var findings: [CompatibilityFinding] = []
 
@@ -246,22 +234,6 @@ public struct RuntimeCompatibilityPolicy: Equatable, Sendable {
             )
         }
 
-        switch claude {
-        case let .version(actualVersion) where actualVersion != lastVerifiedClaudeCodeVersion:
-            findings.append(
-                .unverifiedClaudeCodeVersion(
-                    expected: lastVerifiedClaudeCodeVersion,
-                    actual: actualVersion
-                )
-            )
-        case .unavailable:
-            findings.append(.unavailableClaudeCode)
-        case .unverified:
-            findings.append(.unverifiedClaudeCode)
-        case .notChecked, .version:
-            break
-        }
-
         return findings
     }
 
@@ -282,10 +254,7 @@ public struct RuntimeCompatibilityPolicy: Equatable, Sendable {
              .unsupportedArtifactTarget:
             return true
         case .legacyArtifactTargetInferred,
-             .unsupportedLoginShell,
-             .unavailableClaudeCode,
-             .unverifiedClaudeCode,
-             .unverifiedClaudeCodeVersion:
+             .unsupportedLoginShell:
             return false
         }
     }
@@ -293,28 +262,18 @@ public struct RuntimeCompatibilityPolicy: Equatable, Sendable {
     private func isBlocking(_ finding: CompatibilityFinding, for action: CompatibilityAction) -> Bool {
         if action == .installShellFunctions {
             switch finding {
-            case .unsupportedLoginShell, .unavailableClaudeCode:
+            case .unsupportedLoginShell:
                 return true
             case .unsupportedOperatingSystem,
                  .unsupportedArchitecture,
                  .translatedExecution,
                  .unsupportedArtifactTarget,
-                 .legacyArtifactTargetInferred,
-                 .unverifiedClaudeCode,
-                 .unverifiedClaudeCodeVersion:
+                 .legacyArtifactTargetInferred:
                 return false
             }
         }
 
-        if isBlocking(finding) {
-            return true
-        }
-
-        if case .unsupportedLoginShell = finding {
-            return action == .installShellFunctions
-        }
-
-        return false
+        return isBlocking(finding)
     }
 
     private func allowsRecovery(_ action: CompatibilityAction) -> Bool {

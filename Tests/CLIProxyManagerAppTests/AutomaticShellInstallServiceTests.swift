@@ -8,7 +8,8 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
         let installer = StubShellInstaller()
         let service = AutomaticShellInstallService.runtimeDefault(
             installer: installer,
-            compatibilityAuthorizer: FixedCompatibilityAuthorizer(report: allowedCompatibilityReport())
+            compatibilityAuthorizer: FixedCompatibilityAuthorizer(report: allowedCompatibilityReport()),
+            claudeInspector: FixedClaudeCodeInspector(observation: .version("test"))
         )
         var config = AppConfig.default
         config.oauthCommandProfiles = [
@@ -349,17 +350,25 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
         XCTAssertEqual(installer.installedFunctionNames, [])
     }
 
-    func testClaudeUnavailableExplicitInstallDoesNotWriteShellFiles() async throws {
+    func testClaudeUnavailableExplicitInstallDoesNotWriteClaudeShellFunctions() async throws {
         let installer = StubShellInstaller()
         let service = AutomaticShellInstallService(
             installer: installer,
-            compatibilityAuthorizer: FixedCompatibilityAuthorizer(
-                report: compatibilityReport(finding: .unavailableClaudeCode)
-            )
+            compatibilityAuthorizer: FixedCompatibilityAuthorizer(report: allowedCompatibilityReport()),
+            claudeInspector: FixedClaudeCodeInspector(observation: .unavailable)
         )
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            AppConfig.OAuthCommandProfile(
+                id: "claude",
+                provider: .claude,
+                authProfileID: "claude.json",
+                commandName: "cc"
+            )
+        ]
 
         do {
-            _ = try await service.apply(config: .default)
+            try await service.apply(config: config)
             XCTFail("Expected unavailable-Claude block")
         } catch let error as ShellFunctionInstallationError {
             XCTAssertEqual(error, .claudeCodeUnavailable)
@@ -577,8 +586,6 @@ private func compatibilityReport(finding: CompatibilityFinding) -> RuntimeCompat
     switch finding {
     case .unsupportedLoginShell:
         disposition = .blocked
-    case .unavailableClaudeCode:
-        disposition = .allowedWithWarnings
     default:
         disposition = .blocked
     }
@@ -613,6 +620,14 @@ private final class InstallationEventLog: @unchecked Sendable {
 
     func record(_ event: String) {
         lock.withLock { recordedEvents.append(event) }
+    }
+}
+
+private struct FixedClaudeCodeInspector: ClaudeCodeInspecting {
+    let observation: ClaudeCodeObservation
+
+    func observeVersion() async -> ClaudeCodeObservation {
+        observation
     }
 }
 

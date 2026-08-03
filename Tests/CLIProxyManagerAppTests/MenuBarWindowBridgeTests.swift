@@ -74,12 +74,13 @@ final class MenuBarWindowBridgeTests: XCTestCase {
             height: 420
         )
         window.setFrame(currentFrame, display: false)
+        let frameBeforeConfiguration = window.frame
         let configurator = UsageOverlayWindowConfigurator()
 
         configurator.configure(window: window, alwaysOnTop: true)
 
         XCTAssertTrue(window.frameAutosaveName.isEmpty)
-        XCTAssertEqual(window.frame, currentFrame)
+        XCTAssertEqual(window.frame, frameBeforeConfiguration)
     }
 
     func testWindowBridgeCoordinatorInvokesCallbackOnEveryWindowKeyNotification() {

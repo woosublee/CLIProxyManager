@@ -122,32 +122,24 @@ public struct LiveRuntimeEnvironmentProvider: RuntimeEnvironmentProviding, Senda
 public struct RuntimeCompatibilityPreflight: RuntimeCompatibilityAuthorizing, Sendable {
     private let policy: RuntimeCompatibilityPolicy
     private let environment: RuntimeEnvironmentProviding
-    private let claudeInspector: ClaudeCodeInspecting
 
     public init(
         policy: RuntimeCompatibilityPolicy = .current,
-        environment: RuntimeEnvironmentProviding = LiveRuntimeEnvironmentProvider(),
-        claudeInspector: ClaudeCodeInspecting = ClaudeCodeInspector()
+        environment: RuntimeEnvironmentProviding = LiveRuntimeEnvironmentProvider()
     ) {
         self.policy = policy
         self.environment = environment
-        self.claudeInspector = claudeInspector
     }
 
     public func staticReport(artifacts: CompatibilityArtifacts) -> RuntimeCompatibilityReport {
         policy.report(
             environment: environment.snapshot(),
-            artifacts: artifacts,
-            claude: .notChecked
+            artifacts: artifacts
         )
     }
 
     public func report(artifacts: CompatibilityArtifacts) async -> RuntimeCompatibilityReport {
-        policy.report(
-            environment: environment.snapshot(),
-            artifacts: artifacts,
-            claude: await claudeInspector.observeVersion()
-        )
+        staticReport(artifacts: artifacts)
     }
 
     public func require(_ action: CompatibilityAction, artifacts: CompatibilityArtifacts) throws {

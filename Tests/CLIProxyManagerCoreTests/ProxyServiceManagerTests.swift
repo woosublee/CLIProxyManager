@@ -792,6 +792,30 @@ final class ProxyServiceManagerTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: paths.clipProxyConfigFile), canonical)
     }
 
+    func testPrepareDoesNotRestartAdoptedProcessWhenConfigIsAlreadyCanonical() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let seedManager = makeProxyServiceManager(paths: paths, launcher: FakeProcessLauncher())
+        try await seedManager.start(port: 8317)
+        try await seedManager.stop()
+        let canonical = try Data(contentsOf: paths.clipProxyConfigFile)
+        let launchctl = RunningLabelsLaunchctl(labels: ["com.cliproxymanager.port.8317"])
+        let launcher = FakeProcessLauncher(usesManagedLaunchdJobs: true)
+        let manager = makeProxyServiceManager(
+            paths: paths,
+            launcher: launcher,
+            launchctl: launchctl,
+            inspectSystemProcesses: false
+        )
+
+        try manager.prepare(port: 8317)
+
+        XCTAssertTrue(launchctl.removedLabels.isEmpty)
+        XCTAssertTrue(launcher.invocations.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: paths.clipProxyConfigFile), canonical)
+    }
+
     func testRestartStopsExistingProcessBeforeStartingAgain() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
@@ -860,6 +884,43 @@ final class ProxyServiceManagerTests: XCTestCase {
 
         try await manager.stop()
         XCTAssertEqual(restoredProcess.terminateCallCount, 1)
+    }
+
+    func testRollbackUsesRestoredConfigurationPortInsteadOfDetectedListenerPort() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        let seedManager = makeProxyServiceManager(paths: paths, launcher: FakeProcessLauncher())
+        try await seedManager.start(port: 9000)
+        try await seedManager.stop()
+        let originalConfig = try Data(contentsOf: paths.clipProxyConfigFile)
+        let restoredProcess = ManagedProxyProcessDouble()
+        let launcher = SequencedProcessLauncher(
+            outcomes: [
+                .failure(NSError(domain: "test", code: 1)),
+                .process(restoredProcess),
+            ],
+            usesManagedLaunchdJobs: true
+        )
+        let launchctl = RunningLabelsLaunchctl(labels: ["com.cliproxymanager.port.8317"])
+        let manager = makeProxyServiceManager(
+            paths: paths,
+            launcher: launcher,
+            launchctl: launchctl,
+            rollbackReadinessProvider: { $0 == 9000 },
+            inspectSystemProcesses: false
+        )
+
+        do {
+            _ = try await manager.reconcileConfiguration(port: 10_000)
+            XCTFail("Expected restart failure")
+        } catch let error as ProxyServiceError {
+            XCTAssertEqual(error, .restartFailed(stage: .processLaunch, rollbackSucceeded: true))
+        }
+
+        XCTAssertEqual(try Data(contentsOf: paths.clipProxyConfigFile), originalConfig)
+        XCTAssertEqual(restoredProcess.terminateCallCount, 0)
+        XCTAssertEqual(launcher.invocations.count, 2)
     }
 
     func testRollbackReportsFailureWhenRestoredProcessNeverListens() async throws {
@@ -1185,7 +1246,7 @@ final class ProxyServiceManagerTests: XCTestCase {
         ))
     }
 
-    func testPrepareFindsManagedListenerOnPortOutsidePersistedAndRequestedPorts() throws {
+    func testPrepareReconcilesManagedListenerOnPortOutsidePersistedAndRequestedPorts() throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         try createBinary(at: paths.clipProxyBinary)
@@ -1195,20 +1256,21 @@ final class ProxyServiceManagerTests: XCTestCase {
             encoding: .utf8
         )
         let launchctl = RunningLabelsLaunchctl(labels: ["com.cliproxymanager.port.8317"])
+        let launcher = FakeProcessLauncher(usesManagedLaunchdJobs: true)
         let manager = makeProxyServiceManager(
             paths: paths,
-            launcher: FakeProcessLauncher(usesManagedLaunchdJobs: true),
+            launcher: launcher,
             launchctl: launchctl,
             inspectSystemProcesses: false
         )
 
-        XCTAssertThrowsError(try manager.prepare(port: 28_317)) { error in
-            XCTAssertEqual(error as? ProxyServiceError, .configurationChangeRequiresRestart)
-        }
-        XCTAssertEqual(
-            try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8),
-            "host: \"0.0.0.0\"\nport: 9000\n"
-        )
+        try manager.prepare(port: 28_317)
+
+        XCTAssertTrue(launchctl.removedLabels.contains("com.cliproxymanager.port.8317"))
+        XCTAssertEqual(launcher.invocations.count, 1)
+        let config = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
+        XCTAssertTrue(config.contains("host: \"127.0.0.1\""))
+        XCTAssertTrue(config.contains("port: 28317"))
     }
 
     func testReconcileStopsManagedLaunchdJobOnPortOutsidePersistedAndRequestedPorts() async throws {
@@ -1258,28 +1320,26 @@ final class ProxyServiceManagerTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8), existing)
     }
 
-    func testPrepareDoesNotRestartRunningProxyWhenConfigurationChanged() async throws {
+    func testPrepareRestartsRunningProxyWhenOAuthRequiresConfigurationChange() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
         try createBinary(at: paths.clipProxyBinary)
         let process = ManagedProxyProcessDouble()
-        let launcher = FakeProcessLauncher(process: process)
+        let restartedProcess = ManagedProxyProcessDouble()
+        let launcher = FakeProcessLauncher(processes: [process, restartedProcess])
         let manager = makeProxyServiceManager(paths: paths, launcher: launcher)
 
         try await manager.start(port: 8317)
         try "port: 8317\n".write(to: paths.clipProxyConfigFile, atomically: true, encoding: .utf8)
 
-        XCTAssertThrowsError(try manager.prepare(port: 8317)) { error in
-            XCTAssertEqual(error as? ProxyServiceError, .configurationChangeRequiresRestart)
-            XCTAssertTrue(error.localizedDescription.contains("Restart Server, then retry login"))
-        }
-        XCTAssertEqual(process.terminateCallCount, 0)
-        XCTAssertEqual(process.waitUntilExitCallCount, 0)
-        XCTAssertEqual(launcher.invocations.count, 1)
-        XCTAssertEqual(
-            try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8),
-            "port: 8317\n"
-        )
+        try manager.prepare(port: 8317)
+
+        XCTAssertEqual(process.terminateCallCount, 1)
+        XCTAssertEqual(process.waitUntilExitCallCount, 1)
+        XCTAssertEqual(launcher.invocations.count, 2)
+        let config = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
+        XCTAssertTrue(config.contains("host: \"127.0.0.1\""))
+        XCTAssertTrue(config.contains("port: 8317"))
     }
 
     func testPrepareRendersMultipleAPIKeyProfilesPerProvider() throws {
@@ -1770,7 +1830,11 @@ private final class RunningLabelsLaunchctl: LaunchctlManaging, @unchecked Sendab
     func labels(matchingPID pid: pid_t) throws -> [String] { [] }
     func runningLabels(prefix: String) throws -> [String] {
         if let error { throw error }
-        return labels.filter { $0.hasPrefix(prefix) }
+        return lock.withLock {
+            labels.filter {
+                $0.hasPrefix(prefix) && !storedRemovedLabels.contains($0)
+            }
+        }
     }
 }
 
@@ -1797,7 +1861,7 @@ private final class AppConfigProviderDouble: @unchecked Sendable {
 }
 
 private final class SequencedProcessLauncher: ProcessLaunching, @unchecked Sendable {
-    let usesManagedLaunchdJobs = false
+    let usesManagedLaunchdJobs: Bool
     enum Outcome {
         case process(any ManagedProxyProcess)
         case failure(Error)
@@ -1811,8 +1875,12 @@ private final class SequencedProcessLauncher: ProcessLaunching, @unchecked Senda
         lock.withLock { storedInvocations }
     }
 
-    init(outcomes: [Outcome]) {
+    init(
+        outcomes: [Outcome],
+        usesManagedLaunchdJobs: Bool = false
+    ) {
         self.outcomes = outcomes
+        self.usesManagedLaunchdJobs = usesManagedLaunchdJobs
     }
 
     func launch(_ executable: String, _ arguments: [String]) throws -> any ManagedProxyProcess {

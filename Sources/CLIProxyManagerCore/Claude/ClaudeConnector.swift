@@ -4,27 +4,88 @@ public protocol ClaudeCodeInspecting: Sendable {
     func observeVersion() async -> ClaudeCodeObservation
 }
 
+private func userLocalClaudeExecutablePaths() -> [String] {
+    let homeDirectory = FileManager.default.homeDirectoryForCurrentUser
+    let candidates = [
+        homeDirectory.appendingPathComponent(".local/bin/claude").path,
+        "/opt/homebrew/bin/claude",
+        "/usr/local/bin/claude",
+    ]
+    return candidates.filter(FileManager.default.isExecutableFile(atPath:))
+}
+
+private func claudeExecutableCandidates(
+    pathLookupSucceeded: Bool,
+    fallbackPaths: [String]
+) -> [String] {
+    var candidates = pathLookupSucceeded ? ["claude"] : []
+    for path in fallbackPaths where !candidates.contains(path) {
+        candidates.append(path)
+    }
+    return candidates
+}
+
+func claudeExecutableSearchPath(
+    executable: String,
+    inheritedPath: String
+) -> String {
+    let directory = URL(fileURLWithPath: executable).deletingLastPathComponent().path
+    return inheritedPath.isEmpty ? directory : "\(directory):\(inheritedPath)"
+}
+
+private func runClaude(
+    using runner: any ProcessRunning,
+    executable: String,
+    arguments: [String]
+) async -> ProcessResult {
+    guard executable.contains("/") else {
+        return await runner.run("/usr/bin/env", [executable] + arguments)
+    }
+    let searchPath = claudeExecutableSearchPath(
+        executable: executable,
+        inheritedPath: ProcessInfo.processInfo.environment["PATH"] ?? ""
+    )
+    return await runner.run(
+        "/usr/bin/env",
+        ["PATH=\(searchPath)", executable] + arguments
+    )
+}
+
 public struct ClaudeCodeInspector: ClaudeCodeInspecting, Sendable {
     private static let maximumVersionOutputLength = 512
 
     private let runner: ProcessRunning
+    private let fallbackExecutablePaths: @Sendable () -> [String]
 
     public init(runner: ProcessRunning = ProcessRunner()) {
+        self.init(
+            runner: runner,
+            fallbackExecutablePaths: { userLocalClaudeExecutablePaths() }
+        )
+    }
+
+    init(
+        runner: ProcessRunning,
+        fallbackExecutablePaths: @escaping @Sendable () -> [String]
+    ) {
         self.runner = runner
+        self.fallbackExecutablePaths = fallbackExecutablePaths
     }
 
     public func observeVersion() async -> ClaudeCodeObservation {
         let which = await runner.run("/usr/bin/env", ["which", "claude"])
-        guard which.exitCode == 0 else {
-            return .unavailable
-        }
+        let candidates = claudeExecutableCandidates(
+            pathLookupSucceeded: which.exitCode == 0,
+            fallbackPaths: fallbackExecutablePaths()
+        )
+        guard !candidates.isEmpty else { return .unavailable }
 
-        let version = await runner.run("/usr/bin/env", ["claude", "--version"])
-        guard version.exitCode == 0 else {
-            return .unverified
+        for executable in candidates {
+            let version = await runClaude(using: runner, executable: executable, arguments: ["--version"])
+            guard version.exitCode == 0 else { continue }
+            return semanticVersion(in: version.stdout).map(ClaudeCodeObservation.version) ?? .unverified
         }
-
-        return semanticVersion(in: version.stdout).map(ClaudeCodeObservation.version) ?? .unverified
+        return .unverified
     }
 
     private func semanticVersion(in output: String) -> String? {
@@ -46,21 +107,38 @@ public struct ClaudeCodeInspector: ClaudeCodeInspecting, Sendable {
 
 public struct ClaudeConnector: Sendable {
     private let runner: ProcessRunning
+    private let fallbackExecutablePaths: @Sendable () -> [String]
 
     public init(runner: ProcessRunning = ProcessRunner()) {
+        self.init(
+            runner: runner,
+            fallbackExecutablePaths: { userLocalClaudeExecutablePaths() }
+        )
+    }
+
+    init(
+        runner: ProcessRunning,
+        fallbackExecutablePaths: @escaping @Sendable () -> [String]
+    ) {
         self.runner = runner
+        self.fallbackExecutablePaths = fallbackExecutablePaths
     }
 
     public func status() async -> DiagnosticStatus {
         let which = await runner.run("/usr/bin/env", ["which", "claude"])
-        guard which.exitCode == 0 else {
-            if which.timedOut {
-                return DiagnosticStatus(
-                    severity: .error,
-                    title: "Claude Code Check Timed Out",
-                    message: timeoutMessage(from: which)
-                )
-            }
+        if which.timedOut {
+            return DiagnosticStatus(
+                severity: .error,
+                title: "Claude Code Check Timed Out",
+                message: timeoutMessage(from: which)
+            )
+        }
+
+        let candidates = claudeExecutableCandidates(
+            pathLookupSucceeded: which.exitCode == 0,
+            fallbackPaths: fallbackExecutablePaths()
+        )
+        guard !candidates.isEmpty else {
             return DiagnosticStatus(
                 severity: .error,
                 title: "Claude Code Not Installed",
@@ -68,16 +146,30 @@ public struct ClaudeConnector: Sendable {
             )
         }
 
-        let version = await runner.run("/usr/bin/env", ["claude", "--version"])
-        guard version.exitCode == 0 else {
+        var selectedExecutable: String?
+        var lastVersionResult: ProcessResult?
+        for executable in candidates {
+            let version = await runClaude(using: runner, executable: executable, arguments: ["--version"])
+            lastVersionResult = version
+            if version.exitCode == 0 {
+                selectedExecutable = executable
+                break
+            }
+        }
+        guard let selectedExecutable, let version = lastVersionResult else {
             return DiagnosticStatus(
                 severity: .warning,
                 title: "Claude Code Check Failed",
-                message: versionFailureMessage(from: version)
+                message: lastVersionResult.map(versionFailureMessage(from:))
+                    ?? "Could not determine the Claude Code version."
             )
         }
 
-        let auth = await runner.run("/usr/bin/env", ["claude", "auth", "status"])
+        let auth = await runClaude(
+            using: runner,
+            executable: selectedExecutable,
+            arguments: ["auth", "status"]
+        )
         guard auth.exitCode == 0 else {
             if auth.timedOut {
                 return DiagnosticStatus(

@@ -1,6 +1,6 @@
 import XCTest
 @testable import CLIProxyManagerApp
-import CLIProxyManagerCore
+@testable import CLIProxyManagerCore
 
 @MainActor
 final class DashboardViewModelRefreshTests: XCTestCase {
@@ -77,8 +77,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
                 architecture: .x86_64,
                 loginShell: "/bin/zsh"
             ),
-            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil),
-            claude: .version("2.1.220")
+            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil)
         )
         let viewModel = DashboardViewModel(
             config: .default,
@@ -106,8 +105,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
                 architecture: .arm64,
                 loginShell: "/bin/zsh"
             ),
-            artifacts: .init(bundled: .legacy, active: nil, pending: nil),
-            claude: .notChecked
+            artifacts: .init(bundled: .legacy, active: nil, pending: nil)
         )
         let viewModel = DashboardViewModel(
             config: .default,
@@ -138,8 +136,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
                 architecture: .x86_64,
                 loginShell: "/bin/zsh"
             ),
-            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil),
-            claude: .notChecked
+            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil)
         )
         let viewModel = DashboardViewModel(
             config: .default,
@@ -171,8 +168,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
                 architecture: .arm64,
                 loginShell: "/bin/zsh"
             ),
-            artifacts: artifacts,
-            claude: .version("2.1.220")
+            artifacts: artifacts
         ))
         let viewModel = DashboardViewModel(
             config: .default,
@@ -904,9 +900,12 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: StubProxyServiceStarter(),
             compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
-            claudeConnector: ClaudeConnector(runner: StubProcessRunner(results: [
-                ProcessResult(exitCode: 1, stdout: "", stderr: "")
-            ])),
+            claudeConnector: ClaudeConnector(
+                runner: StubProcessRunner(results: [
+                    ProcessResult(exitCode: 1, stdout: "", stderr: "")
+                ]),
+                fallbackExecutablePaths: { [] }
+            ),
             serverStatusRetryDelayNanoseconds: 0
         )
 
@@ -7672,6 +7671,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         let didStartReset = await quotaClient.waitForResetRequests(expectedCount: 1)
         XCTAssertTrue(didStartReset)
         await action.value
+        let didScheduleUsagePolling = await sleeper.waitForDelays(expectedCount: 1)
+        XCTAssertTrue(didScheduleUsagePolling)
         let usageCountBeforeResetCompletion = await quotaClient.usageRequestCount()
         let delaysBeforeResetCompletion = await sleeper.delays()
         XCTAssertEqual(usageCountBeforeResetCompletion, 1)
@@ -7689,6 +7690,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             await Task.yield()
         }
 
+        let didReschedulePolling = await sleeper.waitForDelays(expectedCount: 2)
+        XCTAssertTrue(didReschedulePolling)
         XCTAssertEqual(viewModel.codexResetCreditsSnapshots[profile.id], resetSnapshot)
         XCTAssertEqual(resetCache.load()[profile.id], resetSnapshot)
         let finalUsageCount = await quotaClient.usageRequestCount()

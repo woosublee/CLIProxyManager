@@ -26,8 +26,7 @@ final class StatusServiceTests: XCTestCase {
                 architecture: .x86_64,
                 loginShell: "/Users/example.com/bin/zsh"
             ),
-            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil),
-            claude: .version("2.1.221")
+            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil)
         )
         let artifacts = CompatibilityArtifacts(bundled: .legacy, active: .explicit(.darwinArm64), pending: .legacy)
         let authorizer = RecordingStatusCompatibilityAuthorizer(report: report)
@@ -42,7 +41,7 @@ final class StatusServiceTests: XCTestCase {
 
         XCTAssertEqual(authorizer.reportedArtifacts, artifacts)
         XCTAssertEqual(status.compatibility.disposition, .blocked)
-        XCTAssertEqual(status.compatibility.findings.map(\.code), ["unsupportedArchitecture", "unverifiedClaudeCodeVersion"])
+        XCTAssertEqual(status.compatibility.findings.map(\.code), ["unsupportedArchitecture"])
         XCTAssertFalse(try String(decoding: JSONEncoder().encode(status), as: UTF8.self).contains("/private/"))
         XCTAssertFalse(try String(decoding: JSONEncoder().encode(status), as: UTF8.self).contains("example.com"))
     }

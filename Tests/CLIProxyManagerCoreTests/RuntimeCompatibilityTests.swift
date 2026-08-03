@@ -9,8 +9,7 @@ final class RuntimeCompatibilityTests: XCTestCase {
                 architecture: .x86_64,
                 loginShell: "/bin/zsh"
             ),
-            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil),
-            claude: .notChecked
+            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil)
         )
 
         XCTAssertEqual(report.decision(for: .startProxy).disposition, .blocked)
@@ -28,8 +27,7 @@ final class RuntimeCompatibilityTests: XCTestCase {
                 bundled: .explicit(.darwinArm64),
                 active: .explicit(.init(operatingSystem: .darwin, architecture: .x86_64)),
                 pending: nil
-            ),
-            claude: .version("2.1.220")
+            )
         )
 
         XCTAssertTrue(report.findings.contains(.unsupportedArtifactTarget(
@@ -46,27 +44,11 @@ final class RuntimeCompatibilityTests: XCTestCase {
                 architecture: .arm64,
                 loginShell: "/bin/bash"
             ),
-            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil),
-            claude: .notChecked
+            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil)
         )
 
         XCTAssertEqual(report.decision(for: .installShellFunctions).disposition, .blocked)
         XCTAssertTrue(report.findings.contains(.unsupportedLoginShell(expectedBasename: "zsh", actualBasename: "bash")))
-    }
-
-    func testInstallShellFunctionsBlocksUnavailableClaudeCode() {
-        let report = RuntimeCompatibilityPolicy.current.report(
-            environment: .init(
-                operatingSystem: .macOS(major: 15, minor: 0),
-                architecture: .arm64,
-                loginShell: "/bin/zsh"
-            ),
-            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil),
-            claude: .unavailable
-        )
-
-        XCTAssertTrue(report.findings.contains(.unavailableClaudeCode))
-        XCTAssertEqual(report.decision(for: .installShellFunctions).disposition, .blocked)
     }
 
     func testUnsupportedLoginShellOnlyBlocksShellFunctionInstallation() {
@@ -76,8 +58,7 @@ final class RuntimeCompatibilityTests: XCTestCase {
                 architecture: .arm64,
                 loginShell: "/bin/bash"
             ),
-            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil),
-            claude: .version("2.1.220")
+            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil)
         )
 
         XCTAssertEqual(report.decision(for: .startProxy).disposition, .allowedWithWarnings)
@@ -92,8 +73,7 @@ final class RuntimeCompatibilityTests: XCTestCase {
                 isTranslated: true,
                 loginShell: "/bin/zsh"
             ),
-            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil),
-            claude: .notChecked
+            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil)
         )
 
         XCTAssertTrue(report.findings.contains(.translatedExecution))
@@ -121,8 +101,7 @@ final class RuntimeCompatibilityTests: XCTestCase {
         )
         let legacy = RuntimeCompatibilityPolicy.current.report(
             environment: environment,
-            artifacts: .init(bundled: .legacy, active: nil, pending: nil),
-            claude: .notChecked
+            artifacts: .init(bundled: .legacy, active: nil, pending: nil)
         )
 
         XCTAssertEqual(legacy.decision(for: .startProxy).disposition, .allowedWithWarnings)
@@ -133,8 +112,7 @@ final class RuntimeCompatibilityTests: XCTestCase {
 
         let explicit = RuntimeCompatibilityPolicy.current.report(
             environment: environment,
-            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil),
-            claude: .notChecked
+            artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil)
         )
 
         XCTAssertEqual(explicit.decision(for: .startProxy).disposition, .allowed)
