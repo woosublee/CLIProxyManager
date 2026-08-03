@@ -152,6 +152,7 @@ struct AutomaticShellInstallService: Sendable {
     private let installer: any ShellFunctionInstalling
     private let secretStore: any SecretStore
     private let compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing
+    private let claudeInspector: (any ClaudeCodeInspecting)?
     private let reconciliationCoordinator = AutomaticShellReconciliationCoordinator()
     private let defaultHelperCommand: String
     private let isEnabled: Bool
@@ -161,11 +162,13 @@ struct AutomaticShellInstallService: Sendable {
         secretStore: any SecretStore = FileSecretStore(),
         helperCommand: String = "/usr/local/bin/cliproxy-manager",
         compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing = RuntimeCompatibilityPreflight(),
+        claudeInspector: (any ClaudeCodeInspecting)? = nil,
         isEnabled: Bool = true
     ) {
         self.installer = installer
         self.secretStore = secretStore
         self.compatibilityAuthorizer = compatibilityAuthorizer
+        self.claudeInspector = claudeInspector
         self.defaultHelperCommand = helperCommand
         self.isEnabled = isEnabled
     }
@@ -179,7 +182,8 @@ struct AutomaticShellInstallService: Sendable {
             installer: installer,
             secretStore: secretStore,
             helperCommand: resolvedDefaultHelperCommand(),
-            compatibilityAuthorizer: compatibilityAuthorizer
+            compatibilityAuthorizer: compatibilityAuthorizer,
+            claudeInspector: ClaudeCodeInspector()
         )
     }
 
@@ -222,7 +226,7 @@ struct AutomaticShellInstallService: Sendable {
         guard isEnabled else { return }
         let request = reconciliationCoordinator.beginExplicit()
         defer { request.finish() }
-        try await preflight()
+        try await preflight(config: config, enabledFunctions: enabledFunctions)
         let installation = try renderedInstallation(
             config: config,
             helperCommand: helperCommand,
@@ -248,7 +252,7 @@ struct AutomaticShellInstallService: Sendable {
         guard isEnabled else { return .disabled }
         let request = request ?? beginAutomaticReconciliation()
         do {
-            try await preflight()
+            try await preflight(config: config, enabledFunctions: enabledFunctions)
             let installation = try renderedInstallation(
                 config: config,
                 helperCommand: helperCommand,
@@ -267,7 +271,10 @@ struct AutomaticShellInstallService: Sendable {
         }
     }
 
-    private func preflight() async throws {
+    private func preflight(
+        config: AppConfig,
+        enabledFunctions: EnabledFunctions
+    ) async throws {
         let report = await compatibilityAuthorizer.report(artifacts: CompatibilityArtifacts(
             bundled: nil,
             active: nil,
@@ -275,6 +282,26 @@ struct AutomaticShellInstallService: Sendable {
         ))
         if let compatibilityError = compatibilityError(for: report) {
             throw compatibilityError
+        }
+        if requiresClaudeExecutable(config: config, enabledFunctions: enabledFunctions),
+           let claudeInspector,
+           await claudeInspector.observeVersion() == .unavailable {
+            throw ShellFunctionInstallationError.claudeCodeUnavailable
+        }
+    }
+
+    private func requiresClaudeExecutable(
+        config: AppConfig,
+        enabledFunctions: EnabledFunctions
+    ) -> Bool {
+        if shouldIncludeOAuth(provider: .claude, config: config, enabled: enabledFunctions.claudeOAuth) {
+            return true
+        }
+        return config.apiKeyProfiles.contains { profile in
+            profile.provider == .claude
+                && enabledFunctions.apiKeyProfileIDs.contains(profile.id)
+                && !profile.commandName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && ((try? hasAPIKey(profile.secretReference)) == true)
         }
     }
 
@@ -319,12 +346,6 @@ struct AutomaticShellInstallService: Sendable {
             return false
         }) {
             return .unsupportedLoginShell
-        }
-        if report.findings.contains(where: { finding in
-            if case .unavailableClaudeCode = finding { return true }
-            return false
-        }) {
-            return .claudeCodeUnavailable
         }
         if report.decision(for: .installShellFunctions).disposition == .blocked {
             return .runtimeIncompatible

@@ -1,6 +1,6 @@
 import XCTest
 @testable import CLIProxyManagerApp
-import CLIProxyManagerCore
+@testable import CLIProxyManagerCore
 
 @MainActor
 final class DashboardViewModelRefreshTests: XCTestCase {
@@ -78,7 +78,6 @@ final class DashboardViewModelRefreshTests: XCTestCase {
                 loginShell: "/bin/zsh"
             ),
             artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil),
-            claude: .version("2.1.220")
         )
         let viewModel = DashboardViewModel(
             config: .default,
@@ -107,7 +106,6 @@ final class DashboardViewModelRefreshTests: XCTestCase {
                 loginShell: "/bin/zsh"
             ),
             artifacts: .init(bundled: .legacy, active: nil, pending: nil),
-            claude: .notChecked
         )
         let viewModel = DashboardViewModel(
             config: .default,
@@ -139,7 +137,6 @@ final class DashboardViewModelRefreshTests: XCTestCase {
                 loginShell: "/bin/zsh"
             ),
             artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil),
-            claude: .notChecked
         )
         let viewModel = DashboardViewModel(
             config: .default,
@@ -172,7 +169,6 @@ final class DashboardViewModelRefreshTests: XCTestCase {
                 loginShell: "/bin/zsh"
             ),
             artifacts: artifacts,
-            claude: .version("2.1.220")
         ))
         let viewModel = DashboardViewModel(
             config: .default,
@@ -904,9 +900,12 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(result: .success(Data("{}".utf8))), timeout: 0.1),
             proxyService: StubProxyServiceStarter(),
             compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
-            claudeConnector: ClaudeConnector(runner: StubProcessRunner(results: [
-                ProcessResult(exitCode: 1, stdout: "", stderr: "")
-            ])),
+            claudeConnector: ClaudeConnector(
+                runner: StubProcessRunner(results: [
+                    ProcessResult(exitCode: 1, stdout: "", stderr: "")
+                ]),
+                fallbackExecutablePaths: { [] }
+            ),
             serverStatusRetryDelayNanoseconds: 0
         )
 

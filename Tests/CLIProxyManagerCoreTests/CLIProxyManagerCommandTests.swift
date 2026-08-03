@@ -641,7 +641,6 @@ final class CLIProxyManagerCommandTests: XCTestCase {
                 loginShell: "/bin/zsh"
             ),
             artifacts: .init(bundled: .legacy, active: nil, pending: nil),
-            claude: .notChecked
         )
         let command = makeRuntimeCommand(
             output: output,
@@ -659,7 +658,7 @@ final class CLIProxyManagerCommandTests: XCTestCase {
         XCTAssertTrue(output.stderr.isEmpty)
     }
 
-    func testStatusJSONContainsSanitizedCompatibilitySummary() async throws {
+    func testStatusJSONDoesNotReportClaudeVersionAsRuntimeCompatibility() async throws {
         let output = OutputDouble(isInteractive: false)
         let report = RuntimeCompatibilityPolicy.current.report(
             environment: .init(
@@ -668,7 +667,6 @@ final class CLIProxyManagerCommandTests: XCTestCase {
                 loginShell: "/bin/zsh"
             ),
             artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil),
-            claude: .version("sensitive-version.example.com")
         )
         let services = RuntimeServicesDouble(compatibility: CPMStatus.Compatibility(report: report))
         let command = makeRuntimeCommand(output: output, services: services)
@@ -677,7 +675,7 @@ final class CLIProxyManagerCommandTests: XCTestCase {
 
         let text = output.stdout.joined()
         XCTAssertTrue(text.contains("compatibility"))
-        XCTAssertTrue(text.contains("unverifiedClaudeCodeVersion"))
+        XCTAssertFalse(text.contains("unverifiedClaudeCodeVersion"))
         XCTAssertFalse(text.contains("/Users/"))
         XCTAssertFalse(text.contains("sensitive-version.example.com"))
         XCTAssertTrue(output.stderr.isEmpty)
@@ -691,7 +689,6 @@ final class CLIProxyManagerCommandTests: XCTestCase {
                 loginShell: "/bin/bash"
             ),
             artifacts: .init(bundled: .explicit(.darwinArm64), active: nil, pending: nil),
-            claude: .unavailable
         )
 
         let compatibility = CPMStatus.Compatibility(report: report)
@@ -701,10 +698,7 @@ final class CLIProxyManagerCommandTests: XCTestCase {
             compatibility.findings.first(where: { $0.code == "unsupportedLoginShell" })?.disposition,
             .blocked
         )
-        XCTAssertEqual(
-            compatibility.findings.first(where: { $0.code == "unavailableClaudeCode" })?.disposition,
-            .blocked
-        )
+        XCTAssertFalse(compatibility.findings.contains { $0.code == "unavailableClaudeCode" })
     }
 
     func testRootUserIsRejectedBeforeStart() async throws {

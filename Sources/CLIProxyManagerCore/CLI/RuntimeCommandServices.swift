@@ -217,24 +217,6 @@ public struct CPMStatus: Codable, Equatable, Sendable {
                     disposition: report.decision(for: .installShellFunctions).disposition,
                     recovery: "Use zsh as the login shell before installing generated functions."
                 )
-            case .unavailableClaudeCode:
-                Finding(
-                    code: "unavailableClaudeCode",
-                    disposition: report.decision(for: .installShellFunctions).disposition,
-                    recovery: "Install Claude Code, then refresh compatibility status."
-                )
-            case .unverifiedClaudeCode:
-                Finding(
-                    code: "unverifiedClaudeCode",
-                    disposition: .allowedWithWarnings,
-                    recovery: "Verify the Claude Code installation, then refresh compatibility status."
-                )
-            case .unverifiedClaudeCodeVersion:
-                Finding(
-                    code: "unverifiedClaudeCodeVersion",
-                    disposition: .allowedWithWarnings,
-                    recovery: "Update Claude Code or continue with caution; refresh after updating."
-                )
             }
         }
     }

@@ -33,11 +33,75 @@ final class ClaudeConnectorTests: XCTestCase {
         ])
     }
 
+    func testUserLocalClaudeIsUsedWhenGUIPathLookupFails() async throws {
+        let runner = FakeProcessRunner(results: [
+            ProcessResult(exitCode: 1, stdout: "", stderr: "not found"),
+            ProcessResult(exitCode: 0, stdout: "1.2.3\n", stderr: ""),
+            ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: "")
+        ])
+        let connector = ClaudeConnector(
+            runner: runner,
+            fallbackExecutablePaths: { ["/Users/example/.local/bin/claude"] }
+        )
+
+        let status = await connector.status()
+
+        XCTAssertEqual(status.severity, .ready)
+        XCTAssertEqual(runner.calls, [
+            FakeProcessRunner.Call(executable: "/usr/bin/env", arguments: ["which", "claude"]),
+            FakeProcessRunner.Call(executable: "/usr/bin/env", arguments: fallbackArguments(
+                executable: "/Users/example/.local/bin/claude",
+                arguments: ["--version"]
+            )),
+            FakeProcessRunner.Call(executable: "/usr/bin/env", arguments: fallbackArguments(
+                executable: "/Users/example/.local/bin/claude",
+                arguments: ["auth", "status"]
+            ))
+        ])
+    }
+
+    func testFallbackSkipsBrokenCandidateAndUsesNextInstallation() async throws {
+        let runner = FakeProcessRunner(results: [
+            ProcessResult(exitCode: 1, stdout: "", stderr: "not found"),
+            ProcessResult(exitCode: 1, stdout: "", stderr: "broken"),
+            ProcessResult(exitCode: 0, stdout: "1.2.3\n", stderr: ""),
+            ProcessResult(exitCode: 0, stdout: "Logged in\n", stderr: "")
+        ])
+        let connector = ClaudeConnector(
+            runner: runner,
+            fallbackExecutablePaths: {
+                ["/Users/example/.local/bin/claude", "/opt/homebrew/bin/claude"]
+            }
+        )
+
+        let status = await connector.status()
+
+        XCTAssertEqual(status.severity, .ready)
+        XCTAssertEqual(runner.calls, [
+            FakeProcessRunner.Call(executable: "/usr/bin/env", arguments: ["which", "claude"]),
+            FakeProcessRunner.Call(executable: "/usr/bin/env", arguments: fallbackArguments(
+                executable: "/Users/example/.local/bin/claude",
+                arguments: ["--version"]
+            )),
+            FakeProcessRunner.Call(executable: "/usr/bin/env", arguments: fallbackArguments(
+                executable: "/opt/homebrew/bin/claude",
+                arguments: ["--version"]
+            )),
+            FakeProcessRunner.Call(executable: "/usr/bin/env", arguments: fallbackArguments(
+                executable: "/opt/homebrew/bin/claude",
+                arguments: ["auth", "status"]
+            ))
+        ])
+    }
+
     func testMissingClaudeReportsError() async throws {
         let runner = FakeProcessRunner(results: [
             ProcessResult(exitCode: 1, stdout: "", stderr: "not found")
         ])
-        let connector = ClaudeConnector(runner: runner)
+        let connector = ClaudeConnector(
+            runner: runner,
+            fallbackExecutablePaths: { [] }
+        )
 
         let status = await connector.status()
 
@@ -77,7 +141,10 @@ final class ClaudeConnectorTests: XCTestCase {
             ProcessResult(exitCode: 0, stdout: "/usr/local/bin/claude\n", stderr: ""),
             ProcessResult(exitCode: 1, stdout: "", stderr: "")
         ])
-        let connector = ClaudeConnector(runner: runner)
+        let connector = ClaudeConnector(
+            runner: runner,
+            fallbackExecutablePaths: { [] }
+        )
 
         let status = await connector.status()
 
@@ -117,12 +184,37 @@ final class ClaudeConnectorTests: XCTestCase {
         ])
     }
 
+    func testVersionInspectorUsesUserLocalClaudeWhenGUIPathLookupFails() async {
+        let runner = FakeProcessRunner(results: [
+            ProcessResult(exitCode: 1, stdout: "", stderr: "not found"),
+            ProcessResult(exitCode: 0, stdout: "2.1.221 (Claude Code)\n", stderr: "")
+        ])
+        let inspector = ClaudeCodeInspector(
+            runner: runner,
+            fallbackExecutablePaths: { ["/Users/example/.local/bin/claude"] }
+        )
+
+        let observation = await inspector.observeVersion()
+
+        XCTAssertEqual(observation, .version("2.1.221"))
+        XCTAssertEqual(runner.calls, [
+            FakeProcessRunner.Call(executable: "/usr/bin/env", arguments: ["which", "claude"]),
+            FakeProcessRunner.Call(executable: "/usr/bin/env", arguments: fallbackArguments(
+                executable: "/Users/example/.local/bin/claude",
+                arguments: ["--version"]
+            ))
+        ])
+    }
+
     func testVersionInspectorReportsUnverifiedVersionWithoutRawCommandOutput() async {
         let runner = FakeProcessRunner(results: [
             ProcessResult(exitCode: 0, stdout: "/usr/local/bin/claude\n", stderr: ""),
             ProcessResult(exitCode: 1, stdout: "", stderr: "")
         ])
-        let inspector = ClaudeCodeInspector(runner: runner)
+        let inspector = ClaudeCodeInspector(
+            runner: runner,
+            fallbackExecutablePaths: { [] }
+        )
 
         let observation = await inspector.observeVersion()
 
@@ -140,6 +232,12 @@ final class ClaudeConnectorTests: XCTestCase {
 
         XCTAssertEqual(connector.logoutCommand(), ["claude", "auth", "logout"])
     }
+}
+
+private func fallbackArguments(executable: String, arguments: [String]) -> [String] {
+    let directory = URL(fileURLWithPath: executable).deletingLastPathComponent().path
+    let inheritedPath = ProcessInfo.processInfo.environment["PATH"] ?? ""
+    return ["PATH=\(directory):\(inheritedPath)", executable] + arguments
 }
 
 private final class FakeProcessRunner: ProcessRunning, @unchecked Sendable {

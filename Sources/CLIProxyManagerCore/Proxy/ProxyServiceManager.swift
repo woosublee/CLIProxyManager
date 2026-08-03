@@ -306,10 +306,7 @@ public enum RuntimeCompatibilityBlocker: Equatable, Sendable {
                 self = .unsupportedArtifactTarget
                 return
             case .legacyArtifactTargetInferred,
-                 .unsupportedLoginShell,
-                 .unavailableClaudeCode,
-                 .unverifiedClaudeCode,
-                 .unverifiedClaudeCodeVersion:
+                 .unsupportedLoginShell:
                 continue
             }
         }
@@ -338,7 +335,6 @@ public enum ProxyServiceError: LocalizedError, Equatable {
     case writeFailed(String)
     case launchFailed(String)
     case listenerInspectionFailed(port: Int, detail: String)
-    case configurationChangeRequiresRestart
     case compatibilityBlocked(RuntimeCompatibilityBlocker)
     case restartFailed(stage: ProxyRestartFailureStage, rollbackSucceeded: Bool)
 
@@ -354,8 +350,6 @@ public enum ProxyServiceError: LocalizedError, Equatable {
             "CLIProxyAPI could not be started with the local-only configuration. Check the configured port and retry Start Server."
         case let .listenerInspectionFailed(port, detail):
             "The proxy listener on port \(port) could not be inspected, so its configuration was left unchanged. Retry the operation or check Diagnostics. Details: \(detail)"
-        case .configurationChangeRequiresRestart:
-            "The running proxy must be restarted before account login can update its local-only configuration. Restart Server, then retry login."
         case .compatibilityBlocked(let blocker):
             blocker.recoveryMessage
         case let .restartFailed(stage, rollbackSucceeded):
@@ -511,13 +505,23 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
 
     public func restart(port: Int) async throws {
         try lifecycleLock.withLock {
-            _ = try reconcileConfigurationLocked(port: port, forceRestart: true)
+            _ = try reconcileConfigurationLocked(
+                port: port,
+                action: .restartProxy,
+                forceRestart: true,
+                restartAdoptedProcess: true
+            )
         }
     }
 
     public func reconcileConfiguration(port: Int) async throws -> Bool {
         try lifecycleLock.withLock {
-            try reconcileConfigurationLocked(port: port, forceRestart: false)
+            try reconcileConfigurationLocked(
+                port: port,
+                action: .startProxy,
+                forceRestart: false,
+                restartAdoptedProcess: true
+            )
         }
     }
 
@@ -574,28 +578,30 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
     }
 
     private func prepareLocked(port: Int) throws {
-        try requireCompatibility(for: .prepareOAuthLogin)
-        guard isValidPort(port) else {
-            throw ProxyServiceError.invalidPort(port)
-        }
-        let staged = try stageConfiguration(port: port)
-        defer { try? fileManager.removeItem(at: staged.url) }
-        try validateConfigTarget()
-        let snapshot = currentConfigSnapshot()
-        guard snapshot.data != staged.data else { return }
-        let candidatePorts = [snapshot.port, port].compactMap { $0 }
-        guard try managedListeningPorts(candidates: candidatePorts).isEmpty else {
-            throw ProxyServiceError.configurationChangeRequiresRestart
-        }
-        try activate(staged)
+        _ = try reconcileConfigurationLocked(
+            port: port,
+            action: .prepareOAuthLogin,
+            forceRestart: false,
+            restartAdoptedProcess: false
+        )
     }
 
     private func startLocked(port: Int) throws {
         if processState.port != nil {
-            _ = try reconcileConfigurationLocked(port: port, forceRestart: true)
+            _ = try reconcileConfigurationLocked(
+                port: port,
+                action: .restartProxy,
+                forceRestart: true,
+                restartAdoptedProcess: true
+            )
             return
         }
-        _ = try reconcileConfigurationLocked(port: port, forceRestart: false)
+        _ = try reconcileConfigurationLocked(
+            port: port,
+            action: .startProxy,
+            forceRestart: false,
+            restartAdoptedProcess: true
+        )
         if !(try managedListeningPorts(candidates: [port])).isEmpty {
             return
         }
@@ -603,8 +609,13 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
     }
 
     @discardableResult
-    private func reconcileConfigurationLocked(port: Int, forceRestart: Bool) throws -> Bool {
-        try requireCompatibility(for: forceRestart ? .restartProxy : .startProxy)
+    private func reconcileConfigurationLocked(
+        port: Int,
+        action: CompatibilityAction,
+        forceRestart: Bool,
+        restartAdoptedProcess: Bool
+    ) throws -> Bool {
+        try requireCompatibility(for: action)
         guard isValidPort(port) else {
             throw ProxyServiceError.invalidPort(port)
         }
@@ -614,9 +625,14 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         try validateConfigTarget()
         let snapshot = currentConfigSnapshot()
         let configChanged = snapshot.data != staged.data
+        if !configChanged, !forceRestart, !restartAdoptedProcess {
+            return false
+        }
         let candidatePorts = [snapshot.port, port].compactMap { $0 }
         let runningPorts = try managedListeningPorts(candidates: candidatePorts)
-        let requiresRestartForAdoptedProcess = processState.port == nil && !runningPorts.isEmpty
+        let requiresRestartForAdoptedProcess = restartAdoptedProcess
+            && processState.port == nil
+            && !runningPorts.isEmpty
 
         guard configChanged || forceRestart || requiresRestartForAdoptedProcess else { return false }
         guard !runningPorts.isEmpty else {
@@ -630,7 +646,7 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
             return false
         }
 
-        let rollbackPort = runningPorts.first ?? snapshot.port ?? port
+        let rollbackPort = snapshot.port ?? runningPorts.first ?? port
         stopManagedProcessesLocked(onPorts: runningPorts)
         do {
             if configChanged {
