@@ -8,7 +8,8 @@ final class AutomaticShellInstallServiceTests: XCTestCase {
         let installer = StubShellInstaller()
         let service = AutomaticShellInstallService.runtimeDefault(
             installer: installer,
-            compatibilityAuthorizer: FixedCompatibilityAuthorizer(report: allowedCompatibilityReport())
+            compatibilityAuthorizer: FixedCompatibilityAuthorizer(report: allowedCompatibilityReport()),
+            claudeInspector: FixedClaudeCodeInspector(observation: .version("test"))
         )
         var config = AppConfig.default
         config.oauthCommandProfiles = [

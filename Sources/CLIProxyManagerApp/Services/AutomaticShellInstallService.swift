@@ -176,14 +176,15 @@ struct AutomaticShellInstallService: Sendable {
     static func runtimeDefault(
         installer: any ShellFunctionInstalling,
         secretStore: any SecretStore = FileSecretStore(),
-        compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing = RuntimeCompatibilityPreflight()
+        compatibilityAuthorizer: any RuntimeCompatibilityAuthorizing = RuntimeCompatibilityPreflight(),
+        claudeInspector: any ClaudeCodeInspecting = ClaudeCodeInspector()
     ) -> AutomaticShellInstallService {
         AutomaticShellInstallService(
             installer: installer,
             secretStore: secretStore,
             helperCommand: resolvedDefaultHelperCommand(),
             compatibilityAuthorizer: compatibilityAuthorizer,
-            claudeInspector: ClaudeCodeInspector()
+            claudeInspector: claudeInspector
         )
     }
 
