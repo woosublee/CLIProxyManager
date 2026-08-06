@@ -1,19 +1,19 @@
 {
   "name": "cliproxyapi",
-  "version": "7.2.97",
-  "commit": "42f36b94",
-  "builtAt": "2026-07-23T17:26:16Z",
-  "source": "https://github.com/router-for-me/CLIProxyAPI/releases/download/v7.2.97/CLIProxyAPI_7.2.97_darwin_aarch64.tar.gz",
+  "version": "7.2.120",
+  "commit": "ea37d13a",
+  "builtAt": "2026-08-05T16:19:31Z",
+  "source": "https://github.com/router-for-me/CLIProxyAPI/releases/download/v7.2.120/CLIProxyAPI_7.2.120_darwin_aarch64.tar.gz",
+  "upstreamRepository": "router-for-me/CLIProxyAPI",
+  "upstreamTag": "v7.2.120",
+  "upstreamAsset": "CLIProxyAPI_7.2.120_darwin_aarch64.tar.gz",
+  "upstreamAssetSha256": "01ebcb3a683560c91f532fb124ac30edcc68945859e3ddf4880e09f1979ffdee",
+  "vendoredBinaryName": "cliproxyapi",
+  "vendoredBinarySha256": "0087fdd3dc72ef7e6741123cea67ca1a2b39f401e3c665ca832ac81c07344e16",
+  "vendoredBinarySizeBytes": 58178498,
+  "vendoredFromArchivePath": "cli-proxy-api",
   "target": {
     "operatingSystem": "darwin",
     "architecture": "arm64"
-  },
-  "upstreamRepository": "router-for-me/CLIProxyAPI",
-  "upstreamTag": "v7.2.97",
-  "upstreamAsset": "CLIProxyAPI_7.2.97_darwin_aarch64.tar.gz",
-  "upstreamAssetSha256": "be064fec2d5cb253d8f8c20de62e18e791072546bd4ae7bd1e413a333895aa71",
-  "vendoredBinaryName": "cliproxyapi",
-  "vendoredBinarySha256": "172d23b9aab86a3336b223b44bd3f0c5d7ca40b872bc5af202036ef76ade5005",
-  "vendoredBinarySizeBytes": 44006626,
-  "vendoredFromArchivePath": "cli-proxy-api"
+  }
 }
