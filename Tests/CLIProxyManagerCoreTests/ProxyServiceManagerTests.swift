@@ -276,6 +276,70 @@ final class ProxyServiceManagerTests: XCTestCase {
         XCTAssertEqual(yaml.components(separatedBy: "alias: \"gpt-5.6-sol-fast\"").count - 1, 1)
     }
 
+    func testStartAddsContextMetadataToCodexAPIModelsForSupportedBinary() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        try writeActiveManifest(for: paths.clipProxyBinary, version: "7.2.120", paths: paths)
+        var config = AppConfig.default
+        config.codexAPI.codex.opus = .init(
+            model: "gpt-5.6-terra",
+            reasoning: .xhigh,
+            detectedContextWindow: 1_000_000
+        )
+        config.codexAPI.codex.sonnet = .init(
+            model: "gpt-5.6-terra",
+            reasoning: .medium,
+            detectedContextWindow: 500_000,
+            fastModeEnabled: true
+        )
+        config.codexAPI.codex.haiku = .init(
+            model: "gpt-5.6-terra",
+            reasoning: .low,
+            detectedContextWindow: 750_000
+        )
+        let configuredAppConfig = config
+        let manager = makeProxyServiceManager(
+            paths: paths,
+            launcher: FakeProcessLauncher(),
+            codexAPIKeyProvider: { "codex-key" },
+            appConfigProvider: { configuredAppConfig }
+        )
+
+        try await manager.start(port: 8317)
+
+        let yaml = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
+        XCTAssertTrue(yaml.contains("      - name: \"gpt-5.6-terra\"\n        max-context-length: 750000"))
+        XCTAssertTrue(yaml.contains("      - name: \"gpt-5.6-terra\"\n        alias: \"gpt-5.6-terra-fast\"\n        max-context-length: 500000"))
+        XCTAssertEqual(yaml.components(separatedBy: "      - name: \"gpt-5.6-terra\"").count - 1, 2)
+    }
+
+    func testStartOmitsContextMetadataForUnsupportedBinary() async throws {
+        let sandbox = try makeSandbox()
+        let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
+        try createBinary(at: paths.clipProxyBinary)
+        try writeActiveManifest(for: paths.clipProxyBinary, version: "7.2.114", paths: paths)
+        var config = AppConfig.default
+        config.codexAPI.codex.opus = .init(
+            model: "gpt-5.6-terra",
+            reasoning: .xhigh,
+            detectedContextWindow: 1_000_000
+        )
+        let configuredAppConfig = config
+        let manager = makeProxyServiceManager(
+            paths: paths,
+            launcher: FakeProcessLauncher(),
+            codexAPIKeyProvider: { "codex-key" },
+            appConfigProvider: { configuredAppConfig }
+        )
+
+        try await manager.start(port: 8317)
+
+        let yaml = try String(contentsOf: paths.clipProxyConfigFile, encoding: .utf8)
+        XCTAssertFalse(yaml.contains("models:"))
+        XCTAssertFalse(yaml.contains("max-context-length:"))
+    }
+
     func testStartReadsCodexAPIKeyOnceAndOmitsAPIKeyFastModelsWithoutCredential() async throws {
         let sandbox = try makeSandbox()
         let paths = ManagedPaths(rootDirectory: sandbox.appendingPathComponent("managed"))
@@ -1553,6 +1617,30 @@ final class ProxyServiceManagerTests: XCTestCase {
     private func createBinary(at url: URL, contents: String = "#!/bin/sh\n") throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data(contents.utf8).write(to: url)
+    }
+
+    private func writeActiveManifest(for binaryURL: URL, version: String, paths: ManagedPaths) throws {
+        let manifest = CLIProxyAPIBinaryManifest(
+            name: "cliproxyapi",
+            version: version,
+            commit: "active-\(version)",
+            builtAt: "2026-08-05T16:19:31Z",
+            sourceKind: .bundled,
+            source: "https://example.com/active.tar.gz",
+            upstreamRepository: "router-for-me/CLIProxyAPI",
+            upstreamTag: "v\(version)",
+            upstreamAsset: "CLIProxyAPI_\(version)_darwin_aarch64.tar.gz",
+            upstreamAssetSha256: "archive",
+            vendoredBinaryName: "cliproxyapi",
+            vendoredBinarySha256: try Data(contentsOf: binaryURL).sha256HexDigest(),
+            vendoredBinarySizeBytes: try XCTUnwrap(binaryURL.resourceValues(forKeys: [.fileSizeKey]).fileSize),
+            vendoredFromArchivePath: "cli-proxy-api"
+        )
+        try FileManager.default.createDirectory(
+            at: paths.activeClipProxyManifest.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try JSONEncoder().encode(manifest).write(to: paths.activeClipProxyManifest)
     }
 
     private func writeBundledManifest(for binaryURL: URL, version: String, in sandbox: URL) throws -> URL {

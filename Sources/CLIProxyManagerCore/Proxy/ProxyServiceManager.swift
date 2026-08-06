@@ -1011,6 +1011,17 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         let key: String
     }
 
+    private struct CodexAPIModelKey: Hashable {
+        let name: String
+        let alias: String?
+    }
+
+    private struct CodexAPIModelConfiguration {
+        let name: String
+        let alias: String?
+        let maxContextLength: Int?
+    }
+
     private struct LegacyAPIKeys {
         let claude: String?
         let codex: String?
@@ -1120,7 +1131,10 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
                 lines.append("  - api-key: \(yamlDoubleQuoted(resolved.key))")
                 lines.append("    base-url: \(yamlDoubleQuoted("https://api.openai.com/v1"))")
                 lines.append("    prefix: \(yamlDoubleQuoted(resolved.profile.modelPrefix))")
-                let models = fastConfiguration.apiKeyCanonicalModelsByProfileID[resolved.profile.id] ?? []
+                let models = codexAPIModelConfigurations(
+                    for: resolved.profile,
+                    fastModels: fastConfiguration.apiKeyCanonicalModelsByProfileID[resolved.profile.id] ?? []
+                )
                 if !models.isEmpty {
                     lines.append("    models:")
                     lines.append(contentsOf: codexAPIModelsConfiguration(models: models))
@@ -1180,11 +1194,67 @@ public struct ProxyServiceManager: ProxyRuntimePreparing, @unchecked Sendable {
         return lines.joined(separator: "\n")
     }
 
-    private func codexAPIModelsConfiguration(models: [String]) -> [String] {
+    private func codexAPIModelConfigurations(
+        for profile: AppConfig.APIKeyProfile,
+        fastModels: [String]
+    ) -> [CodexAPIModelConfiguration] {
+        var configurations: [CodexAPIModelKey: Int?] = Dictionary(
+            uniqueKeysWithValues: fastModels.map {
+                (CodexAPIModelKey(name: $0, alias: CodexFastMode.alias(for: $0)), nil)
+            }
+        )
+        guard supportsCodexModelContextMetadata() else {
+            return configurations.keys.map {
+                CodexAPIModelConfiguration(name: $0.name, alias: $0.alias, maxContextLength: nil)
+            }
+            .sorted(by: codexAPIModelConfigurationOrder)
+        }
+
+        for role in [profile.effectiveCodex.opus, profile.effectiveCodex.sonnet, profile.effectiveCodex.haiku] {
+            guard let contextWindow = role.effectiveContextWindow else { continue }
+            let name = CodexFastMode.canonicalModel(from: role.model)
+            let alias = role.fastModeEnabled ? CodexFastMode.alias(for: name) : nil
+            let key = CodexAPIModelKey(name: name, alias: alias)
+            let existing = configurations[key] ?? nil
+            configurations[key] = min(existing ?? contextWindow, contextWindow)
+        }
+
+        return configurations.compactMap { key, contextWindow in
+            CodexAPIModelConfiguration(
+                name: key.name,
+                alias: key.alias,
+                maxContextLength: contextWindow
+            )
+        }
+        .sorted(by: codexAPIModelConfigurationOrder)
+    }
+
+    private func supportsCodexModelContextMetadata() -> Bool {
+        guard let version = try? binaryStore.activeManifest()?.parsedVersion,
+              let minimumVersion = CLIProxyAPIVersion("7.2.115") else {
+            return false
+        }
+        return version >= minimumVersion
+    }
+
+    private func codexAPIModelConfigurationOrder(
+        _ lhs: CodexAPIModelConfiguration,
+        _ rhs: CodexAPIModelConfiguration
+    ) -> Bool {
+        if lhs.name != rhs.name { return lhs.name < rhs.name }
+        return (lhs.alias ?? "") < (rhs.alias ?? "")
+    }
+
+    private func codexAPIModelsConfiguration(models: [CodexAPIModelConfiguration]) -> [String] {
         var lines: [String] = []
         for model in models {
-            lines.append("      - name: \(yamlDoubleQuoted(model))")
-            lines.append("        alias: \(yamlDoubleQuoted(CodexFastMode.alias(for: model)))")
+            lines.append("      - name: \(yamlDoubleQuoted(model.name))")
+            if let alias = model.alias {
+                lines.append("        alias: \(yamlDoubleQuoted(alias))")
+            }
+            if let maxContextLength = model.maxContextLength {
+                lines.append("        max-context-length: \(maxContextLength)")
+            }
         }
         return lines
     }
