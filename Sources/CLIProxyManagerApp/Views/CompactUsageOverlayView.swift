@@ -152,7 +152,6 @@ private struct CompactUsageAccountView: View {
                                 .layoutPriority(1)
                         }
                         .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                        .contentShape(Rectangle())
                         .fastTooltip(row.tooltip)
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel(row.accessibilityLabel)
@@ -161,6 +160,8 @@ private struct CompactUsageAccountView: View {
                 .padding(.horizontal, 7)
                 .padding(.vertical, 7)
                 .background(.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .contentShape(Rectangle())
+                .fastTooltip(presentation.cardTooltip)
             }
         }
         .padding(.vertical, 10)

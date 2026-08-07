@@ -30,21 +30,33 @@ final class FastTooltipMigrationTests: XCTestCase {
         }
     }
 
-    func testCompactUsageTooltipIsAttachedToWholeRow() throws {
+    func testCompactUsageCardOwnsGroupedResetTooltip() throws {
         let compact = try appSource(relativePath: "Views/CompactUsageOverlayView.swift")
         let lines = compact.components(separatedBy: .newlines)
-        let tooltipIndex = try XCTUnwrap(
-            lines.firstIndex { $0.contains(".fastTooltip(row.tooltip)") }
+        let cardTooltipIndex = try XCTUnwrap(
+            lines.firstIndex { $0.contains(".fastTooltip(presentation.cardTooltip)") }
         )
 
         XCTAssertEqual(
-            lines[tooltipIndex - 1].trimmingCharacters(in: .whitespaces),
+            lines[cardTooltipIndex - 1].trimmingCharacters(in: .whitespaces),
             ".contentShape(Rectangle())"
         )
-        XCTAssertEqual(
-            lines[tooltipIndex + 1].trimmingCharacters(in: .whitespaces),
-            ".accessibilityElement(children: .ignore)"
+        XCTAssertTrue(
+            lines[..<cardTooltipIndex].suffix(8).contains {
+                $0.contains(".padding(.horizontal, 7)")
+            }
         )
+        XCTAssertTrue(
+            lines[..<cardTooltipIndex].suffix(8).contains {
+                $0.contains(".background(.primary.opacity(0.055)")
+            }
+        )
+    }
+
+    func testCompactAPICostRowsKeepIndividualTooltipModifier() throws {
+        let compact = try appSource(relativePath: "Views/CompactUsageOverlayView.swift")
+
+        XCTAssertTrue(compact.contains(".fastTooltip(row.tooltip)"))
     }
 
     func testGeneralIconControlsUseAccessibilityLabelsWithoutFastTooltip() throws {
