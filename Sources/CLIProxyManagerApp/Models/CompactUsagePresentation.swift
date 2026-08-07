@@ -60,6 +60,19 @@ struct CompactUsagePresentation: Equatable {
     let rows: [CompactUsageRowPresentation]
     let placeholder: String?
     let indicator: CompactUsageIndicator?
+    let cardTooltip: String?
+
+    init(
+        rows: [CompactUsageRowPresentation],
+        placeholder: String?,
+        indicator: CompactUsageIndicator?,
+        cardTooltip: String? = nil
+    ) {
+        self.rows = rows
+        self.placeholder = placeholder
+        self.indicator = indicator
+        self.cardTooltip = cardTooltip
+    }
 
     var headerIndicator: CompactUsageIndicator? {
         rows.isEmpty ? nil : indicator
@@ -182,6 +195,29 @@ private func compactUnavailableIndicator(for issue: SubscriptionUsageIssue) -> C
     }
 }
 
+private let compactUsageResetWaitingText = "Shown after usage starts"
+
+private func compactUsageResetLine(for window: UsageWindow) -> String {
+    let label = subscriptionUsageDisplayLabel(for: window)
+    let resetStatus = subscriptionUsageResetDateText(for: window)
+        ?? compactUsageResetWaitingText
+    return "\(label)  \(resetStatus)"
+}
+
+private func compactUsageAccessibilityLabel(
+    for window: UsageWindow,
+    usedPercent: Int
+) -> String {
+    if subscriptionUsageResetDateText(for: window) != nil {
+        return subscriptionUsageAccessibilityLabel(
+            for: window,
+            usedPercent: usedPercent
+        )
+    }
+    let label = subscriptionUsageDisplayLabel(for: window)
+    return "\(label), \(usedPercent) percent used, reset time shown after usage starts"
+}
+
 private func compactSnapshotPresentation(
     _ snapshot: SubscriptionUsageSnapshot,
     warning: SubscriptionUsageIssue?,
@@ -208,11 +244,10 @@ private func compactSnapshotPresentation(
             id: window.id,
             label: label,
             value: "\(rounded)%",
-            accessibilityLabel: subscriptionUsageAccessibilityLabel(
+            accessibilityLabel: compactUsageAccessibilityLabel(
                 for: window,
                 usedPercent: rounded
-            ),
-            tooltip: subscriptionUsageResetTooltip(for: window)
+            )
         )
     }
     let indicator = warning.map { issue in
@@ -224,5 +259,13 @@ private func compactSnapshotPresentation(
             )
         )
     }
-    return CompactUsagePresentation(rows: rows, placeholder: nil, indicator: indicator)
+    let cardTooltip = snapshot.windows
+        .map(compactUsageResetLine(for:))
+        .joined(separator: "\n")
+    return CompactUsagePresentation(
+        rows: rows,
+        placeholder: nil,
+        indicator: indicator,
+        cardTooltip: cardTooltip
+    )
 }

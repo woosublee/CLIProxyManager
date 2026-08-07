@@ -26,18 +26,36 @@ final class CompactUsagePresentationTests: XCTestCase {
         XCTAssertEqual(
             presentation.rows,
             [
-                CompactUsageRowPresentation(id: "primary", label: "5h", value: "0%", accessibilityLabel: "5h, 0 percent used"),
-                CompactUsageRowPresentation(id: "secondary", label: "7d", value: "16%", accessibilityLabel: "7d, 16 percent used"),
-                CompactUsageRowPresentation(id: "monthly", label: "1mo", value: "100%", accessibilityLabel: "1mo, 100 percent used")
+                CompactUsageRowPresentation(
+                    id: "primary",
+                    label: "5h",
+                    value: "0%",
+                    accessibilityLabel: "5h, 0 percent used, reset time shown after usage starts"
+                ),
+                CompactUsageRowPresentation(
+                    id: "secondary",
+                    label: "7d",
+                    value: "16%",
+                    accessibilityLabel: "7d, 16 percent used, reset time shown after usage starts"
+                ),
+                CompactUsageRowPresentation(
+                    id: "monthly",
+                    label: "1mo",
+                    value: "100%",
+                    accessibilityLabel: "1mo, 100 percent used, reset time shown after usage starts"
+                )
             ]
+        )
+        XCTAssertEqual(
+            presentation.cardTooltip,
+            "5h  Shown after usage starts\n7d  Shown after usage starts\n1mo  Shown after usage starts"
         )
         XCTAssertNil(presentation.placeholder)
         XCTAssertNil(presentation.indicator)
     }
 
-    func testSubscriptionRowsExposeIndependentResetTooltipsAndAccessibilityText() {
+    func testSubscriptionCardTooltipCombinesResetAndWaitingRowsInOrder() {
         let fiveHourReset = Date(timeIntervalSince1970: 1_786_189_800)
-        let sevenDayReset = Date(timeIntervalSince1970: 1_786_449_600)
         let snapshot = SubscriptionUsageSnapshot(
             profileID: "codex.json",
             provider: .codex,
@@ -51,55 +69,58 @@ final class CompactUsagePresentationTests: XCTestCase {
                 UsageWindow(
                     id: "secondary",
                     label: "Secondary",
-                    usedPercent: 12,
-                    resetAt: sevenDayReset
+                    usedPercent: 0,
+                    resetAt: nil
                 )
             ],
             fetchedAt: Date(timeIntervalSince1970: 60)
         )
 
-        let rows = compactUsagePresentation(for: .available(snapshot)).rows
-        let fiveHourText = fiveHourReset.formatted(date: .abbreviated, time: .shortened)
-        let sevenDayText = sevenDayReset.formatted(date: .abbreviated, time: .shortened)
+        let presentation = compactUsagePresentation(for: .available(snapshot))
+        let resetText = fiveHourReset.formatted(date: .abbreviated, time: .shortened)
 
         XCTAssertEqual(
-            rows,
+            presentation.cardTooltip,
+            "5h  \(resetText)\n7d  Shown after usage starts"
+        )
+        XCTAssertEqual(presentation.rows.map(\.tooltip), [nil, nil])
+        XCTAssertEqual(
+            presentation.rows.map(\.accessibilityLabel),
             [
-                CompactUsageRowPresentation(
-                    id: "primary",
-                    label: "5h",
-                    value: "30%",
-                    accessibilityLabel: "5h, 30 percent used, resets \(fiveHourText)",
-                    tooltip: "Next reset: \(fiveHourText)"
-                ),
-                CompactUsageRowPresentation(
-                    id: "secondary",
-                    label: "7d",
-                    value: "12%",
-                    accessibilityLabel: "7d, 12 percent used, resets \(sevenDayText)",
-                    tooltip: "Next reset: \(sevenDayText)"
-                )
+                "5h, 30 percent used, resets \(resetText)",
+                "7d, 0 percent used, reset time shown after usage starts"
             ]
         )
     }
 
-    func testSubscriptionRowWithoutResetKeepsExistingAccessibilityAndNoTooltip() throws {
+    func testSubscriptionCardTooltipExplainsWhenAllResetTimesAreMissing() {
         let snapshot = SubscriptionUsageSnapshot(
             profileID: "claude.json",
             provider: .claude,
             windows: [
-                UsageWindow(id: "primary", label: "Primary", usedPercent: 25, resetAt: nil)
+                UsageWindow(id: "five_hour", label: "5h", usedPercent: 0, resetAt: nil),
+                UsageWindow(id: "seven_day", label: "7d", usedPercent: 0, resetAt: nil)
             ],
             fetchedAt: Date(timeIntervalSince1970: 60)
         )
 
-        let row = try XCTUnwrap(compactUsagePresentation(for: .available(snapshot)).rows.first)
+        let presentation = compactUsagePresentation(for: .available(snapshot))
 
-        XCTAssertEqual(row.accessibilityLabel, "5h, 25 percent used")
-        XCTAssertNil(row.tooltip)
+        XCTAssertEqual(
+            presentation.cardTooltip,
+            "5h  Shown after usage starts\n7d  Shown after usage starts"
+        )
+        XCTAssertTrue(presentation.rows.allSatisfy { $0.tooltip == nil })
+        XCTAssertEqual(
+            presentation.rows.map(\.accessibilityLabel),
+            [
+                "5h, 0 percent used, reset time shown after usage starts",
+                "7d, 0 percent used, reset time shown after usage starts"
+            ]
+        )
     }
 
-    func testStaleSnapshotRetainsLastSuccessfulResetTooltip() throws {
+    func testStaleSnapshotRetainsGroupedResetTooltip() throws {
         let resetAt = Date(timeIntervalSince1970: 1_786_189_800)
         let snapshot = SubscriptionUsageSnapshot(
             profileID: "codex.json",
@@ -114,11 +135,10 @@ final class CompactUsagePresentationTests: XCTestCase {
             for: .stale(snapshot, .credentialExpired),
             now: Date(timeIntervalSince1970: 780)
         )
-        let row = try XCTUnwrap(presentation.rows.first)
         let resetText = resetAt.formatted(date: .abbreviated, time: .shortened)
 
-        XCTAssertEqual(row.tooltip, "Next reset: \(resetText)")
-        XCTAssertEqual(row.accessibilityLabel, "5h, 15 percent used, resets \(resetText)")
+        XCTAssertEqual(presentation.cardTooltip, "5h  \(resetText)")
+        XCTAssertNil(try XCTUnwrap(presentation.rows.first).tooltip)
         XCTAssertEqual(
             presentation.indicator,
             .warning(message: "Credential needs attention. Showing usage last updated 12 minutes ago.")
@@ -279,8 +299,16 @@ final class CompactUsagePresentationTests: XCTestCase {
 
         XCTAssertEqual(
             presentation.rows,
-            [CompactUsageRowPresentation(id: "primary", label: "5h", value: "16%", accessibilityLabel: "5h, 16 percent used")]
+            [
+                CompactUsageRowPresentation(
+                    id: "primary",
+                    label: "5h",
+                    value: "16%",
+                    accessibilityLabel: "5h, 16 percent used, reset time shown after usage starts"
+                )
+            ]
         )
+        XCTAssertEqual(presentation.cardTooltip, "5h  Shown after usage starts")
         XCTAssertNil(presentation.indicator)
     }
 
