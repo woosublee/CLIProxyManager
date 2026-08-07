@@ -30,6 +30,23 @@ final class FastTooltipMigrationTests: XCTestCase {
         }
     }
 
+    func testCompactUsageTooltipIsAttachedToWholeRow() throws {
+        let compact = try appSource(relativePath: "Views/CompactUsageOverlayView.swift")
+        let lines = compact.components(separatedBy: .newlines)
+        let tooltipIndex = try XCTUnwrap(
+            lines.firstIndex { $0.contains(".fastTooltip(row.tooltip)") }
+        )
+
+        XCTAssertEqual(
+            lines[tooltipIndex - 1].trimmingCharacters(in: .whitespaces),
+            ".contentShape(Rectangle())"
+        )
+        XCTAssertEqual(
+            lines[tooltipIndex + 1].trimmingCharacters(in: .whitespaces),
+            ".accessibilityElement(children: .ignore)"
+        )
+    }
+
     func testGeneralIconControlsUseAccessibilityLabelsWithoutFastTooltip() throws {
         let providerList = try appSource(relativePath: "Views/ProviderListView.swift")
         let dashboard = try appSource(relativePath: "Views/DashboardView.swift")

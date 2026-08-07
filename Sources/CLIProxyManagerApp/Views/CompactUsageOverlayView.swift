@@ -150,9 +150,10 @@ private struct CompactUsageAccountView: View {
                                 .minimumScaleFactor(row.textLayout.minimumScaleFactor)
                                 .allowsTightening(true)
                                 .layoutPriority(1)
-                                .fastTooltip(row.tooltip)
                         }
                         .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .contentShape(Rectangle())
+                        .fastTooltip(row.tooltip)
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel(row.accessibilityLabel)
                     }
