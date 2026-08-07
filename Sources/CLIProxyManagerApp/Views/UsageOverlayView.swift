@@ -424,8 +424,8 @@ private struct ExpandedUsageOverlayProgressRow: View {
                     .font(.system(size: 10.5, design: .monospaced))
                     .frame(width: 34, alignment: .trailing)
             }
-            if let resetAt = window.resetAt {
-                Text("Next reset: \(resetAt.formatted(date: .abbreviated, time: .shortened))")
+            if let resetTooltip = subscriptionUsageResetTooltip(for: window) {
+                Text(resetTooltip)
                     .font(.system(size: 9.5))
                     .foregroundStyle(.tertiary)
                     .padding(.leading, 36)

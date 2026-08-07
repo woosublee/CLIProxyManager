@@ -35,6 +35,96 @@ final class CompactUsagePresentationTests: XCTestCase {
         XCTAssertNil(presentation.indicator)
     }
 
+    func testSubscriptionRowsExposeIndependentResetTooltipsAndAccessibilityText() {
+        let fiveHourReset = Date(timeIntervalSince1970: 1_786_189_800)
+        let sevenDayReset = Date(timeIntervalSince1970: 1_786_449_600)
+        let snapshot = SubscriptionUsageSnapshot(
+            profileID: "codex.json",
+            provider: .codex,
+            windows: [
+                UsageWindow(
+                    id: "primary",
+                    label: "Primary",
+                    usedPercent: 30,
+                    resetAt: fiveHourReset
+                ),
+                UsageWindow(
+                    id: "secondary",
+                    label: "Secondary",
+                    usedPercent: 12,
+                    resetAt: sevenDayReset
+                )
+            ],
+            fetchedAt: Date(timeIntervalSince1970: 60)
+        )
+
+        let rows = compactUsagePresentation(for: .available(snapshot)).rows
+        let fiveHourText = fiveHourReset.formatted(date: .abbreviated, time: .shortened)
+        let sevenDayText = sevenDayReset.formatted(date: .abbreviated, time: .shortened)
+
+        XCTAssertEqual(
+            rows,
+            [
+                CompactUsageRowPresentation(
+                    id: "primary",
+                    label: "5h",
+                    value: "30%",
+                    accessibilityLabel: "5h, 30 percent used, resets \(fiveHourText)",
+                    tooltip: "Next reset: \(fiveHourText)"
+                ),
+                CompactUsageRowPresentation(
+                    id: "secondary",
+                    label: "7d",
+                    value: "12%",
+                    accessibilityLabel: "7d, 12 percent used, resets \(sevenDayText)",
+                    tooltip: "Next reset: \(sevenDayText)"
+                )
+            ]
+        )
+    }
+
+    func testSubscriptionRowWithoutResetKeepsExistingAccessibilityAndNoTooltip() throws {
+        let snapshot = SubscriptionUsageSnapshot(
+            profileID: "claude.json",
+            provider: .claude,
+            windows: [
+                UsageWindow(id: "primary", label: "Primary", usedPercent: 25, resetAt: nil)
+            ],
+            fetchedAt: Date(timeIntervalSince1970: 60)
+        )
+
+        let row = try XCTUnwrap(compactUsagePresentation(for: .available(snapshot)).rows.first)
+
+        XCTAssertEqual(row.accessibilityLabel, "5h, 25 percent used")
+        XCTAssertNil(row.tooltip)
+    }
+
+    func testStaleSnapshotRetainsLastSuccessfulResetTooltip() throws {
+        let resetAt = Date(timeIntervalSince1970: 1_786_189_800)
+        let snapshot = SubscriptionUsageSnapshot(
+            profileID: "codex.json",
+            provider: .codex,
+            windows: [
+                UsageWindow(id: "primary", label: "Primary", usedPercent: 15, resetAt: resetAt)
+            ],
+            fetchedAt: Date(timeIntervalSince1970: 60)
+        )
+
+        let presentation = compactUsagePresentation(
+            for: .stale(snapshot, .credentialExpired),
+            now: Date(timeIntervalSince1970: 780)
+        )
+        let row = try XCTUnwrap(presentation.rows.first)
+        let resetText = resetAt.formatted(date: .abbreviated, time: .shortened)
+
+        XCTAssertEqual(row.tooltip, "Next reset: \(resetText)")
+        XCTAssertEqual(row.accessibilityLabel, "5h, 15 percent used, resets \(resetText)")
+        XCTAssertEqual(
+            presentation.indicator,
+            .warning(message: "Credential needs attention. Showing usage last updated 12 minutes ago.")
+        )
+    }
+
     func testEmptySnapshotUsesUnavailablePlaceholder() {
         let snapshot = SubscriptionUsageSnapshot(
             profileID: "claude.json",

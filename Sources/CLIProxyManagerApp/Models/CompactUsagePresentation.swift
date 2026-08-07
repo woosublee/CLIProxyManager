@@ -208,7 +208,11 @@ private func compactSnapshotPresentation(
             id: window.id,
             label: label,
             value: "\(rounded)%",
-            accessibilityLabel: "\(label), \(rounded) percent used"
+            accessibilityLabel: subscriptionUsageAccessibilityLabel(
+                for: window,
+                usedPercent: rounded
+            ),
+            tooltip: subscriptionUsageResetTooltip(for: window)
         )
     }
     let indicator = warning.map { issue in

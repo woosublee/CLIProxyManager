@@ -50,11 +50,23 @@ func subscriptionUsageDisplayLabel(for window: UsageWindow) -> String {
     return window.label
 }
 
-func subscriptionUsageAccessibilityLabel(for window: UsageWindow) -> String {
-    let used = Int(window.usedPercent.rounded())
+func subscriptionUsageResetDateText(for window: UsageWindow) -> String? {
+    guard let resetAt = window.resetAt else { return nil }
+    return resetAt.formatted(date: .abbreviated, time: .shortened)
+}
+
+func subscriptionUsageResetTooltip(for window: UsageWindow) -> String? {
+    subscriptionUsageResetDateText(for: window).map { "Next reset: \($0)" }
+}
+
+func subscriptionUsageAccessibilityLabel(
+    for window: UsageWindow,
+    usedPercent: Int? = nil
+) -> String {
+    let used = usedPercent ?? Int(window.usedPercent.rounded())
     let label = subscriptionUsageDisplayLabel(for: window)
-    guard let resetAt = window.resetAt else {
+    guard let resetText = subscriptionUsageResetDateText(for: window) else {
         return "\(label), \(used) percent used"
     }
-    return "\(label), \(used) percent used, resets \(resetAt.formatted(date: .abbreviated, time: .shortened))"
+    return "\(label), \(used) percent used, resets \(resetText)"
 }
