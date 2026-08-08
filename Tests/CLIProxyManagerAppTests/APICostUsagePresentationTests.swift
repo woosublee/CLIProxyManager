@@ -17,6 +17,7 @@ final class APICostUsagePresentationTests: XCTestCase {
             )
             let day = presentation.rows[0]
 
+            XCTAssertNil(presentation.cardTooltip)
             XCTAssertEqual(day.value, visible)
             XCTAssertTrue(day.tooltip?.contains(exact) == true)
             XCTAssertTrue(day.tooltip?.contains("UTC") == true)
