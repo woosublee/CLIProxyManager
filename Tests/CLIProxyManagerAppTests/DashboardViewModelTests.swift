@@ -7579,6 +7579,7 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         viewModel.serverStatus = readyStatus()
 
         await viewModel.refreshSubscriptionUsage()
+        await waitForUsageSleeps(sleeper, expectedCount: 1)
 
         let requestedResetCreditProfileIDSets = await quota.requestedResetCreditProfileIDSets()
         let delays = await sleeper.delays()
