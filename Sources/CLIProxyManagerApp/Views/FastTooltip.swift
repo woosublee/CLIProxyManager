@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum FastTooltipConfiguration {
-    static let defaultDelayMilliseconds = 120
+    static let defaultDelayMilliseconds = 400
     static let defaultDelay: Duration = .milliseconds(defaultDelayMilliseconds)
     static let maximumWidth: CGFloat = 280
 }
@@ -12,7 +12,7 @@ func normalizedFastTooltipText(_ text: String?) -> String? {
 }
 
 private struct FastTooltipModifier: ViewModifier {
-    let text: String?
+    let text: String
     let edge: Edge
     let delay: Duration
 
@@ -23,16 +23,11 @@ private struct FastTooltipModifier: ViewModifier {
         content
             .onHover(perform: updateHover)
             .popover(
-                isPresented: Binding(
-                    get: { normalizedFastTooltipText(text) != nil && isPresented },
-                    set: { isPresented = $0 }
-                ),
+                isPresented: $isPresented,
                 attachmentAnchor: .rect(.bounds),
                 arrowEdge: edge
             ) {
-                if let text = normalizedFastTooltipText(text) {
-                    FastTooltipBubble(text: text)
-                }
+                FastTooltipBubble(text: text)
             }
             .onDisappear(perform: cancelPresentation)
     }
@@ -41,7 +36,7 @@ private struct FastTooltipModifier: ViewModifier {
         displayTask?.cancel()
         displayTask = nil
 
-        guard isHovering, normalizedFastTooltipText(text) != nil else {
+        guard isHovering else {
             isPresented = false
             return
         }
@@ -67,7 +62,6 @@ private struct FastTooltipModifier: ViewModifier {
 private struct FastTooltipBubble: View {
     let text: String
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var accessibilityContrast
 
@@ -97,20 +91,20 @@ private struct FastTooltipBubble: View {
                     )
             }
             .shadow(color: .black.opacity(0.16), radius: 4, y: 2)
-            .transition(
-                reduceMotion
-                    ? .opacity
-                    : .opacity.combined(with: .scale(scale: 0.98, anchor: .center))
-            )
     }
 }
 
 extension View {
+    @ViewBuilder
     func fastTooltip(
         _ text: String?,
         edge: Edge = .top,
         delay: Duration = FastTooltipConfiguration.defaultDelay
     ) -> some View {
-        modifier(FastTooltipModifier(text: text, edge: edge, delay: delay))
+        if let text = normalizedFastTooltipText(text) {
+            modifier(FastTooltipModifier(text: text, edge: edge, delay: delay))
+        } else {
+            self
+        }
     }
 }

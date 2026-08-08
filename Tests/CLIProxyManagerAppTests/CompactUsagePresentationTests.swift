@@ -36,19 +36,19 @@ final class CompactUsagePresentationTests: XCTestCase {
                     id: "secondary",
                     label: "7d",
                     value: "16%",
-                    accessibilityLabel: "7d, 16 percent used, reset time shown after usage starts"
+                    accessibilityLabel: "7d, 16 percent used, reset time unavailable"
                 ),
                 CompactUsageRowPresentation(
                     id: "monthly",
                     label: "1mo",
                     value: "100%",
-                    accessibilityLabel: "1mo, 100 percent used, reset time shown after usage starts"
+                    accessibilityLabel: "1mo, 100 percent used, reset time unavailable"
                 )
             ]
         )
         XCTAssertEqual(
             presentation.cardTooltip,
-            "5h  Shown after usage starts\n7d  Shown after usage starts\n1mo  Shown after usage starts"
+            "5h  Shown after usage starts\n7d  Reset time unavailable\n1mo  Reset time unavailable"
         )
         XCTAssertNil(presentation.placeholder)
         XCTAssertNil(presentation.indicator)
@@ -93,13 +93,13 @@ final class CompactUsagePresentationTests: XCTestCase {
         )
     }
 
-    func testSubscriptionCardTooltipExplainsWhenAllResetTimesAreMissing() {
+    func testMissingResetDistinguishesUnusedWindowFromUnavailableTimestamp() {
         let snapshot = SubscriptionUsageSnapshot(
             profileID: "claude.json",
             provider: .claude,
             windows: [
                 UsageWindow(id: "five_hour", label: "5h", usedPercent: 0, resetAt: nil),
-                UsageWindow(id: "seven_day", label: "7d", usedPercent: 0, resetAt: nil)
+                UsageWindow(id: "seven_day", label: "7d", usedPercent: 52, resetAt: nil)
             ],
             fetchedAt: Date(timeIntervalSince1970: 60)
         )
@@ -108,14 +108,13 @@ final class CompactUsagePresentationTests: XCTestCase {
 
         XCTAssertEqual(
             presentation.cardTooltip,
-            "5h  Shown after usage starts\n7d  Shown after usage starts"
+            "5h  Shown after usage starts\n7d  Reset time unavailable"
         )
-        XCTAssertTrue(presentation.rows.allSatisfy { $0.tooltip == nil })
         XCTAssertEqual(
             presentation.rows.map(\.accessibilityLabel),
             [
                 "5h, 0 percent used, reset time shown after usage starts",
-                "7d, 0 percent used, reset time shown after usage starts"
+                "7d, 52 percent used, reset time unavailable"
             ]
         )
     }
@@ -295,21 +294,10 @@ final class CompactUsagePresentationTests: XCTestCase {
             fetchedAt: Date(timeIntervalSince1970: 60)
         )
 
-        let presentation = compactUsagePresentation(for: .subscription(.available(snapshot)))
+        let direct = compactUsagePresentation(for: AccountSubscriptionUsageState.available(snapshot))
+        let dispatched = compactUsagePresentation(for: ProviderUsageState.subscription(.available(snapshot)))
 
-        XCTAssertEqual(
-            presentation.rows,
-            [
-                CompactUsageRowPresentation(
-                    id: "primary",
-                    label: "5h",
-                    value: "16%",
-                    accessibilityLabel: "5h, 16 percent used, reset time shown after usage starts"
-                )
-            ]
-        )
-        XCTAssertEqual(presentation.cardTooltip, "5h  Shown after usage starts")
-        XCTAssertNil(presentation.indicator)
+        XCTAssertEqual(dispatched, direct)
     }
 
     func testDuplicateDisplayLabelsPreserveDistinctWindowIDs() {

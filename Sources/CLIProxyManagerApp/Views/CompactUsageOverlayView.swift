@@ -80,23 +80,27 @@ struct CompactUsageOverlayView: View {
 
     private var measurementAccountStack: some View {
         VStack(spacing: 0) {
-            accountRows
+            accountRows(tooltipsEnabled: false)
         }
     }
 
     private var visibleAccountStack: some View {
         LazyVStack(spacing: 0) {
-            accountRows
+            accountRows(tooltipsEnabled: true)
         }
     }
 
     @ViewBuilder
-    private var accountRows: some View {
+    private func accountRows(tooltipsEnabled: Bool) -> some View {
         ForEach(Array(providers.enumerated()), id: \.element.id) { index, provider in
             if index > 0 {
                 CompactUsageSeparator()
             }
-            CompactUsageAccountView(provider: provider, now: now)
+            CompactUsageAccountView(
+                provider: provider,
+                now: now,
+                tooltipsEnabled: tooltipsEnabled
+            )
         }
     }
 }
@@ -104,6 +108,7 @@ struct CompactUsageOverlayView: View {
 private struct CompactUsageAccountView: View {
     let provider: MenuBarConnectedProvider
     let now: Date
+    let tooltipsEnabled: Bool
 
     var body: some View {
         let presentation = compactUsagePresentation(for: provider.usageState)
@@ -152,7 +157,6 @@ private struct CompactUsageAccountView: View {
                                 .layoutPriority(1)
                         }
                         .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                        .fastTooltip(row.tooltip)
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel(row.accessibilityLabel)
                     }
@@ -161,7 +165,7 @@ private struct CompactUsageAccountView: View {
                 .padding(.vertical, 7)
                 .background(.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .contentShape(Rectangle())
-                .fastTooltip(presentation.cardTooltip)
+                .fastTooltip(tooltipsEnabled ? presentation.cardTooltip : nil)
             }
         }
         .padding(.vertical, 10)

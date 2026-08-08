@@ -196,26 +196,43 @@ private func compactUnavailableIndicator(for issue: SubscriptionUsageIssue) -> C
 }
 
 private let compactUsageResetWaitingText = "Shown after usage starts"
+private let compactUsageResetUnavailableText = "Reset time unavailable"
 
-private func compactUsageResetLine(for window: UsageWindow) -> String {
-    let label = subscriptionUsageDisplayLabel(for: window)
-    let resetStatus = subscriptionUsageResetDateText(for: window)
-        ?? compactUsageResetWaitingText
-    return "\(label)  \(resetStatus)"
+private struct CompactUsageWindowPresentation {
+    let row: CompactUsageRowPresentation
+    let resetLine: String
 }
 
-private func compactUsageAccessibilityLabel(
-    for window: UsageWindow,
-    usedPercent: Int
-) -> String {
-    if subscriptionUsageResetDateText(for: window) != nil {
-        return subscriptionUsageAccessibilityLabel(
-            for: window,
-            usedPercent: usedPercent
-        )
-    }
+private func compactUsageWindowPresentation(
+    for window: UsageWindow
+) -> CompactUsageWindowPresentation {
+    let percent = min(max(window.usedPercent, 0), 100)
+    let rounded = Int(percent.rounded())
     let label = subscriptionUsageDisplayLabel(for: window)
-    return "\(label), \(usedPercent) percent used, reset time shown after usage starts"
+    let resetText = subscriptionUsageResetDateText(for: window)
+
+    let resetStatus: String
+    let accessibilityLabel: String
+    if let resetText {
+        resetStatus = resetText
+        accessibilityLabel = "\(label), \(rounded) percent used, resets \(resetText)"
+    } else if window.usedPercent <= 0 {
+        resetStatus = compactUsageResetWaitingText
+        accessibilityLabel = "\(label), \(rounded) percent used, reset time shown after usage starts"
+    } else {
+        resetStatus = compactUsageResetUnavailableText
+        accessibilityLabel = "\(label), \(rounded) percent used, reset time unavailable"
+    }
+
+    return CompactUsageWindowPresentation(
+        row: CompactUsageRowPresentation(
+            id: window.id,
+            label: label,
+            value: "\(rounded)%",
+            accessibilityLabel: accessibilityLabel
+        ),
+        resetLine: "\(label)  \(resetStatus)"
+    )
 }
 
 private func compactSnapshotPresentation(
@@ -236,20 +253,8 @@ private func compactSnapshotPresentation(
         return .placeholder("—", indicator: indicator)
     }
 
-    let rows = snapshot.windows.map { window in
-        let percent = min(max(window.usedPercent, 0), 100)
-        let rounded = Int(percent.rounded())
-        let label = subscriptionUsageDisplayLabel(for: window)
-        return CompactUsageRowPresentation(
-            id: window.id,
-            label: label,
-            value: "\(rounded)%",
-            accessibilityLabel: compactUsageAccessibilityLabel(
-                for: window,
-                usedPercent: rounded
-            )
-        )
-    }
+    let windowPresentations = snapshot.windows.map(compactUsageWindowPresentation(for:))
+    let rows = windowPresentations.map(\.row)
     let indicator = warning.map { issue in
         CompactUsageIndicator.warning(
             message: SubscriptionUsageWarningPresentation.message(
@@ -259,8 +264,8 @@ private func compactSnapshotPresentation(
             )
         )
     }
-    let cardTooltip = snapshot.windows
-        .map(compactUsageResetLine(for:))
+    let cardTooltip = windowPresentations
+        .map(\.resetLine)
         .joined(separator: "\n")
     return CompactUsagePresentation(
         rows: rows,

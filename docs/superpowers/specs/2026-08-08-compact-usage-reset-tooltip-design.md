@@ -10,10 +10,11 @@ Hovering anywhere over the rounded subscription usage card presents one multilin
 
 - Make the complete rounded Compact HUD subscription usage card the reset-tooltip hover target.
 - Present all visible subscription window reset states in one multiline tooltip.
-- Show an explanatory waiting state when the provider has not supplied a reset time.
-- Use the existing `FastTooltip` timing, cancellation, popover, material, and accessibility settings.
+- Distinguish an unused window waiting for its first reset time from an active window whose reset time is unavailable.
+- Use a shared 400-millisecond `FastTooltip` delay with existing cancellation, popover, material, and accessibility settings.
+- Let the native macOS popover own the presentation motion without an additional bubble transition.
 - Remove individual reset hover targets from Compact subscription rows.
-- Preserve Compact API-cost row tooltips.
+- Remove Compact API-cost row tooltips while preserving their Menu Bar detail tooltips.
 - Add focused presentation and source-contract tests.
 
 ## Non-goals
@@ -34,7 +35,7 @@ The Compact HUD currently creates one `CompactUsageRowPresentation` for each vis
 
 This works when the provider supplies a timestamp, but it still requires the pointer to enter a relatively short individual row. It also produces no hover feedback when Claude reports a window such as `five_hour` with `resets_at: null`.
 
-Compact API-cost rows use the same row type but their tooltip describes cost and token details, not subscription reset time. Those row-level tooltips remain separate.
+Compact API-cost rows use the same row type, but their tooltip describes cost and token details rather than subscription reset time. The Compact HUD omits those row-level tooltips, while Menu Bar keeps the existing detailed tooltip.
 
 ## Interaction Design
 
@@ -50,7 +51,7 @@ The rounded subscription usage card is one hover target. Its complete bounds inc
 
 No click action is added. The HUD frame and account layout remain unchanged.
 
-The shared `FastTooltip` retains its existing 120-millisecond delay. Leaving the card cancels a pending tooltip or dismisses the visible tooltip immediately.
+The shared `FastTooltip` uses a 400-millisecond delay so incidental pointer movement does not present a tooltip. Leaving the card cancels a pending tooltip or dismisses the visible tooltip immediately. The bubble adds no custom transition; the native macOS popover owns presentation motion.
 
 ### Tooltip content
 
@@ -64,8 +65,9 @@ The tooltip contains one line for each visible subscription usage window, in the
 Each line contains:
 
 1. the existing compact period label;
-2. the provider-supplied reset time formatted with `Date.formatted(date: .abbreviated, time: .shortened)`; or
-3. `Shown after usage starts` when `resetAt` is unavailable.
+2. the provider-supplied reset time formatted with `Date.formatted(date: .abbreviated, time: .shortened)`;
+3. `Shown after usage starts` when `resetAt` is unavailable and the window has no usage; or
+4. `Reset time unavailable` when `resetAt` is unavailable after usage has started.
 
 The implementation does not hard-code `five_hour` or `seven_day`. Additional provider-supplied subscription windows appear as additional lines.
 
@@ -84,7 +86,8 @@ let cardTooltip: String?
 `compactSnapshotPresentation` creates one aggregate line per visible window and joins the lines with `\n`.
 
 - A window with `resetAt` contributes `<label>  <formatted reset time>`.
-- A window without `resetAt` contributes `<label>  Shown after usage starts`.
+- A window without `resetAt` and without usage contributes `<label>  Shown after usage starts`.
+- An active window without `resetAt` contributes `<label>  Reset time unavailable`.
 - A snapshot with no windows continues to use the existing placeholder and indicator and has no card tooltip.
 - A stale snapshot uses the same last-success windows and reset values already retained by the current cache policy.
 
@@ -92,9 +95,9 @@ Subscription row `tooltip` values become `nil`; reset information is owned only 
 
 ### API-cost usage
 
-`compactAPICostSnapshotPresentation` sets `cardTooltip` to `nil` and preserves each API-cost row's existing `tooltip`. The view therefore continues to attach row-level tooltips for API-cost cards.
+`compactAPICostSnapshotPresentation` keeps its existing detail data for reuse by other surfaces, but Compact HUD does not attach row-level tooltips to API-cost cards. Menu Bar continues to attach the API-cost row tooltip for users who need exact estimate and time-zone details.
 
-This separation prevents a group reset tooltip from replacing or combining unrelated cost details.
+This keeps the small Compact HUD calm while preserving the detailed information in Menu Bar.
 
 ## View Structure
 
@@ -110,8 +113,9 @@ For subscription presentation:
 For API-cost presentation:
 
 1. `cardTooltip` is `nil`;
-2. keep `fastTooltip(row.tooltip)` on each row;
-3. preserve existing cost text layout and accessibility labels.
+2. do not attach a row tooltip in Compact HUD;
+3. preserve existing cost text layout and accessibility labels;
+4. keep the row tooltip attached in Menu Bar.
 
 The distinction comes from presentation data rather than provider-name checks in the view.
 
@@ -125,13 +129,19 @@ Subscription row accessibility labels use:
 5h, 30 percent used, resets Aug 8, 4:30 PM
 ```
 
-or, when no timestamp exists:
+or, when an unused window has no timestamp:
 
 ```text
 5h, 0 percent used, reset time shown after usage starts
 ```
 
-The aggregate tooltip itself remains informational and non-interactive. Existing Reduce Motion, Reduce Transparency, and Increase Contrast handling in `FastTooltip` remains unchanged.
+An active window whose provider omits the timestamp uses:
+
+```text
+7d, 52 percent used, reset time unavailable
+```
+
+The aggregate tooltip itself remains informational and non-interactive. `FastTooltip` retains its Reduce Transparency and Increase Contrast adaptations; presentation motion is delegated to the native macOS popover.
 
 ## Data Flow
 
@@ -145,14 +155,15 @@ No storage, request, cache, observer, timer, or production runtime control is in
 
 ## Failure and Edge Handling
 
-- `resetAt == nil`: show `Shown after usage starts`; do not invent a timestamp.
+- `resetAt == nil` with no usage: show `Shown after usage starts`; do not invent a timestamp.
+- `resetAt == nil` after usage starts: show `Reset time unavailable` so the reset state does not contradict the visible usage percentage.
 - All reset times missing: still show the multiline explanatory tooltip so hover visibly works.
 - Some reset times missing: combine available timestamps and waiting states in their original row order.
 - Empty snapshot: retain the current unavailable placeholder and indicator; no reset tooltip.
 - Stale snapshot: show the last successful reset values and preserve the existing stale warning indicator.
 - Past reset timestamp: display the provider-supplied absolute time without deriving a new schedule.
 - Long provider labels: preserve the existing label and allow the shared tooltip's multiline wrapping and maximum width.
-- API-cost state: keep existing individual cost tooltips and do not show reset waiting copy.
+- API-cost state: omit row tooltips in Compact HUD, preserve their detailed tooltip in Menu Bar, and do not show reset waiting copy.
 - Rapid pointer movement: rely on existing `FastTooltip` cancellation behavior.
 
 ## Testing
@@ -163,12 +174,12 @@ Extend `CompactUsagePresentationTests` to verify:
 
 1. Multiple subscription windows produce one ordered multiline `cardTooltip`.
 2. Available timestamps use the same local absolute format as the Expanded HUD.
-3. A missing timestamp produces `Shown after usage starts`.
+3. A missing timestamp produces `Shown after usage starts` for unused windows and `Reset time unavailable` for active windows.
 4. A mixed snapshot combines timestamp and waiting lines.
 5. A stale snapshot retains the aggregate tooltip from its last-success windows.
 6. Subscription rows have no individual tooltip.
 7. API-cost presentation has no aggregate reset tooltip and preserves row tooltips.
-8. Accessibility labels include either the reset timestamp or the waiting explanation.
+8. Accessibility labels include the reset timestamp, waiting explanation, or unavailable explanation.
 
 ### View source contract
 
@@ -177,7 +188,7 @@ Update the Compact HUD tooltip contract test to verify:
 - the card container receives `fastTooltip(presentation.cardTooltip)`;
 - the card container has a rectangular content shape covering its padding;
 - subscription reset presentation no longer relies on individual row tooltip values;
-- row-level `fastTooltip(row.tooltip)` remains available for API-cost presentation.
+- Compact HUD contains no row-level `fastTooltip(row.tooltip)`, while Menu Bar retains it for API-cost detail.
 
 ### Regression and build verification
 
@@ -189,12 +200,12 @@ Runtime verification must not stop, restart, kill, reconfigure, or overwrite the
 
 - Hovering anywhere over a Compact subscription usage card shows all visible reset statuses in one tooltip.
 - Typical 5-hour and 7-day usage appears as two lines.
-- Missing Claude reset timestamps visibly explain that the time appears after usage starts.
+- Missing Claude reset timestamps distinguish unused windows from active windows whose reset time is unavailable.
 - Individual subscription rows no longer require precise hover targeting.
-- Compact API-cost row tooltips remain unchanged.
+- Compact API-cost row tooltips are removed while Menu Bar detail tooltips remain available.
 - No click interaction or HUD resizing is introduced.
-- VoiceOver exposes timestamp and waiting states.
-- Existing FastTooltip timing and adaptive appearance remain unchanged.
+- VoiceOver exposes timestamp, waiting, and unavailable states.
+- FastTooltip uses a 400-millisecond delay, native popover motion, and the existing adaptive appearance.
 - Subscription fetching, parsing, cache, refresh, and stale-value behavior remain unchanged.
 - Production app and server remain running and untouched during verification.
 - Focused tests, full tests, warnings-as-errors build, and development bundle verification pass.

@@ -32,31 +32,43 @@ final class FastTooltipMigrationTests: XCTestCase {
 
     func testCompactUsageCardOwnsGroupedResetTooltip() throws {
         let compact = try appSource(relativePath: "Views/CompactUsageOverlayView.swift")
-        let lines = compact.components(separatedBy: .newlines)
-        let cardTooltipIndex = try XCTUnwrap(
-            lines.firstIndex { $0.contains(".fastTooltip(presentation.cardTooltip)") }
+        let rowsRange = try XCTUnwrap(compact.range(of: "ForEach(presentation.rows)"))
+        let tooltipRange = try XCTUnwrap(
+            compact.range(
+                of: ".fastTooltip(tooltipsEnabled ? presentation.cardTooltip : nil)",
+                range: rowsRange.lowerBound..<compact.endIndex
+            )
         )
+        let cardSegment = String(compact[rowsRange.lowerBound..<tooltipRange.upperBound])
 
-        XCTAssertEqual(
-            lines[cardTooltipIndex - 1].trimmingCharacters(in: .whitespaces),
-            ".contentShape(Rectangle())"
-        )
-        XCTAssertTrue(
-            lines[..<cardTooltipIndex].suffix(8).contains {
-                $0.contains(".padding(.horizontal, 7)")
-            }
-        )
-        XCTAssertTrue(
-            lines[..<cardTooltipIndex].suffix(8).contains {
-                $0.contains(".background(.primary.opacity(0.055)")
-            }
-        )
+        XCTAssertTrue(cardSegment.contains(".padding(.horizontal, 7)"))
+        XCTAssertTrue(cardSegment.contains(".padding(.vertical, 7)"))
+        XCTAssertTrue(cardSegment.contains(".background(.primary.opacity(0.055)"))
+        XCTAssertTrue(cardSegment.contains(".contentShape(Rectangle())"))
     }
 
-    func testCompactAPICostRowsKeepIndividualTooltipModifier() throws {
+    func testCompactMeasurementDisablesTooltips() throws {
         let compact = try appSource(relativePath: "Views/CompactUsageOverlayView.swift")
 
-        XCTAssertTrue(compact.contains(".fastTooltip(row.tooltip)"))
+        XCTAssertTrue(compact.contains("accountRows(tooltipsEnabled: false)"))
+        XCTAssertTrue(compact.contains("accountRows(tooltipsEnabled: true)"))
+        XCTAssertFalse(compact.contains("row.tooltip"))
+        XCTAssertTrue(compact.contains(".fastTooltip(tooltipsEnabled ? presentation.cardTooltip : nil)"))
+    }
+
+    func testMenuBarSubscriptionResetUsesSharedPresentationHelper() throws {
+        let menuBar = try appSource(relativePath: "Views/MenuBarStatusView.swift")
+
+        XCTAssertTrue(menuBar.contains("subscriptionUsageResetTooltip(for: window)"))
+        XCTAssertFalse(menuBar.contains("resetAt.formatted(date: .abbreviated, time: .shortened)"))
+    }
+
+    func testCompactOmitsAPICostRowTooltipWhileMenuBarKeepsIt() throws {
+        let compact = try appSource(relativePath: "Views/CompactUsageOverlayView.swift")
+        let menuBar = try appSource(relativePath: "Views/MenuBarStatusView.swift")
+
+        XCTAssertFalse(compact.contains("row.tooltip"))
+        XCTAssertTrue(menuBar.contains(".fastTooltip(row.tooltip)"))
     }
 
     func testGeneralIconControlsUseAccessibilityLabelsWithoutFastTooltip() throws {

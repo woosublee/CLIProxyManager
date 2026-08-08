@@ -327,8 +327,8 @@ private struct MenuBarAccountRow: View {
             }
             .font(.system(size: 10.5, design: .monospaced))
 
-            if let resetAt = window.resetAt {
-                Text("Next reset: \(resetAt.formatted(date: .abbreviated, time: .shortened))")
+            if let resetTooltip = subscriptionUsageResetTooltip(for: window) {
+                Text(resetTooltip)
                     .font(.system(size: 9.5))
                     .foregroundStyle(.tertiary)
             }

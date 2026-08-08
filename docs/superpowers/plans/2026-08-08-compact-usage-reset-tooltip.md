@@ -13,12 +13,13 @@
 - Hover target은 개별 usage 행이 아니라 둥근 subscription usage 카드 전체다.
 - Tooltip은 현재 카드에 표시된 모든 subscription window를 같은 순서로 한 줄씩 표시한다.
 - Timestamp line은 `<label>  <abbreviated local date and shortened local time>` 형식이다.
-- `resetAt == nil` line은 `<label>  Shown after usage starts` 형식이다.
+- `resetAt == nil` line은 사용량이 없으면 `<label>  Shown after usage starts`, 사용량이 이미 있으면 `<label>  Reset time unavailable` 형식이다.
 - 특정 `five_hour` 또는 `seven_day` ID를 하드코딩하지 않는다.
 - 클릭, toggle, inline expansion, HUD resize를 추가하지 않는다.
-- 기존 `FastTooltip`의 120밀리초 delay, cancellation, popover, material, Reduce Motion, Reduce Transparency, Increase Contrast 동작을 변경하지 않는다.
+- `FastTooltip`의 공통 delay는 400밀리초로 조정하고 cancellation, popover, material, Reduce Transparency, Increase Contrast 동작은 유지한다.
+- Bubble의 별도 opacity/scale transition은 제거하고 native macOS popover motion만 사용한다.
 - Compact subscription row의 개별 reset tooltip은 제거한다.
-- Compact API-cost row의 기존 cost tooltip은 그대로 유지한다.
+- Compact API-cost row tooltip은 제거하되 Menu Bar의 기존 cost tooltip은 유지한다.
 - Expanded HUD의 보이는 `Next reset: ...` 문구는 변경하지 않는다.
 - 상대 시간, countdown, timer, tooltip 전용 refresh를 추가하지 않는다.
 - Subscription usage API, parsing, cache, persistence, background refresh, stale-value 정책을 변경하지 않는다.
@@ -26,11 +27,26 @@
 - 자동 검증은 focused/full tests, warnings-as-errors build, development app bundle 생성까지 수행한다.
 - 실행 중인 프로덕션 앱과 프로덕션 CLIProxyAPI 서버를 중지, 재시작, kill, reconfigure, overwrite하지 않는다.
 - Runtime 확인이 dev 인스턴스만으로 불가능하면 프로덕션에 접근하지 말고 limitation을 보고한다.
+- 자동 검증 과정에서 production 또는 development 앱을 실행하지 않는다.
+
+## Post-review Amendments
+
+- Subscription window presentation은 row와 reset line을 한 번의 순회에서 만들고 reset 날짜를 window마다 한 번만 포맷한다.
+- `resetAt == nil`은 사용 시작 전 상태를 의미하지 않을 수 있으므로 visible usage가 있으면 `Reset time unavailable`을 표시한다.
+- Provider dispatcher 회귀 테스트는 파생 필드를 다시 작성하지 않고 direct subscription overload 결과와 전체 equality를 비교한다.
+- Menu Bar의 `Next reset` 표시도 `subscriptionUsageResetTooltip(for:)`를 사용해 Compact·Expanded와 날짜 형식을 공유한다.
+- 높이 측정용 hidden Compact tree는 tooltip text를 `nil`로 전달하고, `fastTooltip(nil)`은 stateful modifier 자체를 생성하지 않는다.
+- Source contract는 임의의 직전 줄이나 `suffix(8)`에 의존하지 않고 row rendering부터 card tooltip까지의 modifier segment를 검사한다.
+- All-reset-missing 동작은 clamping fixture와 mixed missing-reset 회귀 테스트가 함께 포괄하므로 중복 테스트를 유지하지 않는다.
+- 공통 tooltip delay는 400밀리초로 늘리고 bubble의 별도 transition은 제거한다.
+- Compact HUD는 API-cost row tooltip을 붙이지 않으며 Menu Bar는 기존 상세 tooltip을 유지한다.
 
 ## File Structure
 
 - `Sources/CLIProxyManagerApp/Models/CompactUsagePresentation.swift`: card-level tooltip, subscription reset-status line, Compact 전용 accessibility waiting copy, API-cost와 subscription tooltip ownership 분리를 담당한다.
-- `Sources/CLIProxyManagerApp/Views/CompactUsageOverlayView.swift`: padded rounded usage card 전체 hover target과 row-level API-cost tooltip을 렌더링한다.
+- `Sources/CLIProxyManagerApp/Views/CompactUsageOverlayView.swift`: padded rounded subscription usage card 전체 hover target을 렌더링하고, Compact API-cost 및 hidden measurement tree의 tooltip을 비활성화한다.
+- `Sources/CLIProxyManagerApp/Views/FastTooltip.swift`: nil 또는 빈 tooltip이 stateful hover/popover modifier를 만들지 않도록 한다.
+- `Sources/CLIProxyManagerApp/Views/MenuBarStatusView.swift`: 공유 reset tooltip helper로 Menu Bar 날짜 형식을 일치시킨다.
 - `Tests/CLIProxyManagerAppTests/CompactUsagePresentationTests.swift`: ordered multiline tooltip, mixed/missing reset, stale snapshot, row tooltip 제거, accessibility를 검증한다.
 - `Tests/CLIProxyManagerAppTests/APICostUsagePresentationTests.swift`: API-cost card tooltip은 없고 기존 row tooltip이 보존되는지 검증한다.
 - `Tests/CLIProxyManagerAppTests/FastTooltipMigrationTests.swift`: card-level FastTooltip과 row-level FastTooltip이 각각 올바른 위치에 남는 source contract를 검증한다.
@@ -577,8 +593,8 @@ Ask the user to verify manually:
 
 1. Hovering the label, percentage, blank column space, row gap, or internal card padding shows the same grouped tooltip.
 2. A typical `5h` and `7d` account displays two lines at once.
-3. Claude windows with `resets_at: null` display `Shown after usage starts` instead of producing no tooltip.
+3. Claude windows with `resets_at: null` display `Shown after usage starts` at 0% usage and `Reset time unavailable` after usage begins.
 4. A timestamp supplied by Codex or Claude uses the same local absolute time as Expanded HUD.
-5. API-cost Day/Mon rows retain their individual detail tooltips.
+5. API-cost Day/Mon rows show no tooltip in Compact HUD, while Menu Bar retains the detail tooltip.
 6. Light/Dark appearance and tooltip clipping remain correct.
 7. The production app and production server continue running without interruption.

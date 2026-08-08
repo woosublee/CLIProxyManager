@@ -39,7 +39,7 @@ final class UsageOverlayAccountAnimationTests: XCTestCase {
         XCTAssertTrue(content.contains("if providers.isEmpty"))
         XCTAssertTrue(content.contains("measurementAccountStack"))
         XCTAssertTrue(content.contains("ScrollView(.vertical, showsIndicators: needsScrolling)"))
-        XCTAssertTrue(content.contains("private var accountRows: some View"))
+        XCTAssertTrue(content.contains("private func accountRows(tooltipsEnabled: Bool) -> some View"))
         XCTAssertFalse(
             content.contains(
                 "onMeasurementChange(measurementState.viewportHeight(maximumHeight: maximumAccountHeight))"
