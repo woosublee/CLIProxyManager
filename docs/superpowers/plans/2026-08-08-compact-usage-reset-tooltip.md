@@ -277,56 +277,61 @@ struct CompactUsagePresentation: Equatable {
 
 The default argument preserves placeholder and API-cost construction sites until they are explicitly verified.
 
-- [ ] **Step 7: Add Compact-only reset status helpers**
+- [ ] **Step 7: Add a shared Compact window presentation**
 
-Immediately above `compactSnapshotPresentation`, add:
+Immediately above `compactSnapshotPresentation`, add one helper that formats each reset timestamp once and produces both the row and tooltip line:
 
 ```swift
 private let compactUsageResetWaitingText = "Shown after usage starts"
+private let compactUsageResetUnavailableText = "Reset time unavailable"
 
-private func compactUsageResetLine(for window: UsageWindow) -> String {
-    let label = subscriptionUsageDisplayLabel(for: window)
-    let resetStatus = subscriptionUsageResetDateText(for: window)
-        ?? compactUsageResetWaitingText
-    return "\(label)  \(resetStatus)"
+private struct CompactUsageWindowPresentation {
+    let row: CompactUsageRowPresentation
+    let resetLine: String
 }
 
-private func compactUsageAccessibilityLabel(
-    for window: UsageWindow,
-    usedPercent: Int
-) -> String {
-    if subscriptionUsageResetDateText(for: window) != nil {
-        return subscriptionUsageAccessibilityLabel(
-            for: window,
-            usedPercent: usedPercent
-        )
-    }
-    let label = subscriptionUsageDisplayLabel(for: window)
-    return "\(label), \(usedPercent) percent used, reset time shown after usage starts"
-}
-```
-
-Keep the waiting copy scoped to Compact presentation. Do not change Menu Bar or Expanded HUD accessibility for nil reset timestamps.
-
-- [ ] **Step 8: Move subscription reset ownership from rows to card**
-
-Change `compactSnapshotPresentation` to build rows without individual tooltips and return the joined card tooltip:
-
-```swift
-let rows = snapshot.windows.map { window in
+private func compactUsageWindowPresentation(
+    for window: UsageWindow
+) -> CompactUsageWindowPresentation {
     let percent = min(max(window.usedPercent, 0), 100)
     let rounded = Int(percent.rounded())
     let label = subscriptionUsageDisplayLabel(for: window)
-    return CompactUsageRowPresentation(
-        id: window.id,
-        label: label,
-        value: "\(rounded)%",
-        accessibilityLabel: compactUsageAccessibilityLabel(
-            for: window,
-            usedPercent: rounded
-        )
+    let resetText = subscriptionUsageResetDateText(for: window)
+
+    let resetStatus: String
+    let accessibilityLabel: String
+    if let resetText {
+        resetStatus = resetText
+        accessibilityLabel = "\(label), \(rounded) percent used, resets \(resetText)"
+    } else if window.usedPercent <= 0 {
+        resetStatus = compactUsageResetWaitingText
+        accessibilityLabel = "\(label), \(rounded) percent used, reset time shown after usage starts"
+    } else {
+        resetStatus = compactUsageResetUnavailableText
+        accessibilityLabel = "\(label), \(rounded) percent used, reset time unavailable"
+    }
+
+    return CompactUsageWindowPresentation(
+        row: CompactUsageRowPresentation(
+            id: window.id,
+            label: label,
+            value: "\(rounded)%",
+            accessibilityLabel: accessibilityLabel
+        ),
+        resetLine: "\(label)  \(resetStatus)"
     )
 }
+```
+
+Keep the waiting and unavailable copy scoped to Compact presentation. Do not change Menu Bar or Expanded HUD accessibility for nil reset timestamps.
+
+- [ ] **Step 8: Move subscription reset ownership from rows to card**
+
+Change `compactSnapshotPresentation` to make one window-presentation pass, then derive rows and the joined card tooltip from those results:
+
+```swift
+let windowPresentations = snapshot.windows.map(compactUsageWindowPresentation(for:))
+let rows = windowPresentations.map(\.row)
 let indicator = warning.map { issue in
     CompactUsageIndicator.warning(
         message: SubscriptionUsageWarningPresentation.message(
@@ -336,8 +341,8 @@ let indicator = warning.map { issue in
         )
     )
 }
-let cardTooltip = snapshot.windows
-    .map(compactUsageResetLine(for:))
+let cardTooltip = windowPresentations
+    .map(\.resetLine)
     .joined(separator: "\n")
 return CompactUsagePresentation(
     rows: rows,
@@ -347,7 +352,7 @@ return CompactUsagePresentation(
 )
 ```
 
-Do not change `compactAPICostSnapshotPresentation`; its default `cardTooltip` remains `nil` and its rows retain `row.tooltip`.
+Do not change `compactAPICostSnapshotPresentation`; its default `cardTooltip` remains `nil`, and its row detail data remains available for Menu Bar and other non-Compact consumers.
 
 - [ ] **Step 9: Run presentation tests to verify GREEN**
 
@@ -359,7 +364,7 @@ swift test --filter APICostUsagePresentationTests
 swift test --filter MenuBarStatusSnapshotTests
 ```
 
-Expected: grouped reset, waiting copy, stale snapshot, API-cost row tooltip, and existing shared accessibility tests all pass with 0 failures.
+Expected: grouped reset, waiting and unavailable copy, stale snapshot, preserved API-cost row detail data, and shared accessibility tests all pass with 0 failures.
 
 - [ ] **Step 10: Commit Task 1**
 
@@ -382,47 +387,47 @@ git commit -m "feat: group compact reset tooltip content" \
 
 **Interfaces:**
 - Consumes: Task 1 `CompactUsagePresentation.cardTooltip: String?`
-- Consumes: existing `CompactUsageRowPresentation.tooltip: String?`
 - Consumes: existing `View.fastTooltip(_:edge:delay:)`
-- Produces: padded rounded card with one card-level tooltip target
-- Preserves: row-level FastTooltip modifier for API-cost rows whose tooltip remains non-nil
+- Produces: padded rounded subscription card with one card-level tooltip target
+- Preserves: `CompactUsageRowPresentation.tooltip` data for Menu Bar and other non-Compact consumers without attaching it in Compact HUD
 
-- [ ] **Step 1: Replace the old whole-row source contract with card-and-row ownership contracts**
+- [ ] **Step 1: Replace the old whole-row source contract with card ownership contracts**
 
-Replace `testCompactUsageTooltipIsAttachedToWholeRow` in `FastTooltipMigrationTests` with:
+Replace `testCompactUsageTooltipIsAttachedToWholeRow` in `FastTooltipMigrationTests` with tests that locate the closing brace of the row `ForEach`, inspect only the following card modifiers, and verify Compact omits API-cost row tooltips while Menu Bar keeps them:
 
 ```swift
 func testCompactUsageCardOwnsGroupedResetTooltip() throws {
     let compact = try appSource(relativePath: "Views/CompactUsageOverlayView.swift")
-    let lines = compact.components(separatedBy: .newlines)
-    let cardTooltipIndex = try XCTUnwrap(
-        lines.firstIndex { $0.contains(".fastTooltip(presentation.cardTooltip)") }
+    let rowsRange = try XCTUnwrap(compact.range(of: "ForEach(presentation.rows) { row in"))
+    let openingBrace = try XCTUnwrap(compact[rowsRange].firstIndex(of: "{"))
+    let closingBrace = try XCTUnwrap(
+        matchingClosingBrace(in: compact, openingBrace: openingBrace)
     )
+    let cardModifierStart = compact.index(after: closingBrace)
+    let tooltipRange = try XCTUnwrap(
+        compact.range(
+            of: ".fastTooltip(tooltipsEnabled ? presentation.cardTooltip : nil)",
+            range: cardModifierStart..<compact.endIndex
+        )
+    )
+    let cardSegment = String(compact[cardModifierStart..<tooltipRange.upperBound])
 
-    XCTAssertEqual(
-        lines[cardTooltipIndex - 1].trimmingCharacters(in: .whitespaces),
-        ".contentShape(Rectangle())"
-    )
-    XCTAssertTrue(
-        lines[..<cardTooltipIndex].suffix(8).contains {
-            $0.contains(".padding(.horizontal, 7)")
-        }
-    )
-    XCTAssertTrue(
-        lines[..<cardTooltipIndex].suffix(8).contains {
-            $0.contains(".background(.primary.opacity(0.055)")
-        }
-    )
+    XCTAssertTrue(cardSegment.contains(".padding(.horizontal, 7)"))
+    XCTAssertTrue(cardSegment.contains(".padding(.vertical, 7)"))
+    XCTAssertTrue(cardSegment.contains(".background(.primary.opacity(0.055)"))
+    XCTAssertTrue(cardSegment.contains(".contentShape(Rectangle())"))
 }
 
-func testCompactAPICostRowsKeepIndividualTooltipModifier() throws {
+func testCompactOmitsAPICostRowTooltipWhileMenuBarKeepsIt() throws {
     let compact = try appSource(relativePath: "Views/CompactUsageOverlayView.swift")
+    let menuBar = try appSource(relativePath: "Views/MenuBarStatusView.swift")
 
-    XCTAssertTrue(compact.contains(".fastTooltip(row.tooltip)"))
+    XCTAssertFalse(compact.contains("row.tooltip"))
+    XCTAssertTrue(menuBar.contains(".fastTooltip(row.tooltip)"))
 }
 ```
 
-The first test catches placement above the padding or background, which would shrink the hover area. The second prevents removal of API-cost row details.
+Add a small brace-matching test helper so the grouped-card assertions cannot accidentally inspect row modifiers.
 
 - [ ] **Step 2: Run source contract tests to verify RED**
 
@@ -430,17 +435,17 @@ Run:
 
 ```bash
 swift test --filter FastTooltipMigrationTests/testCompactUsageCardOwnsGroupedResetTooltip
-swift test --filter FastTooltipMigrationTests/testCompactAPICostRowsKeepIndividualTooltipModifier
+swift test --filter FastTooltipMigrationTests/testCompactOmitsAPICostRowTooltipWhileMenuBarKeepsIt
 ```
 
 Expected:
 
-- The grouped card test fails because `.fastTooltip(presentation.cardTooltip)` does not exist.
-- The API-cost row modifier test passes, establishing the behavior that must be preserved.
+- The grouped card test fails because the complete padded card does not yet own `cardTooltip`.
+- The API-cost contract fails because Compact still contains `.fastTooltip(row.tooltip)`.
 
-- [ ] **Step 3: Move the content shape for grouped reset hover to the padded rounded card**
+- [ ] **Step 3: Move grouped reset hover to the padded rounded card**
 
-Keep the row-level modifier for API-cost rows, but remove the row-level `contentShape` because the card now owns subscription hover coverage. Change the usage-card section to:
+Remove the row-level tooltip modifier from Compact HUD and attach only the aggregate tooltip to the complete padded card:
 
 ```swift
 VStack(spacing: 5) {
@@ -458,7 +463,6 @@ VStack(spacing: 5) {
                 .layoutPriority(1)
         }
         .font(.system(size: 10, weight: .semibold, design: .monospaced))
-        .fastTooltip(row.tooltip)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(row.accessibilityLabel)
     }
@@ -467,10 +471,10 @@ VStack(spacing: 5) {
 .padding(.vertical, 7)
 .background(.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
 .contentShape(Rectangle())
-.fastTooltip(presentation.cardTooltip)
+.fastTooltip(tooltipsEnabled ? presentation.cardTooltip : nil)
 ```
 
-Because Task 1 sets subscription `row.tooltip` to `nil`, nested row modifiers do not present reset popovers. API-cost rows retain non-nil tooltips, while API-cost `cardTooltip` is nil.
+Pass `tooltipsEnabled: false` from `measurementAccountStack` and `true` from `visibleAccountStack`. API-cost rows retain their detail data in the presentation model, but Compact HUD does not attach it; Menu Bar continues to use `.fastTooltip(row.tooltip)`.
 
 - [ ] **Step 4: Run grouped hover and tooltip regression tests**
 
@@ -483,7 +487,7 @@ swift test --filter APICostUsagePresentationTests
 swift test --filter FastTooltipTests
 ```
 
-Expected: card-level source contract, API-cost row ownership, grouped content, and existing FastTooltip behavior pass with 0 failures.
+Expected: card-level source contract, Compact API-cost omission with Menu Bar preservation, grouped content, and existing FastTooltip behavior pass with 0 failures.
 
 - [ ] **Step 5: Commit Task 2**
 
@@ -509,7 +513,7 @@ git commit -m "feat: expand reset tooltip to usage card" \
 - Modify: `docs/superpowers/plans/2026-08-08-compact-usage-reset-tooltip.md` only to mark completed checkboxes if the execution workflow records progress in-file
 
 **Interfaces:**
-- Verifies: one ordered multiline subscription card tooltip, waiting-state copy, stale preservation, API-cost row tooltip preservation, whole-card hover target, accessibility
+- Verifies: one ordered multiline subscription card tooltip, waiting and unavailable copy, stale preservation, Compact API-cost tooltip omission with Menu Bar preservation, whole-card hover target, accessibility
 - Produces: structurally verified development app bundle
 - Prohibits: commands that stop, restart, kill, reconfigure, or overwrite production app/server/data
 

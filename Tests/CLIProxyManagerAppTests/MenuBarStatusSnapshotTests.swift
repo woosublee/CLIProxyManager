@@ -507,6 +507,30 @@ final class MenuBarStatusSnapshotTests: XCTestCase {
         XCTAssertTrue(label.contains("resets"))
     }
 
+    func testUsageProgressAccessibilityLabelClampsDefaultUsagePercent() {
+        let belowRange = UsageWindow(
+            id: "five_hour",
+            label: "5h",
+            usedPercent: -2,
+            resetAt: nil
+        )
+        let aboveRange = UsageWindow(
+            id: "seven_day",
+            label: "7d",
+            usedPercent: 104,
+            resetAt: nil
+        )
+
+        XCTAssertEqual(
+            subscriptionUsageAccessibilityLabel(for: belowRange),
+            "5h, 0 percent used"
+        )
+        XCTAssertEqual(
+            subscriptionUsageAccessibilityLabel(for: aboveRange),
+            "7d, 100 percent used"
+        )
+    }
+
     func testSnapshotExcludesDisabledConnectedProviders() {
         let snapshot = MenuBarStatusSnapshot(
             serverStatus: DiagnosticStatus(severity: .ready, title: "CLIProxyAPI Running", message: "Ready"),

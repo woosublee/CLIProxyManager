@@ -18,6 +18,15 @@ final class FastTooltipTests: XCTestCase {
         XCTAssertTrue(extensionSource.contains("@ViewBuilder"))
         XCTAssertTrue(extensionSource.contains("if let text = normalizedFastTooltipText(text)"))
         XCTAssertTrue(extensionSource.contains("FastTooltipModifier(text: text"))
+        XCTAssertTrue(
+            extensionSource.contains(
+                """
+                } else {
+                            self
+                        }
+                """
+            )
+        )
     }
 
     func testTooltipSourceUsesSharedAdaptivePopoverSurface() throws {

@@ -63,7 +63,8 @@ func subscriptionUsageAccessibilityLabel(
     for window: UsageWindow,
     usedPercent: Int? = nil
 ) -> String {
-    let used = usedPercent ?? Int(window.usedPercent.rounded())
+    let used = usedPercent
+        ?? min(max(Int(window.usedPercent.rounded()), 0), 100)
     let label = subscriptionUsageDisplayLabel(for: window)
     guard let resetText = subscriptionUsageResetDateText(for: window) else {
         return "\(label), \(used) percent used"
