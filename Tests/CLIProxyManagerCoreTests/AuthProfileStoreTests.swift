@@ -320,7 +320,7 @@ final class AuthProfileStoreTests: XCTestCase {
         }
 
         XCTAssertEqual(try json(at: targetURL)["access_token"] as? String, "replacement-access")
-        XCTAssertEqual(try String(contentsOf: sourceURL, encoding: .utf8), originalSource)
+        XCTAssertEqual(try fileDigest(at: sourceURL), digest(of: Data(originalSource.utf8)))
     }
 
     func testReauthenticateRollsBackWhenMultipleCredentialsChange() async throws {
@@ -341,7 +341,7 @@ final class AuthProfileStoreTests: XCTestCase {
             XCTAssertEqual(error as? AuthProfileReauthenticationError, .ambiguousChangedCredentials)
         }
 
-        XCTAssertEqual(try String(contentsOf: targetURL, encoding: .utf8), originalTarget)
+        XCTAssertEqual(try fileDigest(at: targetURL), digest(of: Data(originalTarget.utf8)))
         XCTAssertFalse(FileManager.default.fileExists(atPath: firstNewURL.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: secondNewURL.path))
     }
@@ -362,7 +362,64 @@ final class AuthProfileStoreTests: XCTestCase {
             XCTAssertTrue(error is CancellationError)
         }
 
-        XCTAssertEqual(try String(contentsOf: targetURL, encoding: .utf8), originalTarget)
+        XCTAssertEqual(try fileDigest(at: targetURL), digest(of: Data(originalTarget.utf8)))
+    }
+
+    func testReauthenticateRollsBackWhenExistingCredentialIsDeletedAlongsideNewSource() async throws {
+        let authDirectory = try makeAuthDirectory()
+        let targetURL = authDirectory.appendingPathComponent("claude-work.json")
+        let deletedURL = authDirectory.appendingPathComponent("claude-personal.json")
+        let sourceURL = authDirectory.appendingPathComponent("claude-login-output.json")
+        let originalTarget = #"{"type":"claude","email":"work@example.com","access_token":"work-old"}"#
+        let originalDeleted = #"{"type":"claude","email":"personal@example.com","access_token":"personal-old"}"#
+        try write(originalTarget, to: targetURL)
+        try write(originalDeleted, to: deletedURL)
+        let store = AuthProfileStore(authDirectory: authDirectory)
+
+        await XCTAssertThrowsErrorAsync {
+            _ = try await store.reauthenticate(targetID: "claude-work.json", provider: .claude) {
+                try FileManager.default.removeItem(at: deletedURL)
+                try write(#"{"type":"claude","email":"replacement@example.com","access_token":"replacement-access"}"#, to: sourceURL)
+            }
+        } verify: { error in
+            XCTAssertEqual(error as? AuthProfileReauthenticationError, .ambiguousChangedCredentials)
+        }
+
+        XCTAssertEqual(try fileDigest(at: targetURL), digest(of: Data(originalTarget.utf8)))
+        XCTAssertEqual(try fileDigest(at: deletedURL), digest(of: Data(originalDeleted.utf8)))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sourceURL.path))
+    }
+
+    func testReauthenticateContinuesRollbackAfterNewCredentialRemovalFails() async throws {
+        let authDirectory = try makeAuthDirectory()
+        let targetURL = authDirectory.appendingPathComponent("claude-work.json")
+        let firstNewURL = authDirectory.appendingPathComponent("claude-new-one.json")
+        let secondNewURL = authDirectory.appendingPathComponent("claude-new-two.json")
+        let originalTarget = #"{"type":"claude","email":"work@example.com","access_token":"work-old"}"#
+        try write(originalTarget, to: targetURL)
+        let fileManager = FailFirstNewCredentialRemovalFileManager(
+            fileNames: [firstNewURL.lastPathComponent, secondNewURL.lastPathComponent]
+        )
+        let store = AuthProfileStore(authDirectory: authDirectory, fileManager: fileManager)
+
+        await XCTAssertThrowsErrorAsync {
+            _ = try await store.reauthenticate(targetID: "claude-work.json", provider: .claude) {
+                try write(#"{"type":"claude","email":"replacement@example.com","access_token":"replacement-access"}"#, to: targetURL)
+                try write(#"{"type":"claude","email":"one@example.com","access_token":"one"}"#, to: firstNewURL)
+                try write(#"{"type":"claude","email":"two@example.com","access_token":"two"}"#, to: secondNewURL)
+                throw CancellationError()
+            }
+        } verify: { error in
+            XCTAssertEqual(error as? AuthProfileReauthenticationError, .rollbackFailed)
+        }
+
+        let failedFileName = try XCTUnwrap(fileManager.failedFileName)
+        let otherNewURL = try XCTUnwrap(
+            [firstNewURL, secondNewURL].first { $0.lastPathComponent != failedFileName }
+        )
+        XCTAssertEqual(try fileDigest(at: targetURL), digest(of: Data(originalTarget.utf8)))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: authDirectory.appendingPathComponent(failedFileName).path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: otherNewURL.path))
     }
 
     private func makeAuthDirectory() throws -> URL {
@@ -378,6 +435,14 @@ final class AuthProfileStoreTests: XCTestCase {
 
     private func json(at url: URL) throws -> [String: Any] {
         try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+    }
+
+    private func fileDigest(at url: URL) throws -> String {
+        digest(of: try Data(contentsOf: url))
+    }
+
+    private func digest(of data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     private func XCTAssertThrowsErrorAsync<T>(
@@ -413,6 +478,35 @@ final class AuthProfileStoreTests: XCTestCase {
         try FileManager.default.createDirectory(at: sandbox, withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: sandbox) }
         return sandbox
+    }
+}
+
+private final class FailFirstNewCredentialRemovalFileManager: FileManager {
+    private let fileNames: Set<String>
+    private let lock = NSLock()
+    private var failedFileNameStorage: String?
+
+    init(fileNames: Set<String>) {
+        self.fileNames = fileNames
+        super.init()
+    }
+
+    var failedFileName: String? {
+        lock.withLock { failedFileNameStorage }
+    }
+
+    override func removeItem(at URL: URL) throws {
+        let shouldFail = lock.withLock { () -> Bool in
+            guard fileNames.contains(URL.lastPathComponent), failedFileNameStorage == nil else {
+                return false
+            }
+            failedFileNameStorage = URL.lastPathComponent
+            return true
+        }
+        if shouldFail {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        try super.removeItem(at: URL)
     }
 }
 

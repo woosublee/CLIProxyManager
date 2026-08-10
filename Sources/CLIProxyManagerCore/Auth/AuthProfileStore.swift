@@ -98,11 +98,13 @@ public struct AuthProfileStore: @unchecked Sendable {
 
             if candidates.targetChanged,
                candidates.newIDs.isEmpty,
-               candidates.changedExistingIDs.isEmpty {
+               candidates.changedExistingIDs.isEmpty,
+               candidates.deletedExistingIDs.isEmpty {
                 try restoreTargetMetadata(snapshot)
             } else if !candidates.targetChanged,
                       candidates.newIDs.count == 1,
                       candidates.changedExistingIDs.isEmpty,
+                      candidates.deletedExistingIDs.isEmpty,
                       let sourceID = candidates.newIDs.first {
                 try replaceReauthenticationTarget(
                     targetID: targetID,
@@ -113,6 +115,7 @@ public struct AuthProfileStore: @unchecked Sendable {
             } else if !candidates.targetChanged,
                       candidates.newIDs.isEmpty,
                       candidates.changedExistingIDs.count == 1,
+                      candidates.deletedExistingIDs.isEmpty,
                       let sourceID = candidates.changedExistingIDs.first {
                 try replaceReauthenticationTarget(
                     targetID: targetID,
@@ -124,6 +127,7 @@ public struct AuthProfileStore: @unchecked Sendable {
                 let changedCount = (candidates.targetChanged ? 1 : 0)
                     + candidates.newIDs.count
                     + candidates.changedExistingIDs.count
+                    + candidates.deletedExistingIDs.count
                 throw changedCount == 0
                     ? AuthProfileReauthenticationError.noChangedCredential
                     : AuthProfileReauthenticationError.ambiguousChangedCredentials
@@ -461,7 +465,7 @@ public struct AuthProfileStore: @unchecked Sendable {
     private func reauthenticationCandidateIDs(
         afterLogin: [String: Data],
         snapshot: AuthProfileReauthenticationSnapshot
-    ) -> (targetChanged: Bool, newIDs: [String], changedExistingIDs: [String]) {
+    ) -> (targetChanged: Bool, newIDs: [String], changedExistingIDs: [String], deletedExistingIDs: [String]) {
         let targetChanged = afterLogin[snapshot.targetID] != snapshot.dataByFileName[snapshot.targetID]
         let newIDs = afterLogin.keys
             .filter { snapshot.dataByFileName[$0] == nil }
@@ -475,18 +479,42 @@ public struct AuthProfileStore: @unchecked Sendable {
                 return afterLogin[fileName] != previousData
             }
             .sorted()
-        return (targetChanged, newIDs, changedExistingIDs)
+        let deletedExistingIDs = snapshot.dataByFileName.keys
+            .filter { afterLogin[$0] == nil }
+            .sorted()
+        return (targetChanged, newIDs, changedExistingIDs, deletedExistingIDs)
     }
 
     private func restoreReauthenticationSnapshot(
         _ snapshot: AuthProfileReauthenticationSnapshot
     ) throws {
-        let afterLogin = try providerAuthFileData(snapshot.provider)
-        for fileName in snapshot.dataByFileName.keys.sorted() {
-            try restoreAuthFile(named: fileName, data: snapshot.dataByFileName[fileName]!)
+        let afterLogin: [String: Data]
+        do {
+            afterLogin = try providerAuthFileData(snapshot.provider)
+        } catch {
+            throw AuthProfileReauthenticationError.rollbackFailed
         }
-        for fileName in afterLogin.keys where snapshot.dataByFileName[fileName] == nil {
-            try removeAuthFile(named: fileName)
+
+        var restoreFailed = false
+        for fileName in snapshot.dataByFileName.keys.sorted() {
+            do {
+                try restoreAuthFile(named: fileName, data: snapshot.dataByFileName[fileName]!)
+            } catch {
+                restoreFailed = true
+            }
+        }
+        for fileName in afterLogin.keys
+            .filter({ snapshot.dataByFileName[$0] == nil })
+            .sorted() {
+            do {
+                try removeAuthFile(named: fileName)
+            } catch {
+                restoreFailed = true
+            }
+        }
+
+        if restoreFailed {
+            throw AuthProfileReauthenticationError.rollbackFailed
         }
     }
 
