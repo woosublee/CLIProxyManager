@@ -441,6 +441,25 @@ final class AuthProfileStoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: otherNewURL.path))
     }
 
+    func testReauthenticationErrorsProvideRecoveryDescriptions() {
+        XCTAssertEqual(
+            AuthProfileReauthenticationError.noChangedCredential.localizedDescription,
+            "No new credential was detected after login. Retry the login in your browser."
+        )
+        XCTAssertEqual(
+            AuthProfileReauthenticationError.ambiguousChangedCredentials.localizedDescription,
+            "Multiple credentials changed during login, so the target account could not be identified. Retry with a single login."
+        )
+        XCTAssertEqual(
+            AuthProfileReauthenticationError.targetProfileNotFound("claude-work.json").localizedDescription,
+            "The selected account credential could not be found."
+        )
+        XCTAssertEqual(
+            AuthProfileReauthenticationError.rollbackFailed.localizedDescription,
+            "The previous credentials could not be fully restored. Check the account credentials and retry."
+        )
+    }
+
     private func makeAuthDirectory() throws -> URL {
         let sandbox = try makeSandbox()
         let authDirectory = sandbox.appendingPathComponent("auth", isDirectory: true)

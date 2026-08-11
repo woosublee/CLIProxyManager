@@ -1,11 +1,24 @@
 import CryptoKit
 import Foundation
 
-public enum AuthProfileReauthenticationError: Error, Equatable, Sendable {
+public enum AuthProfileReauthenticationError: LocalizedError, Equatable, Sendable {
     case noChangedCredential
     case ambiguousChangedCredentials
     case targetProfileNotFound(String)
     case rollbackFailed
+
+    public var errorDescription: String? {
+        switch self {
+        case .noChangedCredential:
+            "No new credential was detected after login. Retry the login in your browser."
+        case .ambiguousChangedCredentials:
+            "Multiple credentials changed during login, so the target account could not be identified. Retry with a single login."
+        case .targetProfileNotFound:
+            "The selected account credential could not be found."
+        case .rollbackFailed:
+            "The previous credentials could not be fully restored. Check the account credentials and retry."
+        }
+    }
 }
 
 private struct AuthProfileReauthenticationSnapshot {
