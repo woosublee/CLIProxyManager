@@ -1,6 +1,34 @@
 import CryptoKit
 import Foundation
 
+public enum AuthProfileReauthenticationError: LocalizedError, Equatable, Sendable {
+    case noChangedCredential
+    case ambiguousChangedCredentials
+    case targetProfileNotFound(String)
+    case rollbackFailed
+
+    public var errorDescription: String? {
+        switch self {
+        case .noChangedCredential:
+            "No new credential was detected after login. Retry the login in your browser."
+        case .ambiguousChangedCredentials:
+            "Multiple credentials changed during login, so the target account could not be identified. Retry with a single login."
+        case .targetProfileNotFound:
+            "The selected account credential could not be found."
+        case .rollbackFailed:
+            "The previous credentials could not be fully restored. Check the account credentials and retry."
+        }
+    }
+}
+
+private struct AuthProfileReauthenticationSnapshot {
+    let targetID: String
+    let provider: AuthProfileType
+    let targetDisabled: Bool
+    let targetPrefix: String?
+    let dataByFileName: [String: Data]
+}
+
 public struct AuthProfileMigration: Equatable, Sendable {
     public let oldID: String
     public let newID: String
@@ -68,6 +96,69 @@ public struct AuthProfileStore: @unchecked Sendable {
 
     public func profile(id: String) throws -> AuthProfile? {
         try profiles().first { $0.id == id }
+    }
+
+    public func reauthenticate(
+        targetID: String,
+        provider: AuthProfileType,
+        login: @Sendable () async throws -> Void
+    ) async throws -> AuthProfile {
+        let snapshot = try reauthenticationSnapshot(targetID: targetID, provider: provider)
+        do {
+            try await login()
+            try Task.checkCancellation()
+            let afterLogin = try providerAuthFileData(provider)
+            let candidates = reauthenticationCandidateIDs(afterLogin: afterLogin, snapshot: snapshot)
+
+            if candidates.targetChanged,
+               candidates.newIDs.isEmpty,
+               candidates.changedExistingIDs.isEmpty,
+               candidates.deletedExistingIDs.isEmpty {
+                try restoreTargetMetadata(snapshot)
+            } else if !candidates.targetChanged,
+                      candidates.newIDs.count == 1,
+                      candidates.changedExistingIDs.isEmpty,
+                      candidates.deletedExistingIDs.isEmpty,
+                      let sourceID = candidates.newIDs.first {
+                try replaceReauthenticationTarget(
+                    targetID: targetID,
+                    sourceData: afterLogin[sourceID]!,
+                    snapshot: snapshot
+                )
+                try removeAuthFile(named: sourceID)
+            } else if !candidates.targetChanged,
+                      candidates.newIDs.isEmpty,
+                      candidates.changedExistingIDs.count == 1,
+                      candidates.deletedExistingIDs.isEmpty,
+                      let sourceID = candidates.changedExistingIDs.first {
+                try replaceReauthenticationTarget(
+                    targetID: targetID,
+                    sourceData: afterLogin[sourceID]!,
+                    snapshot: snapshot
+                )
+                try restoreAuthFile(named: sourceID, data: snapshot.dataByFileName[sourceID]!)
+            } else {
+                let changedCount = (candidates.targetChanged ? 1 : 0)
+                    + candidates.newIDs.count
+                    + candidates.changedExistingIDs.count
+                    + candidates.deletedExistingIDs.count
+                throw changedCount == 0
+                    ? AuthProfileReauthenticationError.noChangedCredential
+                    : AuthProfileReauthenticationError.ambiguousChangedCredentials
+            }
+
+            guard let profile = try profile(id: targetID) else {
+                throw AuthProfileReauthenticationError.targetProfileNotFound(targetID)
+            }
+            return profile
+        } catch {
+            do {
+                try restoreReauthenticationSnapshot(snapshot)
+            } catch {
+                throw AuthProfileReauthenticationError.rollbackFailed
+            }
+            throw error
+        }
     }
 
     public func prepareCodexCredentialMigrations() throws -> [AuthProfileMigration] {
@@ -339,6 +430,137 @@ public struct AuthProfileStore: @unchecked Sendable {
         return fileURLs.first { fileURL in
             fileURL.pathExtension == "json" && fileURL.lastPathComponent == trimmedID
         }
+    }
+
+    private func providerAuthFileData(_ provider: AuthProfileType) throws -> [String: Data] {
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: authDirectory.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            return [:]
+        }
+
+        let fileURLs = try fileManager.contentsOfDirectory(
+            at: authDirectory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )
+
+        var dataByFileName: [String: Data] = [:]
+        for fileURL in fileURLs where fileURL.pathExtension == "json" {
+            guard let data = try? Data(contentsOf: fileURL),
+                  let authFile = try? JSONDecoder().decode(AuthFile.self, from: data),
+                  authFile.type == provider.rawValue else {
+                continue
+            }
+            dataByFileName[fileURL.lastPathComponent] = data
+        }
+        return dataByFileName
+    }
+
+    private func reauthenticationSnapshot(
+        targetID: String,
+        provider: AuthProfileType
+    ) throws -> AuthProfileReauthenticationSnapshot {
+        let dataByFileName = try providerAuthFileData(provider)
+        guard let targetData = dataByFileName[targetID],
+              let targetAuthFile = try? JSONDecoder().decode(AuthFile.self, from: targetData),
+              targetAuthFile.type == provider.rawValue else {
+            throw AuthProfileReauthenticationError.targetProfileNotFound(targetID)
+        }
+
+        return AuthProfileReauthenticationSnapshot(
+            targetID: targetID,
+            provider: provider,
+            targetDisabled: targetAuthFile.disabled ?? false,
+            targetPrefix: sanitizedPrefix(targetAuthFile.prefix),
+            dataByFileName: dataByFileName
+        )
+    }
+
+    private func reauthenticationCandidateIDs(
+        afterLogin: [String: Data],
+        snapshot: AuthProfileReauthenticationSnapshot
+    ) -> (targetChanged: Bool, newIDs: [String], changedExistingIDs: [String], deletedExistingIDs: [String]) {
+        let targetChanged = afterLogin[snapshot.targetID] != snapshot.dataByFileName[snapshot.targetID]
+        let newIDs = afterLogin.keys
+            .filter { snapshot.dataByFileName[$0] == nil }
+            .sorted()
+        let changedExistingIDs = afterLogin.keys
+            .filter { fileName in
+                guard fileName != snapshot.targetID,
+                      let previousData = snapshot.dataByFileName[fileName] else {
+                    return false
+                }
+                return afterLogin[fileName] != previousData
+            }
+            .sorted()
+        let deletedExistingIDs = snapshot.dataByFileName.keys
+            .filter { afterLogin[$0] == nil }
+            .sorted()
+        return (targetChanged, newIDs, changedExistingIDs, deletedExistingIDs)
+    }
+
+    private func restoreReauthenticationSnapshot(
+        _ snapshot: AuthProfileReauthenticationSnapshot
+    ) throws {
+        let afterLogin: [String: Data]
+        do {
+            afterLogin = try providerAuthFileData(snapshot.provider)
+        } catch {
+            throw AuthProfileReauthenticationError.rollbackFailed
+        }
+
+        var restoreFailed = false
+        for fileName in snapshot.dataByFileName.keys.sorted() {
+            do {
+                try restoreAuthFile(named: fileName, data: snapshot.dataByFileName[fileName]!)
+            } catch {
+                restoreFailed = true
+            }
+        }
+        for fileName in afterLogin.keys
+            .filter({ snapshot.dataByFileName[$0] == nil })
+            .sorted() {
+            do {
+                try removeAuthFile(named: fileName)
+            } catch {
+                restoreFailed = true
+            }
+        }
+
+        if restoreFailed {
+            throw AuthProfileReauthenticationError.rollbackFailed
+        }
+    }
+
+    private func restoreTargetMetadata(
+        _ snapshot: AuthProfileReauthenticationSnapshot
+    ) throws {
+        guard let targetURL = try authFileURL(id: snapshot.targetID) else {
+            throw AuthProfileReauthenticationError.targetProfileNotFound(snapshot.targetID)
+        }
+        try updateField(key: "disabled", value: snapshot.targetDisabled, fileURL: targetURL)
+        try updateField(key: "prefix", value: snapshot.targetPrefix, fileURL: targetURL)
+    }
+
+    private func restoreAuthFile(named fileName: String, data: Data) throws {
+        let fileURL = authDirectory.appendingPathComponent(fileName)
+        try data.write(to: fileURL, options: .atomic)
+    }
+
+    private func removeAuthFile(named fileName: String) throws {
+        guard let fileURL = try authFileURL(id: fileName) else { return }
+        try fileManager.removeItem(at: fileURL)
+    }
+
+    private func replaceReauthenticationTarget(
+        targetID: String,
+        sourceData: Data,
+        snapshot: AuthProfileReauthenticationSnapshot
+    ) throws {
+        let targetURL = authDirectory.appendingPathComponent(targetID)
+        try sourceData.write(to: targetURL, options: .atomic)
+        try updateField(key: "disabled", value: snapshot.targetDisabled, fileURL: targetURL)
+        try updateField(key: "prefix", value: snapshot.targetPrefix, fileURL: targetURL)
     }
 
     private func updateField(key: String, value: Any?, fileURL: URL) throws {

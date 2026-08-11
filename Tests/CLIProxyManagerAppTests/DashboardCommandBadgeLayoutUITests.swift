@@ -101,10 +101,8 @@ final class DashboardCommandBadgeLayoutUITests: XCTestCase {
             toggleUsageOverlayVisibility: {},
             toggleAccountDetailVisibility: {},
             setEnabled: { _ in },
-            moveUp: {},
-            moveDown: {},
-            canMoveUp: false,
-            canMoveDown: false,
+            relogin: {},
+            isOAuthLoginInProgress: false,
             remove: {}
         )
         .frame(width: AppWindowMetrics.mainWidth - 28)

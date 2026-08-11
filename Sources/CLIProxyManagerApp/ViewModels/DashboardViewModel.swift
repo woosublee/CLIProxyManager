@@ -43,6 +43,11 @@ extension ProxyModelClient: ProxyModelListing {}
 
 protocol AuthProfileManaging: Sendable {
     func profiles() throws -> [AuthProfile]
+    func reauthenticate(
+        targetID: String,
+        provider: AuthProfileType,
+        login: @Sendable () async throws -> Void
+    ) async throws -> AuthProfile
     func prepareCodexCredentialMigrations() throws -> [AuthProfileMigration]
     func finalizeCodexCredentialMigrations(_ migrations: [AuthProfileMigration]) throws
     func rollbackCodexCredentialMigrations(_ migrations: [AuthProfileMigration])
@@ -54,6 +59,14 @@ protocol AuthProfileManaging: Sendable {
 }
 
 extension AuthProfileManaging {
+    func reauthenticate(
+        targetID: String,
+        provider _: AuthProfileType,
+        login _: @Sendable () async throws -> Void
+    ) async throws -> AuthProfile {
+        throw AuthProfileReauthenticationError.targetProfileNotFound(targetID)
+    }
+
     func prepareCodexCredentialMigrations() throws -> [AuthProfileMigration] { [] }
     func finalizeCodexCredentialMigrations(_: [AuthProfileMigration]) throws {}
     func rollbackCodexCredentialMigrations(_: [AuthProfileMigration]) {}
@@ -2613,6 +2626,31 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
+    func startOAuthReauthentication(_ provider: ProviderRowState.ID) {
+        guard oauthLoginTask == nil,
+              let commandProfile = config.oauthCommandProfiles.first(where: { $0.id == provider.rawValue }),
+              let providerRow = providerRows.first(where: { $0.id == provider }),
+              providerRow.credentialKind == .oauth,
+              providerRow.isConnected || providerRow.isDisabled else {
+            return
+        }
+
+        let sessionID = UUID()
+        beginOAuthLoginSession(sessionID)
+        completedOAuthLoginProvider = nil
+        completedOAuthLoginIsInitialSetup = true
+        activeOAuthLoginProvider = provider
+        isProfileLoginInProgress = true
+        oauthLoginTask = Task { [weak self] in
+            await self?.runOAuthReauthentication(
+                provider: provider,
+                authProfileID: commandProfile.authProfileID,
+                providerType: commandProfile.provider,
+                sessionID: sessionID
+            )
+        }
+    }
+
     func cancelOAuthLogin() {
         let cancelledProvider = activeOAuthLoginProvider
         let cancelledSessionID = oauthLoginSessionID
@@ -2647,6 +2685,17 @@ final class DashboardViewModel: ObservableObject {
             id: sessionID,
             startedDuringServerActionGeneration: actionGeneration
         )
+    }
+
+    private func finishOAuthLoginSession(_ sessionID: UUID) {
+        _ = releaseOAuthRefreshOwnership(for: sessionID)
+        if oauthLoginSessionID == sessionID {
+            isProfileLoginInProgress = false
+            activeOAuthLoginProvider = nil
+            oauthLoginTask = nil
+            oauthLoginSession = nil
+        }
+        scheduleConfigurationWorkStabilization()
     }
 
     private func markOAuthLoginReconciled(sessionID: UUID) {
@@ -2720,16 +2769,7 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func runOAuthLogin(_ providerType: AuthProfileType, sessionID: UUID, isInitialSetup: Bool) async {
-        defer {
-            _ = releaseOAuthRefreshOwnership(for: sessionID)
-            if oauthLoginSessionID == sessionID {
-                isProfileLoginInProgress = false
-                activeOAuthLoginProvider = nil
-                oauthLoginTask = nil
-                oauthLoginSession = nil
-            }
-            scheduleConfigurationWorkStabilization()
-        }
+        defer { finishOAuthLoginSession(sessionID) }
 
         let beforeProfiles = authProfiles
         let loginProvider: OAuthLoginProvider = providerType == .codex ? .codex : .claude
@@ -2742,39 +2782,12 @@ final class DashboardViewModel: ObservableObject {
             applyCodexCredentialMigrationsIfNeeded()
             let completedID = reconcileOAuthLoginCompletion(providerType: providerType, beforeProfiles: beforeProfiles)
             refreshProfiles()
-            markOAuthLoginReconciled(sessionID: sessionID)
-
-            if oauthLoginSession?.observedServerActionCompletion?.succeeded == false {
-                preserveOAuthConfigurationWorkAfterFailure(sessionID: sessionID)
-                return
-            }
-
-            let pendingWorkSucceeded = await waitForPendingProxyConfigurationWork()
-            try Task.checkCancellation()
-            guard oauthLoginSessionID == sessionID else { return }
-            guard pendingWorkSucceeded else {
-                preserveOAuthConfigurationWorkAfterFailure(sessionID: sessionID)
-                return
-            }
-
-            if serverStatus.severity == .ready {
-                _ = await refreshSubscriptionUsage(
-                    force: false,
-                    pollingWakeReason: nil,
-                    source: .oauth(sessionID)
-                )
-                try Task.checkCancellation()
-                guard oauthLoginSessionID == sessionID else { return }
-                if configurationWork.deferredCollectorUpdate {
-                    configurationWork.deferredCollectorUpdate = false
-                    scheduleAPIUsageCollectorUpdateIfStarted()
-                }
-            }
-            handOffCodexResetCreditsSourceAuthorizationIfNeeded(for: .oauth(sessionID))
-            _ = releaseOAuthRefreshOwnership(for: sessionID)
-            completedOAuthLoginProvider = completedID
-            completedOAuthLoginIsInitialSetup = isInitialSetup
-            settingsMessage = "\(providerName) connection was updated."
+            try await finalizeOAuthLogin(
+                sessionID: sessionID,
+                completedID: completedID,
+                isInitialSetup: isInitialSetup,
+                successMessage: "\(providerName) connection was updated."
+            )
         } catch is CancellationError {
             guard oauthLoginSessionID == sessionID else { return }
             let releasedOwnership = releaseOAuthRefreshOwnership(for: sessionID)
@@ -2790,6 +2803,99 @@ final class DashboardViewModel: ObservableObject {
             settingsMessage = "\(providerName) login failed: \(error.localizedDescription)"
             refreshProfiles()
         }
+    }
+
+    private func runOAuthReauthentication(
+        provider: ProviderRowState.ID,
+        authProfileID: String,
+        providerType: AuthProfileType,
+        sessionID: UUID
+    ) async {
+        defer { finishOAuthLoginSession(sessionID) }
+        let loginProvider: OAuthLoginProvider = providerType == .codex ? .codex : .claude
+
+        do {
+            _ = try await authProfileStore.reauthenticate(
+                targetID: authProfileID,
+                provider: providerType
+            ) { [oauthLoginService, port = config.port] in
+                try await oauthLoginService.login(provider: loginProvider, port: port)
+            }
+            try Task.checkCancellation()
+            guard oauthLoginSessionID == sessionID else { return }
+
+            applyCodexCredentialMigrationsIfNeeded()
+            refreshProfiles()
+            try await finalizeOAuthLogin(
+                sessionID: sessionID,
+                completedID: provider,
+                isInitialSetup: false,
+                successMessage: "\(reauthenticatedAccountTitle(provider)) was reauthenticated.",
+                configurationFailurePrefix: "Re-login succeeded, but CLIProxyAPI could not restart"
+            )
+        } catch is CancellationError {
+            guard oauthLoginSessionID == sessionID else { return }
+            let releasedOwnership = releaseOAuthRefreshOwnership(for: sessionID)
+            configurationWork.removeDeferredSubscriptionUsageRefreshReason(.oauthFinal)
+            settingsMessage = "Re-login was cancelled."
+            refreshProfiles()
+            if releasedOwnership {
+                await stabilizeConfigurationWorkIfPossible()
+            }
+        } catch {
+            guard oauthLoginSessionID == sessionID else { return }
+            _ = releaseOAuthRefreshOwnership(for: sessionID)
+            settingsMessage = "Re-login failed: \(error.localizedDescription)"
+            refreshProfiles()
+        }
+    }
+
+    private func finalizeOAuthLogin(
+        sessionID: UUID,
+        completedID: ProviderRowState.ID,
+        isInitialSetup: Bool,
+        successMessage: String,
+        configurationFailurePrefix: String? = nil
+    ) async throws {
+        markOAuthLoginReconciled(sessionID: sessionID)
+        if oauthLoginSession?.observedServerActionCompletion?.succeeded == false {
+            preserveOAuthConfigurationWorkAfterFailure(sessionID: sessionID)
+            if let configurationFailurePrefix {
+                settingsMessage = "\(configurationFailurePrefix): \(serverStatus.message)"
+            }
+            return
+        }
+
+        let pendingWorkSucceeded = await waitForPendingProxyConfigurationWork()
+        try Task.checkCancellation()
+        guard oauthLoginSessionID == sessionID else { return }
+        guard pendingWorkSucceeded else {
+            preserveOAuthConfigurationWorkAfterFailure(sessionID: sessionID)
+            if let configurationFailurePrefix {
+                settingsMessage = "\(configurationFailurePrefix): \(serverStatus.message)"
+            }
+            return
+        }
+
+        if serverStatus.severity == .ready {
+            _ = await refreshSubscriptionUsage(force: false, pollingWakeReason: nil, source: .oauth(sessionID))
+            try Task.checkCancellation()
+            guard oauthLoginSessionID == sessionID else { return }
+            if configurationWork.deferredCollectorUpdate {
+                configurationWork.deferredCollectorUpdate = false
+                scheduleAPIUsageCollectorUpdateIfStarted()
+            }
+        }
+        handOffCodexResetCreditsSourceAuthorizationIfNeeded(for: .oauth(sessionID))
+        _ = releaseOAuthRefreshOwnership(for: sessionID)
+        completedOAuthLoginProvider = completedID
+        completedOAuthLoginIsInitialSetup = isInitialSetup
+        settingsMessage = successMessage
+    }
+
+    private func reauthenticatedAccountTitle(_ provider: ProviderRowState.ID) -> String {
+        providerRows.first(where: { $0.id == provider })?.displayTitle
+            ?? oauthProviderName(oauthProviderType(for: provider))
     }
 
     private func preserveOAuthConfigurationWorkAfterFailure(sessionID: UUID) {
