@@ -365,6 +365,25 @@ final class AuthProfileStoreTests: XCTestCase {
         XCTAssertEqual(try fileDigest(at: targetURL), digest(of: Data(originalTarget.utf8)))
     }
 
+    func testReauthenticateRollsBackWhenLoginTaskIsCancelledAfterWritingCredential() async throws {
+        let authDirectory = try makeAuthDirectory()
+        let targetURL = authDirectory.appendingPathComponent("claude-work.json")
+        let originalTarget = #"{"type":"claude","email":"work@example.com","access_token":"work-old"}"#
+        try write(originalTarget, to: targetURL)
+        let store = AuthProfileStore(authDirectory: authDirectory)
+
+        await XCTAssertThrowsErrorAsync {
+            _ = try await store.reauthenticate(targetID: "claude-work.json", provider: .claude) {
+                try write(#"{"type":"claude","email":"replacement@example.com","access_token":"replacement-access"}"#, to: targetURL)
+                withUnsafeCurrentTask { $0?.cancel() }
+            }
+        } verify: { error in
+            XCTAssertTrue(error is CancellationError)
+        }
+
+        XCTAssertEqual(try fileDigest(at: targetURL), digest(of: Data(originalTarget.utf8)))
+    }
+
     func testReauthenticateRollsBackWhenExistingCredentialIsDeletedAlongsideNewSource() async throws {
         let authDirectory = try makeAuthDirectory()
         let targetURL = authDirectory.appendingPathComponent("claude-work.json")

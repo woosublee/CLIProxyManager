@@ -93,6 +93,7 @@ public struct AuthProfileStore: @unchecked Sendable {
         let snapshot = try reauthenticationSnapshot(targetID: targetID, provider: provider)
         do {
             try await login()
+            try Task.checkCancellation()
             let afterLogin = try providerAuthFileData(provider)
             let candidates = reauthenticationCandidateIDs(afterLogin: afterLogin, snapshot: snapshot)
 
