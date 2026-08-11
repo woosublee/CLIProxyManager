@@ -2984,6 +2984,184 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         try await Task.sleep(nanoseconds: 50_000_000)
     }
 
+    func testReauthenticateTargetsExistingCardWithoutChangingItsCommandProfile() async {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            .init(
+                id: "claude-work",
+                provider: .claude,
+                authProfileID: "claude-work.json",
+                commandName: "ccwork",
+                nickname: "Work",
+                modelPrefix: "claude-work",
+                isEnabled: true
+            )
+        ]
+        config.accountOrder = ["claude-work"]
+        config.usageOverlay.hiddenAccountIDs = ["claude-work"]
+        let authStore = ReauthenticatingAuthProfileStore(
+            initialTarget: .init(fileName: "claude-work.json", type: .claude, email: "work@example.com", accountID: nil, expired: nil, disabled: false, prefix: "claude-work"),
+            afterLoginTarget: .init(fileName: "claude-work.json", type: .claude, email: "replacement@example.com", accountID: nil, expired: nil, disabled: false, prefix: "claude-work")
+        )
+        let viewModel = reauthenticationViewModel(config: config, authProfileStore: authStore)
+
+        viewModel.startOAuthReauthentication(.init(rawValue: "claude-work"))
+        await waitForOAuthCompletion(viewModel)
+
+        XCTAssertEqual(authStore.reauthenticationRequests, [.init(targetID: "claude-work.json", provider: .claude)])
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.map(\.id), ["claude-work"])
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.first?.commandName, "ccwork")
+        XCTAssertEqual(viewModel.config.oauthCommandProfiles.first?.nickname, "Work")
+        XCTAssertEqual(viewModel.config.accountOrder, ["claude-work"])
+        XCTAssertEqual(viewModel.config.usageOverlay.hiddenAccountIDs, ["claude-work"])
+        XCTAssertEqual(viewModel.completedOAuthLoginProvider, .init(rawValue: "claude-work"))
+        XCTAssertFalse(viewModel.completedOAuthLoginIsInitialSetup)
+    }
+
+    func testReauthenticatePreservesDisabledStateWithoutEnableCall() async {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            .init(
+                id: "codex-work",
+                provider: .codex,
+                authProfileID: "codex-work.json",
+                commandName: "ccwork",
+                nickname: "Work",
+                modelPrefix: "codex-work",
+                isEnabled: true
+            )
+        ]
+        let authStore = ReauthenticatingAuthProfileStore(
+            initialTarget: .init(fileName: "codex-work.json", type: .codex, email: "work@example.com", accountID: "acct_example", expired: nil, disabled: true, prefix: "codex-work"),
+            afterLoginTarget: .init(fileName: "codex-work.json", type: .codex, email: "replacement@example.com", accountID: "acct_example", expired: nil, disabled: true, prefix: "codex-work")
+        )
+        let viewModel = reauthenticationViewModel(config: config, authProfileStore: authStore)
+
+        viewModel.startOAuthReauthentication(.init(rawValue: "codex-work"))
+        await waitForOAuthCompletion(viewModel)
+
+        XCTAssertTrue(viewModel.providerRows.first { $0.id.rawValue == "codex-work" }?.isDisabled == true)
+        XCTAssertTrue(authStore.disabledIDUpdates.isEmpty)
+    }
+
+    func testReauthenticateFailureKeepsOriginalCardState() async {
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            .init(
+                id: "claude-work",
+                provider: .claude,
+                authProfileID: "claude-work.json",
+                commandName: "ccwork",
+                nickname: "Work",
+                modelPrefix: "claude-work",
+                isEnabled: true
+            )
+        ]
+        let initialTarget = AuthProfile(
+            fileName: "claude-work.json",
+            type: .claude,
+            email: "work@example.com",
+            accountID: nil,
+            expired: nil,
+            disabled: false,
+            prefix: "claude-work"
+        )
+        let authStore = ReauthenticatingAuthProfileStore(
+            initialTarget: initialTarget,
+            afterLoginTarget: initialTarget,
+            reauthenticationError: AuthProfileReauthenticationError.ambiguousChangedCredentials
+        )
+        let viewModel = reauthenticationViewModel(config: config, authProfileStore: authStore)
+        let originalConfig = viewModel.config
+        let originalRows = viewModel.providerRows
+
+        viewModel.startOAuthReauthentication(.init(rawValue: "claude-work"))
+        await waitForOAuthCompletion(viewModel)
+
+        XCTAssertEqual(viewModel.config, originalConfig)
+        XCTAssertEqual(viewModel.providerRows, originalRows)
+        XCTAssertNil(viewModel.completedOAuthLoginProvider)
+        XCTAssertTrue(viewModel.settingsMessage?.hasPrefix("Re-login failed:") == true)
+    }
+
+    func testReauthenticateKeepsCredentialVisibleWhenConfigurationRestartFails() async {
+        let restartFailure = NSError(
+            domain: "ReauthenticationRestart",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "Restart failed"]
+        )
+        var config = AppConfig.default
+        config.oauthCommandProfiles = [
+            .init(
+                id: "codex-work",
+                provider: .codex,
+                authProfileID: "codex-work.json",
+                commandName: "ccwork",
+                nickname: "Work",
+                modelPrefix: "codex-work",
+                isEnabled: true
+            )
+        ]
+        let initialTarget = AuthProfile(
+            fileName: "codex-work.json",
+            type: .codex,
+            email: "work@example.com",
+            accountID: "acct_example",
+            expired: nil,
+            disabled: false,
+            prefix: "codex-work"
+        )
+        let replacementTarget = AuthProfile(
+            fileName: "codex-work.json",
+            type: .codex,
+            email: "replacement@example.com",
+            accountID: "acct_example",
+            expired: nil,
+            disabled: false,
+            prefix: "codex-work"
+        )
+        let authStore = ReauthenticatingAuthProfileStore(
+            initialTarget: initialTarget,
+            afterLoginTarget: replacementTarget
+        )
+        let proxyService = StubProxyServiceStarter(
+            restartError: restartFailure,
+            suspendedRestartCount: 1
+        )
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: authStore,
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: proxyService,
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
+        )
+        viewModel.serverStatus = readyStatus()
+        viewModel.serverControlState = .running
+
+        let restart = Task { await viewModel.restartServer() }
+        let reachedRestart = await proxyService.reachesRestartCount(1)
+        XCTAssertTrue(reachedRestart)
+        viewModel.startOAuthReauthentication(.init(rawValue: "codex-work"))
+        proxyService.releaseRestart(1)
+        await restart.value
+        await waitForOAuthCompletion(viewModel)
+
+        XCTAssertEqual(
+            viewModel.providerRows.first { $0.id.rawValue == "codex-work" }?.connectionDetail,
+            "replacement@example.com"
+        )
+        XCTAssertNil(viewModel.completedOAuthLoginProvider)
+        XCTAssertTrue(
+            viewModel.settingsMessage?.hasPrefix(
+                "Re-login succeeded, but CLIProxyAPI could not restart:"
+            ) == true
+        )
+    }
+
     func testCancelOAuthLoginCancelsActiveProviderLogin() async throws {
         let authStore = StubAuthProfileStore(profiles: [])
         authStore.nextProfiles = [
@@ -10196,6 +10374,23 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         )
     }
 
+    private func reauthenticationViewModel(
+        config: AppConfig,
+        authProfileStore: any AuthProfileManaging
+    ) -> DashboardViewModel {
+        DashboardViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: authProfileStore,
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
+            claudeConnector: connectedClaudeConnector(),
+            secretStore: InMemorySecretStore()
+        )
+    }
+
     private func waitForShellInstallation(
         _ installer: StubShellInstaller,
         functionNames: [String]
@@ -12521,6 +12716,71 @@ private final class ReloadFailingAfterDisableAuthProfileStore: AuthProfileManagi
             )
             return true
         }
+    }
+
+    func setDisabled(_: Bool, for _: AuthProfileType) throws -> Int { 0 }
+    func delete(for _: AuthProfileType) throws -> Int { 0 }
+}
+
+private final class ReauthenticatingAuthProfileStore: AuthProfileManaging, @unchecked Sendable {
+    struct ReauthenticationRequest: Equatable {
+        let targetID: String
+        let provider: AuthProfileType
+    }
+
+    private let lock = NSLock()
+    private var profilesValue: [AuthProfile]
+    private var _reauthenticationRequests: [ReauthenticationRequest] = []
+    private var _disabledIDUpdates: [DisabledIDUpdate] = []
+    private let afterLoginTarget: AuthProfile
+    private let reauthenticationError: Error?
+
+    var reauthenticationRequests: [ReauthenticationRequest] {
+        lock.withLock { _reauthenticationRequests }
+    }
+
+    var disabledIDUpdates: [DisabledIDUpdate] {
+        lock.withLock { _disabledIDUpdates }
+    }
+
+    init(
+        initialTarget: AuthProfile,
+        afterLoginTarget: AuthProfile,
+        reauthenticationError: Error? = nil
+    ) {
+        profilesValue = [initialTarget]
+        self.afterLoginTarget = afterLoginTarget
+        self.reauthenticationError = reauthenticationError
+    }
+
+    func profiles() throws -> [AuthProfile] {
+        lock.withLock { profilesValue }
+    }
+
+    func reauthenticate(
+        targetID: String,
+        provider: AuthProfileType,
+        login: @Sendable () async throws -> Void
+    ) async throws -> AuthProfile {
+        lock.withLock {
+            _reauthenticationRequests.append(.init(targetID: targetID, provider: provider))
+        }
+        try await login()
+        if let reauthenticationError { throw reauthenticationError }
+        return try lock.withLock {
+            guard let index = profilesValue.firstIndex(where: { $0.id == targetID }) else {
+                throw AuthProfileReauthenticationError.targetProfileNotFound(targetID)
+            }
+            profilesValue[index] = afterLoginTarget
+            return afterLoginTarget
+        }
+    }
+
+    func setDisabled(_ disabled: Bool, id: String) throws -> Bool {
+        lock.withLock {
+            _disabledIDUpdates.append(.init(id: id, disabled: disabled))
+        }
+        return false
     }
 
     func setDisabled(_: Bool, for _: AuthProfileType) throws -> Int { 0 }
