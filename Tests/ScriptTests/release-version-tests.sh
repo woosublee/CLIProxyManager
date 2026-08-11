@@ -243,11 +243,15 @@ checksum_after_replace="$(shasum -a 256 "$sync_repo/Info.plist" | cut -d' ' -f1)
 [[ "$checksum_before" == "$checksum_after_replace" ]] || fail "failed atomic replace must preserve the original plist"
 
 makefile="$REPO_ROOT/Makefile"
+canonical_version="$("$SOURCE_RESOLVER" version)"
+canonical_build="$("$SOURCE_RESOLVER" build)"
+canonical_tag="$("$SOURCE_RESOLVER" tag)"
+canonical_dmg_name="$("$SOURCE_RESOLVER" dmg-name)"
 ! grep -Eq '^VERSION[[:space:]]*\?=' "$makefile" || fail "Makefile must not own VERSION"
 ! grep -Eq '^BUILD_NUMBER[[:space:]]*\?=' "$makefile" || fail "Makefile must not own BUILD_NUMBER"
-[[ "$(make -s -C "$REPO_ROOT" print-app-version)" == '0.1.37' ]] || fail "Makefile version must delegate to resolver"
-[[ "$(make -s -C "$REPO_ROOT" print-build-number)" == '40' ]] || fail "Makefile build must delegate to resolver"
-[[ "$(make -s -C "$REPO_ROOT" print-build-tag)" == 'v0.1.37' ]] || fail "Makefile tag must delegate to resolver"
+[[ "$(make -s -C "$REPO_ROOT" print-app-version)" == "$canonical_version" ]] || fail "Makefile version must delegate to resolver"
+[[ "$(make -s -C "$REPO_ROOT" print-build-number)" == "$canonical_build" ]] || fail "Makefile build must delegate to resolver"
+[[ "$(make -s -C "$REPO_ROOT" print-build-tag)" == "$canonical_tag" ]] || fail "Makefile tag must delegate to resolver"
 assert_failure_contains 'VERSION is derived from release/version.json' make -s -C "$REPO_ROOT" VERSION=9.9.9 print-app-version
 assert_failure_contains 'BUILD_NUMBER is derived from release/version.json' make -s -C "$REPO_ROOT" BUILD_NUMBER=999 print-build-number
 assert_failure_contains 'DMG_PATH is derived from release/version.json' make -s -C "$REPO_ROOT" DMG_PATH=alternate.dmg print-app-version
@@ -255,14 +259,14 @@ assert_failure_contains 'DMG_PATH is derived from release/version.json' env DMG_
 assert_failure_contains 'BUNDLE_ID is fixed to com.woosublee.CLIProxyManager' make -s -C "$REPO_ROOT" BUNDLE_ID=com.example.override print-app-version
 grep -F 'swift-build: release-metadata-check' "$makefile" >/dev/null || fail "release metadata must gate Swift compilation before bundle"
 canonical_dmg_dry_run="$(make -n -C "$REPO_ROOT" BUILD_DIR=release-output sign-dmg)"
-printf '%s\n' "$canonical_dmg_dry_run" | grep -F 'release-output/CLIProxyManager-0.1.37.dmg' >/dev/null ||
+printf '%s\n' "$canonical_dmg_dry_run" | grep -F "release-output/$canonical_dmg_name" >/dev/null ||
   fail "DMG path must use the permitted build directory and resolver basename"
 [[ "$(make -s -C "$REPO_ROOT" ARTIFACT_CHANNEL=development DEVELOPMENT_VERSION=0.2.0 DEVELOPMENT_BUILD_NUMBER=9001 print-app-version)" == '0.2.0' ]] || fail "development version should be explicit"
 
 development_bundle_dry_run="$(make -n -C "$REPO_ROOT" development-bundle)" ||
   fail "development-bundle target should support a dry run"
 printf '%s\n' "$development_bundle_dry_run" | grep -F \
-  'make verify-app-structure ARTIFACT_CHANNEL=development CONFIGURATION=debug DEVELOPMENT_VERSION="0.1.37" DEVELOPMENT_BUILD_NUMBER="40"' \
+  "make verify-app-structure ARTIFACT_CHANNEL=development CONFIGURATION=debug DEVELOPMENT_VERSION=\"$canonical_version\" DEVELOPMENT_BUILD_NUMBER=\"$canonical_build\"" \
   >/dev/null || fail "development bundle must derive canonical development metadata"
 development_override_dry_run="$(
   make -n -C "$REPO_ROOT" development-bundle \
@@ -270,27 +274,27 @@ development_override_dry_run="$(
     DEVELOPMENT_BUILD_NUMBER=9999
 )" || fail "development-bundle must handle caller metadata overrides"
 printf '%s\n' "$development_override_dry_run" | grep -F \
-  'make verify-app-structure ARTIFACT_CHANNEL=development CONFIGURATION=debug DEVELOPMENT_VERSION="0.1.37" DEVELOPMENT_BUILD_NUMBER="40"' \
+  "make verify-app-structure ARTIFACT_CHANNEL=development CONFIGURATION=debug DEVELOPMENT_VERSION=\"$canonical_version\" DEVELOPMENT_BUILD_NUMBER=\"$canonical_build\"" \
   >/dev/null || fail "development bundle must not accept caller metadata overrides"
-development_metadata_line="$(printf '%s\n' "$development_bundle_dry_run" | grep -n -m 1 -F 'scripts/resolve-release-version.sh validate' | cut -d: -f1)"
-development_compile_line="$(printf '%s\n' "$development_bundle_dry_run" | grep -n -m 1 -E 'swift build -c debug[[:space:]]+--product CLIProxyManager' | cut -d: -f1)"
+development_metadata_line="$(grep -n -m 1 -F 'scripts/resolve-release-version.sh validate' <<<"$development_bundle_dry_run" | cut -d: -f1)"
+development_compile_line="$(grep -n -m 1 -E 'swift build -c debug[[:space:]]+--product CLIProxyManager' <<<"$development_bundle_dry_run" | cut -d: -f1)"
 [[ -n "$development_metadata_line" && -n "$development_compile_line" && "$development_metadata_line" -lt "$development_compile_line" ]] ||
   fail "development bundle must validate metadata before compilation"
 ! printf '%s\n' "$development_bundle_dry_run" | grep -E '(^|[[:space:]])(sign|release-sign|dmg|verify-dmg|sign-dmg|codesign|hdiutil)([[:space:]]|$)' >/dev/null ||
   fail "development bundle must not sign or create a DMG"
 printf '%s\n' "$development_bundle_dry_run" | grep -F \
-  'scripts/verify-app-structure.sh --app "build/CLIProxyManager.app" --version "0.1.37" --build "40" --channel "development"' \
+  "scripts/verify-app-structure.sh --app \"build/CLIProxyManager.app\" --version \"$canonical_version\" --build \"$canonical_build\" --channel \"development\"" \
   >/dev/null || fail "development bundle must verify its structure with development metadata"
 
 verify_bundle_structure_dry_run="$(make -n -C "$REPO_ROOT" verify-bundle-structure)" ||
   fail "verify-bundle-structure target should support a dry run"
 printf '%s\n' "$verify_bundle_structure_dry_run" | grep -F \
-  'make verify-app-structure ARTIFACT_CHANNEL=development CONFIGURATION=debug DEVELOPMENT_VERSION="0.1.37" DEVELOPMENT_BUILD_NUMBER="40"' \
+  "make verify-app-structure ARTIFACT_CHANNEL=development CONFIGURATION=debug DEVELOPMENT_VERSION=\"$canonical_version\" DEVELOPMENT_BUILD_NUMBER=\"$canonical_build\"" \
   >/dev/null || fail "verify-bundle-structure must reuse development bundle validation"
 
 sign_dry_run="$(make -n -C "$REPO_ROOT" sign)" || fail "sign target should support a dry run"
-sign_structure_line="$(printf '%s\n' "$sign_dry_run" | grep -n -m 1 -F 'scripts/verify-app-structure.sh --app "build/CLIProxyManager.app" --version "0.1.37" --build "40" --channel "official"' | cut -d: -f1)"
-sign_codesign_line="$(printf '%s\n' "$sign_dry_run" | grep -n -m 1 -F 'codesign --force --options runtime --sign' | cut -d: -f1)"
+sign_structure_line="$(grep -n -m 1 -F "scripts/verify-app-structure.sh --app \"build/CLIProxyManager.app\" --version \"$canonical_version\" --build \"$canonical_build\" --channel \"official\"" <<<"$sign_dry_run" | cut -d: -f1)"
+sign_codesign_line="$(grep -n -m 1 -F 'codesign --force --options runtime --sign' <<<"$sign_dry_run" | cut -d: -f1)"
 [[ -n "$sign_structure_line" && -n "$sign_codesign_line" && "$sign_structure_line" -lt "$sign_codesign_line" ]] ||
   fail "sign must validate official app structure before codesign"
 development_verify_dry_run="$(
@@ -316,8 +320,8 @@ for product in CLIProxyManager cpm cliproxy-manager; do
     "swift build -c debug -Xswiftc -warnings-as-errors --product $product" \
     >/dev/null || fail "ci-build must compile $product with warnings as errors"
 done
-ci_metadata_line="$(printf '%s\n' "$ci_build_dry_run" | grep -n -m 1 -F 'scripts/resolve-release-version.sh validate' | cut -d: -f1)"
-ci_compile_line="$(printf '%s\n' "$ci_build_dry_run" | grep -n -m 1 -F 'swift build -c debug -Xswiftc -warnings-as-errors --product CLIProxyManager' | cut -d: -f1)"
+ci_metadata_line="$(grep -n -m 1 -F 'scripts/resolve-release-version.sh validate' <<<"$ci_build_dry_run" | cut -d: -f1)"
+ci_compile_line="$(grep -n -m 1 -F 'swift build -c debug -Xswiftc -warnings-as-errors --product CLIProxyManager' <<<"$ci_build_dry_run" | cut -d: -f1)"
 [[ -n "$ci_metadata_line" && -n "$ci_compile_line" && "$ci_metadata_line" -lt "$ci_compile_line" ]] ||
   fail "ci-build must validate metadata before compilation"
 ! printf '%s\n' "$ci_build_dry_run" | grep -E '[[:space:]](codesign|hdiutil)[[:space:]]' >/dev/null ||
