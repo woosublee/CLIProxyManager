@@ -276,8 +276,8 @@ development_override_dry_run="$(
 printf '%s\n' "$development_override_dry_run" | grep -F \
   "make verify-app-structure ARTIFACT_CHANNEL=development CONFIGURATION=debug DEVELOPMENT_VERSION=\"$canonical_version\" DEVELOPMENT_BUILD_NUMBER=\"$canonical_build\"" \
   >/dev/null || fail "development bundle must not accept caller metadata overrides"
-development_metadata_line="$(printf '%s\n' "$development_bundle_dry_run" | grep -n -m 1 -F 'scripts/resolve-release-version.sh validate' | cut -d: -f1)"
-development_compile_line="$(printf '%s\n' "$development_bundle_dry_run" | grep -n -m 1 -E 'swift build -c debug[[:space:]]+--product CLIProxyManager' | cut -d: -f1)"
+development_metadata_line="$(grep -n -m 1 -F 'scripts/resolve-release-version.sh validate' <<<"$development_bundle_dry_run" | cut -d: -f1)"
+development_compile_line="$(grep -n -m 1 -E 'swift build -c debug[[:space:]]+--product CLIProxyManager' <<<"$development_bundle_dry_run" | cut -d: -f1)"
 [[ -n "$development_metadata_line" && -n "$development_compile_line" && "$development_metadata_line" -lt "$development_compile_line" ]] ||
   fail "development bundle must validate metadata before compilation"
 ! printf '%s\n' "$development_bundle_dry_run" | grep -E '(^|[[:space:]])(sign|release-sign|dmg|verify-dmg|sign-dmg|codesign|hdiutil)([[:space:]]|$)' >/dev/null ||
@@ -293,8 +293,8 @@ printf '%s\n' "$verify_bundle_structure_dry_run" | grep -F \
   >/dev/null || fail "verify-bundle-structure must reuse development bundle validation"
 
 sign_dry_run="$(make -n -C "$REPO_ROOT" sign)" || fail "sign target should support a dry run"
-sign_structure_line="$(printf '%s\n' "$sign_dry_run" | grep -n -m 1 -F "scripts/verify-app-structure.sh --app \"build/CLIProxyManager.app\" --version \"$canonical_version\" --build \"$canonical_build\" --channel \"official\"" | cut -d: -f1)"
-sign_codesign_line="$(printf '%s\n' "$sign_dry_run" | grep -n -m 1 -F 'codesign --force --options runtime --sign' | cut -d: -f1)"
+sign_structure_line="$(grep -n -m 1 -F "scripts/verify-app-structure.sh --app \"build/CLIProxyManager.app\" --version \"$canonical_version\" --build \"$canonical_build\" --channel \"official\"" <<<"$sign_dry_run" | cut -d: -f1)"
+sign_codesign_line="$(grep -n -m 1 -F 'codesign --force --options runtime --sign' <<<"$sign_dry_run" | cut -d: -f1)"
 [[ -n "$sign_structure_line" && -n "$sign_codesign_line" && "$sign_structure_line" -lt "$sign_codesign_line" ]] ||
   fail "sign must validate official app structure before codesign"
 development_verify_dry_run="$(
@@ -320,8 +320,8 @@ for product in CLIProxyManager cpm cliproxy-manager; do
     "swift build -c debug -Xswiftc -warnings-as-errors --product $product" \
     >/dev/null || fail "ci-build must compile $product with warnings as errors"
 done
-ci_metadata_line="$(printf '%s\n' "$ci_build_dry_run" | grep -n -m 1 -F 'scripts/resolve-release-version.sh validate' | cut -d: -f1)"
-ci_compile_line="$(printf '%s\n' "$ci_build_dry_run" | grep -n -m 1 -F 'swift build -c debug -Xswiftc -warnings-as-errors --product CLIProxyManager' | cut -d: -f1)"
+ci_metadata_line="$(grep -n -m 1 -F 'scripts/resolve-release-version.sh validate' <<<"$ci_build_dry_run" | cut -d: -f1)"
+ci_compile_line="$(grep -n -m 1 -F 'swift build -c debug -Xswiftc -warnings-as-errors --product CLIProxyManager' <<<"$ci_build_dry_run" | cut -d: -f1)"
 [[ -n "$ci_metadata_line" && -n "$ci_compile_line" && "$ci_metadata_line" -lt "$ci_compile_line" ]] ||
   fail "ci-build must validate metadata before compilation"
 ! printf '%s\n' "$ci_build_dry_run" | grep -E '[[:space:]](codesign|hdiutil)[[:space:]]' >/dev/null ||
