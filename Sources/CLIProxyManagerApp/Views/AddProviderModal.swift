@@ -14,21 +14,23 @@ struct AddProviderModal: View {
     let onCancelLogin: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            if let activeOAuthLoginProvider {
-                OAuthLoginProgressView(provider: activeOAuthLoginProvider)
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 16)
-            } else if let selectedProvider {
-                connectionPicker(provider: selectedProvider)
-            } else {
-                providerPicker
-            }
+        if let activeOAuthLoginProvider {
+            OAuthLoginProgressSheet(
+                provider: activeOAuthLoginProvider,
+                title: oauthLoginTitle(for: activeOAuthLoginProvider),
+                onCancel: onCancelLogin
+            )
+        } else {
+            VStack(spacing: 0) {
+                if let selectedProvider {
+                    connectionPicker(provider: selectedProvider)
+                } else {
+                    providerPicker
+                }
 
-            Divider()
+                Divider()
 
-            HStack {
-                if activeOAuthLoginProvider == nil {
+                HStack {
                     Button(selectedProvider == nil ? "Cancel" : "Back") {
                         if selectedProvider == nil {
                             dismiss()
@@ -38,19 +40,16 @@ struct AddProviderModal: View {
                     }
                     .frame(maxWidth: .infinity)
                     .controlSize(.regular)
-                } else {
-                    Button("Cancel Login") {
-                        onCancelLogin()
-                        dismiss()
-                    }
-                    .frame(maxWidth: .infinity)
-                    .controlSize(.regular)
                 }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .frame(width: 380)
         }
-        .frame(width: activeOAuthLoginProvider == nil ? 380 : 320)
+    }
+
+    private func oauthLoginTitle(for provider: ProviderRowState.ID) -> String {
+        "\(provider.inferredProviderType == .codex ? "Codex" : "Claude") OAuth"
     }
 
     private func connectionPicker(provider: AuthProfileType) -> some View {
@@ -135,8 +134,38 @@ private struct ConnectionChoiceRow: View {
     }
 }
 
+struct OAuthLoginProgressSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let provider: ProviderRowState.ID
+    /// Either "<provider> OAuth" for setup or "Re-login <account title>" for reauthentication.
+    let title: String
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            OAuthLoginProgressView(provider: provider, title: title)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 16)
+
+            Divider()
+
+            Button("Cancel Login") {
+                onCancel()
+                dismiss()
+            }
+            .frame(maxWidth: .infinity)
+            .controlSize(.regular)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+        }
+        .frame(width: 320)
+    }
+}
+
 private struct OAuthLoginProgressView: View {
     let provider: ProviderRowState.ID
+    let title: String
 
     var body: some View {
         HStack(spacing: 10) {
@@ -144,7 +173,7 @@ private struct OAuthLoginProgressView: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    Text("\(providerName) OAuth")
+                    Text(title)
                         .font(.system(size: 14, weight: .semibold))
                     ProgressView()
                         .controlSize(.small)
@@ -157,10 +186,6 @@ private struct OAuthLoginProgressView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var providerName: String {
-        provider.inferredProviderType == .codex ? "Codex" : "Claude"
     }
 }
 

@@ -6,6 +6,7 @@ enum DashboardSheet: Identifiable, Equatable {
     case addProvider
     case newAPIKey(AppConfig.APIKeyProfile)
     case providerSettings(ProviderRowState.ID, isInitialSetup: Bool)
+    case reauthenticate(ProviderRowState.ID, accountTitle: String)
 
     var id: String {
         switch self {
@@ -15,6 +16,8 @@ enum DashboardSheet: Identifiable, Equatable {
             "new-api-key-\(profile.id)"
         case let .providerSettings(provider, isInitialSetup):
             "provider-settings-\(provider.rawValue)-initial-\(isInitialSetup)"
+        case let .reauthenticate(provider, _):
+            "reauthenticate-\(provider.rawValue)"
         }
     }
 
@@ -124,10 +127,11 @@ struct DashboardView: View {
                                 },
                                 toggleAccountDetailVisibility: { viewModel.toggleAccountDetailVisibility(account.id) },
                                 setEnabled: { enabled in viewModel.setProviderEnabled(account.id, enabled: enabled) },
-                                moveUp: { viewModel.moveAccountUp(account.id) },
-                                moveDown: { viewModel.moveAccountDown(account.id) },
-                                canMoveUp: viewModel.canMoveAccountUp(account.id),
-                                canMoveDown: viewModel.canMoveAccountDown(account.id),
+                                relogin: {
+                                    activeSheet = .reauthenticate(account.id, accountTitle: account.title)
+                                    viewModel.startOAuthReauthentication(account.id)
+                                },
+                                isOAuthLoginInProgress: viewModel.isProfileLoginInProgress,
                                 remove: {
                                     if account.isAPIKeyProfile {
                                         viewModel.removeAPIProvider(account.id)
@@ -273,14 +277,28 @@ struct DashboardView: View {
                     apiKeySettingsSheet(profile: profile, isInitialSetup: true)
                 case let .providerSettings(provider, isInitialSetup):
                     providerSettingsSheet(provider, isInitialSetup: isInitialSetup)
+                case .reauthenticate(let provider, let accountTitle):
+                    OAuthLoginProgressSheet(
+                        provider: provider,
+                        title: "Re-login \(accountTitle)",
+                        onCancel: viewModel.cancelOAuthLogin
+                    )
                 }
             }
             .onChange(of: viewModel.activeOAuthLoginProvider) { _, provider in
-                guard provider == nil, let connectedProvider = viewModel.completedOAuthLoginProvider else { return }
-                openProviderSettings(
-                    connectedProvider,
-                    isInitialSetup: viewModel.completedOAuthLoginIsInitialSetup
-                )
+                guard provider == nil, let activeSheet else { return }
+                switch activeSheet {
+                case .reauthenticate:
+                    self.activeSheet = nil
+                case .addProvider:
+                    guard let connectedProvider = viewModel.completedOAuthLoginProvider else { return }
+                    openProviderSettings(
+                        connectedProvider,
+                        isInitialSetup: viewModel.completedOAuthLoginIsInitialSetup
+                    )
+                case .newAPIKey, .providerSettings:
+                    break
+                }
             }
             .onDisappear {
                 if viewModel.activeOAuthLoginProvider != nil {
@@ -692,10 +710,8 @@ struct ProviderAccountCardView: View {
     let toggleUsageOverlayVisibility: () -> Void
     let toggleAccountDetailVisibility: () -> Void
     let setEnabled: (Bool) -> Void
-    let moveUp: () -> Void
-    let moveDown: () -> Void
-    let canMoveUp: Bool
-    let canMoveDown: Bool
+    let relogin: () -> Void
+    let isOAuthLoginInProgress: Bool
     let remove: () -> Void
     @State private var hovering: Bool = false
     @State private var confirmRemove: Bool = false
@@ -856,12 +872,12 @@ struct ProviderAccountCardView: View {
                 .buttonStyle(.plain)
 
                 Menu {
-                    Button("Move Up", action: moveUp)
-                        .disabled(!canMoveUp)
-                    Button("Move Down", action: moveDown)
-                        .disabled(!canMoveDown)
-                    Divider()
                     if !account.isAPIKeyProfile {
+                        Button(action: relogin) {
+                            Label("Re-login", systemImage: "arrow.clockwise")
+                        }
+                        .disabled(isOAuthLoginInProgress)
+
                         Button {
                             setEnabled(false)
                         } label: {
@@ -898,11 +914,12 @@ struct ProviderAccountCardView: View {
                 .buttonStyle(.plain)
 
                 Menu {
-                    Button("Move Up", action: moveUp)
-                        .disabled(!canMoveUp)
-                    Button("Move Down", action: moveDown)
-                        .disabled(!canMoveDown)
-                    Divider()
+                    if !account.isAPIKeyProfile {
+                        Button(action: relogin) {
+                            Label("Re-login", systemImage: "arrow.clockwise")
+                        }
+                        .disabled(isOAuthLoginInProgress)
+                    }
                     Button {
                         setEnabled(true)
                     } label: {
@@ -942,11 +959,6 @@ struct ProviderAccountCardView: View {
                 .buttonStyle(.plain)
 
                 Menu {
-                    Button("Move Up", action: moveUp)
-                        .disabled(!canMoveUp)
-                    Button("Move Down", action: moveDown)
-                        .disabled(!canMoveDown)
-                    Divider()
                     Button(role: .destructive) {
                         confirmRemove = true
                     } label: {

@@ -11,13 +11,15 @@ final class AccountReorderingUITests: XCTestCase {
         XCTAssertTrue(source.contains("Reorder account"))
     }
 
-    func testDashboardProvidesMoveUpAndMoveDownFallbackCommands() throws {
+    func testDashboardRemovesFallbackCommandsWhileKeepingDragReordering() throws {
         let source = try dashboardSource()
 
-        XCTAssertTrue(source.contains("Move Up"))
-        XCTAssertTrue(source.contains("Move Down"))
-        XCTAssertTrue(source.contains("canMoveAccountUp"))
-        XCTAssertTrue(source.contains("canMoveAccountDown"))
+        XCTAssertFalse(source.contains("Move Up"))
+        XCTAssertFalse(source.contains("Move Down"))
+        XCTAssertTrue(source.contains("line.3.horizontal"))
+        XCTAssertTrue(source.contains(".onDrag"))
+        XCTAssertTrue(source.contains("AccountReorderDropDelegate"))
+        XCTAssertTrue(source.contains(".onDrop("))
     }
 
     func testDashboardTracksInsertionPositionAndReducedMotion() throws {
