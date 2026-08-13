@@ -4,6 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/release-version-lib.sh
 source "$SCRIPT_DIR/release-version-lib.sh"
+# shellcheck source=scripts/cliproxyapi-artifact-lib.sh
+source "$SCRIPT_DIR/cliproxyapi-artifact-lib.sh"
 
 CANONICAL_BUNDLE_ID='com.woosublee.CLIProxyManager'
 CANONICAL_APP_NAME='CLIProxyManager'
@@ -20,10 +22,6 @@ invalid_arguments() {
 structure_failure() {
   printf 'App structure validation failed: %s\n' "$1" >&2
   exit 1
-}
-
-is_sha256() {
-  [[ ${#1} -eq 64 && "$1" =~ ^[0-9A-Fa-f]+$ ]]
 }
 
 app=''
@@ -137,14 +135,23 @@ proxy_manifest="$resources/cliproxyapi/cliproxyapi.manifest.json"
 [[ -f "$proxy_binary" && -x "$proxy_binary" ]] ||
   structure_failure 'bundled proxy binary'
 
-expected_sha256="$(release_plist_value vendoredBinarySha256 "$proxy_manifest")"
-actual_sha256="$(shasum -a 256 "$proxy_binary" 2>/dev/null | awk '{print $1}')"
-is_sha256 "$expected_sha256" && [[ "$actual_sha256" == "$expected_sha256" ]] ||
-  structure_failure 'bundled proxy binary checksum'
+cliproxyapi_load_manifest "$proxy_manifest" && cliproxyapi_manifest_is_valid ||
+  structure_failure 'bundled proxy manifest'
 
-expected_size="$(release_plist_value vendoredBinarySizeBytes "$proxy_manifest")"
+actual_sha256="$(cliproxyapi_sha256_file "$proxy_binary" 2>/dev/null || true)"
+[[ "$actual_sha256" == "$CLIPROXYAPI_MANIFEST_BINARY_SHA256" ]] ||
+  structure_failure 'bundled proxy binary checksum'
 actual_size="$(wc -c < "$proxy_binary" 2>/dev/null | tr -d '[:space:]')"
-release_is_positive_integer "$expected_size" && [[ "$actual_size" == "$expected_size" ]] ||
+[[ "$actual_size" == "$CLIPROXYAPI_MANIFEST_BINARY_SIZE" ]] ||
   structure_failure 'bundled proxy binary size'
+cliproxyapi_is_arm64_binary "$proxy_binary" ||
+  structure_failure 'bundled proxy binary architecture'
+version_line="$(cliproxyapi_parse_version_line "$proxy_binary")"
+cliproxyapi_load_version_metadata "$version_line" ||
+  structure_failure 'bundled proxy binary metadata'
+[[ "$CLIPROXYAPI_BINARY_VERSION" == "$CLIPROXYAPI_MANIFEST_VERSION" &&
+   "$CLIPROXYAPI_BINARY_COMMIT" == "$CLIPROXYAPI_MANIFEST_COMMIT" &&
+   "$CLIPROXYAPI_BINARY_BUILT_AT" == "$CLIPROXYAPI_MANIFEST_BUILT_AT" ]] ||
+  structure_failure 'bundled proxy binary metadata'
 
 printf 'App structure verification passed\n'

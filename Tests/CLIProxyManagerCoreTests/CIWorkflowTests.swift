@@ -77,6 +77,10 @@ final class CIWorkflowTests: XCTestCase {
                   - uses: actions/checkout@v4
                     with:
                       persist-credentials: false
+                  - uses: actions/cache@v4
+                    with:
+                      path: .build/cliproxyapi
+                      key: cliproxyapi-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Sources/CLIProxyManagerApp/Resources/cliproxyapi/cliproxyapi.manifest.json') }}
                   - run: make verify-bundle-structure
             """
         ]
@@ -112,7 +116,6 @@ final class CIWorkflowTests: XCTestCase {
             "pull-requests: write",
             "actions/upload-artifact",
             "actions/download-artifact",
-            "artifact",
             "gh",
             "git push",
             "release",
@@ -133,7 +136,9 @@ final class CIWorkflowTests: XCTestCase {
             )
         }
 
-        XCTAssertEqual(occurrences(of: "uses:", in: workflow), 4)
+        XCTAssertEqual(occurrences(of: "uses:", in: workflow), 5)
+        XCTAssertEqual(occurrences(of: "uses: actions/cache@v4", in: workflow), 1)
+        XCTAssertEqual(occurrences(of: "path: .build/cliproxyapi", in: workflow), 1)
     }
 
     func testMainCIRulesetDefinesThePostRolloutBranchProtectionPolicy() throws {

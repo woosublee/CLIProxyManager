@@ -114,9 +114,16 @@ cat > "$fake_bin/make" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'make %s\n' "$*" >> "$RELEASE_LOCAL_TEST_LOG"
-[[ "$*" == 'verify-dmg' ]] || exit 20
-mkdir -p build
-printf 'fake dmg' > build/CLIProxyManager-1.2.3.dmg
+case "$*" in
+  resolve-bundled-proxy)
+    [[ "${RESOLVE_PROXY_SCENARIO:-pass}" == 'pass' ]] || exit 62
+  ;;
+  verify-dmg)
+    mkdir -p build
+    printf 'fake dmg' > build/CLIProxyManager-1.2.3.dmg
+  ;;
+  *) exit 20 ;;
+esac
 SH
 chmod +x "$fake_bin/make"
 
@@ -211,6 +218,7 @@ printf '%s\n' \
   'gh repo view --json nameWithOwner --jq .nameWithOwner' \
   'git ls-remote --tags origin refs/tags/v1.2.3 refs/tags/v1.2.3^{}' \
   'monotonic --repository example/CLIProxyManager --provenance build/release-provenance.json' \
+  'make resolve-bundled-proxy' \
   'security find-identity -v -p codesigning' \
   'make verify-dmg' \
   'appcast repository=example/CLIProxyManager' \
@@ -261,6 +269,15 @@ if MONOTONIC_SCENARIO=fail run_release "$monotonic_log" "$release_script" v1.2.3
   fail "release must reject a non-monotonic version"
 fi
 assert_no_remote_writes "$monotonic_log"
+
+proxy_resolution_log="$sandbox/proxy-resolution.log"
+if RESOLVE_PROXY_SCENARIO=fail run_release "$proxy_resolution_log" "$release_script" v1.2.3; then
+  fail "release must fail when the pinned proxy artifact cannot be resolved"
+fi
+grep -Fx 'make resolve-bundled-proxy' "$proxy_resolution_log" >/dev/null || fail "release should resolve the proxy before signing"
+! grep -F 'security find-identity' "$proxy_resolution_log" >/dev/null || fail "proxy resolution failure must stop before signing identity lookup"
+! grep -F 'make verify-dmg' "$proxy_resolution_log" >/dev/null || fail "proxy resolution failure must stop before build"
+assert_no_remote_writes "$proxy_resolution_log"
 
 parity_log="$sandbox/parity.log"
 if VERIFY_SCENARIO=fail-final run_release "$parity_log" "$release_script" v1.2.3; then

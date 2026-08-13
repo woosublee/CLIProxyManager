@@ -105,8 +105,9 @@ if [[ "$resume_mode" == '1' ]]; then
 fi
 
 "$SCRIPT_DIR/check-release-monotonic.sh" "${monotonic_args[@]}"
+make resolve-bundled-proxy
 security find-identity -v -p codesigning | grep -F '"cliproxymanager"' >/dev/null || fail 'cliproxymanager code signing identity is required. Confirm it exists with: security find-identity -v -p codesigning.'
-make verify-dmg
+CLIPROXYAPI_OFFLINE=1 make verify-dmg
 "$SCRIPT_DIR/generate-sparkle-appcast.sh"
 "$SCRIPT_DIR/verify-release-artifacts.sh" \
   --source-plist Info.plist \

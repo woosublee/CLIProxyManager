@@ -32,9 +32,19 @@ final class ReleaseWorkflowTests: XCTestCase {
         XCTAssertTrue(makefile.contains("sign-dmg:"))
         XCTAssertTrue(makefile.contains("codesign --force --sign \"$(CODESIGN_IDENTITY)\" \"$(DMG_PATH)\""))
         XCTAssertTrue(makefile.contains("verify-app-structure: bundle"))
+        XCTAssertTrue(makefile.contains("CLIPROXYAPI_RESOLVER := scripts/resolve-bundled-cliproxyapi.sh"))
+        XCTAssertTrue(makefile.contains("resolve-bundled-proxy:"))
+        XCTAssertTrue(makefile.contains("prune-bundled-proxy-cache:"))
+        XCTAssertTrue(makefile.contains("--prune-cache"))
+        XCTAssertTrue(makefile.contains("bundle: swift-build $(INFO_PLIST) $(ENTITLEMENTS) $(ICON_FILE)"))
+        XCTAssertFalse(makefile.contains("bundle: swift-build resolve-bundled-proxy"), "The bundle recipe resolves and materializes the proxy in one verification pass.")
         XCTAssertTrue(
             makefile.contains("scripts/verify-app-structure.sh --app \"$(APP_BUNDLE)\" --version \"$(VERSION)\" --build \"$(BUILD_NUMBER)\" --channel \"$(RELEASE_CHANNEL)\""),
             "The Makefile should validate canonical app structure before signing."
+        )
+        XCTAssertTrue(
+            makefile.contains("scripts/verify-app-structure.sh --app \"$$MOUNT_DIR/$(APP_NAME).app\" --version \"$(VERSION)\" --build \"$(BUILD_NUMBER)\" --channel \"$(RELEASE_CHANNEL)\""),
+            "DMG verification should validate the mounted app's pinned proxy artifact before publication."
         )
         XCTAssertTrue(makefile.contains("install_name_tool -add_rpath \"@executable_path/../Frameworks\""))
         XCTAssertTrue(
@@ -62,6 +72,11 @@ final class ReleaseWorkflowTests: XCTestCase {
             "Sparkle codesigning must not pipe find output through xargs."
         )
 
+        XCTAssertTrue(
+            releaseLocal.contains("make resolve-bundled-proxy"),
+            "Local fallback releases should use the canonical Makefile resolver entrypoint."
+        )
+        XCTAssertFalse(releaseLocal.contains("resolve-bundled-cliproxyapi.sh"))
         XCTAssertTrue(
             releaseLocal.contains("security find-identity -v -p codesigning | grep -F '\"cliproxymanager\"'"),
             "Local fallback releases should verify the required signing identity before building."
@@ -109,7 +124,8 @@ final class ReleaseWorkflowTests: XCTestCase {
         XCTAssertTrue(workflow.contains("concurrency:"))
         XCTAssertTrue(workflow.contains("group: cliproxymanager-official-release"))
         XCTAssertTrue(workflow.contains("cancel-in-progress: false"))
-        XCTAssertTrue(workflow.contains("fetch-depth: 0"))
+        XCTAssertTrue(workflow.contains("fetch-depth: 1"))
+        XCTAssertFalse(workflow.contains("fetch-depth: 0"), "Release checks remote tags explicitly and should not fetch historical binary blobs.")
         XCTAssertTrue(workflow.contains("INPUT_TAG: ${{ inputs.tag }}"))
         XCTAssertTrue(workflow.contains("ACTUAL_TAG='invalid'"))
         XCTAssertTrue(workflow.contains("[[ \"$INPUT_TAG\" =~ ^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$ ]]"))
@@ -157,6 +173,13 @@ final class ReleaseWorkflowTests: XCTestCase {
         XCTAssertFalse(workflow.contains("bash Tests/ScriptTests/release-local-tests.sh"))
         XCTAssertFalse(workflow.contains("bash Tests/ScriptTests/generate-sparkle-appcast-tests.sh"))
         XCTAssertTrue(workflow.contains("swift test"))
+        XCTAssertTrue(workflow.contains("uses: actions/cache@v4"))
+        XCTAssertTrue(workflow.contains("path: .build/cliproxyapi"))
+        XCTAssertTrue(workflow.contains("hashFiles('Sources/CLIProxyManagerApp/Resources/cliproxyapi/cliproxyapi.manifest.json')"))
+        XCTAssertTrue(workflow.contains("- name: Resolve pinned CLIProxyAPI artifact"))
+        XCTAssertTrue(workflow.contains("run: make resolve-bundled-proxy"))
+        XCTAssertTrue(workflow.contains("CLIPROXYAPI_OFFLINE=1 make CODESIGN_IDENTITY=\"$CODESIGN_IDENTITY\" verify-dmg"))
+        assert("- name: Resolve pinned CLIProxyAPI artifact", appearsBefore: "- name: Import CLIProxyManager signing certificate", in: workflow)
         XCTAssertTrue(workflow.contains("CLIPROXYMANAGER_CERTIFICATE_BASE64"))
         XCTAssertTrue(workflow.contains("CLIPROXYMANAGER_CERTIFICATE_PASSWORD"))
         XCTAssertTrue(workflow.contains("SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}"))

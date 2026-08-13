@@ -30,7 +30,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Resolve and validate release identity
         id: version
@@ -78,6 +78,15 @@ jobs:
         run: |
           bash scripts/run-script-tests.sh
           swift test
+
+      - name: Restore pinned CLIProxyAPI artifact cache
+        uses: actions/cache@v4
+        with:
+          path: .build/cliproxyapi
+          key: cliproxyapi-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Sources/CLIProxyManagerApp/Resources/cliproxyapi/cliproxyapi.manifest.json') }}
+
+      - name: Resolve pinned CLIProxyAPI artifact
+        run: make resolve-bundled-proxy
 
       # Required GitHub secrets:
       #   CLIPROXYMANAGER_CERTIFICATE_BASE64 — base64-encoded .p12 of the self-signed "cliproxymanager" certificate (with private key)
@@ -131,7 +140,7 @@ jobs:
           echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
 
       - name: Build and verify self-signed DMG
-        run: make CODESIGN_IDENTITY="$CODESIGN_IDENTITY" verify-dmg
+        run: CLIPROXYAPI_OFFLINE=1 make CODESIGN_IDENTITY="$CODESIGN_IDENTITY" verify-dmg
 
       - name: Sign DMG
         run: make CODESIGN_IDENTITY="$CODESIGN_IDENTITY" sign-dmg

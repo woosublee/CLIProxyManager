@@ -140,6 +140,18 @@ cpm update stage all
 cpm update apply all --yes
 ```
 
+### CLIProxyAPI artifact 관리
+
+CLIProxyAPI 실행 파일은 Git에 직접 저장하지 않습니다. `Sources/CLIProxyManagerApp/Resources/cliproxyapi/cliproxyapi.manifest.json`이 upstream URL·archive SHA-256·추출 binary SHA-256·크기·version metadata·`darwin/arm64` target을 고정하는 trust anchor입니다.
+
+- `swift build`, `swift test`, `make ci-build`은 source-only 작업이며 CLIProxyAPI archive를 내려받지 않습니다. 따라서 clean checkout에서 `swift run CLIProxyManager`는 proxy를 실행할 수 있는 지원 경로가 아닙니다.
+- 로컬에서 proxy를 포함한 개발 앱을 실행하려면 `make development-bundle BUILD_DIR=build-development`로 검증된 development bundle을 만들고 `open build-development/CLIProxyManager.app`를 사용합니다. 평소 실행은 `make run`을 사용합니다.
+- 실행 가능한 app bundle, `make verify-bundle-structure`, DMG·release build는 manifest에 고정된 archive를 `.build/cliproxyapi/` cache로 resolve하고 매번 checksum·크기·arm64 architecture·version metadata를 검증합니다.
+- 기본 build는 검증된 cache를 먼저 사용하고, cache가 없거나 손상됐으면 manifest의 pinned HTTPS URL에서 archive를 내려받습니다. `CLIPROXYAPI_OFFLINE=1`을 지정하면 cache-only로 동작하며, 유효한 cache가 없으면 network fallback 없이 실패합니다. 오래된 hash별 cache는 `make prune-bundled-proxy-cache`로 정리할 수 있습니다.
+- upstream binary를 갱신할 때는 `scripts/vendor-cliproxyapi.sh <version>`을 실행해 manifest만 갱신합니다. 이 명령은 targeted release asset과 `checksums.txt`, extracted arm64 binary metadata를 검증합니다.
+
+이 방식은 앞으로 일반 Git history에 대형 binary가 추가되는 것을 막습니다. 이미 과거 history에 있는 binary object를 줄이는 Git history rewrite와 Git LFS 도입은 이 절차의 범위가 아닙니다.
+
 ### Maintainer release 절차
 
 앱 version과 build number의 유일한 수동 편집 source는 `release/version.json`입니다. `Makefile`이나 `Info.plist`의 값을 직접 수정하지 마세요.

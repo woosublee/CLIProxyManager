@@ -50,10 +50,21 @@ BUNDLED_HELPER := $(HELPERS_DIR)/cliproxy-manager
 BUNDLED_ICON := $(RESOURCES_DIR)/$(ICON_FILE)
 BUNDLED_SPARKLE_FRAMEWORK := $(FRAMEWORKS_DIR)/Sparkle.framework
 SPARKLE_FRAMEWORK = $(shell find .build/artifacts -path '*/Sparkle.framework' -type d -print -quit)
+CLIPROXYAPI_MANIFEST := Sources/CLIProxyManagerApp/Resources/cliproxyapi/cliproxyapi.manifest.json
+CLIPROXYAPI_RESOLVER := scripts/resolve-bundled-cliproxyapi.sh
+CLIPROXYAPI_ARTIFACT_LIB := scripts/cliproxyapi-artifact-lib.sh
+CLIPROXYAPI_CACHE_ROOT := .build/cliproxyapi
+BUNDLED_PROXY_RESOURCE_DIR := $(RESOURCES_DIR)/cliproxyapi
+BUNDLED_PROXY_BINARY := $(BUNDLED_PROXY_RESOURCE_DIR)/cliproxyapi
+BUNDLED_PROXY_MANIFEST := $(BUNDLED_PROXY_RESOURCE_DIR)/cliproxyapi.manifest.json
+CLIPROXYAPI_RESOLVE_FLAGS :=
+ifeq ($(CLIPROXYAPI_OFFLINE),1)
+CLIPROXYAPI_RESOLVE_FLAGS := --offline
+endif
 INFO_PLIST := Info.plist
 ENTITLEMENTS := CLIProxyManager.entitlements
 
-.PHONY: all ci-build development-bundle verify-bundle-structure verify-app-structure release-metadata-check print-app-version print-build-number print-build-tag swift-build bundle sign release-sign verify install-helper install run install-and-run dmg verify-dmg sign-dmg clean distclean
+.PHONY: all ci-build development-bundle verify-bundle-structure verify-app-structure resolve-bundled-proxy prune-bundled-proxy-cache release-metadata-check print-app-version print-build-number print-build-tag swift-build bundle sign release-sign verify install-helper install run install-and-run dmg verify-dmg sign-dmg clean distclean
 
 all: sign
 
@@ -85,6 +96,12 @@ development-bundle:
 	$(MAKE) verify-app-structure ARTIFACT_CHANNEL=development CONFIGURATION=debug DEVELOPMENT_VERSION="$(CANONICAL_DEVELOPMENT_VERSION)" DEVELOPMENT_BUILD_NUMBER="$(CANONICAL_DEVELOPMENT_BUILD_NUMBER)"
 
 verify-bundle-structure: development-bundle
+
+resolve-bundled-proxy: $(CLIPROXYAPI_MANIFEST) $(CLIPROXYAPI_RESOLVER) $(CLIPROXYAPI_ARTIFACT_LIB)
+	$(CLIPROXYAPI_RESOLVER) --manifest "$(CLIPROXYAPI_MANIFEST)" --cache-root "$(CLIPROXYAPI_CACHE_ROOT)" $(CLIPROXYAPI_RESOLVE_FLAGS)
+
+prune-bundled-proxy-cache: $(CLIPROXYAPI_MANIFEST) $(CLIPROXYAPI_RESOLVER) $(CLIPROXYAPI_ARTIFACT_LIB)
+	$(CLIPROXYAPI_RESOLVER) --manifest "$(CLIPROXYAPI_MANIFEST)" --cache-root "$(CLIPROXYAPI_CACHE_ROOT)" --prune-cache
 
 bundle: swift-build $(INFO_PLIST) $(ENTITLEMENTS) $(ICON_FILE)
 	test -x "$(APP_EXECUTABLE)" || { echo "Missing executable: $(APP_EXECUTABLE)"; exit 1; }
@@ -119,6 +136,9 @@ bundle: swift-build $(INFO_PLIST) $(ENTITLEMENTS) $(ICON_FILE)
 			ditto --norsrc --noextattr "$$bundle" "$(RESOURCES_DIR)"; \
 		fi; \
 	done
+	mkdir -p "$(BUNDLED_PROXY_RESOURCE_DIR)"
+	cp "$(CLIPROXYAPI_MANIFEST)" "$(BUNDLED_PROXY_MANIFEST)"
+	$(CLIPROXYAPI_RESOLVER) --manifest "$(CLIPROXYAPI_MANIFEST)" --cache-root "$(CLIPROXYAPI_CACHE_ROOT)" --output "$(BUNDLED_PROXY_BINARY)" $(CLIPROXYAPI_RESOLVE_FLAGS)
 	chmod -R u+w "$(APP_BUNDLE)"
 	chmod +x "$(MACOS_DIR)/$(APP_NAME)" "$(BUNDLED_CPM)" "$(BUNDLED_HELPER)" "$(BUNDLED_SPARKLE_FRAMEWORK)/Autoupdate"
 	xattr -r -c "$(APP_BUNDLE)"
@@ -275,6 +295,7 @@ verify-dmg: dmg
 	test -d "$$MOUNT_DIR/$(APP_NAME).app" || { echo "Missing app in DMG"; exit 1; }; \
 	test -L "$$MOUNT_DIR/Applications" || { echo "Missing Applications symlink in DMG"; exit 1; }; \
 	test "$$(readlink "$$MOUNT_DIR/Applications")" = "/Applications" || { echo "Applications symlink points to wrong target"; exit 1; }; \
+	scripts/verify-app-structure.sh --app "$$MOUNT_DIR/$(APP_NAME).app" --version "$(VERSION)" --build "$(BUILD_NUMBER)" --channel "$(RELEASE_CHANNEL)"; \
 	codesign --verify --deep --strict --verbose=2 "$$MOUNT_DIR/$(APP_NAME).app"; \
 	echo "DMG verification passed"
 	@if [ "$(RELEASE_CHANNEL)" = "development" ]; then \

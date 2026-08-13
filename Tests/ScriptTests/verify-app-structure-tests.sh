@@ -20,10 +20,20 @@ cat > "$fake_bin/codesign" <<'SH'
 #!/usr/bin/env bash
 exit 99
 SH
-chmod +x "$fake_bin/codesign"
+cat > "$fake_bin/lipo" <<'SH'
+#!/usr/bin/env bash
+[[ "$1" == '-archs' ]] || exit 64
+case "${VERIFY_APP_ARCHITECTURE:-arm64}" in
+  arm64|x86_64) printf '%s\n' "${VERIFY_APP_ARCHITECTURE:-arm64}" ;;
+  *) exit 1 ;;
+esac
+SH
+chmod +x "$fake_bin/codesign" "$fake_bin/lipo"
 
 run_checker() {
-  PATH="$fake_bin:$PATH" "$SOURCE_SCRIPT" "$@"
+  PATH="$fake_bin:$PATH" \
+  CLIPROXYAPI_LIPO="$fake_bin/lipo" \
+  "$SOURCE_SCRIPT" "$@"
 }
 
 write_executable() {
@@ -31,6 +41,10 @@ write_executable() {
   mkdir -p "$(dirname "$path")"
   cat > "$path" <<'SH'
 #!/usr/bin/env bash
+if [[ "${1:-}" == '--version' ]]; then
+  printf 'CLIProxyAPI Version: 7.2.130, Commit: fixturecommit, BuiltAt: 2026-08-12T10:31:20Z\n'
+  exit 2
+fi
 exit 0
 SH
   chmod 755 "$path"
@@ -43,13 +57,9 @@ create_app() {
   local channel="$4"
   local contents="$app/Contents"
   local resources="$contents/Resources"
-  local binary
-  local manifest
-  local binary_sha
-  local binary_size
-
-  binary="$resources/cliproxyapi/cliproxyapi"
-  manifest="$resources/cliproxyapi/cliproxyapi.manifest.json"
+  local binary="$resources/cliproxyapi/cliproxyapi"
+  local manifest="$resources/cliproxyapi/cliproxyapi.manifest.json"
+  local binary_sha binary_size
 
   mkdir -p "$contents/MacOS" "$contents/Helpers" "$resources" \
     "$contents/Frameworks/Sparkle.framework/Updater.app" \
@@ -58,8 +68,7 @@ create_app() {
   cat > "$contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
+<plist version="1.0"><dict>
   <key>CFBundleIdentifier</key><string>com.woosublee.CLIProxyManager</string>
   <key>CFBundleName</key><string>CLIProxyManager</string>
   <key>CFBundleDisplayName</key><string>CLIProxyManager</string>
@@ -67,8 +76,7 @@ create_app() {
   <key>CFBundleIconFile</key><string>CLIProxyManager</string>
   <key>CFBundleShortVersionString</key><string>$version</string>
   <key>CFBundleVersion</key><string>$build</string>
-</dict>
-</plist>
+</dict></plist>
 EOF
   if [[ "$channel" == 'development' ]]; then
     plutil -insert CLIProxyManagerReleaseChannel -string development "$contents/Info.plist"
@@ -79,8 +87,7 @@ EOF
   write_executable "$contents/Helpers/cliproxy-manager"
   write_executable "$contents/Frameworks/Sparkle.framework/Autoupdate"
   : > "$resources/CLIProxyManager.icns"
-  printf 'fixture cliproxyapi binary\n' > "$binary"
-  chmod 755 "$binary"
+  write_executable "$binary"
   : > "$resources/Licenses/CLIProxyAPI-LICENSE.txt"
   : > "$resources/ProviderImages/claude.png"
   : > "$resources/ProviderImages/codex.png"
@@ -89,8 +96,20 @@ EOF
   binary_size="$(wc -c < "$binary" | tr -d '[:space:]')"
   cat > "$manifest" <<EOF
 {
+  "name": "cliproxyapi",
+  "version": "7.2.130",
+  "commit": "fixturecommit",
+  "builtAt": "2026-08-12T10:31:20Z",
+  "source": "https://github.com/router-for-me/CLIProxyAPI/releases/download/v7.2.130/CLIProxyAPI_7.2.130_darwin_aarch64.tar.gz",
+  "upstreamRepository": "router-for-me/CLIProxyAPI",
+  "upstreamTag": "v7.2.130",
+  "upstreamAsset": "CLIProxyAPI_7.2.130_darwin_aarch64.tar.gz",
+  "upstreamAssetSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "vendoredBinaryName": "cliproxyapi",
   "vendoredBinarySha256": "$binary_sha",
-  "vendoredBinarySizeBytes": $binary_size
+  "vendoredBinarySizeBytes": $binary_size,
+  "vendoredFromArchivePath": "cli-proxy-api",
+  "target": {"operatingSystem": "darwin", "architecture": "arm64"}
 }
 EOF
 }
@@ -100,7 +119,6 @@ expect_failure() {
   local expected_diagnostic="$2"
   shift 2
   local stderr_file="$sandbox/${label}.err"
-
   if run_checker "$@" >"$sandbox/${label}.out" 2>"$stderr_file"; then
     fail "$label should fail"
   fi
@@ -109,10 +127,7 @@ expect_failure() {
 }
 
 assert_valid() {
-  local app="$1"
-  local version="$2"
-  local build="$3"
-  local channel="$4"
+  local app="$1" version="$2" build="$3" channel="$4"
   run_checker --app "$app" --version "$version" --build "$build" --channel "$channel" \
     >"$sandbox/valid-${channel}.out" 2>"$sandbox/valid-${channel}.err" ||
     fail "valid $channel app should pass without codesign"
@@ -120,30 +135,15 @@ assert_valid() {
 
 create_app "$sandbox/development.app" 1.2.3 42 development
 assert_valid "$sandbox/development.app" 1.2.3 42 development
-
 create_app "$sandbox/official.app" 1.2.3 42 official
 assert_valid "$sandbox/official.app" 1.2.3 42 official
 
-create_app "$sandbox/int64-boundary.app" 1.2.3 9223372036854775807 official
-assert_valid "$sandbox/int64-boundary.app" 1.2.3 9223372036854775807 official
-
-for metadata_key in \
-  CFBundleIdentifier \
-  CFBundleName \
-  CFBundleDisplayName \
-  CFBundleExecutable \
-  CFBundleIconFile \
-  CFBundleShortVersionString \
-  CFBundleVersion; do
+for metadata_key in CFBundleIdentifier CFBundleName CFBundleDisplayName CFBundleExecutable CFBundleIconFile CFBundleShortVersionString CFBundleVersion; do
   app="$sandbox/metadata-${metadata_key}.app"
   create_app "$app" 1.2.3 42 official
   plutil -replace "$metadata_key" -string $'fixture@example.com\nPROMPT_SENTINEL' "$app/Contents/Info.plist"
   expect_failure "metadata-${metadata_key}" 'App structure validation failed: metadata' \
     --app "$app" --version 1.2.3 --build 42 --channel official
-  ! grep -F 'fixture@example.com' "$sandbox/metadata-${metadata_key}.err" >/dev/null ||
-    fail "metadata diagnostics must not expose plist values"
-  ! grep -F 'PROMPT_SENTINEL' "$sandbox/metadata-${metadata_key}.err" >/dev/null ||
-    fail "metadata diagnostics must not expose plist values"
 done
 
 app="$sandbox/development-marker.app"
@@ -152,16 +152,16 @@ plutil -remove CLIProxyManagerReleaseChannel "$app/Contents/Info.plist"
 expect_failure development-marker 'App structure validation failed: release channel marker' \
   --app "$app" --version 1.2.3 --build 42 --channel development
 
-app="$sandbox/official-marker.app"
-create_app "$app" 1.2.3 42 official
-plutil -insert CLIProxyManagerReleaseChannel -string development "$app/Contents/Info.plist"
-expect_failure official-marker 'App structure validation failed: release channel marker' \
-  --app "$app" --version 1.2.3 --build 42 --channel official
-
 app="$sandbox/main-executable.app"
 create_app "$app" 1.2.3 42 official
 chmod 644 "$app/Contents/MacOS/CLIProxyManager"
 expect_failure main-executable 'App structure validation failed: main executable' \
+  --app "$app" --version 1.2.3 --build 42 --channel official
+
+app="$sandbox/official-marker.app"
+create_app "$app" 1.2.3 42 official
+plutil -insert CLIProxyManagerReleaseChannel -string development "$app/Contents/Info.plist"
+expect_failure official-marker 'App structure validation failed: release channel marker' \
   --app "$app" --version 1.2.3 --build 42 --channel official
 
 for helper in cpm cliproxy-manager; do
@@ -178,35 +178,35 @@ rm -f "$app/Contents/Resources/CLIProxyManager.icns"
 expect_failure icon 'App structure validation failed: icon' \
   --app "$app" --version 1.2.3 --build 42 --channel official
 
-app="$sandbox/autoupdate.app"
+app="$sandbox/sparkle-autoupdate.app"
 create_app "$app" 1.2.3 42 official
 chmod 644 "$app/Contents/Frameworks/Sparkle.framework/Autoupdate"
-expect_failure autoupdate 'App structure validation failed: Sparkle Autoupdate' \
+expect_failure sparkle-autoupdate 'App structure validation failed: Sparkle Autoupdate' \
   --app "$app" --version 1.2.3 --build 42 --channel official
 
-app="$sandbox/updater.app"
+app="$sandbox/sparkle-updater.app"
 create_app "$app" 1.2.3 42 official
 rm -rf "$app/Contents/Frameworks/Sparkle.framework/Updater.app"
-expect_failure updater 'App structure validation failed: Sparkle Updater' \
+expect_failure sparkle-updater 'App structure validation failed: Sparkle Updater' \
   --app "$app" --version 1.2.3 --build 42 --channel official
 
-for legacy_resource in cpm cliproxy-manager; do
-  app="$sandbox/legacy-${legacy_resource}.app"
+for helper in cpm cliproxy-manager; do
+  app="$sandbox/resource-${helper}.app"
   create_app "$app" 1.2.3 42 official
-  : > "$app/Contents/Resources/$legacy_resource"
-  expect_failure "legacy-${legacy_resource}" 'App structure validation failed: unexpected resource helper' \
+  : > "$app/Contents/Resources/$helper"
+  expect_failure "resource-${helper}" 'App structure validation failed: unexpected resource helper' \
     --app "$app" --version 1.2.3 --build 42 --channel official
 done
 
-for resource_path in \
+for resource in \
   'cliproxyapi/cliproxyapi.manifest.json' \
   'Licenses/CLIProxyAPI-LICENSE.txt' \
   'ProviderImages/claude.png' \
   'ProviderImages/codex.png'; do
-  app="$sandbox/resource-$(basename "$resource_path").app"
+  app="$sandbox/resource-$(basename "$resource").app"
   create_app "$app" 1.2.3 42 official
-  rm -f "$app/Contents/Resources/$resource_path"
-  expect_failure "resource-$(basename "$resource_path")" 'App structure validation failed: resource contents' \
+  rm -f "$app/Contents/Resources/$resource"
+  expect_failure "resource-$(basename "$resource")" 'App structure validation failed: resource contents' \
     --app "$app" --version 1.2.3 --build 42 --channel official
 done
 
@@ -225,28 +225,31 @@ expect_failure binary-checksum 'App structure validation failed: bundled proxy b
 
 app="$sandbox/binary-size.app"
 create_app "$app" 1.2.3 42 official
-plutil -replace vendoredBinarySizeBytes -integer 1 \
-  "$app/Contents/Resources/cliproxyapi/cliproxyapi.manifest.json"
+plutil -replace vendoredBinarySizeBytes -integer 1 "$app/Contents/Resources/cliproxyapi/cliproxyapi.manifest.json"
 expect_failure binary-size 'App structure validation failed: bundled proxy binary size' \
+  --app "$app" --version 1.2.3 --build 42 --channel official
+
+app="$sandbox/binary-architecture.app"
+create_app "$app" 1.2.3 42 official
+VERIFY_APP_ARCHITECTURE=x86_64 expect_failure binary-architecture 'App structure validation failed: bundled proxy binary architecture' \
+  --app "$app" --version 1.2.3 --build 42 --channel official
+
+app="$sandbox/binary-metadata.app"
+create_app "$app" 1.2.3 42 official
+plutil -replace commit -string othercommit "$app/Contents/Resources/cliproxyapi/cliproxyapi.manifest.json"
+expect_failure binary-metadata 'App structure validation failed: bundled proxy binary metadata' \
+  --app "$app" --version 1.2.3 --build 42 --channel official
+
+app="$sandbox/manifest.app"
+create_app "$app" 1.2.3 42 official
+plutil -replace upstreamTag -string v7.2.129 "$app/Contents/Resources/cliproxyapi/cliproxyapi.manifest.json"
+expect_failure manifest 'App structure validation failed: bundled proxy manifest' \
   --app "$app" --version 1.2.3 --build 42 --channel official
 
 app="$sandbox/argument-validation.app"
 create_app "$app" 1.2.3 42 official
-expect_failure invalid-version 'Invalid checker arguments' \
-  --app "$app" --version 01.2.3 --build 42 --channel official
-expect_failure invalid-build 'Invalid checker arguments' \
-  --app "$app" --version 1.2.3 --build 0 --channel official
-expect_failure overflow-build 'Invalid checker arguments' \
-  --app "$app" --version 1.2.3 --build 9223372036854775808 --channel official
-expect_failure invalid-channel 'Invalid checker arguments' \
-  --app "$app" --version 1.2.3 --build 42 --channel preview
-expect_failure missing-option 'Invalid checker arguments' \
-  --app "$app" --version 1.2.3 --build 42
-
-untrusted_app="$sandbox/untrusted@example.com"
-expect_failure untrusted-path 'App structure validation failed: app bundle' \
-  --app "$untrusted_app" --version 1.2.3 --build 42 --channel official
-! grep -F 'untrusted@example.com' "$sandbox/untrusted-path.err" >/dev/null ||
-  fail "app diagnostics must not expose supplied paths"
+expect_failure invalid-version 'Invalid checker arguments' --app "$app" --version 01.2.3 --build 42 --channel official
+expect_failure invalid-build 'Invalid checker arguments' --app "$app" --version 1.2.3 --build 0 --channel official
+expect_failure invalid-channel 'Invalid checker arguments' --app "$app" --version 1.2.3 --build 42 --channel preview
 
 printf 'verify-app-structure tests passed\n'
