@@ -37,10 +37,14 @@ final class LicenseResourceTests: XCTestCase {
         XCTAssertTrue(text.contains("THE SOFTWARE IS PROVIDED \"AS IS\""))
     }
 
-    func testCLIProxyAPIBinaryResourceIsBundled() throws {
-        let url = try XCTUnwrap(BundledProxyBinary.url())
+    func testCLIProxyAPIManifestResourceIsBundled() throws {
+        let url = try XCTUnwrap(BundledProxyBinary.manifestURL())
+        let data = try Data(contentsOf: url)
+        let manifest = try JSONSerialization.jsonObject(with: data) as? [String: Any]
 
-        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+        XCTAssertEqual(manifest?["name"] as? String, "cliproxyapi")
+        XCTAssertNotNil(manifest?["version"] as? String)
+        XCTAssertNotNil(manifest?["vendoredBinarySha256"] as? String)
     }
 
     func testBundledProxyBinaryCreatesServiceManager() {

@@ -140,6 +140,18 @@ cpm update stage all
 cpm update apply all --yes
 ```
 
+### CLIProxyAPI artifact management
+
+The CLIProxyAPI executable is not stored directly in Git. `Sources/CLIProxyManagerApp/Resources/cliproxyapi/cliproxyapi.manifest.json` is the trust anchor that pins the upstream URL, archive SHA-256, extracted binary SHA-256 and size, version metadata, and `darwin/arm64` target.
+
+- `swift build`, `swift test`, and `make ci-build` are source-only operations and do not download CLIProxyAPI. Therefore, `swift run CLIProxyManager` is not a supported proxy-running path from a clean checkout.
+- To run a local development app with the proxy, create a verified development bundle with `make development-bundle BUILD_DIR=build-development` and use `open build-development/CLIProxyManager.app`. For the normal local launch path, use `make run`.
+- A runnable app bundle, `make verify-bundle-structure`, and DMG/release builds resolve the manifest-pinned archive into `.build/cliproxyapi/`, validating checksum, size, arm64 architecture, and version metadata on every use.
+- Default builds use a verified cache first, then download only the manifest-pinned HTTPS URL when the cache is missing or corrupt. `CLIPROXYAPI_OFFLINE=1` enables cache-only operation and fails without a network fallback when no valid cache is available. Run `make prune-bundled-proxy-cache` to remove stale hash-addressed cache entries.
+- To update the upstream binary, run `scripts/vendor-cliproxyapi.sh <version>` to update only the manifest. It validates the targeted release asset, `checksums.txt`, and the extracted arm64 binary metadata.
+
+This stops future large binary objects from being added to normal Git history. Git history rewriting for existing objects and Git LFS adoption are outside this procedure's scope.
+
 ### Maintainer release procedure
 
 The only manually edited source for the app version and build number is `release/version.json`. Do not edit the values in `Makefile` or `Info.plist` directly; `Info.plist` is a committed generated mirror.

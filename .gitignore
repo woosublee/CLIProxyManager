@@ -1,6 +1,7 @@
 .DS_Store
 .build/
 /build/
+/Sources/CLIProxyManagerApp/Resources/cliproxyapi/cliproxyapi
 .swiftpm/
 *.xcodeproj
 *.xcworkspace
