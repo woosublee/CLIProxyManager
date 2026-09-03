@@ -35,8 +35,25 @@ struct UsageOverlaySurfaceLayout {
 }
 
 @MainActor
+private final class UsageOverlayDraggableHostingView: NSHostingView<UsageOverlayView> {
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard let window else {
+            super.mouseDown(with: event)
+            return
+        }
+        window.performDrag(with: event)
+    }
+}
+
+@MainActor
 final class UsageOverlaySurfaceView: NSView {
-    private let hostingView: NSHostingView<UsageOverlayView>
+    private let hostingView: UsageOverlayDraggableHostingView
     private let chromeHostingView: NSHostingView<UsageOverlayChrome>
     private var cancellables: Set<AnyCancellable> = []
     private var cornerRadius = UsageOverlaySurfaceLayout.expandedCornerRadius
@@ -48,7 +65,7 @@ final class UsageOverlaySurfaceView: NSView {
         onToggleDisplayMode: @escaping () -> Void,
         onClose: @escaping () -> Void
     ) {
-        hostingView = NSHostingView(rootView: rootView)
+        hostingView = UsageOverlayDraggableHostingView(rootView: rootView)
         chromeHostingView = NSHostingView(
             rootView: UsageOverlayChrome(
                 viewModel: viewModel,

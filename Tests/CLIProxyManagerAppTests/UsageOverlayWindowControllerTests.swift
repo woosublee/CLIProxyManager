@@ -10,12 +10,63 @@ private final class UnconstrainedTestPanel: NSPanel {
     }
 }
 
+private final class DragTrackingPanel: NSPanel {
+    private(set) var performedDragEvent: NSEvent?
+
+    override func performDrag(with event: NSEvent) {
+        performedDragEvent = event
+    }
+}
+
 @MainActor
 final class UsageOverlayWindowControllerTests: XCTestCase {
     func testDefaultPanelUsesBorderlessStyleForCustomHeader() {
         let controller = UsageOverlayWindowController()
 
         XCTAssertTrue(controller.window.styleMask.contains(.borderless))
+    }
+
+    func testHUDContentStartsWindowDragOnFirstMouseDown() async throws {
+        let viewModel = DashboardViewModel(config: .default)
+        let panel = DragTrackingPanel(
+            contentRect: NSRect(x: 400, y: 400, width: 300, height: 260),
+            styleMask: [.borderless, .utilityWindow],
+            backing: .buffered,
+            defer: false
+        )
+        _ = UsageOverlayWindowController(
+            panel: panel,
+            viewModel: viewModel,
+            initialDisplayMode: .expanded,
+            shouldReduceMotion: { true },
+            visibleFrameProvider: visibleFrame
+        )
+        await drainMainQueue()
+
+        let surfaceView = try XCTUnwrap(panel.contentView as? UsageOverlaySurfaceView)
+        surfaceView.layoutSubtreeIfNeeded()
+        panel.orderFront(nil)
+        defer { panel.orderOut(nil) }
+        let contentPoint = NSPoint(x: surfaceView.bounds.midX, y: surfaceView.bounds.midY)
+        let contentView = try XCTUnwrap(surfaceView.hitTest(contentPoint))
+        let event = try XCTUnwrap(
+            NSEvent.mouseEvent(
+                with: .leftMouseDown,
+                location: contentPoint,
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: panel.windowNumber,
+                context: nil,
+                eventNumber: 1,
+                clickCount: 1,
+                pressure: 1
+            )
+        )
+
+        XCTAssertTrue(contentView.acceptsFirstMouse(for: event))
+        panel.sendEvent(event)
+
+        XCTAssertTrue(panel.performedDragEvent === event)
     }
 
     func testChromeHostingViewIdentityStaysStableAcrossModeToggle() async {
