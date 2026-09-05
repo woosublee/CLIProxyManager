@@ -1806,12 +1806,25 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         XCTAssertTrue(didReschedule)
         staleScreenRestore()
         XCTAssertEqual(panel.frame, initialFrame)
-        for callback in callbacks { callback() }
+        // 복원 직후 추가 화면 알림이 도착하는 순서를 명시적으로 재현한다.
+        let pendingScreenRestore = try XCTUnwrap(callbacks.last)
+        callbacks = [{
+            pendingScreenRestore()
+            controller.windowDidChangeScreen(
+                Notification(name: NSWindow.didChangeScreenNotification, object: panel)
+            )
+        }]
+        let didSettle = await waitUntil {
+            if !callbacks.isEmpty {
+                callbacks.removeFirst()()
+            }
+            return callbacks.isEmpty
+        }
+        XCTAssertTrue(didSettle)
 
         XCTAssertEqual(panel.frame, CGRect(x: 1480, y: 500, width: 108, height: 180))
         XCTAssertEqual(savedPlacement, placement)
 
-        callbacks.removeAll()
         controller.handleWindowWillMove()
         controller.handleWindowDidMove()
         XCTAssertTrue(callbacks.isEmpty)
