@@ -12,9 +12,11 @@ private final class UnconstrainedTestPanel: NSPanel {
 
 private final class DragTrackingPanel: NSPanel {
     private(set) var performedDragEvent: NSEvent?
+    var onPerformDrag: () -> Void = {}
 
     override func performDrag(with event: NSEvent) {
         performedDragEvent = event
+        onPerformDrag()
     }
 }
 
@@ -34,14 +36,27 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
             backing: .buffered,
             defer: false
         )
-        _ = UsageOverlayWindowController(
+        var savedPlacements: [UsageOverlayPlacement] = []
+        let controller = UsageOverlayWindowController(
             panel: panel,
             viewModel: viewModel,
             initialDisplayMode: .expanded,
             shouldReduceMotion: { true },
-            visibleFrameProvider: visibleFrame
+            visibleFrameProvider: visibleFrame,
+            placementPersistence: .init(
+                load: { nil },
+                save: { savedPlacements.append($0); return true },
+                loadLegacyFrame: { nil },
+                removeLegacyFrame: {}
+            ),
+            isMouseButtonPressed: { false }
         )
         await drainMainQueue()
+        panel.onPerformDrag = {
+            panel.setFrameOrigin(CGPoint(x: 450, y: 420))
+            controller.handleWindowDidMove()
+        }
+        defer { panel.onPerformDrag = {} }
 
         let surfaceView = try XCTUnwrap(panel.contentView as? UsageOverlaySurfaceView)
         surfaceView.layoutSubtreeIfNeeded()
@@ -67,6 +82,7 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         panel.sendEvent(event)
 
         XCTAssertTrue(panel.performedDragEvent === event)
+        XCTAssertEqual(savedPlacements.count, 1)
     }
 
     func testChromeHostingViewIdentityStaysStableAcrossModeToggle() async {
@@ -753,6 +769,7 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
     }
 
     func testWindowMoveDuringAccountResizeSettlesAtMovedAnchorThenReveals() async {
+        var isMousePressed = true
         let oneAccount = accountPresentation([.claude])
         let twoAccounts = accountPresentation([.claude, .codex])
         let panel = makePanel(x: 500, y: 400, width: 300, height: 260)
@@ -772,7 +789,7 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
             fittingSizeProvider: { CGSize(width: 300, height: 360) },
             frameAnimator: { _, _, completion in staleFrameCompletion = completion },
             frameAnimationInterrupter: { _ in interruptionCount += 1 },
-            isUserInitiatedMoveDuringAnimation: { true }
+            isMouseButtonPressed: { isMousePressed }
         )
         controller.showForCurrentSession(using: .init(isVisible: true, displayMode: .expanded))
         controller.updateAccountPresentation(twoAccounts)
@@ -783,6 +800,7 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         controller.handleWindowWillMove()
         let movedFrame = CGRect(x: 220, y: 180, width: 150, height: 210)
         panel.setFrame(movedFrame, display: false)
+        isMousePressed = false
         controller.handleWindowDidMove()
 
         XCTAssertEqual(interruptionCount, 1)
@@ -1481,7 +1499,67 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         XCTAssertEqual(panel.frame.height, 240)
     }
 
+    func testWindowMoveBeforeModeResizeSettlesAndRevealsInBothDirections() async throws {
+        for initialMode in [AppConfig.UsageOverlay.DisplayMode.expanded, .compact] {
+            let initialSize = initialMode == .expanded
+                ? CGSize(width: 300, height: 330)
+                : CGSize(width: 108, height: 180)
+            let targetSize = initialMode == .expanded
+                ? CGSize(width: 108, height: 180)
+                : CGSize(width: 300, height: 330)
+            let panel = makeUnconstrainedPanel(
+                x: 500,
+                y: 400,
+                width: initialSize.width,
+                height: initialSize.height
+            )
+            panel.contentView = NSView(frame: CGRect(origin: .zero, size: initialSize))
+            var isMousePressed = true
+            var delayedModeResize: (@MainActor () -> Void)?
+            let controller = UsageOverlayWindowController(
+                panel: panel,
+                initialDisplayMode: initialMode,
+                persistDisplayMode: { _ in true },
+                shouldReduceMotion: { false },
+                visibleFrameProvider: visibleFrame,
+                deferredScreenResizeScheduler: { _ in },
+                modeTransitionResizeScheduler: { delayedModeResize = $0 },
+                fittingSizeProvider: { targetSize },
+                frameAnimator: { _, _, _ in
+                    XCTFail("드래그로 중단된 모드 전환은 애니메이션 없이 정착해야 합니다.")
+                },
+                frameAnimationInterrupter: { _ in },
+                isMouseButtonPressed: { isMousePressed }
+            )
+
+            controller.toggleDisplayMode()
+            let staleModeResize = try XCTUnwrap(delayedModeResize)
+            XCTAssertTrue(controller.isContentHiddenForModeTransition)
+            XCTAssertEqual(panel.frame.size, initialSize)
+
+            controller.handleWindowWillMove()
+            panel.setFrameOrigin(CGPoint(x: 220, y: 180))
+            let movedAnchor = CGPoint(x: panel.frame.maxX, y: panel.frame.maxY)
+            isMousePressed = false
+            controller.handleWindowDidMove()
+            await drainMainQueue()
+
+            XCTAssertEqual(controller.presentedDisplayMode, initialMode.opposite)
+            XCTAssertFalse(controller.isContentHiddenForModeTransition)
+            XCTAssertEqual(panel.frame.size, targetSize)
+            XCTAssertEqual(panel.frame.maxX, movedAnchor.x)
+            XCTAssertEqual(panel.frame.maxY, movedAnchor.y)
+
+            let settledFrame = panel.frame
+            staleModeResize()
+            await drainMainQueue()
+            XCTAssertEqual(panel.frame, settledFrame)
+            XCTAssertFalse(controller.isContentHiddenForModeTransition)
+        }
+    }
+
     func testWindowMoveDuringTransitionSettlesAtMovedRightTopAnchorWithoutAnimation() {
+        var isMousePressed = true
         var animationCount = 0
         var animationWasInterrupted = false
         var staleCompletion: (@MainActor () -> Void)?
@@ -1502,7 +1580,7 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
             frameAnimationInterrupter: { _ in
                 animationWasInterrupted = true
             },
-            isUserInitiatedMoveDuringAnimation: { true }
+            isMouseButtonPressed: { isMousePressed }
         )
 
         controller.toggleDisplayMode()
@@ -1512,7 +1590,11 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         controller.handleWindowWillMove()
         let movedFrame = CGRect(x: 220, y: 180, width: 150, height: 210)
         panel.setFrame(movedFrame, display: false)
+        isMousePressed = false
         controller.handleWindowDidMove()
+        drainMainQueueSynchronously()
+        XCTAssertEqual(controller.presentedDisplayMode, .compact)
+        XCTAssertFalse(controller.isContentHiddenForModeTransition)
         staleCompletion?()
         drainMainQueueSynchronously()
 
@@ -1587,7 +1669,7 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
                 controller.handleWindowDidMove()
                 completion()
             },
-            isUserInitiatedMoveDuringAnimation: { false }
+            isMouseButtonPressed: { false }
         )
 
         controller.toggleDisplayMode()
@@ -1670,6 +1752,133 @@ final class UsageOverlayWindowControllerTests: XCTestCase {
         XCTAssertLessThan(controller.compactAccountMaximumHeight, initialMaximum)
         XCTAssertLessThanOrEqual(panel.frame.maxX, 784)
         XCTAssertLessThanOrEqual(panel.frame.maxY, 484)
+    }
+
+    func testClickBeforeQueuedScreenRestorePreservesSavedPlacement() async throws {
+        var screen = placementScreen(
+            id: 1,
+            uuid: "display",
+            frame: CGRect(x: 0, y: 0, width: 1440, height: 900),
+            isPrimary: true
+        )
+        let initialFrame = CGRect(x: 1000, y: 500, width: 108, height: 180)
+        let placement = UsageOverlayPlacement(
+            display: screen.identity,
+            frame: initialFrame,
+            visibleFrame: screen.visibleFrame
+        )
+        var savedPlacement = placement
+        var isMousePressed = true
+        var callbacks: [@MainActor () -> Void] = []
+        let panel = makeUnconstrainedPanel(x: 1000, y: 500, width: 108, height: 180)
+        panel.contentView = NSView(frame: CGRect(origin: .zero, size: initialFrame.size))
+        let controller = UsageOverlayWindowController(
+            panel: panel,
+            initialDisplayMode: .compact,
+            shouldReduceMotion: { true },
+            visibleFrameProvider: { screen.visibleFrame },
+            screenProvider: placementScreenProvider(screens: { [screen] }, windowScreen: { screen }),
+            placementPersistence: .init(
+                load: { savedPlacement },
+                save: { savedPlacement = $0; return true },
+                loadLegacyFrame: { nil },
+                removeLegacyFrame: {}
+            ),
+            deferredScreenResizeScheduler: { callbacks.append($0) },
+            fittingSizeProvider: { initialFrame.size },
+            isMouseButtonPressed: { isMousePressed }
+        )
+        for callback in callbacks { callback() }
+        callbacks.removeAll()
+        screen = placementScreen(
+            id: 1,
+            uuid: "display",
+            frame: CGRect(x: 0, y: 0, width: 1920, height: 900),
+            isPrimary: true
+        )
+        controller.handleScreenGeometryChange()
+        let staleScreenRestore = try XCTUnwrap(callbacks.last)
+        callbacks.removeAll()
+
+        controller.handleWindowWillMove()
+        isMousePressed = false
+        let didReschedule = await waitUntil { !callbacks.isEmpty }
+        XCTAssertTrue(didReschedule)
+        staleScreenRestore()
+        XCTAssertEqual(panel.frame, initialFrame)
+        for callback in callbacks { callback() }
+
+        XCTAssertEqual(panel.frame, CGRect(x: 1480, y: 500, width: 108, height: 180))
+        XCTAssertEqual(savedPlacement, placement)
+
+        callbacks.removeAll()
+        controller.handleWindowWillMove()
+        controller.handleWindowDidMove()
+        XCTAssertTrue(callbacks.isEmpty)
+        XCTAssertEqual(panel.frame, CGRect(x: 1480, y: 500, width: 108, height: 180))
+    }
+
+    func testDragBeforeQueuedScreenRestoreResizesAtFinalSavedAnchor() throws {
+        var screen = placementScreen(
+            id: 1,
+            uuid: "display",
+            frame: CGRect(x: 0, y: 0, width: 1440, height: 900),
+            isPrimary: true
+        )
+        let initialFrame = CGRect(x: 1000, y: 500, width: 108, height: 180)
+        var savedPlacement = UsageOverlayPlacement(
+            display: screen.identity,
+            frame: initialFrame,
+            visibleFrame: screen.visibleFrame
+        )
+        var isMousePressed = true
+        var fittingSize = initialFrame.size
+        var callbacks: [@MainActor () -> Void] = []
+        let panel = makeUnconstrainedPanel(x: 1000, y: 500, width: 108, height: 180)
+        panel.contentView = NSView(frame: CGRect(origin: .zero, size: initialFrame.size))
+        let controller = UsageOverlayWindowController(
+            panel: panel,
+            initialDisplayMode: .compact,
+            shouldReduceMotion: { true },
+            visibleFrameProvider: { screen.visibleFrame },
+            screenProvider: placementScreenProvider(screens: { [screen] }, windowScreen: { screen }),
+            placementPersistence: .init(
+                load: { savedPlacement },
+                save: { savedPlacement = $0; return true },
+                loadLegacyFrame: { nil },
+                removeLegacyFrame: {}
+            ),
+            deferredScreenResizeScheduler: { callbacks.append($0) },
+            fittingSizeProvider: { fittingSize },
+            isMouseButtonPressed: { isMousePressed }
+        )
+        for callback in callbacks { callback() }
+        callbacks.removeAll()
+        screen = placementScreen(
+            id: 1,
+            uuid: "display",
+            frame: CGRect(x: 0, y: 0, width: 1920, height: 900),
+            isPrimary: true
+        )
+        fittingSize = CGSize(width: 108, height: 240)
+        controller.handleScreenGeometryChange()
+        let staleScreenRestore = try XCTUnwrap(callbacks.last)
+        callbacks.removeAll()
+
+        controller.handleWindowWillMove()
+        panel.setFrameOrigin(CGPoint(x: 1200, y: 520))
+        controller.handleWindowDidMove()
+        staleScreenRestore()
+        XCTAssertEqual(panel.frame, CGRect(x: 1200, y: 520, width: 108, height: 180))
+        isMousePressed = false
+        controller.handleWindowDidMove()
+        for callback in callbacks { callback() }
+
+        XCTAssertEqual(panel.frame, CGRect(x: 1200, y: 460, width: 108, height: 240))
+        XCTAssertEqual(savedPlacement.rightOffset, 612)
+        XCTAssertEqual(savedPlacement.topOffset, 200)
+        staleScreenRestore()
+        XCTAssertEqual(panel.frame, CGRect(x: 1200, y: 460, width: 108, height: 240))
     }
 
     func testScreenGeometryResizeDefersAndCoalescesToLatestGeneration() {

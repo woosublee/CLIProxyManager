@@ -106,7 +106,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     private let fittingSizeProvider: (() -> CGSize)?
     private let frameAnimator: (NSPanel, CGRect, @escaping @MainActor () -> Void) -> Void
     private let frameAnimationInterrupter: (NSPanel) -> Void
-    private let isUserInitiatedMoveDuringAnimation: () -> Bool
+    private let isMouseButtonPressed: () -> Bool
     private struct PersistenceTransaction {
         let generation: Int
         let target: AppConfig.UsageOverlay.DisplayMode
@@ -132,6 +132,11 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     private var userMoveInterruptedTransition = false
     private var userMoveInterruptedAccountGeneration: Int?
     private var isUserMoveInProgress = false
+    private var userMoveGeneration = 0
+    private var userMoveInitialFrame: CGRect?
+    private var userMoveDidChangeFrame = false
+    private var needsResizeAfterUserMove = false
+    private var needsScreenGeometryUpdate = false
     private var isApplyingControllerFrame = false
     private var isUsingTemporaryScreenFallback = false
     private var savedPlacement: UsageOverlayPlacement?
@@ -180,7 +185,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         fittingSizeProvider: (() -> CGSize)? = nil,
         frameAnimator: ((NSPanel, CGRect, @escaping @MainActor () -> Void) -> Void)? = nil,
         frameAnimationInterrupter: ((NSPanel) -> Void)? = nil,
-        isUserInitiatedMoveDuringAnimation: @escaping () -> Bool = {
+        isMouseButtonPressed: @escaping () -> Bool = {
             NSEvent.pressedMouseButtons != 0
         }
     ) {
@@ -239,7 +244,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         self.frameAnimationInterrupter = frameAnimationInterrupter ?? { panel in
             panel.setFrame(panel.frame, display: true, animate: false)
         }
-        self.isUserInitiatedMoveDuringAnimation = isUserInitiatedMoveDuringAnimation
+        self.isMouseButtonPressed = isMouseButtonPressed
         self.persistDisplayMode = persistDisplayMode ?? { [weak viewModel] mode in
             guard let viewModel else { return true }
             var usageOverlay = viewModel.config.usageOverlay
@@ -383,6 +388,10 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         transitionGeneration: Int?,
         completion: (@MainActor () -> Void)? = nil
     ) {
+        guard !isUserMoveInProgress else {
+            needsResizeAfterUserMove = true
+            return
+        }
         let anchorFrame = frameAnchoredAtAuthoritativeTransitionAnchor()
         guard let visibleFrame = currentVisibleFrame() else {
             applyControllerFrame(
@@ -431,6 +440,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     }
 
     func hideForCurrentSession() {
+        completeUserMove(shouldResize: false)
         isSuppressedForCurrentSession = true
         userMoveInterruptedTransition = false
         userMoveInterruptedAccountGeneration = nil
@@ -445,10 +455,15 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     }
 
     func handleWindowWillMove() {
-        if isApplyingControllerFrame, !isUserInitiatedMoveDuringAnimation() {
+        if isApplyingControllerFrame, !isMouseButtonPressed() {
             return
         }
+        guard !isUserMoveInProgress else { return }
         isUserMoveInProgress = true
+        userMoveInitialFrame = panel.frame
+        userMoveGeneration += 1
+        screenGeometryGeneration += 1
+        scheduleUserMoveCompletion(generation: userMoveGeneration)
         if let generation = prepareAccountTransitionForHiddenSettlement() {
             userMoveInterruptedAccountGeneration = generation
         }
@@ -462,20 +477,71 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     }
 
     func handleWindowDidMove() {
-        guard isUserMoveInProgress else { return }
-        isUserMoveInProgress = false
-        saveCurrentPlacement()
-        if let generation = userMoveInterruptedAccountGeneration {
-            userMoveInterruptedAccountGeneration = nil
-            beginAccountResize(generation: generation, animated: false)
+        guard isUserMoveInProgress, !isApplyingControllerFrame else { return }
+        saveUserMovePlacementIfNeeded()
+        if !isMouseButtonPressed() {
+            completeUserMove()
         }
-        if userMoveInterruptedTransition {
-            userMoveInterruptedTransition = false
+    }
+
+    private func scheduleUserMoveCompletion(generation: Int) {
+        // performDrag는 즉시 반환하며 mouseUp이 전달되지 않을 수 있다.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { @MainActor [weak self] in
+            guard let self,
+                  self.isUserMoveInProgress,
+                  generation == self.userMoveGeneration else { return }
+            if self.isMouseButtonPressed() {
+                self.scheduleUserMoveCompletion(generation: generation)
+            } else {
+                self.completeUserMove()
+            }
+        }
+    }
+
+    private func saveUserMovePlacementIfNeeded() {
+        guard userMoveDidChangeFrame || panel.frame != userMoveInitialFrame else { return }
+        userMoveDidChangeFrame = true
+        saveCurrentPlacement()
+    }
+
+    private func completeUserMove(shouldResize: Bool = true) {
+        guard isUserMoveInProgress else { return }
+        saveUserMovePlacementIfNeeded()
+        isUserMoveInProgress = false
+        userMoveGeneration += 1
+        userMoveInitialFrame = nil
+        userMoveDidChangeFrame = false
+        let accountGeneration = userMoveInterruptedAccountGeneration
+        let needsModeSettlement = userMoveInterruptedTransition
+        let needsResize = needsResizeAfterUserMove
+        let needsScreenUpdate = needsScreenGeometryUpdate
+        userMoveInterruptedAccountGeneration = nil
+        userMoveInterruptedTransition = false
+        needsResizeAfterUserMove = false
+        needsScreenGeometryUpdate = false
+        guard shouldResize else { return }
+        if needsScreenUpdate {
+            handleScreenGeometryChange()
+            return
+        }
+        updatePanelConstraints(for: displayMode)
+        if let accountGeneration {
+            beginAccountResize(generation: accountGeneration, animated: false)
+        }
+        if needsModeSettlement {
+            presentationState.presentedDisplayMode = displayMode
+            resizeToFittingContentImmediately(animated: false)
+            presentationState.isContentHiddenForModeTransition = false
+        } else if needsResize {
             resizeToFittingContent(animated: false)
         }
     }
 
     func requestContentResize(animated: Bool = false) {
+        guard !isUserMoveInProgress else {
+            needsResizeAfterUserMove = true
+            return
+        }
         if displayMode == .compact, accountTransitionPhase == .swapping {
             beginAccountResize(
                 generation: accountTransitionCoordinator.generation,
@@ -515,6 +581,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             presentation,
             presentedProviderIDs: presentedAccountPresentation.orderedProviderIDs,
             allowsAnimation: panel.isVisible
+                && !isUserMoveInProgress
                 && !shouldReduceMotion()
                 && !presentationState.isContentHiddenForModeTransition
         )
@@ -673,6 +740,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             isVisible = true
             resizeToFittingContent(animated: false)
         } else if !preferences.isVisible {
+            completeUserMove(shouldResize: false)
             userMoveInterruptedTransition = false
             userMoveInterruptedAccountGeneration = nil
             settleAccountTransitionImmediately(interruptFrameAnimation: true)
@@ -692,6 +760,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
     }
 
     func handleScreenGeometryChange() {
+        needsScreenGeometryUpdate = true
         guard !isUserMoveInProgress else { return }
         userMoveInterruptedTransition = false
         userMoveInterruptedAccountGeneration = nil
@@ -703,7 +772,10 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
         screenGeometryGeneration += 1
         let generation = screenGeometryGeneration
         deferredScreenResizeScheduler { @MainActor [weak self] in
-            guard let self, generation == self.screenGeometryGeneration else { return }
+            guard let self,
+                  generation == self.screenGeometryGeneration,
+                  !self.isUserMoveInProgress else { return }
+            self.needsScreenGeometryUpdate = false
             if self.savedPlacement != nil || self.isUsingTemporaryScreenFallback {
                 self.restoreSavedPlacement(allowMigration: false)
             }
@@ -754,6 +826,7 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             ),
             viewModel: viewModel,
             presentationState: presentationState,
+            onWindowDragStarted: { [weak self] in self?.handleWindowWillMove() },
             onToggleDisplayMode: { [weak self] in self?.toggleDisplayMode() },
             onClose: { [weak self] in self?.hideForCurrentSession() }
         )
@@ -832,8 +905,9 @@ final class UsageOverlayWindowController: NSObject, ObservableObject, NSWindowDe
             frame: panel.frame,
             visibleFrame: screen.visibleFrame
         )
-        savedPlacement = placement
         isUsingTemporaryScreenFallback = false
+        guard placement != savedPlacement else { return }
+        savedPlacement = placement
         if placementPersistence.save(placement) {
             placementPersistence.removeLegacyFrame()
         }

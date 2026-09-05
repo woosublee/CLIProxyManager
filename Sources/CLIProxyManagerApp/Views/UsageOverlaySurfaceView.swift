@@ -36,6 +36,8 @@ struct UsageOverlaySurfaceLayout {
 
 @MainActor
 private final class UsageOverlayDraggableHostingView: NSHostingView<UsageOverlayView> {
+    var onWindowDragStarted: () -> Void = {}
+
     override var mouseDownCanMoveWindow: Bool { false }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
@@ -47,6 +49,7 @@ private final class UsageOverlayDraggableHostingView: NSHostingView<UsageOverlay
             super.mouseDown(with: event)
             return
         }
+        onWindowDragStarted()
         window.performDrag(with: event)
     }
 }
@@ -62,10 +65,12 @@ final class UsageOverlaySurfaceView: NSView {
         rootView: UsageOverlayView,
         viewModel: DashboardViewModel,
         presentationState: UsageOverlayPresentationState,
+        onWindowDragStarted: @escaping () -> Void,
         onToggleDisplayMode: @escaping () -> Void,
         onClose: @escaping () -> Void
     ) {
         hostingView = UsageOverlayDraggableHostingView(rootView: rootView)
+        hostingView.onWindowDragStarted = onWindowDragStarted
         chromeHostingView = NSHostingView(
             rootView: UsageOverlayChrome(
                 viewModel: viewModel,
