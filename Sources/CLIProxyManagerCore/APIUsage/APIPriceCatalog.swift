@@ -118,7 +118,16 @@ public struct APIPriceCatalog: Equatable, Sendable {
         let baseline = utcDate("2026-07-25T00:00:00Z")
         let sonnetStandard = utcDate("2026-09-01T00:00:00Z")
 
-        return APIPriceCatalog(version: 1, entries: [
+        // 공식 가격 확인일 이전 기록에는 새 모델 요율을 소급하지 않는다.
+        // https://developers.openai.com/api/docs/models/gpt-6-astra
+        // https://developers.openai.com/api/docs/pricing
+        let astraVerified = utcDate("2026-09-19T00:00:00Z")
+
+        return APIPriceCatalog(version: 2, entries: [
+            price(.openAI, "gpt-6-astra", "default", .standard, from: astraVerified, input: "10", cacheRead: "1", cacheWrite: "12.5", output: "50"),
+            price(.openAI, "gpt-6-astra", "default", .standardLongContext, from: astraVerified, input: "20", cacheRead: "2", cacheWrite: "25", output: "75"),
+            price(.openAI, "gpt-6-astra", "priority", .priority, from: astraVerified, input: "20", cacheRead: "2", cacheWrite: "25", output: "100"),
+            price(.openAI, "gpt-6-astra", "priority", .priorityLongContext, from: astraVerified, input: "40", cacheRead: "4", cacheWrite: "50", output: "150"),
             price(.claude, "claude-fable-5", "standard", .standard, from: baseline, input: "10", cacheRead: "1", cacheWrite: "12.5", output: "50"),
             price(.claude, "claude-opus-5", "standard", .standard, from: baseline, input: "5", cacheRead: "0.5", cacheWrite: "6.25", output: "25"),
             price(.claude, "claude-opus-4-8", "standard", .standard, from: baseline, input: "5", cacheRead: "0.5", cacheWrite: "6.25", output: "25"),

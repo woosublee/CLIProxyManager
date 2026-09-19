@@ -95,6 +95,7 @@ public struct APIUsageQueueRecord: Decodable, Equatable, Sendable {
     public let tokenBreakdown: APIUsageTokenBreakdown
     public let serviceTier: String
     public let responseServiceTier: String?
+    public let responseModel: String?
 
     enum CodingKeys: String, CodingKey {
         case timestamp, provider, model, alias, failed
@@ -105,6 +106,7 @@ public struct APIUsageQueueRecord: Decodable, Equatable, Sendable {
         case tokenBreakdown = "token_breakdown"
         case serviceTier = "service_tier"
         case responseServiceTier = "response_service_tier"
+        case responseModel = "response_model"
     }
 
     public init(from decoder: Decoder) throws {
@@ -122,6 +124,7 @@ public struct APIUsageQueueRecord: Decodable, Equatable, Sendable {
         tokenBreakdown = try container.decode(APIUsageTokenBreakdown.self, forKey: .tokenBreakdown)
         serviceTier = try container.decode(String.self, forKey: .serviceTier)
         responseServiceTier = try container.decodeIfPresent(String.self, forKey: .responseServiceTier)
+        responseModel = try container.decodeIfPresent(String.self, forKey: .responseModel)
     }
 }
 

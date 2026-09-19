@@ -54,6 +54,7 @@ struct ProviderRowState: Identifiable, Equatable {
     let showsUsage: Bool
     let resetCreditsSnapshot: CodexResetCreditsSnapshot?
     let showsInUsageOverlay: Bool
+    let cooldownState: AccountCooldownState?
 
     init(
         id: ID,
@@ -73,7 +74,8 @@ struct ProviderRowState: Identifiable, Equatable {
         usageState: ProviderUsageState = .subscription(.disabled),
         showsUsage: Bool = true,
         resetCreditsSnapshot: CodexResetCreditsSnapshot? = nil,
-        showsInUsageOverlay: Bool = true
+        showsInUsageOverlay: Bool = true,
+        cooldownState: AccountCooldownState? = nil
     ) {
         self.id = id
         self.providerType = providerType ?? Self.inferredProviderType(from: id)
@@ -93,6 +95,7 @@ struct ProviderRowState: Identifiable, Equatable {
         self.showsUsage = showsUsage
         self.resetCreditsSnapshot = resetCreditsSnapshot
         self.showsInUsageOverlay = showsInUsageOverlay
+        self.cooldownState = cooldownState
     }
 
     var displayTitle: String {

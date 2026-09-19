@@ -441,6 +441,97 @@ final class AuthProfileStoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: otherNewURL.path))
     }
 
+    func testClaudeReauthenticationAcceptsIdentityFilenameMigrationAndPreservesProfile() async throws {
+        let cases = [
+            ("claude-fixture@example.com.json", "fixture-organization", "fixture-organization", "claude-7f81728d-fixture@example.com.json"),
+            ("claude-fixture@example.com.json", "", "", "claude-55b47e1b-fixture@example.com.json"),
+            ("claude-55b47e1b-fixture@example.com.json", "", "fixture-organization", "claude-7f81728d-fixture@example.com.json")
+        ]
+        for (targetName, oldOrganization, newOrganization, sourceName) in cases {
+            let directory = try makeAuthDirectory()
+            let target = directory.appendingPathComponent(targetName)
+            let source = directory.appendingPathComponent(sourceName)
+            let old = claudeMigrationCredential(organization: oldOrganization, token: "old", disabled: true)
+            let new = claudeMigrationCredential(organization: newOrganization, token: "new", disabled: false)
+            try old.write(to: target)
+            let store = AuthProfileStore(authDirectory: directory)
+
+            let profile = try await store.reauthenticate(targetID: targetName, provider: .claude) {
+                try new.write(to: source)
+                try FileManager.default.removeItem(at: target)
+            }
+
+            XCTAssertEqual(profile.id, targetName)
+            XCTAssertEqual(profile.prefix, "work")
+            XCTAssertTrue(profile.disabled)
+            XCTAssertEqual(try json(at: target)["access_token"] as? String, "new")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: source.path))
+        }
+    }
+
+    func testClaudeReauthenticationRejectsUnrelatedOrInvalidFilenameMigration() async throws {
+        let cases = [
+            ("claude-29622330-fixture@example.com.json", "other-organization", "fixture@example.com", "fixture-account"),
+            ("claude-7f81728d-other@example.com.json", "fixture-organization", "other@example.com", "fixture-account"),
+            ("claude-deadbeef-fixture@example.com.json", "fixture-organization", "fixture@example.com", "fixture-account"),
+            ("claude-7f81728d-fixture@example.com.json", "", "fixture@example.com", "")
+        ]
+        for (sourceName, organization, email, account) in cases {
+            let directory = try makeAuthDirectory()
+            let target = directory.appendingPathComponent("claude-fixture@example.com.json")
+            let source = directory.appendingPathComponent(sourceName)
+            let old = claudeMigrationCredential(organization: "fixture-organization", token: "old", disabled: false)
+            let new = claudeMigrationCredential(organization: organization, token: "new", disabled: false, email: email, account: account)
+            try old.write(to: target)
+            let store = AuthProfileStore(authDirectory: directory)
+            await XCTAssertThrowsErrorAsync {
+                _ = try await store.reauthenticate(targetID: target.lastPathComponent, provider: .claude) {
+                    try new.write(to: source)
+                    try FileManager.default.removeItem(at: target)
+                }
+            } verify: {
+                XCTAssertEqual($0 as? AuthProfileReauthenticationError, .ambiguousChangedCredentials)
+            }
+            XCTAssertEqual(try Data(contentsOf: target), old)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: source.path))
+        }
+    }
+
+    func testClaudeMigrationDoesNotAllowAnotherCredentialDeletion() async throws {
+        let directory = try makeAuthDirectory()
+        let target = directory.appendingPathComponent("claude-fixture@example.com.json")
+        let source = directory.appendingPathComponent("claude-7f81728d-fixture@example.com.json")
+        let other = directory.appendingPathComponent("claude-other.json")
+        let old = claudeMigrationCredential(organization: "fixture-organization", token: "old", disabled: false)
+        let new = claudeMigrationCredential(organization: "fixture-organization", token: "new", disabled: false)
+        try old.write(to: target)
+        try old.write(to: other)
+        let store = AuthProfileStore(authDirectory: directory)
+        await XCTAssertThrowsErrorAsync {
+            _ = try await store.reauthenticate(targetID: target.lastPathComponent, provider: .claude) {
+                try new.write(to: source)
+                try FileManager.default.removeItem(at: target)
+                try FileManager.default.removeItem(at: other)
+            }
+        } verify: {
+            XCTAssertEqual($0 as? AuthProfileReauthenticationError, .ambiguousChangedCredentials)
+        }
+        XCTAssertEqual(try Data(contentsOf: target), old)
+        XCTAssertEqual(try Data(contentsOf: other), old)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.path))
+    }
+
+    private func claudeMigrationCredential(
+        organization: String, token: String, disabled: Bool,
+        email: String = "fixture@example.com", account: String = "fixture-account"
+    ) -> Data {
+        try! JSONSerialization.data(withJSONObject: [
+            "type": "claude", "email": email, "organization_uuid": organization,
+            "account_uuid": account, "access_token": token, "disabled": disabled,
+            "prefix": disabled ? "work" : "generated"
+        ])
+    }
+
     func testReauthenticationErrorsProvideRecoveryDescriptions() {
         XCTAssertEqual(
             AuthProfileReauthenticationError.noChangedCredential.localizedDescription,

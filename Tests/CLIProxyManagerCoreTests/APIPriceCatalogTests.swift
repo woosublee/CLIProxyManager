@@ -4,7 +4,7 @@ import XCTest
 
 final class APIPriceCatalogTests: XCTestCase {
     func testCurrentCatalogVersionChangesWithBundledPriceData() {
-        XCTAssertEqual(APIPriceCatalog.current.version, 1)
+        XCTAssertEqual(APIPriceCatalog.current.version, 2)
     }
 
     func testClaudeSonnetIntroductoryPriceEndsAtSeptemberBoundary() throws {

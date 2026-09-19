@@ -103,6 +103,8 @@ final class DashboardCommandBadgeLayoutUITests: XCTestCase {
             setEnabled: { _ in },
             relogin: {},
             isOAuthLoginInProgress: false,
+            clearQuotaCooldown: {},
+            quotaRecoveryDisabledReason: nil,
             remove: {}
         )
         .frame(width: AppWindowMetrics.mainWidth - 28)

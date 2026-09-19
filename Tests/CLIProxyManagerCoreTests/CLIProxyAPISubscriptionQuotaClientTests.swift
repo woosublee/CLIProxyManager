@@ -650,6 +650,188 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
         XCTAssertTrue(transport.requests.isEmpty)
     }
 
+    func testCooldownObservationSurvivesProviderUsageFailure() async throws {
+        let transport = StubSubscriptionUsageTransport(responses: [
+            .success(.init(data: cooldownAuthFiles(), statusCode: 200)),
+            .success(.init(data: Data(#"{"status_code":429,"body":"{}"}"#.utf8), statusCode: 200))
+        ])
+        let report = await quotaClient(transport).fetchUsage(port: 28_317, profiles: [cooldownProfile])
+        XCTAssertEqual(report.statesByProfileID[cooldownProfile.id], .unavailable(.transientFailure))
+        let snapshot = try XCTUnwrap(report.cooldownStatesByProfileID[cooldownProfile.id]?.snapshot)
+        XCTAssertEqual(snapshot.cooldowns.first?.reason, "quota")
+        XCTAssertEqual(snapshot.cooldowns.first?.modelKey, "gpt-6-astra")
+        XCTAssertEqual(snapshot.observedAt, Date(timeIntervalSince1970: 1_789_776_000))
+        XCTAssertEqual(snapshot.cooldowns.first?.retryAt, Date(timeIntervalSince1970: 1_789_779_600.125))
+    }
+
+    func testCooldownUnsupportedEmptyAndMalformedAreDistinctWithoutBreakingUsage() async {
+        for (field, expected) in [
+            ("", "unsupported"), (",\"cooldowns\":null", "unsupported"),
+            (",\"cooldowns\":[]", "empty"), (",\"cooldowns\":{}", "malformed"),
+            (",\"cooldowns\":[{\"reason\":\"quota\"}]", "malformed")
+        ] {
+            let auth = Data("{\"files\":[{\"name\":\"codex.json\",\"provider\":\"codex\",\"auth_index\":\"fresh-index\",\"disabled\":false\(field)}]}".utf8)
+            let transport = StubSubscriptionUsageTransport(responses: [
+                .success(.init(data: auth, statusCode: 200)),
+                .success(.init(data: Data(#"{"status_code":200,"body":"{\"rate_limit\":{\"primary_window\":{\"used_percent\":20}}}"}"#.utf8), statusCode: 200))
+            ])
+            let report = await quotaClient(transport).fetchUsage(port: 28_317, profiles: [cooldownProfile])
+            XCTAssertNotNil(report.statesByProfileID[cooldownProfile.id]?.snapshot)
+            let state = report.cooldownStatesByProfileID[cooldownProfile.id]
+            switch expected {
+            case "unsupported": XCTAssertEqual(state, .unsupported)
+            case "empty": XCTAssertEqual(state?.snapshot?.cooldowns, [])
+            default: XCTAssertEqual(state, .unavailable(.schemaMismatch))
+            }
+        }
+    }
+
+    func testResetQuotaUsesFreshUniqueCredentialAndOnlyLocalManagementEndpoint() async throws {
+        let transport = StubSubscriptionUsageTransport(responses: [
+            .success(.init(data: cooldownAuthFiles(), statusCode: 200)),
+            .success(.init(data: Data(#"{"status":"ok","auth_index":"fresh-index","models":["gpt-6-astra"]}"#.utf8), statusCode: 200))
+        ])
+        let result = try await quotaClient(transport).resetQuota(port: 28_317, profile: cooldownProfile, authorize: { true })
+        XCTAssertEqual(result, .reset)
+        XCTAssertEqual(transport.requests.map { $0.url?.absoluteString }, [
+            "http://127.0.0.1:28317/v0/management/auth-files",
+            "http://127.0.0.1:28317/v0/management/reset-quota"
+        ])
+        let post = try XCTUnwrap(transport.requests.last)
+        XCTAssertEqual(post.httpMethod, "POST")
+        XCTAssertEqual(post.value(forHTTPHeaderField: "Authorization"), "Bearer management-secret")
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(post.httpBody)) as? [String: String])
+        XCTAssertEqual(body, ["auth_index": "fresh-index"])
+    }
+
+    func testResetQuotaRefusesInvalidOrAmbiguousCredentialAndMalformedDiagnostics() async {
+        for auth in [
+            #"{"files":[]}"#,
+            #"{"files":[{"name":"codex.json","provider":"claude","auth_index":"wrong","disabled":false}]}"#,
+            #"{"files":[{"name":"codex.json","provider":"codex","auth_index":"","disabled":false}]}"#,
+            #"{"files":[{"name":"codex.json","provider":"codex","auth_index":"a","disabled":true}]}"#,
+            #"{"files":[{"name":"codex.json","provider":"codex","auth_index":"a","disabled":false,"status":"expired"}]}"#,
+            #"{"files":[{"name":"codex.json","provider":"codex","auth_index":"a","disabled":false},{"name":"codex.json","provider":"codex","auth_index":"b","disabled":false}]}"#,
+            #"{"files":[{"name":"codex.json","provider":"codex","auth_index":"a","disabled":false,"cooldowns":{}}]}"#
+        ] {
+            let transport = StubSubscriptionUsageTransport(responses: [.success(.init(data: Data(auth.utf8), statusCode: 200))])
+            do {
+                _ = try await quotaClient(transport).resetQuota(port: 28_317, profile: cooldownProfile, authorize: { true })
+                XCTFail("Invalid credential must not be reset")
+            } catch {}
+            XCTAssertEqual(transport.requests.map(\.httpMethod), ["GET"])
+        }
+    }
+
+    func testResetQuotaChecksAuthorizationAgainAfterLookup() async {
+        let transport = StubSubscriptionUsageTransport(responses: [.success(.init(data: cooldownAuthFiles(), statusCode: 200))])
+        let authorization = ResetAuthorizationGate()
+        do {
+            _ = try await quotaClient(transport).resetQuota(port: 28_317, profile: cooldownProfile, authorize: { await authorization.allowOnce() })
+            XCTFail("Invalidated operation must be cancelled")
+        } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(transport.requests.map(\.httpMethod), ["GET"])
+    }
+
+    func testResetQuotaDoesNotPostForObservedEmptyOrNonQuotaCooldowns() async throws {
+        for cooldowns in ["[]", #"[{"scope":"credential","reason":"unauthorized","retry_at":"2026-09-19T01:00:00Z","remaining_seconds":3600}]"#] {
+            let transport = StubSubscriptionUsageTransport(responses: [.success(.init(data: cooldownAuthFiles(cooldowns: cooldowns), statusCode: 200))])
+            let result = try await quotaClient(transport).resetQuota(port: 28_317, profile: cooldownProfile, authorize: { true })
+            guard case .notNeeded = result else { return XCTFail("Must leave non-quota state untouched") }
+            XCTAssertEqual(transport.requests.count, 1)
+        }
+    }
+
+    func testResetQuotaSupportsLegacyAndRejectsFailedOrMismatchedAcknowledgment() async throws {
+        let legacy = Data(#"{"files":[{"name":"codex.json","provider":"codex","auth_index":"fresh-index","disabled":false}]}"#.utf8)
+        for (status, body, succeeds) in [
+            (200, #"{"status":"ok","auth_index":"fresh-index"}"#, true),
+            (200, #"{"status":"ok","auth_index":"other-index"}"#, false),
+            (200, "{}", false), (401, "{}", false), (404, "{}", false),
+            (429, "{}", false), (503, "{}", false)
+        ] {
+            let transport = StubSubscriptionUsageTransport(responses: [
+                .success(.init(data: legacy, statusCode: 200)),
+                .success(.init(data: Data(body.utf8), statusCode: status))
+            ])
+            do {
+                let result = try await quotaClient(transport).resetQuota(port: 28_317, profile: cooldownProfile, authorize: { true })
+                XCTAssertTrue(succeeds)
+                XCTAssertEqual(result, .reset)
+            } catch { XCTAssertFalse(succeeds) }
+            XCTAssertEqual(transport.requests.count, 2)
+        }
+    }
+
+    func testResetQuotaDistinguishesRemovedCredentialFromUnsupportedEndpoint() async {
+        for (body, expected) in [
+            (#"{"error":"auth not found"}"#, SubscriptionUsageIssue.authFileNotMatched),
+            ("404 page not found", .managementAPINotSupported)
+        ] {
+            let transport = StubSubscriptionUsageTransport(responses: [
+                .success(.init(data: cooldownAuthFiles(), statusCode: 200)),
+                .success(.init(data: Data(body.utf8), statusCode: 404))
+            ])
+            do {
+                _ = try await quotaClient(transport).resetQuota(port: 28_317, profile: cooldownProfile, authorize: { true })
+                XCTFail("Missing credential or endpoint must fail")
+            } catch {
+                XCTAssertEqual(error as? AccountQuotaResetError, .management(expected))
+            }
+            XCTAssertEqual(transport.requests.count, 2)
+        }
+    }
+
+    func testResetQuotaRejectsMalformedAcknowledgmentAsSchemaMismatch() async {
+        let transport = StubSubscriptionUsageTransport(responses: [
+            .success(.init(data: cooldownAuthFiles(), statusCode: 200)),
+            .success(.init(data: Data("not JSON".utf8), statusCode: 200))
+        ])
+        do {
+            _ = try await quotaClient(transport).resetQuota(port: 28_317, profile: cooldownProfile, authorize: { true })
+            XCTFail("Malformed acknowledgment must not be accepted")
+        } catch {
+            XCTAssertEqual(error as? AccountQuotaResetError, .management(.schemaMismatch))
+        }
+        XCTAssertEqual(transport.requests.count, 2)
+    }
+
+    func testCooldownRejectsBooleanDurationWithoutDiscardingUsage() async {
+        let auth = cooldownAuthFiles(cooldowns: #"[{"scope":"credential","reason":"quota","retry_at":"2026-09-19T01:00:00Z","remaining_seconds":true}]"#)
+        let transport = StubSubscriptionUsageTransport(responses: [
+            .success(.init(data: auth, statusCode: 200)),
+            .success(.init(data: Data(#"{"status_code":200,"body":"{\"rate_limit\":{\"primary_window\":{\"used_percent\":20}}}"}"#.utf8), statusCode: 200))
+        ])
+        let report = await quotaClient(transport).fetchUsage(port: 28_317, profiles: [cooldownProfile])
+        XCTAssertEqual(report.cooldownStatesByProfileID[cooldownProfile.id], .unavailable(.schemaMismatch))
+        XCTAssertNotNil(report.statesByProfileID[cooldownProfile.id]?.snapshot)
+    }
+
+    func testResetQuotaDoesNotRequestWithMissingKeyInvalidPortOrDisabledProfile() async {
+        for (port, key, disabled) in [(0, "key", false), (28_317, "", false), (28_317, "key", true)] {
+            let transport = StubSubscriptionUsageTransport(responses: [])
+            let client = CLIProxyAPISubscriptionQuotaClient(keyStore: StubManagementKeyStore(key: key), transport: transport)
+            let profile = AuthProfile(fileName: "codex.json", type: .codex, email: nil, accountID: nil, expired: nil, disabled: disabled)
+            do {
+                _ = try await client.resetQuota(port: port, profile: profile, authorize: { true })
+                XCTFail("Preflight should reject invalid input")
+            } catch {}
+            XCTAssertTrue(transport.requests.isEmpty)
+        }
+    }
+
+    private var cooldownProfile: AuthProfile {
+        AuthProfile(fileName: "codex.json", type: .codex, email: nil, accountID: nil, expired: nil, disabled: false)
+    }
+
+    private func quotaClient(_ transport: StubSubscriptionUsageTransport) -> CLIProxyAPISubscriptionQuotaClient {
+        CLIProxyAPISubscriptionQuotaClient(keyStore: StubManagementKeyStore(key: "management-secret"), transport: transport)
+    }
+
+    private func cooldownAuthFiles(cooldowns: String = #"[{"scope":"model","model_key":"gpt-6-astra","reason":"quota","retry_at":"2026-09-19T01:00:00.125Z","remaining_seconds":3600}]"#) -> Data {
+        Data("{\"observed_at\":\"2026-09-19T00:00:00Z\",\"files\":[{\"name\":\"codex.json\",\"provider\":\"codex\",\"auth_index\":\"fresh-index\",\"status\":\"ready\",\"disabled\":false,\"cooldowns\":\(cooldowns)}]}".utf8)
+    }
+
     func testDisabledProfileDoesNotCallProviderEndpoint() async {
         let transport = StubSubscriptionUsageTransport(responses: [
             .success(.init(data: Data(#"{"files":[]}"#.utf8), statusCode: 200))
@@ -661,6 +843,14 @@ final class CLIProxyAPISubscriptionQuotaClientTests: XCTestCase {
 
         XCTAssertEqual(report.statesByProfileID[profile.id], .unavailable(.credentialDisabled))
         XCTAssertEqual(transport.requests.count, 1)
+    }
+}
+
+private actor ResetAuthorizationGate {
+    private var used = false
+    func allowOnce() -> Bool {
+        defer { used = true }
+        return !used
     }
 }
 

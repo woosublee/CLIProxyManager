@@ -132,6 +132,8 @@ struct DashboardView: View {
                                     viewModel.startOAuthReauthentication(account.id)
                                 },
                                 isOAuthLoginInProgress: viewModel.isProfileLoginInProgress,
+                                clearQuotaCooldown: { Task { await viewModel.clearQuotaCooldown(account.id) } },
+                                quotaRecoveryDisabledReason: viewModel.quotaCooldownResetDisabledReason(account.id),
                                 remove: {
                                     if account.isAPIKeyProfile {
                                         viewModel.removeAPIProvider(account.id)
@@ -712,9 +714,12 @@ struct ProviderAccountCardView: View {
     let setEnabled: (Bool) -> Void
     let relogin: () -> Void
     let isOAuthLoginInProgress: Bool
+    let clearQuotaCooldown: () -> Void
+    let quotaRecoveryDisabledReason: String?
     let remove: () -> Void
     @State private var hovering: Bool = false
     @State private var confirmRemove: Bool = false
+    @State private var confirmQuotaRecovery: Bool = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -737,6 +742,19 @@ struct ProviderAccountCardView: View {
                 }
 
                 accountDetailRow
+
+                if let summary = account.cooldownSummary {
+                    Text(summary)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    if let detail = account.cooldownDetail {
+                        Text(detail)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .fastTooltip(detail)
+                    }
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -771,6 +789,13 @@ struct ProviderAccountCardView: View {
             Button("Remove", role: .destructive) { remove() }
         } message: {
             Text("The auth profile will be deleted from CLIProxyAPI. You can reconnect at any time via Add provider.")
+        }
+        .alert("Clear this account’s quota cooldown?", isPresented: $confirmQuotaRecovery) {
+            Button("Cancel", role: .cancel) {}
+            Button("Clear cooldown", action: clearQuotaCooldown)
+                .disabled(quotaRecoveryDisabledReason != nil)
+        } message: {
+            Text("This clears local routing cooldowns for this account, including its model cooldowns, without restarting the server. It does not reset provider usage or consume reset credits. If provider quota is still exhausted, requests may be limited again.")
         }
     }
 
@@ -877,6 +902,18 @@ struct ProviderAccountCardView: View {
                             Label("Re-login", systemImage: "arrow.clockwise")
                         }
                         .disabled(isOAuthLoginInProgress)
+
+                        if account.showsQuotaRecoveryAction {
+                            Button {
+                                confirmQuotaRecovery = true
+                            } label: {
+                                Label("Clear quota cooldown…", systemImage: "arrow.uturn.backward")
+                            }
+                            .disabled(quotaRecoveryDisabledReason != nil)
+                            if let reason = quotaRecoveryDisabledReason {
+                                Text(reason)
+                            }
+                        }
 
                         Button {
                             setEnabled(false)

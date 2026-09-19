@@ -3,7 +3,7 @@ import Foundation
 import FoundationNetworking
 #endif
 
-public struct CLIProxyAPISubscriptionQuotaClient: ConcurrentSubscriptionQuotaFetching {
+public struct CLIProxyAPISubscriptionQuotaClient: ConcurrentSubscriptionQuotaFetching, AccountQuotaResetting {
     private let keyStore: any SubscriptionUsageManagementKeyProviding
     private let transport: any ManagementAPIHTTPTransport
     private let now: @Sendable () -> Date
@@ -207,11 +207,125 @@ public struct CLIProxyAPISubscriptionQuotaClient: ConcurrentSubscriptionQuotaFet
 
         return SubscriptionUsageReport(
             statesByProfileID: states,
+            cooldownStatesByProfileID: decodeCooldownStates(authFilesResponse.data, profiles: usageProfiles, fetchedAt: fetchedAt),
             resetCreditsOutcomesByProfileID: resetCreditOutcomes,
             resetCreditsAttemptedProfileIDs: resetCreditsAttemptedProfileIDs,
             resetCreditsDeferredProfileIDs: resetCreditsDeferredProfileIDs,
             fetchedAt: fetchedAt
         )
+    }
+
+    public func resetQuota(
+        port: Int,
+        profile: AuthProfile,
+        authorize: @escaping @Sendable () async -> Bool
+    ) async throws -> AccountQuotaResetResult {
+        guard (1...65_535).contains(port) else { throw AccountQuotaResetError.invalidPort }
+        guard !profile.disabled else { throw AccountQuotaResetError.management(.credentialDisabled) }
+        guard keyStore.isConfigured(), let key = try? keyStore.managementKey(),
+              !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw AccountQuotaResetError.managementKeyNotConfigured
+        }
+        try Task.checkCancellation()
+        guard await authorize() else { throw CancellationError() }
+        let baseURL = URL(string: "http://127.0.0.1:\(port)/v0/management")!
+        do {
+            let response = try await sendManagementRequest(
+                url: baseURL.appendingPathComponent("auth-files"), method: "GET", managementKey: key, body: nil
+            )
+            guard (200..<300).contains(response.statusCode) else {
+                throw AccountQuotaResetError.management(issue(forManagementStatus: response.statusCode))
+            }
+            let matches = try decodeCredentialRecords(response.data).filter {
+                $0.name == profile.fileName && $0.provider == profile.type.rawValue
+            }
+            guard matches.count == 1, let credential = matches.first,
+                  !credential.authIndex.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw AccountQuotaResetError.management(.authFileNotMatched)
+            }
+            guard !credential.disabled, credential.status != "disabled" else {
+                throw AccountQuotaResetError.management(.credentialDisabled)
+            }
+            guard credential.status != "expired" else { throw AccountQuotaResetError.management(.credentialExpired) }
+            let state = decodeCooldownStates(response.data, profiles: [profile], fetchedAt: now())[profile.id]
+                ?? .unavailable(.schemaMismatch)
+            switch state {
+            case .unavailable(let issue): throw AccountQuotaResetError.management(issue)
+            case .observed(let snapshot) where !snapshot.cooldowns.contains(where: \.isQuota): return .notNeeded(state)
+            case .observed, .unsupported: break
+            }
+            try Task.checkCancellation()
+            guard await authorize() else { throw CancellationError() }
+            try Task.checkCancellation()
+            let result = try await sendManagementRequest(
+                url: baseURL.appendingPathComponent("reset-quota"), method: "POST", managementKey: key,
+                body: JSONSerialization.data(withJSONObject: ["auth_index": credential.authIndex])
+            )
+            guard (200..<300).contains(result.statusCode) else {
+                if result.statusCode == 404,
+                   let body = (try? JSONSerialization.jsonObject(with: result.data)) as? [String: Any],
+                   body["error"] as? String == "auth not found" {
+                    throw AccountQuotaResetError.management(.authFileNotMatched)
+                }
+                throw AccountQuotaResetError.management(issue(forManagementStatus: result.statusCode))
+            }
+            guard let acknowledgment = (try? JSONSerialization.jsonObject(with: result.data)) as? [String: Any],
+                  acknowledgment["status"] as? String == "ok",
+                  acknowledgment["auth_index"] as? String == credential.authIndex else {
+                throw AccountQuotaResetError.management(.schemaMismatch)
+            }
+            return .reset
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as AccountQuotaResetError {
+            throw error
+        } catch is DecodingError {
+            throw AccountQuotaResetError.management(.schemaMismatch)
+        } catch {
+            if Task.isCancelled { throw CancellationError() }
+            throw AccountQuotaResetError.management(.proxyUnavailable)
+        }
+    }
+
+    private func decodeCooldownStates(
+        _ data: Data, profiles: [AuthProfile], fetchedAt: Date
+    ) -> [String: AccountCooldownState] {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let files = object["files"] as? [[String: Any]] else {
+            return Dictionary(uniqueKeysWithValues: profiles.map { ($0.id, .unavailable(.schemaMismatch)) })
+        }
+        return Dictionary(uniqueKeysWithValues: profiles.map { profile in
+            let matches = files.filter {
+                $0["name"] as? String == profile.fileName
+                    && ($0["provider"] as? String)?.lowercased() == profile.type.rawValue
+            }
+            guard matches.count == 1, let file = matches.first else {
+                return (profile.id, .unavailable(.authFileNotMatched))
+            }
+            guard let value = file["cooldowns"], !(value is NSNull) else { return (profile.id, .unsupported) }
+            do {
+                guard let entries = value as? [[String: Any]] else {
+                    return (profile.id, .unavailable(.schemaMismatch))
+                }
+                let cooldowns = try entries.map { entry -> AccountCooldown in
+                    guard let scope = entry["scope"] as? String, !scope.isEmpty,
+                          let reason = entry["reason"] as? String, !reason.isEmpty,
+                          let retryString = entry["retry_at"] as? String,
+                          let retryAt = try resetDate(retryString),
+                          let number = entry["remaining_seconds"] as? NSNumber,
+                          CFGetTypeID(number) != CFBooleanGetTypeID(),
+                          let remaining = entry["remaining_seconds"] as? Int, remaining >= 0 else {
+                        throw AccountQuotaResetError.management(.schemaMismatch)
+                    }
+                    return AccountCooldown(scope: scope, modelKey: entry["model_key"] as? String,
+                                           reason: reason, retryAt: retryAt, remainingSeconds: remaining)
+                }
+                let observedAt = try resetDate(object["observed_at"]) ?? fetchedAt
+                return (profile.id, .observed(.init(cooldowns: cooldowns, observedAt: observedAt)))
+            } catch {
+                return (profile.id, .unavailable(.schemaMismatch))
+            }
+        })
     }
 
     private func fetchUsage(
@@ -397,6 +511,9 @@ public struct CLIProxyAPISubscriptionQuotaClient: ConcurrentSubscriptionQuotaFet
         }
         return SubscriptionUsageReport(
             statesByProfileID: Dictionary(uniqueKeysWithValues: profiles.map { ($0.id, state) }),
+            cooldownStatesByProfileID: Dictionary(uniqueKeysWithValues: profiles.map {
+                ($0.id, .unavailable(state.issue ?? .proxyUnavailable))
+            }),
             resetCreditsOutcomesByProfileID: resetCreditsOutcomes,
             fetchedAt: fetchedAt
         )
