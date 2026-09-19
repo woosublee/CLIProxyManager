@@ -1,3 +1,4 @@
+import Combine
 import XCTest
 @testable import CLIProxyManagerApp
 @testable import CLIProxyManagerCore
@@ -10046,6 +10047,70 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertNil(viewModel.quotaResetProfileID)
     }
 
+    func testQuotaCooldownResetDrainsDeferredReloadAfterFailureOrCancellation() async throws {
+        for cancels in [false, true] {
+            let (viewModel, client, service, profile) = quotaResetFixture(
+                fails: !cancels, suspends: true,
+                subscriptionUsageSleep: { _ in throw CancellationError() }
+            )
+            await viewModel.refreshSubscriptionUsage(force: true)
+            let expected = try XCTUnwrap(viewModel.accountCooldownStates[profile.id])
+            let id = try XCTUnwrap(viewModel.providerRows.first?.id)
+            let reset = Task { await viewModel.clearQuotaCooldown(id) }
+            await client.waitForReset()
+            let refreshed = expectation(description: "복구 종료 후 대기 중인 사용량과 진단을 즉시 조회한다")
+            let observation = viewModel.$accountCooldownStates
+                .first { $0[profile.id] == expected }
+                .sink { _ in refreshed.fulfill() }
+            defer { observation.cancel() }
+
+            await viewModel.reloadSubscriptionUsage()
+            XCTAssertNil(viewModel.accountCooldownStates[profile.id])
+            if cancels { reset.cancel() }
+            await client.releaseReset()
+            await reset.value
+            await fulfillment(of: [refreshed], timeout: 1)
+
+            XCTAssertEqual(viewModel.accountCooldownStates[profile.id], expected)
+            XCTAssertNil(viewModel.quotaResetProfileID)
+            let posts = await client.postCount
+            XCTAssertEqual(posts, 0)
+            XCTAssertTrue(service.ports.isEmpty)
+            XCTAssertTrue(service.restartPorts.isEmpty)
+            XCTAssertEqual(service.stopCount, 0)
+        }
+    }
+
+    func testQuotaCooldownResetDrainsReloadQueuedDuringVerification() async throws {
+        let (viewModel, client, _, profile) = quotaResetFixture(
+            suspendPostRefresh: true,
+            subscriptionUsageSleep: { _ in throw CancellationError() }
+        )
+        let id = try XCTUnwrap(viewModel.providerRows.first?.id)
+        let reset = Task { await viewModel.clearQuotaCooldown(id) }
+        await client.waitForPostRefresh()
+        let date = Date(timeIntervalSince1970: 1_790_000_060)
+        let expected = AccountCooldownState.observed(.init(cooldowns: [
+            .init(scope: "model", modelKey: "gpt-6-astra", reason: "quota", retryAt: date.addingTimeInterval(60), remainingSeconds: 60)
+        ], observedAt: date))
+        await client.setPostRefreshState(expected)
+        let refreshed = expectation(description: "검증 조회 중 대기한 요청으로 최신 진단을 반영한다")
+        let observation = viewModel.$accountCooldownStates
+            .first { $0[profile.id] == expected }
+            .sink { _ in refreshed.fulfill() }
+        defer { observation.cancel() }
+
+        await viewModel.refreshSubscriptionUsage(force: true)
+        await client.releasePostRefresh()
+        await reset.value
+        await fulfillment(of: [refreshed], timeout: 1)
+
+        XCTAssertEqual(viewModel.accountCooldownStates[profile.id], expected)
+        XCTAssertNil(viewModel.quotaResetProfileID)
+        let posts = await client.postCount
+        XCTAssertEqual(posts, 1)
+    }
+
     func testQuotaCooldownResetReportsUnverifiedOrReappliedCooldownSeparately() async throws {
         let date = Date(timeIntervalSince1970: 1_790_000_000)
         let states: [AccountCooldownState] = [
@@ -10125,7 +10190,10 @@ final class DashboardViewModelRefreshTests: XCTestCase {
     private func quotaResetFixture(
         fails: Bool = false, suspends: Bool = false, keyConfigured: Bool = true,
         postRefreshState: AccountCooldownState? = nil, suspendPostRefresh: Bool = false,
-        healthReady: Bool = true
+        healthReady: Bool = true,
+        subscriptionUsageSleep: @escaping @Sendable (UInt64) async throws -> Void = { delay in
+            try await Task.sleep(nanoseconds: delay)
+        }
     ) -> (DashboardViewModel, ResettableQuotaClient, StubProxyServiceStarter, AuthProfile) {
         var config = AppConfig.default
         config.port = 28_317
@@ -10142,7 +10210,8 @@ final class DashboardViewModelRefreshTests: XCTestCase {
             proxyService: service, profiles: [profile], quotaClient: client,
             proxyHealthClient: ProxyHealthClient(httpClient: StubHTTPClient(
                 result: healthReady ? .success(Data("{}".utf8)) : .failure(URLError(.cannotConnectToHost))
-            ), timeout: 0.1)
+            ), timeout: 0.1),
+            subscriptionUsageSleep: subscriptionUsageSleep
         )
         viewModel.serverStatus = readyStatus()
         return (viewModel, client, service, profile)
@@ -11632,8 +11701,9 @@ private actor ResettableQuotaClient: SubscriptionQuotaFetching, AccountQuotaRese
     private(set) var postCount = 0
     private var resetWaiters: [CheckedContinuation<Void, Never>] = []
     private var release: CheckedContinuation<Void, Never>?
-    private let postRefreshState: AccountCooldownState?
+    private var postRefreshState: AccountCooldownState?
     private let suspendPostRefresh: Bool
+    private var didSuspendPostRefresh = false
     private var postRefreshWaiters: [CheckedContinuation<Void, Never>] = []
     private var postRefreshRelease: CheckedContinuation<Void, Never>?
 
@@ -11655,23 +11725,29 @@ private actor ResettableQuotaClient: SubscriptionQuotaFetching, AccountQuotaRese
         postRefreshRelease = nil
     }
 
+    func setPostRefreshState(_ state: AccountCooldownState) {
+        postRefreshState = state
+    }
+
     func fetchUsage(port: Int, profiles: [AuthProfile]) async -> SubscriptionUsageReport {
-        if postCount > 0 && suspendPostRefresh {
+        let date = Date(timeIntervalSince1970: 1_790_000_000)
+        let cooldowns: [AccountCooldown] = postCount == 0 ? [
+            AccountCooldown(scope: "model", modelKey: "gpt-6-astra", reason: "quota", retryAt: date.addingTimeInterval(3600), remainingSeconds: 3600)
+        ] : []
+        let report = SubscriptionUsageReport(
+            statesByProfileID: [profile.id: .available(.init(profileID: profile.id, provider: .codex, windows: [.init(id: "primary", label: "Primary", usedPercent: 20, resetAt: nil)], fetchedAt: date))],
+            cooldownStatesByProfileID: [profile.id: postCount > 0 ? postRefreshState ?? .observed(.init(cooldowns: cooldowns, observedAt: date)) : .observed(.init(cooldowns: cooldowns, observedAt: date))],
+            fetchedAt: date
+        )
+        if postCount > 0 && suspendPostRefresh && !didSuspendPostRefresh {
+            didSuspendPostRefresh = true
             await withCheckedContinuation { continuation in
                 postRefreshRelease = continuation
                 postRefreshWaiters.forEach { $0.resume() }
                 postRefreshWaiters.removeAll()
             }
         }
-        let date = Date(timeIntervalSince1970: 1_790_000_000)
-        let cooldowns: [AccountCooldown] = postCount == 0 ? [
-            AccountCooldown(scope: "model", modelKey: "gpt-6-astra", reason: "quota", retryAt: date.addingTimeInterval(3600), remainingSeconds: 3600)
-        ] : []
-        return SubscriptionUsageReport(
-            statesByProfileID: [profile.id: .available(.init(profileID: profile.id, provider: .codex, windows: [.init(id: "primary", label: "Primary", usedPercent: 20, resetAt: nil)], fetchedAt: date))],
-            cooldownStatesByProfileID: [profile.id: postCount > 0 ? postRefreshState ?? .observed(.init(cooldowns: cooldowns, observedAt: date)) : .observed(.init(cooldowns: cooldowns, observedAt: date))],
-            fetchedAt: date
-        )
+        return report
     }
 
     func resetQuota(port: Int, profile: AuthProfile, authorize: @escaping @Sendable () async -> Bool) async throws -> AccountQuotaResetResult {

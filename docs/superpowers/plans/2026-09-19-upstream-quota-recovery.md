@@ -19,6 +19,7 @@ Codex에서 외부 사용량 리셋을 적용해도 CLIProxyAPI가 이전 429 �
 - 최신 관측에 quota 차단이 없으면 POST하지 않는다. 구버전에서 관측만 미지원인 경우에는 수동 시도를 허용한다.
 - 성공 응답의 status와 auth_index를 검증한다. 대상 소멸, API 미지원, 인증 거부, 통신 실패, 잘못된 응답을 구별하고 실패한 POST를 자동 반복하지 않는다.
 - 복구 및 재조회가 진행되는 동안 중복 요청을 막는다. 포트/서버 세대, 계정 삭제·비활성화·재로그인, 서버 준비 상태 변경 시 작업과 진단을 무효화한다. 이전 세대의 늦은 응답을 현재 진단으로 표시하지 않는다.
+- 복구 종료 시 같은 세대에서 대기 중인 사용량 새로고침을 먼저 처리하고 자동 조회를 예약한다. 실패·취소 또는 성공 후 검증 조회 중에 대기한 수동 요청을 다음 polling 주기까지 미루지 않는다. 비동기 후속 처리 전후에도 세대를 확인한다.
 - 해제 후 재조회에서 cooldown이 다시 관측되거나 상태를 확인하지 못한 경우를 별도로 안내한다. 기존 마지막 성공 사용량 캐시는 유지한다.
 
 ### Claude OAuth 재로그인
@@ -81,7 +82,9 @@ bash Tests/ScriptTests/verify-app-structure-tests.sh
 git diff --check
 ```
 
-전체 Swift 테스트는 `-Xswiftc -warnings-as-errors`를 추가한 설정에서 Core 725개와 App 861개, 합계 **1,586개가 통과**했다. 위 스크립트 테스트 3종과 `git diff --check`도 통과했다.
+전체 Swift 테스트는 `-Xswiftc -warnings-as-errors`를 추가한 설정에서 Core 725개와 App 863개, 합계 **1,588개가 통과**했다. 위 스크립트 테스트 3종과 `git diff --check`도 통과했다.
+
+2026-09-20 리뷰 반영에서는 자동 polling을 진행시키지 않는 회귀 테스트 2개로 대기 요청의 지연을 먼저 재현했다. 복구 실패·취소 후 및 성공 후 검증 조회 중에 대기한 새로고침이 즉시 진단을 갱신하는지 확인했다. 수정 후 쿨다운 관련 13개 테스트와 전체 Swift 테스트가 통과했고 development bundle 생성·구조·무결성 검증도 다시 통과했다.
 
 현재 Xcode의 기본 `swiftbuild` 엔진은 리소스 bundle 안에 `Contents/Resources`를 생성한다. 기존 Makefile은 flat 리소스 구조를 전제로 하므로 첫 development bundle 생성은 컴파일 후 `App structure validation failed: resource contents`에서 멈췄다. 이번 작업에서는 Makefile 변경으로 범위를 확대하지 않고 기존 패키징과 호환되는 `native` 모드를 명시한다. 이 모드는 현 도구에서 사용 가능하지만 deprecated 경고가 있으므로 빌드 엔진 전환 대응은 별도 후속 과제다.
 
@@ -110,4 +113,4 @@ make development-bundle BUILD_DIR=build-development \
 5. Claude 재로그인 후 계정 ID, nickname/명령 참조, disabled/prefix가 유지되는지 확인한다.
 6. API-key 사용 기록에서 실제 응답 모델과 tier에 맞는 비용이 표시되는지 확인한다.
 
-자동 테스트는 로컬 복구 요청 계약과 앱 동작을 검증하며, 실계정의 외부 quota 회복 자체를 검증한 것은 아니다. 이 작업에는 커밋·푸시·PR·릴리스·프로덕션 배포가 포함되지 않는다.
+자동 테스트는 로컬 복구 요청 계약과 앱 동작을 검증하며, 실계정의 외부 quota 회복 자체를 검증한 것은 아니다. 초기 구현 이후 사용자 승인으로 [PR #174](https://github.com/woosublee/CLIProxyManager/pull/174)를 등록하고 리뷰 지적을 반영한다. 머지·릴리스·프로덕션 배포는 포함하지 않는다.

@@ -2283,7 +2283,12 @@ final class DashboardViewModel: ObservableObject {
             if quotaResetGeneration == generation {
                 quotaResetTask = nil
                 quotaResetProfileID = nil
-                scheduleSubscriptionUsagePollingIfNeeded()
+                Task { [weak self] in
+                    guard let self, self.quotaResetGeneration == generation else { return }
+                    _ = await self.drainDeferredSubscriptionUsageRefresh(source: .automatic)
+                    guard self.quotaResetGeneration == generation else { return }
+                    self.scheduleSubscriptionUsagePollingIfNeeded()
+                }
             }
         }
         do {
