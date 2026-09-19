@@ -1,4 +1,5 @@
 import CLIProxyManagerCore
+import Foundation
 
 struct UsageOverlayAccountButtonPresentation: Equatable {
     let symbolName = "macwindow"
@@ -34,6 +35,50 @@ struct DashboardAccountSnapshot: Equatable, Identifiable {
     let isAPIKeyProfile: Bool
     let showsInUsageOverlay: Bool
 
+    let cooldownState: AccountCooldownState?
+
+    var showsQuotaRecoveryAction: Bool {
+        status == .connected && !isAPIKeyProfile
+    }
+
+    var cooldownSummary: String? {
+        guard showsQuotaRecoveryAction, let cooldownState else { return nil }
+        switch cooldownState {
+        case .observed(let snapshot):
+            let count = snapshot.cooldowns.count
+            return count == 0
+                ? "No local cooldown observed"
+                : "Local cooldown · \(count) \(count == 1 ? "restriction" : "restrictions")"
+        case .unsupported:
+            return "Cooldown status unsupported"
+        case .unavailable:
+            return "Cooldown status unavailable"
+        }
+    }
+
+    var cooldownDetail: String? {
+        guard showsQuotaRecoveryAction, let cooldownState else { return nil }
+        switch cooldownState {
+        case .observed(let snapshot):
+            let observed = "Observed \(snapshot.observedAt.formatted(date: .abbreviated, time: .shortened))"
+            guard !snapshot.cooldowns.isEmpty else {
+                return "\(observed). Other account restrictions may still apply."
+            }
+            let restrictions = snapshot.cooldowns.map { cooldown in
+                let scope = cooldown.scope == "model" ? "Model" : "Credential"
+                let model = cooldown.modelKey.map { " · \($0)" } ?? ""
+                let reason = cooldown.isQuota ? "Quota" : "Other restriction"
+                let retry = cooldown.retryAt.formatted(date: .abbreviated, time: .shortened)
+                return "\(scope)\(model) · \(reason) · Retry \(retry)"
+            }
+            return (restrictions + [observed]).joined(separator: "\n")
+        case .unsupported:
+            return "This server does not report cooldowns. Manual recovery is still available."
+        case .unavailable(let issue):
+            return issue.message
+        }
+    }
+
     var headerCommandSlug: String {
         commandSlug
     }
@@ -66,5 +111,6 @@ struct DashboardAccountSnapshot: Equatable, Identifiable {
         isAPIKeyProfile = provider.credentialKind == .apiKey
         showsAccountPrivacyToggle = status != .disconnected && !isAPIKeyProfile
         showsInUsageOverlay = provider.showsInUsageOverlay
+        cooldownState = provider.cooldownState
     }
 }

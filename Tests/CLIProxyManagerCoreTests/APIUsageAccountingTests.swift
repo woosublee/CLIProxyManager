@@ -171,6 +171,49 @@ final class APIUsageAccountingTests: XCTestCase {
         XCTAssertEqual(issue.reason, .unknownProviderMapping)
     }
 
+    func testResponseModelDrivesPricingWithoutChangingAccountMapping() {
+        for responseModel in ["gpt-6-astra", "unregistered-model", "", "   "] {
+            var object = recordJSONObject(provider: "codex", executor: "CodexExecutor", model: "gpt-5.6-sol", alias: "cpm-codex-api/gpt-5.6-sol")
+            object["response_model"] = responseModel
+            guard case let .aggregate(input) = APIUsageRecordMapper().classify(decodeRecord(object)) else { return XCTFail("Expected aggregate") }
+            XCTAssertEqual(input.profileID, "codex-api")
+            XCTAssertEqual(input.model, responseModel.trimmingCharacters(in: .whitespaces).isEmpty ? "gpt-5.6-sol" : responseModel)
+        }
+    }
+
+    func testAstraContextBoundaryAndResponseTierSelectCorrectVariant() {
+        let cases: [(Int64, String, APIUsagePricingVariant)] = [
+            (272_000, "default", .standard), (272_001, "default", .standardLongContext),
+            (272_000, "priority", .priority), (272_001, "priority", .priorityLongContext)
+        ]
+        for (tokens, tier, expected) in cases {
+            let record = makeRecord(provider: "codex", executor: "CodexExecutor", model: "gpt-6-astra-fast(xhigh)", alias: "cpm-codex-api/gpt-6-astra-fast(xhigh)", inputTotal: tokens, responseTier: tier)
+            guard case let .aggregate(input) = APIUsageRecordMapper().classify(record) else { return XCTFail("Expected aggregate") }
+            XCTAssertEqual(input.model, "gpt-6-astra")
+            XCTAssertEqual(input.pricingVariant, expected)
+            XCTAssertEqual(input.effectiveServiceTier, tier)
+        }
+    }
+
+    func testAstraPricingSupportsVerifiedRatesWithoutBackdatingOrUltrafastGuessing() throws {
+        let at = ISO8601DateFormatter().date(from: "2026-09-19T00:00:00Z")!
+        let cases: [(String, APIUsagePricingVariant, [Decimal])] = [
+            ("default", .standard, [10, 1, Decimal(string: "12.5")!, 50]),
+            ("default", .standardLongContext, [20, 2, 25, 75]),
+            ("priority", .priority, [20, 2, 25, 100]),
+            ("priority", .priorityLongContext, [40, 4, 50, 150])
+        ]
+        for (tier, variant, rates) in cases {
+            let entry = try XCTUnwrap(APIPriceCatalog.current.entry(provider: .openAI, model: "gpt-6-astra", serviceTier: tier, variant: variant, at: at))
+            XCTAssertEqual(entry.rates.uncachedInputUSDPerMillion, rates[0])
+            XCTAssertEqual(entry.rates.cacheReadUSDPerMillion, rates[1])
+            XCTAssertEqual(entry.rates.cacheWriteUSDPerMillion, rates[2])
+            XCTAssertEqual(entry.rates.outputUSDPerMillion, rates[3])
+        }
+        XCTAssertEqual(APIPriceCatalog.current.classification(provider: .openAI, model: "gpt-6-astra", serviceTier: "ultrafast", variant: .standard, at: at), .unsupportedServiceTier)
+        XCTAssertEqual(APIPriceCatalog.current.classification(provider: .openAI, model: "gpt-6-astra", serviceTier: "default", variant: .standard, at: at.addingTimeInterval(-1)), .priceEpochUnavailable)
+    }
+
     func testCompleteFailedRequestRemainsAnAggregate() {
         var object = recordJSONObject()
         object["failed"] = true

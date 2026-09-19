@@ -110,10 +110,11 @@ public struct APIUsageRecordMapper: Sendable {
             ))
         }
 
-        let model = canonicalModel(record.model, profile: profile)
+        let model = canonicalModel(record.responseModel.flatMap(nonEmpty) ?? record.model, profile: profile)
         let rawTier = normalized(record.responseServiceTier.flatMap(nonEmpty) ?? record.serviceTier)
         let tier = canonicalServiceTier(rawTier, provider: provider)
         let longContextModels: Set<String> = [
+            "gpt-6-astra",
             "gpt-5.6-sol",
             "gpt-5.6-terra",
             "gpt-5.6-luna",

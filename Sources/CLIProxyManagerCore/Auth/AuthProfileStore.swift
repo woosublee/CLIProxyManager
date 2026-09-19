@@ -137,6 +137,16 @@ public struct AuthProfileStore: @unchecked Sendable {
                     snapshot: snapshot
                 )
                 try restoreAuthFile(named: sourceID, data: snapshot.dataByFileName[sourceID]!)
+            } else if provider == .claude,
+                      afterLogin[targetID] == nil,
+                      candidates.newIDs.count == 1,
+                      candidates.changedExistingIDs.isEmpty,
+                      candidates.deletedExistingIDs == [targetID],
+                      let sourceID = candidates.newIDs.first,
+                      let sourceData = afterLogin[sourceID],
+                      isClaudeFilenameMigration(sourceID: sourceID, sourceData: sourceData, snapshot: snapshot) {
+                try replaceReauthenticationTarget(targetID: targetID, sourceData: sourceData, snapshot: snapshot)
+                try removeAuthFile(named: sourceID)
             } else {
                 let changedCount = (candidates.targetChanged ? 1 : 0)
                     + candidates.newIDs.count
@@ -497,6 +507,44 @@ public struct AuthProfileStore: @unchecked Sendable {
             .filter { afterLogin[$0] == nil }
             .sorted()
         return (targetChanged, newIDs, changedExistingIDs, deletedExistingIDs)
+    }
+
+    private func isClaudeFilenameMigration(
+        sourceID: String,
+        sourceData: Data,
+        snapshot: AuthProfileReauthenticationSnapshot
+    ) -> Bool {
+        guard let previousData = snapshot.dataByFileName[snapshot.targetID],
+              let previous = try? JSONSerialization.jsonObject(with: previousData) as? [String: Any],
+              let current = try? JSONSerialization.jsonObject(with: sourceData) as? [String: Any],
+              current["type"] as? String == "claude",
+              let email = trimmed(current["email"] as? String),
+              let previousEmail = trimmed(previous["email"] as? String),
+              email.caseInsensitiveCompare(previousEmail) == .orderedSame else { return false }
+
+        let organization = trimmed(current["organization_uuid"] as? String)
+        let account = trimmed(current["account_uuid"] as? String)
+        let previousOrganization = trimmed(previous["organization_uuid"] as? String)
+        let previousAccount = trimmed(previous["account_uuid"] as? String)
+        guard let identity = organization ?? account else { return false }
+        func hashedName(_ identity: String) -> String {
+            let hash = SHA256.hash(data: Data(identity.utf8)).prefix(4)
+                .map { String(format: "%02x", $0) }.joined()
+            return "claude-\(hash)-\(email).json"
+        }
+        func matches(_ lhs: String?, _ rhs: String?) -> Bool {
+            guard let lhs, let rhs else { return false }
+            return lhs.caseInsensitiveCompare(rhs) == .orderedSame
+        }
+        guard matches(sourceID, hashedName(identity)) else { return false }
+        let isEmailLegacy = matches(snapshot.targetID, "claude-\(email).json")
+        let isAccountPredecessor = organization != nil && account.map { matches(snapshot.targetID, hashedName($0)) } == true
+        guard isEmailLegacy || isAccountPredecessor else { return false }
+        if organization != nil {
+            return matches(previousOrganization, organization)
+                || (previousOrganization == nil && isAccountPredecessor && matches(previousAccount, account))
+        }
+        return isEmailLegacy && previousOrganization == nil && matches(previousAccount, account)
     }
 
     private func restoreReauthenticationSnapshot(

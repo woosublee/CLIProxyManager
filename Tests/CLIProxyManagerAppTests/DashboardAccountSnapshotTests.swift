@@ -1,3 +1,4 @@
+import CLIProxyManagerCore
 import XCTest
 @testable import CLIProxyManagerApp
 
@@ -200,6 +201,46 @@ final class DashboardAccountSnapshotTests: XCTestCase {
         XCTAssertEqual(snapshot.usageOverlayButtonPresentation.symbolName, "macwindow")
         XCTAssertEqual(snapshot.usageOverlayButtonPresentation.accessibilityLabel, "Show in Usage HUD")
         XCTAssertFalse(snapshot.usageOverlayButtonPresentation.isHighlighted)
+    }
+
+    func testCooldownPresentationDistinguishesObservationSupportAndFailure() {
+        let observedAt = Date(timeIntervalSince1970: 1_789_776_000)
+        let cooldown = AccountCooldown(
+            scope: "model", modelKey: "gpt-6-astra", reason: "quota",
+            retryAt: observedAt.addingTimeInterval(3600), remainingSeconds: 3600
+        )
+        let blocked = cooldownAccount(.observed(.init(cooldowns: [cooldown], observedAt: observedAt)))
+        XCTAssertEqual(blocked.cooldownSummary, "Local cooldown · 1 restriction")
+        XCTAssertTrue(blocked.cooldownDetail?.contains("gpt-6-astra") == true)
+        XCTAssertTrue(blocked.cooldownDetail?.contains("Quota") == true)
+        XCTAssertTrue(blocked.cooldownDetail?.contains("Retry") == true)
+        XCTAssertFalse(blocked.cooldownDetail?.contains("fixture@example.com") == true)
+        XCTAssertTrue(blocked.isAccountDetailHidden)
+        XCTAssertEqual(cooldownAccount(.observed(.init(cooldowns: [], observedAt: observedAt))).cooldownSummary, "No local cooldown observed")
+        XCTAssertEqual(cooldownAccount(.unsupported).cooldownSummary, "Cooldown status unsupported")
+        XCTAssertEqual(cooldownAccount(.unavailable(.schemaMismatch)).cooldownSummary, "Cooldown status unavailable")
+        XCTAssertNil(cooldownAccount(nil).cooldownSummary)
+    }
+
+    func testQuotaRecoveryOnlyAppearsForEnabledConnectedOAuthAccounts() {
+        XCTAssertTrue(cooldownAccount(nil).showsQuotaRecoveryAction)
+        XCTAssertFalse(cooldownAccount(nil, kind: .apiKey).showsQuotaRecoveryAction)
+        XCTAssertFalse(cooldownAccount(nil, connected: false).showsQuotaRecoveryAction)
+        XCTAssertFalse(cooldownAccount(nil, disabled: true).showsQuotaRecoveryAction)
+        XCTAssertNil(cooldownAccount(.unsupported, kind: .apiKey).cooldownSummary)
+        XCTAssertNil(cooldownAccount(.unsupported, disabled: true).cooldownSummary)
+    }
+
+    private func cooldownAccount(
+        _ state: AccountCooldownState?, kind: ProviderCredentialKind = .oauth,
+        connected: Bool = true, disabled: Bool = false
+    ) -> DashboardAccountSnapshot {
+        DashboardAccountSnapshot(provider: ProviderRowState(
+            id: .codex, credentialKind: kind, name: "Codex OAuth", nickname: "",
+            functionName: "ccmcodex", connectionTitle: "Connected",
+            connectionDetail: "fixture@example.com", isConnected: connected,
+            isDisabled: disabled, accountDetailHidden: true, cooldownState: state
+        ))
     }
 
     func testVisibleHUDAccountButtonPresentationOffersHideAction() {

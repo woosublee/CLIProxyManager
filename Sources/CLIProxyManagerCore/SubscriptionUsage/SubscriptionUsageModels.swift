@@ -126,6 +126,7 @@ public enum AccountSubscriptionUsageState: Equatable, Sendable {
 
 public struct SubscriptionUsageReport: Equatable, Sendable {
     public let statesByProfileID: [String: AccountSubscriptionUsageState]
+    public let cooldownStatesByProfileID: [String: AccountCooldownState]
     public let resetCreditsOutcomesByProfileID: [String: CodexResetCreditsRefreshOutcome]
     public let resetCreditsAttemptedProfileIDs: Set<String>
     public let resetCreditsDeferredProfileIDs: Set<String>
@@ -133,12 +134,14 @@ public struct SubscriptionUsageReport: Equatable, Sendable {
 
     public init(
         statesByProfileID: [String: AccountSubscriptionUsageState],
+        cooldownStatesByProfileID: [String: AccountCooldownState] = [:],
         resetCreditsOutcomesByProfileID: [String: CodexResetCreditsRefreshOutcome] = [:],
         resetCreditsAttemptedProfileIDs: Set<String> = [],
         resetCreditsDeferredProfileIDs: Set<String> = [],
         fetchedAt: Date
     ) {
         self.statesByProfileID = statesByProfileID
+        self.cooldownStatesByProfileID = cooldownStatesByProfileID
         self.resetCreditsOutcomesByProfileID = resetCreditsOutcomesByProfileID
         self.resetCreditsAttemptedProfileIDs = resetCreditsAttemptedProfileIDs
         self.resetCreditsDeferredProfileIDs = resetCreditsDeferredProfileIDs
@@ -181,6 +184,7 @@ public extension SubscriptionQuotaFetching {
         }
         return SubscriptionUsageReport(
             statesByProfileID: report.statesByProfileID,
+            cooldownStatesByProfileID: report.cooldownStatesByProfileID,
             resetCreditsOutcomesByProfileID: outcomes,
             resetCreditsAttemptedProfileIDs: report.resetCreditsAttemptedProfileIDs
                 .subtracting(unsupportedResetProfileIDs),
@@ -209,6 +213,7 @@ public extension SubscriptionQuotaFetching {
         }
         return SubscriptionUsageReport(
             statesByProfileID: report.statesByProfileID.filter { usageProfileIDs.contains($0.key) },
+            cooldownStatesByProfileID: report.cooldownStatesByProfileID,
             resetCreditsOutcomesByProfileID: outcomes,
             resetCreditsAttemptedProfileIDs: report.resetCreditsAttemptedProfileIDs
                 .subtracting(unsupportedResetProfileIDs),

@@ -223,6 +223,12 @@ final class DashboardViewModel: ObservableObject {
     }
     @Published var optionRows: [DashboardOptionRow] = []
     @Published var providerRows: [ProviderRowState] = []
+    @Published private(set) var accountCooldownStates: [String: AccountCooldownState] = [:]
+    @Published private(set) var quotaResetProfileID: String?
+
+    private var quotaResetTask: Task<AccountQuotaResetResult, Error>?
+    private var quotaResetGeneration = 0
+
     @Published private(set) var subscriptionUsageStates: [String: AccountSubscriptionUsageState] = [:]
     @Published private(set) var codexResetCreditsSnapshots: [String: CodexResetCreditsSnapshot] = [:]
     @Published private(set) var apiCostUsageStates: [String: APICostUsageState] = [:]
@@ -1515,6 +1521,7 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func cancelSubscriptionUsageWork() {
+        invalidateQuotaCooldownWork()
         subscriptionUsageRefreshGeneration += 1
         codexResetCreditsRefreshGeneration += 1
         subscriptionUsageRefreshTask?.cancel()
@@ -1546,6 +1553,7 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func invalidateSubscriptionUsageRefreshForRemoval() -> SubscriptionUsageRemovalRefreshContext {
+        invalidateQuotaCooldownWork()
         let canceledActiveRefresh = subscriptionUsageRefreshTask != nil || codexResetCreditsRefreshTask != nil
         let requiresForcedRefresh = subscriptionUsageRefreshIsForced
             || activeSubscriptionUsageDispatchPermit?.priority == .forced
@@ -1886,7 +1894,8 @@ final class DashboardViewModel: ObservableObject {
     private func refreshSubscriptionUsage(
         force: Bool,
         pollingWakeReason: SubscriptionUsagePollingWakeReason?,
-        source: SubscriptionUsageRefreshSource
+        source: SubscriptionUsageRefreshSource,
+        quotaRecoveryGeneration: Int? = nil
     ) async -> SubscriptionUsageRefreshRequestResult {
         guard config.isSubscriptionUsageEnabled else {
             configurationWork.deferredSubscriptionUsageRefresh = nil
@@ -1899,7 +1908,8 @@ final class DashboardViewModel: ObservableObject {
             return .completed
         }
         var priority: SubscriptionUsageRefreshPriority = force ? .forced : .automatic
-        if configurationWorkBlocksSubscriptionUsageRefresh(source: source)
+        if (quotaResetProfileID != nil && quotaRecoveryGeneration != quotaResetGeneration)
+            || configurationWorkBlocksSubscriptionUsageRefresh(source: source)
             || subscriptionUsageRefreshTask != nil {
             queueSubscriptionUsageRefresh(
                 priority,
@@ -1978,6 +1988,7 @@ final class DashboardViewModel: ObservableObject {
         )
         let quotaClient = subscriptionQuotaClient
         activeSubscriptionUsageDispatchPermit = permit
+        let cooldownGeneration = quotaResetGeneration
         let refreshTask = Task { [weak self] in
             guard let self else { return }
             guard self.isSubscriptionUsageDispatchAuthorized(permit) else {
@@ -2001,7 +2012,7 @@ final class DashboardViewModel: ObservableObject {
                 requestedProfileIDs: permit.resetCreditsProfileIDs,
                 attemptedAt: permit.attemptedAt
             )
-            self.applySubscriptionUsageReport(report, for: usageProfiles, previousStates: previousStates)
+            self.applySubscriptionUsageReport(report, for: usageProfiles, previousStates: previousStates, cooldownGeneration: cooldownGeneration)
             self.rebuildProviderRows(claudeStatus: self.lastClaudeStatus, codexStatus: self.lastCodexStatus)
             self.scheduleSubscriptionUsagePollingIfNeeded(didRefreshUsage: !usageProfiles.isEmpty)
         }
@@ -2057,6 +2068,7 @@ final class DashboardViewModel: ObservableObject {
             usageRefreshGeneration: generation
         )
         activeSubscriptionUsageDispatchPermit = permit
+        let cooldownGeneration = quotaResetGeneration
         let refreshTask = Task { [weak self] in
             guard let self else { return }
             guard self.isSubscriptionUsageDispatchAuthorized(permit) else {
@@ -2074,7 +2086,7 @@ final class DashboardViewModel: ObservableObject {
                 self.rejectSupersededSubscriptionUsageDispatch(permit)
                 return
             }
-            self.applySubscriptionUsageReport(report, for: profiles, previousStates: previousStates)
+            self.applySubscriptionUsageReport(report, for: profiles, previousStates: previousStates, cooldownGeneration: cooldownGeneration)
             self.rebuildProviderRows(claudeStatus: self.lastClaudeStatus, codexStatus: self.lastCodexStatus)
             self.scheduleSubscriptionUsagePollingIfNeeded(didRefreshUsage: true)
         }
@@ -2222,10 +2234,113 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
+    func quotaCooldownResetDisabledReason(_ provider: ProviderRowState.ID) -> String? {
+        quotaCooldownResetDisabledReason(provider, ignoringActiveReset: false)
+    }
+
+    private func quotaCooldownResetDisabledReason(
+        _ provider: ProviderRowState.ID, ignoringActiveReset: Bool
+    ) -> String? {
+        guard let row = providerRows.first(where: { $0.id == provider }),
+              row.credentialKind == .oauth, row.isConnected, !row.isDisabled,
+              authProfiles.contains(where: { $0.id == row.authProfileID && !$0.disabled }) else {
+            return "Select an enabled OAuth account."
+        }
+        guard canReloadSubscriptionUsage else { return "Enable usage management to clear quota cooldowns." }
+        guard serverStatus.severity == .ready else { return "The local proxy is not ready." }
+        guard subscriptionQuotaClient is any AccountQuotaResetting else { return "Quota recovery is unavailable." }
+        if !ignoringActiveReset && quotaResetProfileID != nil { return "A quota recovery is already in progress." }
+        if isProfileLoginInProgress || configurationWorkBlocksSubscriptionUsageRefresh(source: .automatic) {
+            return "Wait for the account or server update to finish."
+        }
+        return nil
+    }
+
+    func clearQuotaCooldown(_ provider: ProviderRowState.ID) async {
+        guard quotaCooldownResetDisabledReason(provider) == nil,
+              let row = providerRows.first(where: { $0.id == provider }),
+              let profile = authProfiles.first(where: { $0.id == row.authProfileID }),
+              let client = subscriptionQuotaClient as? any AccountQuotaResetting else { return }
+        cancelSubscriptionUsageWork()
+        quotaResetGeneration &+= 1
+        let generation = quotaResetGeneration
+        let configurationGeneration = configurationWork.generation
+        let port = config.port
+        quotaResetProfileID = profile.id
+        let authorize: @Sendable () async -> Bool = { [weak self] in
+            guard !Task.isCancelled, let self else { return false }
+            return await MainActor.run {
+                return self.quotaResetGeneration == generation
+                    && self.configurationWork.generation == configurationGeneration
+                    && self.config.port == port
+                    && self.authProfiles.contains(profile)
+                    && self.quotaCooldownResetDisabledReason(provider, ignoringActiveReset: true) == nil
+            }
+        }
+        let task = Task { try await client.resetQuota(port: port, profile: profile, authorize: authorize) }
+        quotaResetTask = task
+        defer {
+            if quotaResetGeneration == generation {
+                quotaResetTask = nil
+                quotaResetProfileID = nil
+                Task { [weak self] in
+                    guard let self, self.quotaResetGeneration == generation else { return }
+                    _ = await self.drainDeferredSubscriptionUsageRefresh(source: .automatic)
+                    guard self.quotaResetGeneration == generation else { return }
+                    self.scheduleSubscriptionUsagePollingIfNeeded()
+                }
+            }
+        }
+        do {
+            let result = try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: {
+                task.cancel()
+            }
+            guard await authorize(), !Task.isCancelled else { return }
+            switch result {
+            case .notNeeded(let state):
+                accountCooldownStates[profile.id] = state
+                settingsMessage = "No quota cooldown was found. Other credential restrictions were left unchanged."
+                rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
+            case .reset:
+                accountCooldownStates[profile.id] = .unavailable(.transientFailure)
+                rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
+                _ = await refreshSubscriptionUsage(
+                    force: true, pollingWakeReason: nil, source: .automatic,
+                    quotaRecoveryGeneration: generation
+                )
+                guard await authorize() else { return }
+                if let snapshot = accountCooldownStates[profile.id]?.snapshot {
+                    settingsMessage = snapshot.cooldowns.isEmpty
+                        ? "Quota cooldown cleared. No local cooldown was observed; provider limits still apply."
+                        : "The reset request succeeded, but the server still reports a local cooldown. Provider limits may have been applied again."
+                } else {
+                    settingsMessage = "Quota cooldown cleared, but the current cooldown status could not be verified."
+                }
+            }
+        } catch is CancellationError {
+            if quotaResetGeneration == generation { settingsMessage = "Quota recovery was cancelled. Refresh account status before retrying." }
+        } catch {
+            guard await authorize() else { return }
+            settingsMessage = "Quota recovery failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func invalidateQuotaCooldownWork() {
+        quotaResetGeneration &+= 1
+        quotaResetTask?.cancel()
+        quotaResetTask = nil
+        quotaResetProfileID = nil
+        accountCooldownStates.removeAll()
+        rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
+    }
+
     private func applySubscriptionUsageReport(
         _ report: SubscriptionUsageReport,
         for profiles: [AuthProfile],
-        previousStates: [String: AccountSubscriptionUsageState]? = nil
+        previousStates: [String: AccountSubscriptionUsageState]? = nil,
+        cooldownGeneration: Int
     ) {
         var didUpdateStates = false
         var successfulSnapshots: [SubscriptionUsageSnapshot] = []
@@ -2237,6 +2352,14 @@ final class DashboardViewModel: ObservableObject {
                 reported: reported
             )
             subscriptionUsageStates[profile.id] = merged
+            if cooldownGeneration == quotaResetGeneration,
+               let cooldownState = report.cooldownStatesByProfileID[profile.id] {
+                let previousDate = accountCooldownStates[profile.id]?.snapshot?.observedAt
+                let incomingDate = cooldownState.snapshot?.observedAt ?? report.fetchedAt
+                if previousDate.map({ incomingDate >= $0 }) ?? true {
+                    accountCooldownStates[profile.id] = cooldownState
+                }
+            }
             if case let .available(snapshot) = reported {
                 successfulSnapshots.append(snapshot)
             }
@@ -2511,7 +2634,9 @@ final class DashboardViewModel: ObservableObject {
     func refreshProfiles() {
         applyCodexCredentialMigrationsIfNeeded()
         do {
-            authProfiles = try authProfileStore.profiles()
+            let refreshedProfiles = try authProfileStore.profiles()
+            if authProfiles != refreshedProfiles { invalidateQuotaCooldownWork() }
+            authProfiles = refreshedProfiles
         } catch {
             rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
             return
@@ -2678,6 +2803,7 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func beginOAuthLoginSession(_ sessionID: UUID) {
+        invalidateQuotaCooldownWork()
         let actionGeneration = serverActionWaitsForReady
             ? configurationWork.activeServerActionGeneration
             : nil
@@ -3401,6 +3527,7 @@ final class DashboardViewModel: ObservableObject {
             || shouldRetainForExplicitRecovery else {
             return
         }
+        invalidateQuotaCooldownWork()
         configurationWork.generation &+= 1
         invalidateSupersededSubscriptionUsageDispatches()
         pendingProxyConfigurationRestartReasons.insert(reason)
@@ -4539,6 +4666,9 @@ final class DashboardViewModel: ObservableObject {
             prefixRollbacks = try syncAuthProfilePrefixesForSave()
             try configStore.save(updatedConfig)
             lastPersistedConfig = updatedConfig
+            if oldConfig.port != updatedConfig.port {
+                invalidateQuotaCooldownWork()
+            }
             rebuildOptionRows()
             rebuildProviderRows(claudeStatus: nil, codexStatus: nil)
         } catch {
@@ -4849,7 +4979,8 @@ final class DashboardViewModel: ObservableObject {
                 resetCreditsSnapshot: commandProfile.provider == .codex
                     ? codexResetCreditsSnapshots[authProfile.id]
                     : nil,
-                showsInUsageOverlay: showsInUsageOverlay(ProviderRowState.ID(rawValue: commandProfile.id))
+                showsInUsageOverlay: showsInUsageOverlay(ProviderRowState.ID(rawValue: commandProfile.id)),
+                cooldownState: accountCooldownStates[authProfile.id]
             )
         }
 
@@ -5037,6 +5168,7 @@ final class DashboardViewModel: ObservableObject {
         action: () async throws -> Void
     ) async -> Bool {
         guard !isPreparingAPIUsageForTermination, !Task.isCancelled else { return false }
+        invalidateQuotaCooldownWork()
         configurationWork.nextServerActionGeneration &+= 1
         let actionGeneration = configurationWork.nextServerActionGeneration
         let reasonsAppliedByAction = waitForReady ? pendingProxyConfigurationRestartReasons : []
@@ -5308,6 +5440,9 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func updateStatuses(serverStatus updatedServerStatus: DiagnosticStatus, claudeStatus: DiagnosticStatus?) {
+        if updatedServerStatus.severity != .ready {
+            invalidateQuotaCooldownWork()
+        }
         serverStatus = updatedServerStatus
         // Mirror the diagnostic into the explicit control state, but never overwrite a
         // transient transition (.starting / .stopping) — that's owned by performServerAction.
