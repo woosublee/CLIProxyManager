@@ -203,7 +203,7 @@ final class DashboardAccountSnapshotTests: XCTestCase {
         XCTAssertFalse(snapshot.usageOverlayButtonPresentation.isHighlighted)
     }
 
-    func testCooldownPresentationDistinguishesObservationSupportAndFailure() {
+    func testCooldownPresentationAppearsOnlyForActiveCooldowns() {
         let observedAt = Date(timeIntervalSince1970: 1_789_776_000)
         let cooldown = AccountCooldown(
             scope: "model", modelKey: "gpt-6-astra", reason: "quota",
@@ -216,10 +216,16 @@ final class DashboardAccountSnapshotTests: XCTestCase {
         XCTAssertTrue(blocked.cooldownDetail?.contains("Retry") == true)
         XCTAssertFalse(blocked.cooldownDetail?.contains("fixture@example.com") == true)
         XCTAssertTrue(blocked.isAccountDetailHidden)
-        XCTAssertEqual(cooldownAccount(.observed(.init(cooldowns: [], observedAt: observedAt))).cooldownSummary, "No local cooldown observed")
-        XCTAssertEqual(cooldownAccount(.unsupported).cooldownSummary, "Cooldown status unsupported")
-        XCTAssertEqual(cooldownAccount(.unavailable(.schemaMismatch)).cooldownSummary, "Cooldown status unavailable")
-        XCTAssertNil(cooldownAccount(nil).cooldownSummary)
+        for state: AccountCooldownState? in [
+            .observed(.init(cooldowns: [], observedAt: observedAt)),
+            .unsupported,
+            .unavailable(.schemaMismatch),
+            nil,
+        ] {
+            XCTAssertNil(cooldownAccount(state).cooldownSummary)
+            XCTAssertNil(cooldownAccount(state).cooldownDetail)
+        }
+        XCTAssertNil(cooldownAccount(.observed(.init(cooldowns: [cooldown], observedAt: observedAt)), kind: .apiKey).cooldownSummary)
     }
 
     func testQuotaRecoveryOnlyAppearsForEnabledConnectedOAuthAccounts() {
