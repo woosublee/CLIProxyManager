@@ -41,42 +41,31 @@ struct DashboardAccountSnapshot: Equatable, Identifiable {
         status == .connected && !isAPIKeyProfile
     }
 
-    var cooldownSummary: String? {
-        guard showsQuotaRecoveryAction, let cooldownState else { return nil }
-        switch cooldownState {
-        case .observed(let snapshot):
-            let count = snapshot.cooldowns.count
-            return count == 0
-                ? "No local cooldown observed"
-                : "Local cooldown · \(count) \(count == 1 ? "restriction" : "restrictions")"
-        case .unsupported:
-            return "Cooldown status unsupported"
-        case .unavailable:
-            return "Cooldown status unavailable"
+    /// Active local cooldowns only; an empty, unsupported, or unavailable observation shows nothing.
+    private var activeCooldownSnapshot: AccountCooldownSnapshot? {
+        guard showsQuotaRecoveryAction, let snapshot = cooldownState?.snapshot, !snapshot.cooldowns.isEmpty else {
+            return nil
         }
+        return snapshot
+    }
+
+    var cooldownSummary: String? {
+        guard let snapshot = activeCooldownSnapshot else { return nil }
+        let count = snapshot.cooldowns.count
+        return "Local cooldown · \(count) \(count == 1 ? "restriction" : "restrictions")"
     }
 
     var cooldownDetail: String? {
-        guard showsQuotaRecoveryAction, let cooldownState else { return nil }
-        switch cooldownState {
-        case .observed(let snapshot):
-            let observed = "Observed \(snapshot.observedAt.formatted(date: .abbreviated, time: .shortened))"
-            guard !snapshot.cooldowns.isEmpty else {
-                return "\(observed). Other account restrictions may still apply."
-            }
-            let restrictions = snapshot.cooldowns.map { cooldown in
-                let scope = cooldown.scope == "model" ? "Model" : "Credential"
-                let model = cooldown.modelKey.map { " · \($0)" } ?? ""
-                let reason = cooldown.isQuota ? "Quota" : "Other restriction"
-                let retry = cooldown.retryAt.formatted(date: .abbreviated, time: .shortened)
-                return "\(scope)\(model) · \(reason) · Retry \(retry)"
-            }
-            return (restrictions + [observed]).joined(separator: "\n")
-        case .unsupported:
-            return "This server does not report cooldowns. Manual recovery is still available."
-        case .unavailable(let issue):
-            return issue.message
+        guard let snapshot = activeCooldownSnapshot else { return nil }
+        let restrictions = snapshot.cooldowns.map { cooldown in
+            let scope = cooldown.scope == "model" ? "Model" : "Credential"
+            let model = cooldown.modelKey.map { " · \($0)" } ?? ""
+            let reason = cooldown.isQuota ? "Quota" : "Other restriction"
+            let retry = cooldown.retryAt.formatted(date: .abbreviated, time: .shortened)
+            return "\(scope)\(model) · \(reason) · Retry \(retry)"
         }
+        let observed = "Observed \(snapshot.observedAt.formatted(date: .abbreviated, time: .shortened))"
+        return (restrictions + [observed]).joined(separator: "\n")
     }
 
     var headerCommandSlug: String {
