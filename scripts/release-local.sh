@@ -53,6 +53,7 @@ CANONICAL_TAG="$RELEASE_TAG"
 RELEASE_APP_BUNDLE='build/CLIProxyManager.app'
 PROVENANCE_PATH='build/release-provenance.json'
 RELEASE_NOTES_PATH='build/release-notes.md'
+NOTARY_PROFILE="${NOTARY_PROFILE:-woosublee-notary}"
 "$SCRIPT_DIR/sync-release-version.sh" --check
 current_repository="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" || fail 'Unable to determine the GitHub repository'
 [[ "$current_repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || fail 'Unable to determine the GitHub repository'
@@ -106,8 +107,11 @@ fi
 
 "$SCRIPT_DIR/check-release-monotonic.sh" "${monotonic_args[@]}"
 make resolve-bundled-proxy
-security find-identity -v -p codesigning | grep -F '"cliproxymanager"' >/dev/null || fail 'cliproxymanager code signing identity is required. Confirm it exists with: security find-identity -v -p codesigning.'
-CLIPROXYAPI_OFFLINE=1 make verify-dmg
+security find-identity -v -p codesigning | grep -F '"Developer ID Application: Woosub Lee (2L6ZW98RCP)"' >/dev/null || fail 'Developer ID Application code signing identity is required. Confirm it exists with: security find-identity -v -p codesigning.'
+xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1 || fail "notarytool keychain profile $NOTARY_PROFILE is required. Create it with: xcrun notarytool store-credentials $NOTARY_PROFILE --key <AuthKey.p8> --key-id <ASC_KEY_ID> --issuer <ASC_ISSUER_ID>"
+CLIPROXYAPI_OFFLINE=1 make NOTARY_PROFILE="$NOTARY_PROFILE" verify-dmg
+make sign-dmg
+make NOTARY_PROFILE="$NOTARY_PROFILE" notarize-dmg
 "$SCRIPT_DIR/generate-sparkle-appcast.sh"
 "$SCRIPT_DIR/verify-release-artifacts.sh" \
   --source-plist Info.plist \
@@ -126,6 +130,7 @@ fi
 
 {
   printf '%s\n' "Local release for CLIProxyManager $APP_VERSION (build $APP_BUILD)."
+  printf '%s\n' 'Developer ID signed and notarized DMG with Sparkle appcast.'
   printf '%s\n' 'Artifacts passed canonical identity, monotonicity, and parity verification before publication.'
   if [[ -n "$PREVIOUS_APPCAST" ]]; then
     printf '%s\n' 'Monotonicity used an explicit local fallback appcast.'

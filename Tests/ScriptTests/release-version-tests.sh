@@ -294,7 +294,7 @@ printf '%s\n' "$verify_bundle_structure_dry_run" | grep -F \
 
 sign_dry_run="$(make -n -C "$REPO_ROOT" sign)" || fail "sign target should support a dry run"
 sign_structure_line="$(grep -n -m 1 -F "scripts/verify-app-structure.sh --app \"build/CLIProxyManager.app\" --version \"$canonical_version\" --build \"$canonical_build\" --channel \"official\"" <<<"$sign_dry_run" | cut -d: -f1)"
-sign_codesign_line="$(grep -n -m 1 -F 'codesign --force --options runtime --sign' <<<"$sign_dry_run" | cut -d: -f1)"
+sign_codesign_line="$(grep -n -m 1 -F 'codesign --force --options runtime --timestamp=none' <<<"$sign_dry_run" | cut -d: -f1)"
 [[ -n "$sign_structure_line" && -n "$sign_codesign_line" && "$sign_structure_line" -lt "$sign_codesign_line" ]] ||
   fail "sign must validate official app structure before codesign"
 development_verify_dry_run="$(

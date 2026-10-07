@@ -1,10 +1,11 @@
-name: Self-signed Release
+name: Notarized Release
 
 # Builds the official auto-update release entirely in CI, signed with the
-# self-signed "cliproxymanager" certificate (the same identity used for local
-# releases). This removes the dependency on a specific release Mac while keeping
-# today's self-signed Sparkle update path. New users may still see a first-launch
-# Gatekeeper warning because this build is not Developer ID signed or notarized.
+# Developer ID certificate, notarized and stapled by Apple, and verified by
+# Sparkle EdDSA signatures. Releases up to 0.1.44 were signed with the
+# self-signed "cliproxymanager" certificate. Sparkle still accepts the update
+# because the EdDSA key in Info.plist is unchanged, which allows the Apple code
+# signing identity to rotate.
 
 on:
   workflow_dispatch:
@@ -23,7 +24,7 @@ concurrency:
 
 jobs:
   build-and-release:
-    name: Build and publish self-signed release
+    name: Build and publish notarized release
     runs-on: macos-latest
 
     steps:
@@ -89,25 +90,28 @@ jobs:
         run: make resolve-bundled-proxy
 
       # Required GitHub secrets:
-      #   CLIPROXYMANAGER_CERTIFICATE_BASE64 — base64-encoded .p12 of the self-signed "cliproxymanager" certificate (with private key)
-      #   CLIPROXYMANAGER_CERTIFICATE_PASSWORD — password for the .p12
+      #   DEVELOPER_ID_CERTIFICATE_BASE64 — base64-encoded .p12 with the Developer ID Application identity (and optionally Apple's G2 intermediate)
+      #   DEVELOPER_ID_CERTIFICATE_PASSWORD — password for the .p12
+      #   ASC_KEY_ID — App Store Connect API key ID for notarization
+      #   ASC_ISSUER_ID — App Store Connect API issuer ID
+      #   ASC_KEY_P8_BASE64 — base64-encoded App Store Connect API private key (.p8)
       #   SPARKLE_PRIVATE_KEY — Sparkle EdDSA private key for appcast signing
-      - name: Import CLIProxyManager signing certificate
+      - name: Import Developer ID certificate
         env:
-          CERTIFICATE_BASE64: ${{ secrets.CLIPROXYMANAGER_CERTIFICATE_BASE64 }}
-          CERTIFICATE_PASSWORD: ${{ secrets.CLIPROXYMANAGER_CERTIFICATE_PASSWORD }}
+          CERTIFICATE_BASE64: ${{ secrets.DEVELOPER_ID_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}
         run: |
-          CERTIFICATE_PATH="$RUNNER_TEMP/cliproxymanager_certificate.p12"
+          CERTIFICATE_PATH="$RUNNER_TEMP/developer_id.p12"
           KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
           KEYCHAIN_PASSWORD="$(openssl rand -hex 20)"
 
           if [ -z "$CERTIFICATE_BASE64" ]; then
-            echo "CLIPROXYMANAGER_CERTIFICATE_BASE64 secret is required." >&2
+            echo "DEVELOPER_ID_CERTIFICATE_BASE64 secret is required." >&2
             exit 1
           fi
 
           if [ -z "$CERTIFICATE_PASSWORD" ]; then
-            echo "CLIPROXYMANAGER_CERTIFICATE_PASSWORD secret is required." >&2
+            echo "DEVELOPER_ID_CERTIFICATE_PASSWORD secret is required." >&2
             exit 1
           fi
 
@@ -125,25 +129,66 @@ jobs:
             -k "$KEYCHAIN_PATH"
           rm -f "$CERTIFICATE_PATH"
 
+          # Make sure Apple's Developer ID G2 intermediate is in this keychain so
+          # the identity is valid without relying on the runner image. The .p12
+          # may already carry it; otherwise download, verify, and import it.
+          import_intermediate() {
+            local name="$1" expected_sha256="$2"
+            local path="$RUNNER_TEMP/$name.cer"
+            if security find-certificate -a -Z "$KEYCHAIN_PATH" | grep -qi "SHA-256 hash: $expected_sha256"; then
+              echo "$name is already in the signing keychain."
+              return
+            fi
+            curl -fsSL --retry 3 -o "$path" "https://www.apple.com/certificateauthority/$name.cer"
+            echo "$expected_sha256  $path" | shasum -a 256 -c -
+            security import "$path" -k "$KEYCHAIN_PATH"
+            rm -f "$path"
+          }
+          import_intermediate DeveloperIDG2CA f16cd3c54c7f83cea4bf1a3e6a0819c8aaa8e4a1528fd144715f350643d2df3a
+
           security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
           security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
           security default-keychain -s "$KEYCHAIN_PATH"
 
-          # The cliproxymanager certificate is self-signed, so without trust
-          # settings it may not appear in `find-identity -v` in this throwaway
-          # keychain. codesign can still sign by common name, so pin the identity.
-          echo "Codesigning identities present in keychain:"
-          security find-identity -p codesigning "$KEYCHAIN_PATH" || true
-          echo "CODESIGN_IDENTITY=cliproxymanager" >> "$GITHUB_ENV"
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | awk '/"Developer ID Application: / { print $2; exit }')"
+          if [ -z "$IDENTITY" ]; then
+            echo "No Developer ID Application identity found in the imported certificate." >&2
+            exit 1
+          fi
+          echo "CODESIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
           echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
 
-      - name: Build and verify self-signed DMG
-        run: CLIPROXYAPI_OFFLINE=1 make CODESIGN_IDENTITY="$CODESIGN_IDENTITY" verify-dmg
+      - name: Store notarization credentials
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+        run: |
+          for name in ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8_BASE64; do
+            if [ -z "${!name}" ]; then
+              echo "$name secret is required." >&2
+              exit 1
+            fi
+          done
+          KEY_PATH="$RUNNER_TEMP/notary_api_key.p8"
+          (umask 077 && echo "$ASC_KEY_P8_BASE64" | base64 --decode > "$KEY_PATH")
+          xcrun notarytool store-credentials "notarytool-profile" \
+            --key "$KEY_PATH" \
+            --key-id "$ASC_KEY_ID" \
+            --issuer "$ASC_ISSUER_ID" \
+            --keychain "$KEYCHAIN_PATH"
+          rm -f "$KEY_PATH"
+
+      - name: Build, sign, notarize, and verify DMG
+        run: CLIPROXYAPI_OFFLINE=1 make CODESIGN_IDENTITY="$CODESIGN_IDENTITY" NOTARY_PROFILE=notarytool-profile NOTARY_KEYCHAIN="$KEYCHAIN_PATH" verify-dmg
 
       - name: Sign DMG
         run: make CODESIGN_IDENTITY="$CODESIGN_IDENTITY" sign-dmg
+
+      - name: Notarize DMG
+        run: make NOTARY_PROFILE=notarytool-profile NOTARY_KEYCHAIN="$KEYCHAIN_PATH" notarize-dmg
 
       - name: Generate Sparkle appcast
         env:
@@ -191,9 +236,9 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: CLIProxyManager ${{ steps.version.outputs.version }}
           body: |
-            Self-signed, non-notarized DMG with Sparkle appcast.
+            Developer ID signed and notarized DMG with Sparkle appcast.
 
-            macOS may show a first-launch security warning because this build is signed with CLIProxyManager's own certificate rather than notarized. If that happens, open System Settings > Privacy & Security and choose Open Anyway.
+            Updating from CLIProxyManager 0.1.44 or earlier works through the in-app updater as before, even though those builds used a self-signed certificate.
           generate_release_notes: true
           make_latest: true
           files: |
@@ -204,7 +249,7 @@ jobs:
       - name: Cleanup signing artifacts
         if: always()
         run: |
-          rm -f "$RUNNER_TEMP/cliproxymanager_certificate.p12"
+          rm -f "$RUNNER_TEMP/developer_id.p12" "$RUNNER_TEMP/notary_api_key.p8"
           KPATH="${KEYCHAIN_PATH:-$RUNNER_TEMP/signing.keychain-db}"
           if [ -f "$KPATH" ]; then
             security delete-keychain "$KPATH"

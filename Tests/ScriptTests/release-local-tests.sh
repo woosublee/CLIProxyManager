@@ -102,7 +102,7 @@ set -euo pipefail
 printf 'security %s\n' "$*" >> "$RELEASE_LOCAL_TEST_LOG"
 case "$*" in
   'find-identity -v -p codesigning')
-    printf '  1) A39E5510B609DE50287781AFDBAE19C4F91783C7 "cliproxymanager"\n'
+    printf '  1) 3AEDD0B6ED90FAE4E245F9968FA6EE81DF0399ED "Developer ID Application: Woosub Lee (2L6ZW98RCP)"\n'
     printf '     1 valid identities found\n'
   ;;
   *) exit 50 ;;
@@ -118,14 +118,31 @@ case "$*" in
   resolve-bundled-proxy)
     [[ "${RESOLVE_PROXY_SCENARIO:-pass}" == 'pass' ]] || exit 62
   ;;
-  verify-dmg)
+  'NOTARY_PROFILE=woosublee-notary verify-dmg')
     mkdir -p build
     printf 'fake dmg' > build/CLIProxyManager-1.2.3.dmg
+  ;;
+  sign-dmg) ;;
+  'NOTARY_PROFILE=woosublee-notary notarize-dmg')
+    [[ "${NOTARIZE_SCENARIO:-pass}" == 'pass' ]] || exit 63
   ;;
   *) exit 20 ;;
 esac
 SH
 chmod +x "$fake_bin/make"
+
+cat > "$fake_bin/xcrun" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'xcrun %s\n' "$*" >> "$RELEASE_LOCAL_TEST_LOG"
+case "$*" in
+  'notarytool history --keychain-profile woosublee-notary')
+    [[ "${NOTARY_PROFILE_SCENARIO:-present}" == 'present' ]] || exit 69
+  ;;
+  *) exit 70 ;;
+esac
+SH
+chmod +x "$fake_bin/xcrun"
 
 cat > "$fake_bin/git" <<'SH'
 #!/usr/bin/env bash
@@ -220,7 +237,10 @@ printf '%s\n' \
   'monotonic --repository example/CLIProxyManager --provenance build/release-provenance.json' \
   'make resolve-bundled-proxy' \
   'security find-identity -v -p codesigning' \
-  'make verify-dmg' \
+  'xcrun notarytool history --keychain-profile woosublee-notary' \
+  'make NOTARY_PROFILE=woosublee-notary verify-dmg' \
+  'make sign-dmg' \
+  'make NOTARY_PROFILE=woosublee-notary notarize-dmg' \
   'appcast repository=example/CLIProxyManager' \
   'verify-artifacts --source-plist Info.plist --app build/CLIProxyManager.app --dmg build/CLIProxyManager-1.2.3.dmg --appcast build/appcast.xml --provenance build/release-provenance.json --official' \
   'monotonic --repository example/CLIProxyManager --provenance build/release-provenance.json' \
@@ -241,7 +261,7 @@ fi
 grep -F 'BUILD_DIR is fixed to build for local releases; remove the override' "$build_dir_stderr" >/dev/null ||
   fail "BUILD_DIR rejection should explain the canonical output directory"
 if [[ -e "$build_dir_log" ]]; then
-  ! grep -F 'make verify-dmg' "$build_dir_log" >/dev/null || fail "BUILD_DIR override must fail before build"
+  ! grep -F 'verify-dmg' "$build_dir_log" >/dev/null || fail "BUILD_DIR override must fail before build"
 fi
 assert_no_remote_writes "$build_dir_log"
 
@@ -276,7 +296,7 @@ if RESOLVE_PROXY_SCENARIO=fail run_release "$proxy_resolution_log" "$release_scr
 fi
 grep -Fx 'make resolve-bundled-proxy' "$proxy_resolution_log" >/dev/null || fail "release should resolve the proxy before signing"
 ! grep -F 'security find-identity' "$proxy_resolution_log" >/dev/null || fail "proxy resolution failure must stop before signing identity lookup"
-! grep -F 'make verify-dmg' "$proxy_resolution_log" >/dev/null || fail "proxy resolution failure must stop before build"
+! grep -F 'verify-dmg' "$proxy_resolution_log" >/dev/null || fail "proxy resolution failure must stop before build"
 assert_no_remote_writes "$proxy_resolution_log"
 
 parity_log="$sandbox/parity.log"
@@ -306,7 +326,7 @@ if RELEASE_LOCAL_GIT_SCENARIO=other ALLOW_LOCAL_RELEASE_CLOBBER=1 \
   run_release "$other_log" "$release_script" v1.2.3; then
   fail "resume must reject a tag pointing to another commit"
 fi
-! grep -F 'make verify-dmg' "$other_log" >/dev/null || fail "tag mismatch must fail before build"
+! grep -F 'verify-dmg' "$other_log" >/dev/null || fail "tag mismatch must fail before build"
 
 existing_appcast="$sandbox/existing-appcast.xml"
 printf '<rss />\n' > "$existing_appcast"
@@ -372,6 +392,20 @@ if RELEASE_LOCAL_GIT_SCENARIO=matching \
 fi
 assert_no_remote_writes "$partial_network_log"
 
+missing_notary_log="$sandbox/missing-notary.log"
+if NOTARY_PROFILE_SCENARIO=missing run_release "$missing_notary_log" "$release_script" v1.2.3; then
+  fail "release must require the notarytool keychain profile"
+fi
+! grep -F 'verify-dmg' "$missing_notary_log" >/dev/null || fail "missing notary profile must stop before build"
+assert_no_remote_writes "$missing_notary_log"
+
+notarize_failure_log="$sandbox/notarize-failure.log"
+if NOTARIZE_SCENARIO=fail run_release "$notarize_failure_log" "$release_script" v1.2.3; then
+  fail "release must fail when DMG notarization fails"
+fi
+! grep -F 'appcast' "$notarize_failure_log" >/dev/null || fail "notarization failure must stop before appcast generation"
+assert_no_remote_writes "$notarize_failure_log"
+
 cat > "$fake_bin/security" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -381,6 +415,6 @@ SH
 chmod +x "$fake_bin/security"
 missing_identity_log="$sandbox/missing-identity.log"
 if run_release "$missing_identity_log" "$release_script" v1.2.3; then
-  fail "release must require the cliproxymanager signing identity"
+  fail "release must require the Developer ID signing identity"
 fi
 assert_no_remote_writes "$missing_identity_log"
