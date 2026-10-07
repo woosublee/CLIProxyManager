@@ -41,12 +41,14 @@ CLIProxyManager는 여러 Claude·Codex OAuth 구독, Claude·OpenAI API Key, �
 | Claude Code | Claude 기반 terminal function을 생성할 때만 설치가 필요합니다. proxy 시작과 OAuth compatibility는 Claude Code 설치 여부 또는 version으로 차단하지 않습니다. |
 | Compatibility | **경고**는 기존 proxy 동작을 유지하면서 다음 단계를 안내합니다. **차단**은 시작, 재시작, proxy update, 생성된 shell 쓰기를 막지만 이미 실행 중인 proxy의 중지는 유지합니다. 표시된 **복구** 안내를 따른 뒤 상태를 새로 고치세요. |
 
-## 설치 및 macOS 보안 경고
+## 설치
 
-배포본은 자체 서명되어 있지만 Apple 공증을 받지 않았습니다. 따라서 처음 실행할 때 macOS 보안 경고가 나타날 수 있습니다.
+배포본은 Developer ID로 서명되고 Apple 공증을 받았습니다. 별도 보안 설정 없이 바로 실행할 수 있습니다.
 
-1. [Releases](https://github.com/woosublee/CLIProxyManager/releases/latest)에서 최신 DMG를 내려받아 앱을 설치합니다.
-2. 경고가 나타나면 Finder에서 앱을 Control-클릭한 뒤 **열기**를 선택하거나, **시스템 설정 → 개인정보 보호 및 보안 → 그래도 열기**를 선택합니다.
+1. [Releases](https://github.com/woosublee/CLIProxyManager/releases/latest)에서 최신 DMG를 내려받습니다.
+2. DMG를 열고 `CLIProxyManager.app`을 `Applications` 폴더로 옮긴 뒤 실행합니다.
+
+이후 업데이트는 앱 안에서 자동으로 확인·설치됩니다. 0.1.44 이하의 자체 서명 배포본을 쓰고 있어도 앱 내 업데이트로 그대로 올라옵니다.
 
 GitHub Releases에서 직접 내려받은 배포본만 사용하세요.
 
@@ -164,13 +166,15 @@ scripts/sync-release-version.sh --check
 # 2. identity 확인
 scripts/resolve-release-version.sh json | plutil -p -
 
-# 3. GitHub Actions의 Self-signed Release workflow를 canonical tag로 실행
+# 3. GitHub Actions의 Notarized Release workflow를 canonical tag로 실행
 scripts/resolve-release-version.sh tag
 ```
 
 Official release는 source plist, GitHub tag, previous appcast build, app bundle, DMG filename, generated appcast를 비교한 뒤에만 tag와 Release를 생성합니다. Published build 이하이거나 GitHub 조회가 실패하면 release는 중단됩니다.
 
-Local fallback은 CI release를 실행할 수 없고 이전 appcast를 별도로 검증할 수 있을 때만 사용합니다.
+Notarized Release workflow는 `DEVELOPER_ID_CERTIFICATE_BASE64`, `DEVELOPER_ID_CERTIFICATE_PASSWORD`, `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8_BASE64`, `SPARKLE_PRIVATE_KEY` secret을 사용합니다. 앱과 DMG를 각각 공증·staple한 뒤 appcast를 생성하므로 Sparkle 서명은 staple된 DMG를 기준으로 합니다.
+
+Local fallback은 CI release를 실행할 수 없고 이전 appcast를 별도로 검증할 수 있을 때만 사용합니다. Keychain에 Developer ID Application identity와 `woosublee-notary` notarytool profile이 있어야 합니다.
 
 ```bash
 scripts/release-local.sh "$(scripts/resolve-release-version.sh tag)" \
@@ -190,7 +194,7 @@ Fallback artifact의 `release-provenance.json`에는 `local-fallback` trust가 �
 | `Script tests` | `bash scripts/run-script-tests.sh` |
 | `Package structure` | `make verify-bundle-structure` |
 
-`verify-bundle-structure`는 package structure 검증만을 위해 unsigned development bundle을 만듭니다. 이 bundle은 signing·notarization을 거치지 않으며 distributable release로 취급하거나 배포해서는 안 됩니다. 수동 **Self-signed Release** GitHub Actions workflow는 이 CI와 별개의 release 절차로 유지되며, PR/main CI는 artifact를 sign하거나 publish하지 않습니다.
+`verify-bundle-structure`는 package structure 검증만을 위해 unsigned development bundle을 만듭니다. 이 bundle은 signing·notarization을 거치지 않으며 distributable release로 취급하거나 배포해서는 안 됩니다. 수동 **Notarized Release** GitHub Actions workflow는 이 CI와 별개의 release 절차로 유지되며, PR/main CI는 artifact를 sign하거나 publish하지 않습니다.
 
 ### Ruleset 단계적 적용 및 복구
 
@@ -256,7 +260,7 @@ source ~/.zshrc
 
 ### 앱이 처음 실행되지 않음
 
-설치 및 macOS 보안 경고 섹션의 안내에 따라 Finder에서 **열기**를 선택하거나 **시스템 설정 → 개인정보 보호 및 보안 → 그래도 열기**를 선택하세요.
+공증된 배포본은 보안 경고 없이 실행됩니다. 경고가 나타나면 GitHub Releases에서 내려받은 DMG인지 확인하고 최신 DMG로 다시 설치하세요.
 
 ## 보안
 

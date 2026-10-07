@@ -26,9 +26,15 @@ RELEASE_CHANNEL := $(shell $(RELEASE_RESOLVE) channel 2>/dev/null)
 BUILD_DIR ?= build
 CONFIGURATION ?= release
 SWIFT_BUILD_FLAGS ?=
-LOCAL_CODESIGN_IDENTITY ?= cliproxymanager
+DEVELOPER_ID_IDENTITY := Developer ID Application: Woosub Lee (2L6ZW98RCP)
 RELEASE_CODESIGN_IDENTITY ?= $(CODESIGN_IDENTITY)
-CODESIGN_IDENTITY ?= $(LOCAL_CODESIGN_IDENTITY)
+CODESIGN_IDENTITY ?= $(DEVELOPER_ID_IDENTITY)
+# Local builds skip Apple's timestamp server; release-sign requests a secure
+# timestamp because notarization rejects signatures without one.
+CODESIGN_TIMESTAMP ?= --timestamp=none
+CODESIGN_FLAGS = --force --options runtime $(CODESIGN_TIMESTAMP)
+NOTARY_PROFILE ?= woosublee-notary
+NOTARY_KEYCHAIN ?=
 ICON_NAME ?= CLIProxyManager
 ICON_FILE ?= $(ICON_NAME).icns
 
@@ -64,7 +70,7 @@ endif
 INFO_PLIST := Info.plist
 ENTITLEMENTS := CLIProxyManager.entitlements
 
-.PHONY: all ci-build development-bundle verify-bundle-structure verify-app-structure resolve-bundled-proxy prune-bundled-proxy-cache release-metadata-check print-app-version print-build-number print-build-tag swift-build bundle sign release-sign verify install-helper install run install-and-run dmg verify-dmg sign-dmg clean distclean
+.PHONY: all ci-build development-bundle verify-bundle-structure verify-app-structure resolve-bundled-proxy prune-bundled-proxy-cache release-metadata-check print-app-version print-build-number print-build-tag swift-build bundle sign release-sign verify install-helper install run install-and-run notarize-app dmg verify-dmg sign-dmg notarize-dmg clean distclean
 
 all: sign
 
@@ -153,26 +159,27 @@ sign: verify-app-structure
 	STAGED_APP="$$STAGING_DIR/$(APP_NAME).app"; \
 	ditto --norsrc --noextattr "$(APP_BUNDLE)" "$$STAGED_APP"; \
 	if [ -d "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/Versions/Current/XPCServices" ]; then \
-		find -L "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/Versions/Current/XPCServices" -maxdepth 1 -name '*.xpc' -type d -exec codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" {} \; ; \
+		find -L "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/Versions/Current/XPCServices" -maxdepth 1 -name '*.xpc' -type d -exec codesign $(CODESIGN_FLAGS) --preserve-metadata=entitlements --sign "$(CODESIGN_IDENTITY)" {} \; ; \
 	fi; \
 	if [ -d "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/Versions/Current/Updater.app" ]; then \
-		codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/Versions/Current/Updater.app"; \
+		codesign $(CODESIGN_FLAGS) --preserve-metadata=entitlements --sign "$(CODESIGN_IDENTITY)" "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/Versions/Current/Updater.app"; \
 	fi; \
 	if [ -x "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/Versions/Current/Autoupdate" ]; then \
-		codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/Versions/Current/Autoupdate"; \
+		codesign $(CODESIGN_FLAGS) --sign "$(CODESIGN_IDENTITY)" "$$STAGED_APP/Contents/Frameworks/Sparkle.framework/Versions/Current/Autoupdate"; \
 	fi; \
-	codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" "$$STAGED_APP/Contents/Frameworks/Sparkle.framework"; \
-	codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" "$$STAGED_APP/Contents/Helpers/cpm" || { \
+	codesign $(CODESIGN_FLAGS) --sign "$(CODESIGN_IDENTITY)" "$$STAGED_APP/Contents/Frameworks/Sparkle.framework"; \
+	scripts/sign-bundled-cliproxyapi.sh --identity "$(CODESIGN_IDENTITY)" --timestamp "$(CODESIGN_TIMESTAMP)" --resource-dir "$$STAGED_APP/Contents/Resources/cliproxyapi"; \
+	codesign $(CODESIGN_FLAGS) --sign "$(CODESIGN_IDENTITY)" "$$STAGED_APP/Contents/Helpers/cpm" || { \
 		status=$$?; \
 		echo "cpm helper codesign failed. Override the signing identity with: make CODESIGN_IDENTITY=\"Your Signing Identity\""; \
 		exit $$status; \
 	}; \
-	codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" "$$STAGED_APP/Contents/Helpers/cliproxy-manager" || { \
+	codesign $(CODESIGN_FLAGS) --sign "$(CODESIGN_IDENTITY)" "$$STAGED_APP/Contents/Helpers/cliproxy-manager" || { \
 		status=$$?; \
 		echo "helper codesign failed. Override the signing identity with: make CODESIGN_IDENTITY=\"Your Signing Identity\""; \
 		exit $$status; \
 	}; \
-	codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" --entitlements "$(ENTITLEMENTS)" "$$STAGED_APP" || { \
+	codesign $(CODESIGN_FLAGS) --sign "$(CODESIGN_IDENTITY)" --entitlements "$(ENTITLEMENTS)" "$$STAGED_APP" || { \
 		status=$$?; \
 		echo "codesign failed. Override the signing identity with: make CODESIGN_IDENTITY=\"Your Signing Identity\""; \
 		exit $$status; \
@@ -185,7 +192,21 @@ sign: verify-app-structure
 	xattr -d com.apple.FinderInfo "$(APP_BUNDLE)" 2>/dev/null || true
 
 release-sign:
-	$(MAKE) sign CODESIGN_IDENTITY="$(RELEASE_CODESIGN_IDENTITY)"
+	$(MAKE) sign CODESIGN_IDENTITY="$(RELEASE_CODESIGN_IDENTITY)" CODESIGN_TIMESTAMP=--timestamp
+
+# Notarizes and staples the signed app so Gatekeeper accepts it offline, both
+# from the DMG and after Sparkle installs it.
+notarize-app:
+	@set -e; \
+	test -d "$(APP_BUNDLE)" || { echo "Missing app: $(APP_BUNDLE)"; exit 1; }; \
+	NOTARIZE_DIR=$$(mktemp -d "/tmp/$(APP_NAME).notarize.XXXXXX"); \
+	cleanup() { rm -rf "$$NOTARIZE_DIR"; }; \
+	trap cleanup EXIT; \
+	ditto -c -k --keepParent "$(APP_BUNDLE)" "$$NOTARIZE_DIR/$(APP_NAME)-notarize.zip"; \
+	NOTARY_PROFILE="$(NOTARY_PROFILE)" NOTARY_KEYCHAIN="$(NOTARY_KEYCHAIN)" scripts/notarize.sh "$$NOTARIZE_DIR/$(APP_NAME)-notarize.zip"
+	xcrun stapler staple "$(APP_BUNDLE)"
+	xcrun stapler validate "$(APP_BUNDLE)"
+	spctl --assess --type execute --verbose=2 "$(APP_BUNDLE)"
 
 verify: sign
 	@set -e; \
@@ -267,6 +288,7 @@ install-and-run: install
 	open "/Applications/$(APP_NAME).app"
 
 dmg: release-sign
+	$(MAKE) notarize-app
 	@set -e; \
 	rm -f "$(DMG_PATH)"; \
 	DMG_STAGING_DIR=$$(mktemp -d "$(DMG_STAGING_TEMPLATE)"); \
@@ -297,6 +319,7 @@ verify-dmg: dmg
 	test "$$(readlink "$$MOUNT_DIR/Applications")" = "/Applications" || { echo "Applications symlink points to wrong target"; exit 1; }; \
 	scripts/verify-app-structure.sh --app "$$MOUNT_DIR/$(APP_NAME).app" --version "$(VERSION)" --build "$(BUILD_NUMBER)" --channel "$(RELEASE_CHANNEL)"; \
 	codesign --verify --deep --strict --verbose=2 "$$MOUNT_DIR/$(APP_NAME).app"; \
+	xcrun stapler validate "$$MOUNT_DIR/$(APP_NAME).app"; \
 	echo "DMG verification passed"
 	@if [ "$(RELEASE_CHANNEL)" = "development" ]; then \
 		scripts/verify-release-artifacts.sh --app "$(APP_BUNDLE)" --dmg "$(DMG_PATH)"; \
@@ -307,8 +330,18 @@ verify-dmg: dmg
 sign-dmg: release-metadata-check
 	@set -e; \
 		test -f "$(DMG_PATH)" || { echo "Missing DMG: $(DMG_PATH)"; exit 1; }; \
-		codesign --force --sign "$(CODESIGN_IDENTITY)" "$(DMG_PATH)"; \
+		codesign --force --timestamp --sign "$(RELEASE_CODESIGN_IDENTITY)" "$(DMG_PATH)"; \
 		echo "Signed $(DMG_PATH)"
+
+# Sparkle signs the DMG bytes, so the appcast must be generated after stapling.
+notarize-dmg: release-metadata-check
+	@set -e; \
+		test -f "$(DMG_PATH)" || { echo "Missing DMG: $(DMG_PATH)"; exit 1; }; \
+		NOTARY_PROFILE="$(NOTARY_PROFILE)" NOTARY_KEYCHAIN="$(NOTARY_KEYCHAIN)" scripts/notarize.sh "$(DMG_PATH)"; \
+		xcrun stapler staple "$(DMG_PATH)"; \
+		xcrun stapler validate "$(DMG_PATH)"; \
+		spctl --assess --type open --context context:primary-signature --verbose=2 "$(DMG_PATH)"; \
+		echo "Notarized $(DMG_PATH)"
 
 clean:
 	rm -rf "$(BUILD_DIR)"

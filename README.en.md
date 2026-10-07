@@ -41,12 +41,14 @@ CLIProxyManager is a macOS menu bar app for managing multiple Claude and Codex O
 | Claude Code | Claude Code is required only when generating Claude-backed terminal functions. Proxy startup and OAuth compatibility are not blocked by Claude Code availability or version. |
 | Compatibility | A **Warning** keeps existing proxy operation available and explains the next step. A **Block** prevents start, restart, proxy updates, and generated shell writes; stopping an already running proxy remains available. Follow the displayed **Recovery** guidance, then refresh the status. |
 
-## Installation and macOS security warning
+## Installation
 
-The release app is self-signed but is **not Apple-notarized**, so macOS may show a security warning the first time you launch it.
+Release builds are signed with a Developer ID and notarized by Apple, so they open without extra security steps.
 
-1. Download the latest DMG from [Releases](https://github.com/woosublee/CLIProxyManager/releases/latest) and install the app.
-2. If macOS blocks the app, Control-click it in Finder and select **Open**, or go to **System Settings → Privacy & Security → Open Anyway**.
+1. Download the latest DMG from [Releases](https://github.com/woosublee/CLIProxyManager/releases/latest).
+2. Open the DMG, move `CLIProxyManager.app` to the `Applications` folder, and launch it.
+
+The app checks for and installs updates itself. Self-signed builds up to 0.1.44 also update through the in-app updater as usual.
 
 Only use release builds downloaded directly from GitHub Releases.
 
@@ -164,13 +166,15 @@ scripts/sync-release-version.sh --check
 # 2. Inspect the resolved identity
 scripts/resolve-release-version.sh json | plutil -p -
 
-# 3. Run the GitHub Actions Self-signed Release workflow with the canonical tag
+# 3. Run the GitHub Actions Notarized Release workflow with the canonical tag
 scripts/resolve-release-version.sh tag
 ```
 
 The official release compares the source plist, GitHub tag, previous appcast build, app bundle, DMG filename, and generated appcast before it creates a tag or Release. It fails closed when identity is stale, the published build is not lower, or GitHub cannot be queried.
 
-Use the local fallback only when CI release is unavailable and you have a separately verified previous appcast.
+The Notarized Release workflow uses the `DEVELOPER_ID_CERTIFICATE_BASE64`, `DEVELOPER_ID_CERTIFICATE_PASSWORD`, `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8_BASE64`, and `SPARKLE_PRIVATE_KEY` secrets. It notarizes and staples both the app and the DMG before generating the appcast, so the Sparkle signature covers the stapled DMG.
+
+Use the local fallback only when CI release is unavailable and you have a separately verified previous appcast. It requires the Developer ID Application identity and the `woosublee-notary` notarytool profile in your Keychain.
 
 ```bash
 scripts/release-local.sh "$(scripts/resolve-release-version.sh tag)" \
@@ -190,7 +194,7 @@ All pull requests and pushes to `main` run read-only CI on the fixed `macos-14` 
 | `Script tests` | `bash scripts/run-script-tests.sh` |
 | `Package structure` | `make verify-bundle-structure` |
 
-`verify-bundle-structure` creates an unsigned development bundle only to validate package structure. It is not signed or notarized and must never be treated or shipped as a distributable release. The manual **Self-signed Release** GitHub Actions workflow remains a separate release procedure; PR/main CI does not sign or publish artifacts.
+`verify-bundle-structure` creates an unsigned development bundle only to validate package structure. It is not signed or notarized and must never be treated or shipped as a distributable release. The manual **Notarized Release** GitHub Actions workflow remains a separate release procedure; PR/main CI does not sign or publish artifacts.
 
 ### Staged ruleset rollout and recovery
 
@@ -256,7 +260,7 @@ Check the server status and the port under **Settings → Server**, then stop an
 
 ### The app will not open
 
-Follow the instructions in [Installation and macOS security warning](#installation-and-macos-security-warning) and select **Open** in Finder or **Open Anyway** in System Settings.
+Notarized release builds open without a security warning. If macOS shows one, confirm that the DMG came from GitHub Releases and reinstall from the latest DMG.
 
 ## Security
 

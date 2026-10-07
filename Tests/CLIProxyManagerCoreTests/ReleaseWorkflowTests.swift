@@ -1,21 +1,25 @@
 import XCTest
 
 final class ReleaseWorkflowTests: XCTestCase {
-    func testReleaseWorkflowBuildsAndUploadsSelfSignedDMG() throws {
+    func testReleaseWorkflowBuildsAndUploadsNotarizedDMG() throws {
         let workflow = try String(contentsOf: repositoryRoot().appendingPathComponent(".github/workflows/release.yml"), encoding: .utf8)
         let makefile = try String(contentsOf: repositoryRoot().appendingPathComponent("Makefile"), encoding: .utf8)
         let releaseLocal = try String(contentsOf: repositoryRoot().appendingPathComponent("scripts/release-local.sh"), encoding: .utf8)
 
         XCTAssertTrue(
-            makefile.contains("LOCAL_CODESIGN_IDENTITY ?= cliproxymanager"),
-            "Development and local release builds should default to the shared cliproxymanager signing identity."
+            makefile.contains("DEVELOPER_ID_IDENTITY := Developer ID Application: Woosub Lee (2L6ZW98RCP)"),
+            "Development and local release builds should default to the Developer ID signing identity."
+        )
+        XCTAssertFalse(
+            makefile.contains("cliproxymanager\n"),
+            "The retired self-signed cliproxymanager identity must not be a signing default."
         )
         XCTAssertTrue(
             makefile.contains("RELEASE_CODESIGN_IDENTITY ?= $(CODESIGN_IDENTITY)"),
             "Release signing should follow the effective signing identity so CI overrides are honored."
         )
         XCTAssertTrue(
-            makefile.contains("CODESIGN_IDENTITY ?= $(LOCAL_CODESIGN_IDENTITY)"),
+            makefile.contains("CODESIGN_IDENTITY ?= $(DEVELOPER_ID_IDENTITY)"),
             "Generic signing should inherit the local default identity."
         )
         XCTAssertFalse(makefile.contains("VERSION ?="))
@@ -30,7 +34,23 @@ final class ReleaseWorkflowTests: XCTestCase {
         XCTAssertTrue(makefile.contains("CLIProxyManagerReleaseChannel"))
         XCTAssertTrue(makefile.contains("scripts/verify-dmg.sh \"$(DMG_PATH)\""))
         XCTAssertTrue(makefile.contains("sign-dmg:"))
-        XCTAssertTrue(makefile.contains("codesign --force --sign \"$(CODESIGN_IDENTITY)\" \"$(DMG_PATH)\""))
+        XCTAssertTrue(makefile.contains("codesign --force --timestamp --sign \"$(RELEASE_CODESIGN_IDENTITY)\" \"$(DMG_PATH)\""))
+        XCTAssertTrue(makefile.contains("CODESIGN_FLAGS = --force --options runtime $(CODESIGN_TIMESTAMP)"))
+        XCTAssertTrue(
+            makefile.contains("$(MAKE) sign CODESIGN_IDENTITY=\"$(RELEASE_CODESIGN_IDENTITY)\" CODESIGN_TIMESTAMP=--timestamp"),
+            "Release signing must request a secure timestamp, which notarization requires."
+        )
+        XCTAssertTrue(makefile.contains("notarize-app:"))
+        XCTAssertTrue(makefile.contains("notarize-dmg:"))
+        XCTAssertTrue(makefile.contains("xcrun stapler staple \"$(APP_BUNDLE)\""))
+        XCTAssertTrue(makefile.contains("xcrun stapler staple \"$(DMG_PATH)\""))
+        XCTAssertTrue(makefile.contains("xcrun stapler validate \"$$MOUNT_DIR/$(APP_NAME).app\""))
+        XCTAssertTrue(
+            makefile.contains("scripts/sign-bundled-cliproxyapi.sh --identity \"$(CODESIGN_IDENTITY)\""),
+            "Notarization requires the bundled CLIProxyAPI binary to be Developer ID signed."
+        )
+        assert("scripts/sign-bundled-cliproxyapi.sh", appearsBefore: "--entitlements \"$(ENTITLEMENTS)\" \"$$STAGED_APP\"", in: makefile)
+        assert("dmg: release-sign\n\t$(MAKE) notarize-app", appearsBefore: "hdiutil create", in: makefile)
         XCTAssertTrue(makefile.contains("verify-app-structure: bundle"))
         XCTAssertTrue(makefile.contains("CLIPROXYAPI_RESOLVER := scripts/resolve-bundled-cliproxyapi.sh"))
         XCTAssertTrue(makefile.contains("resolve-bundled-proxy:"))
@@ -60,11 +80,11 @@ final class ReleaseWorkflowTests: XCTestCase {
             "Sparkle Autoupdate should be signed through the canonical Versions/Current path."
         )
         XCTAssertTrue(
-            makefile.contains("-exec codesign --force --options runtime --sign \"$(CODESIGN_IDENTITY)\" {} \\;"),
+            makefile.contains("-exec codesign $(CODESIGN_FLAGS) --preserve-metadata=entitlements --sign \"$(CODESIGN_IDENTITY)\" {} \\;"),
             "Sparkle XPC services should be signed with hardened runtime and find -exec instead of find|xargs."
         )
         XCTAssertTrue(
-            makefile.contains("codesign --force --options runtime --sign \"$(CODESIGN_IDENTITY)\" \"$$STAGED_APP/Contents/Helpers/cliproxy-manager\""),
+            makefile.contains("codesign $(CODESIGN_FLAGS) --sign \"$(CODESIGN_IDENTITY)\" \"$$STAGED_APP/Contents/Helpers/cliproxy-manager\""),
             "The bundled helper should be signed with hardened runtime for release consistency."
         )
         XCTAssertFalse(
@@ -78,13 +98,16 @@ final class ReleaseWorkflowTests: XCTestCase {
         )
         XCTAssertFalse(releaseLocal.contains("resolve-bundled-cliproxyapi.sh"))
         XCTAssertTrue(
-            releaseLocal.contains("security find-identity -v -p codesigning | grep -F '\"cliproxymanager\"'"),
+            releaseLocal.contains("security find-identity -v -p codesigning | grep -F '\"Developer ID Application: Woosub Lee (2L6ZW98RCP)\"'"),
             "Local fallback releases should verify the required signing identity before building."
         )
         XCTAssertTrue(
-            releaseLocal.contains("make verify-dmg"),
+            releaseLocal.contains("make NOTARY_PROFILE=\"$NOTARY_PROFILE\" verify-dmg"),
             "Local fallback releases should let Makefile resolve canonical release metadata and signing defaults."
         )
+        XCTAssertTrue(releaseLocal.contains("xcrun notarytool history --keychain-profile \"$NOTARY_PROFILE\""))
+        assert("make sign-dmg", appearsBefore: "make NOTARY_PROFILE=\"$NOTARY_PROFILE\" notarize-dmg", in: releaseLocal)
+        assert("notarize-dmg", appearsBefore: "generate-sparkle-appcast.sh", in: releaseLocal)
         XCTAssertFalse(
             releaseLocal.contains("make CODESIGN_IDENTITY=- VERSION=\"$VERSION\" BUILD_NUMBER=\"$BUILD_NUMBER\" verify-dmg"),
             "The local fallback release path must not force ad-hoc signing."
@@ -110,7 +133,7 @@ final class ReleaseWorkflowTests: XCTestCase {
             "Local release notes should no longer describe releases as ad-hoc signed."
         )
 
-        XCTAssertTrue(workflow.contains("name: Self-signed Release"))
+        XCTAssertTrue(workflow.contains("name: Notarized Release"))
         XCTAssertTrue(workflow.contains("workflow_dispatch:"))
         XCTAssertFalse(
             workflow.contains("push:"),
@@ -162,7 +185,7 @@ final class ReleaseWorkflowTests: XCTestCase {
         XCTAssertFalse(workflow.contains("DMG_PATH: ${{ steps.version.outputs.dmg_path }}"))
         XCTAssertFalse(
             workflow.contains("ref: ${{ steps.release-tag.outputs.release_tag }}"),
-            "The self-signed CI release should build the current workflow commit, not checkout a pre-existing tag."
+            "The CI release should build the current workflow commit, not checkout a pre-existing tag."
         )
 
         XCTAssertTrue(
@@ -178,26 +201,30 @@ final class ReleaseWorkflowTests: XCTestCase {
         XCTAssertTrue(workflow.contains("hashFiles('Sources/CLIProxyManagerApp/Resources/cliproxyapi/cliproxyapi.manifest.json')"))
         XCTAssertTrue(workflow.contains("- name: Resolve pinned CLIProxyAPI artifact"))
         XCTAssertTrue(workflow.contains("run: make resolve-bundled-proxy"))
-        XCTAssertTrue(workflow.contains("CLIPROXYAPI_OFFLINE=1 make CODESIGN_IDENTITY=\"$CODESIGN_IDENTITY\" verify-dmg"))
-        assert("- name: Resolve pinned CLIProxyAPI artifact", appearsBefore: "- name: Import CLIProxyManager signing certificate", in: workflow)
-        XCTAssertTrue(workflow.contains("CLIPROXYMANAGER_CERTIFICATE_BASE64"))
-        XCTAssertTrue(workflow.contains("CLIPROXYMANAGER_CERTIFICATE_PASSWORD"))
+        XCTAssertTrue(workflow.contains("CLIPROXYAPI_OFFLINE=1 make CODESIGN_IDENTITY=\"$CODESIGN_IDENTITY\" NOTARY_PROFILE=notarytool-profile NOTARY_KEYCHAIN=\"$KEYCHAIN_PATH\" verify-dmg"))
+        assert("- name: Resolve pinned CLIProxyAPI artifact", appearsBefore: "- name: Import Developer ID certificate", in: workflow)
+        XCTAssertFalse(workflow.contains("CLIPROXYMANAGER_CERTIFICATE"), "The retired self-signed certificate secrets must not be used.")
+        XCTAssertTrue(workflow.contains("DEVELOPER_ID_CERTIFICATE_BASE64"))
+        XCTAssertTrue(workflow.contains("DEVELOPER_ID_CERTIFICATE_PASSWORD"))
+        XCTAssertTrue(workflow.contains("ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}"))
+        XCTAssertTrue(workflow.contains("ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}"))
+        XCTAssertTrue(workflow.contains("ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}"))
+        XCTAssertTrue(workflow.contains("xcrun notarytool store-credentials \"notarytool-profile\""))
+        XCTAssertTrue(workflow.contains("import_intermediate DeveloperIDG2CA f16cd3c54c7f83cea4bf1a3e6a0819c8aaa8e4a1528fd144715f350643d2df3a"))
         XCTAssertTrue(workflow.contains("SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}"))
         XCTAssertTrue(workflow.contains("security create-keychain"))
         XCTAssertTrue(workflow.contains("security import \"$CERTIFICATE_PATH\""))
         XCTAssertTrue(workflow.contains("security set-key-partition-list -S apple-tool:,apple:,codesign:"))
         XCTAssertTrue(workflow.contains("security list-keychains -d user -s \"$KEYCHAIN_PATH\""))
         XCTAssertTrue(workflow.contains("security default-keychain -s \"$KEYCHAIN_PATH\""))
-        XCTAssertTrue(workflow.contains("security find-identity -p codesigning \"$KEYCHAIN_PATH\" || true"))
-        XCTAssertTrue(workflow.contains("CODESIGN_IDENTITY=cliproxymanager"))
+        XCTAssertTrue(workflow.contains("awk '/\"Developer ID Application: / { print $2; exit }'"))
+        XCTAssertFalse(workflow.contains("CODESIGN_IDENTITY=cliproxymanager"))
         XCTAssertFalse(
             workflow.contains("CODESIGN_IDENTITY=-"),
-            "The official self-signed CI release should import the cliproxymanager certificate instead of using ad-hoc signing."
+            "The official CI release should import the Developer ID certificate instead of using ad-hoc signing."
         )
-        XCTAssertTrue(workflow.contains("make CODESIGN_IDENTITY=\"$CODESIGN_IDENTITY\" verify-dmg"))
         XCTAssertTrue(workflow.contains("make CODESIGN_IDENTITY=\"$CODESIGN_IDENTITY\" sign-dmg"))
-        XCTAssertFalse(workflow.contains("notarytool"))
-        XCTAssertFalse(workflow.contains("stapler"))
+        XCTAssertTrue(workflow.contains("make NOTARY_PROFILE=notarytool-profile NOTARY_KEYCHAIN=\"$KEYCHAIN_PATH\" notarize-dmg"))
         XCTAssertTrue(workflow.contains("REPOSITORY: ${{ github.repository }}"))
         XCTAssertTrue(workflow.contains("scripts/generate-sparkle-appcast.sh"))
         XCTAssertTrue(workflow.contains("git tag \"${{ steps.version.outputs.tag }}\" \"$GITHUB_SHA\""))
@@ -207,11 +234,15 @@ final class ReleaseWorkflowTests: XCTestCase {
         XCTAssertTrue(workflow.contains("${{ steps.version.outputs.dmg_path }}"))
         XCTAssertTrue(workflow.contains("${{ steps.version.outputs.appcast_path }}"))
         XCTAssertTrue(workflow.contains("${{ steps.version.outputs.provenance_path }}"))
-        XCTAssertTrue(workflow.contains("Self-signed, non-notarized DMG with Sparkle appcast."))
+        XCTAssertTrue(workflow.contains("Developer ID signed and notarized DMG with Sparkle appcast."))
+        XCTAssertFalse(workflow.contains("Self-signed, non-notarized DMG"))
         XCTAssertTrue(workflow.contains("Cleanup signing artifacts"))
         XCTAssertTrue(workflow.contains("security delete-keychain \"$KPATH\""))
+        XCTAssertTrue(workflow.contains("rm -f \"$RUNNER_TEMP/developer_id.p12\" \"$RUNNER_TEMP/notary_api_key.p8\""))
 
-        assert("- name: Sign DMG", appearsBefore: "- name: Generate Sparkle appcast", in: workflow)
+        assert("- name: Store notarization credentials", appearsBefore: "- name: Build, sign, notarize, and verify DMG", in: workflow)
+        assert("- name: Sign DMG", appearsBefore: "- name: Notarize DMG", in: workflow)
+        assert("- name: Notarize DMG", appearsBefore: "- name: Generate Sparkle appcast", in: workflow)
         assert("- name: Verify release artifacts", appearsBefore: "- name: Recheck published build", in: workflow)
         assert("- name: Recheck published build", appearsBefore: "- name: Create tag", in: workflow)
         assert("- name: Create tag", appearsBefore: "- name: Create Release", in: workflow)
