@@ -14,7 +14,7 @@ fail() {
 [[ -x "$SOURCE_SCRIPT" ]] || fail "install-swiftpm-resources.sh should exist and be executable"
 
 sandbox="$(mktemp -d /tmp/install-swiftpm-resources-tests.XXXXXX)"
-trap 'rm -rf "$sandbox"' EXIT
+trap 'chmod -R u+w "$sandbox" 2>/dev/null; rm -rf "$sandbox"' EXIT
 
 write_resources() {
   local root="$1"
@@ -70,23 +70,39 @@ bin="$sandbox/missing/bin"
 mkdir -p "$bin" "$sandbox/missing/Resources"
 expect_failure missing-bundle 'Missing SwiftPM resource bundle' "$bin" "$sandbox/missing/Resources"
 
+bin="$sandbox/duplicate/bin"
+mkdir -p "$bin/$BUNDLE_NAME" "$bin/Other_CLIProxyManagerApp.bundle" "$sandbox/duplicate/Resources"
+expect_failure duplicate-bundle 'Expected one CLIProxyManagerApp resource bundle' "$bin" "$sandbox/duplicate/Resources"
+
+# A flat bundle may hold a resource folder named Contents; only Info.plist marks swiftbuild.
+bin="$sandbox/flat-contents/bin"
+resources="$sandbox/flat-contents/Resources"
+mkdir -p "$bin/$BUNDLE_NAME/Contents/Resources" "$resources"
+write_resources "$bin/$BUNDLE_NAME"
+"$SOURCE_SCRIPT" "$bin" "$resources" || fail "flat bundle with a Contents folder should install"
+[[ -f "$resources/Licenses/CLIProxyAPI-LICENSE.txt" && -d "$resources/Contents/Resources" ]] ||
+  fail "flat-contents: every flat resource must be copied"
+
 bin="$sandbox/contents-only/bin"
 mkdir -p "$bin/$BUNDLE_NAME/Contents" "$sandbox/contents-only/Resources"
 printf 'plist' > "$bin/$BUNDLE_NAME/Contents/Info.plist"
-expect_failure contents-without-resources 'Contents without Contents/Resources' \
+expect_failure contents-without-resources 'Contents/Info.plist without Contents/Resources' \
   "$bin" "$sandbox/contents-only/Resources"
 
 bin="$sandbox/missing-resources/bin"
 mkdir -p "$bin/$BUNDLE_NAME"
 expect_failure missing-resources-dir 'Missing app resources directory' "$bin" "$sandbox/missing-resources/Resources"
 
-bin="$sandbox/copy-failure/bin"
-resources="$sandbox/copy-failure/Resources"
-mkdir -p "$bin/$BUNDLE_NAME" "$resources"
-write_resources "$bin/$BUNDLE_NAME"
-chmod 500 "$resources"
-expect_failure copy-failure 'Unable to copy SwiftPM resources' "$bin" "$resources"
-chmod 700 "$resources"
+# Root ignores directory permissions, so the copy failure cannot be simulated there.
+if [[ "$EUID" -ne 0 ]]; then
+  bin="$sandbox/copy-failure/bin"
+  resources="$sandbox/copy-failure/Resources"
+  mkdir -p "$bin/$BUNDLE_NAME" "$resources"
+  write_resources "$bin/$BUNDLE_NAME"
+  chmod 500 "$resources"
+  expect_failure copy-failure 'Unable to copy SwiftPM resources' "$bin" "$resources"
+  chmod 700 "$resources"
+fi
 
 expect_failure usage 'Usage: scripts/install-swiftpm-resources.sh' "$sandbox"
 

@@ -197,7 +197,7 @@ final class ReleaseWorkflowTests: XCTestCase {
         XCTAssertFalse(workflow.contains("bash Tests/ScriptTests/generate-sparkle-appcast-tests.sh"))
         let commandLines = workflow.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
         XCTAssertTrue(commandLines.contains("make test"))
-        XCTAssertFalse(commandLines.contains { $0.hasPrefix("swift test") }, "The release workflow must run Swift tests through make test.")
+        XCTAssertFalse(commandLines.contains { workflowCommand($0).hasPrefix("swift test") }, "The release workflow must run Swift tests through make test.")
         XCTAssertTrue(workflow.contains("uses: actions/cache@v4"))
         XCTAssertTrue(workflow.contains("path: .build/cliproxyapi"))
         XCTAssertTrue(workflow.contains("hashFiles('Sources/CLIProxyManagerApp/Resources/cliproxyapi/cliproxyapi.manifest.json')"))
@@ -298,4 +298,12 @@ final class ReleaseWorkflowTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
     }
+}
+
+private func workflowCommand<S: StringProtocol>(_ line: S) -> String {
+    var command = line.trimmingCharacters(in: .whitespaces)
+    for prefix in ["- run:", "run:"] where command.hasPrefix(prefix) {
+        command = String(command.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+    }
+    return command
 }

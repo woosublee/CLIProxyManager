@@ -95,7 +95,7 @@ final class CIWorkflowTests: XCTestCase {
         XCTAssertEqual(occurrences(of: "run: make test", in: workflow), 1)
         let commandLines = workflow.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
         XCTAssertFalse(
-            commandLines.contains { $0.hasPrefix("swift test") || $0.hasPrefix("- run: swift test") },
+            commandLines.contains { workflowCommand($0).hasPrefix("swift test") },
             "CI must run Swift tests through make test so the build system stays in one place."
         )
         XCTAssertFalse(workflow.contains("needs:"), "CI jobs must run independently.")
@@ -240,4 +240,12 @@ final class CIWorkflowTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
     }
+}
+
+private func workflowCommand<S: StringProtocol>(_ line: S) -> String {
+    var command = line.trimmingCharacters(in: .whitespaces)
+    for prefix in ["- run:", "run:"] where command.hasPrefix(prefix) {
+        command = String(command.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+    }
+    return command
 }

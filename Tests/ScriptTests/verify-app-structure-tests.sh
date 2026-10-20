@@ -198,7 +198,7 @@ for helper in cpm cliproxy-manager; do
     --app "$app" --version 1.2.3 --build 42 --channel official
 done
 
-for nested in Contents _CodeSignature Info.plist; do
+for nested in Contents _CodeSignature Info.plist CLIProxyManager_CLIProxyManagerApp.bundle; do
   app="$sandbox/nested-resource-bundle-$nested.app"
   create_app "$app" 1.2.3 42 official
   if [[ "$nested" == 'Info.plist' ]]; then

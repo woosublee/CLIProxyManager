@@ -9,8 +9,6 @@
 # signature, which must not reach the app.
 set -euo pipefail
 
-BUNDLE_NAME='CLIProxyManager_CLIProxyManagerApp.bundle'
-
 fail() {
   printf 'ERROR: %s\n' "$*" >&2
   exit 1
@@ -20,14 +18,20 @@ fail() {
 
 bin_path="$1"
 resources_dir="$2"
-bundle="$bin_path/$BUNDLE_NAME"
-
-[[ -d "$bundle" ]] || fail "Missing SwiftPM resource bundle: $bundle"
 [[ -d "$resources_dir" ]] || fail "Missing app resources directory: $resources_dir"
 
-if [[ -e "$bundle/Contents" || -L "$bundle/Contents" ]]; then
+shopt -s nullglob
+bundles=("$bin_path"/*_CLIProxyManagerApp.bundle)
+shopt -u nullglob
+[[ ${#bundles[@]} -gt 0 ]] || fail "Missing SwiftPM resource bundle in $bin_path"
+[[ ${#bundles[@]} -eq 1 ]] || fail "Expected one CLIProxyManagerApp resource bundle in $bin_path, found ${#bundles[@]}"
+bundle="${bundles[0]}"
+[[ -d "$bundle" ]] || fail "SwiftPM resource bundle is not a directory: $bundle"
+
+# swiftbuild writes a macOS bundle with Contents/Info.plist; a flat bundle has none.
+if [[ -f "$bundle/Contents/Info.plist" ]]; then
   [[ -d "$bundle/Contents/Resources" ]] ||
-    fail "SwiftPM resource bundle has Contents without Contents/Resources: $bundle"
+    fail "SwiftPM resource bundle has Contents/Info.plist without Contents/Resources: $bundle"
   source_dir="$bundle/Contents/Resources"
 else
   source_dir="$bundle"
