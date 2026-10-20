@@ -29,9 +29,13 @@ case "$root" in
 esac
 [[ "$root" == /* ]] ||
   fail "SWIFT_SCRATCH_ROOT must be an absolute path or start with ~/, for example \$HOME/Library/Caches/CLIProxyManager"
+while [[ "$root" == *//* ]]; do
+  root="${root//\/\///}"
+done
 
 file_identity() {
-  stat -f '%d:%i' "$1"
+  stat -f '%d:%i' "$1" ||
+    fail "Unable to read the identity of $1 to check whether SWIFT_SCRATCH_ROOT is inside the checkout"
 }
 
 # Split the root into its longest existing prefix and the part still to create.
@@ -50,22 +54,20 @@ esac
 resolved_prefix="$(cd -P "$prefix" && pwd)" || fail "Unable to resolve SWIFT_SCRATCH_ROOT component: $prefix"
 
 checkout="$(cd -P "$checkout" && pwd)" || fail "Unable to resolve checkout: $2"
-checkout_identity="$(file_identity "$checkout")"
+checkout_identity="$(file_identity "$checkout")" || exit 1
 
 # The new directories in $rest do not exist yet, so the root is inside the
 # checkout exactly when its existing prefix is the checkout or below it.
 ancestor="$resolved_prefix"
 while :; do
-  [[ "$(file_identity "$ancestor")" != "$checkout_identity" ]] ||
+  ancestor_identity="$(file_identity "$ancestor")" || exit 1
+  [[ "$ancestor_identity" != "$checkout_identity" ]] ||
     fail 'SWIFT_SCRATCH_ROOT must be outside the checkout so SwiftPM output leaves the synced folder'
   [[ "$ancestor" != / ]] || break
   ancestor="$(cd -P "$ancestor/.." && pwd)" ||
     fail "Unable to check whether SWIFT_SCRATCH_ROOT is inside the checkout: cannot enter the parent of $ancestor"
 done
 
-while [[ "$rest" == *//* ]]; do
-  rest="${rest//\/\///}"
-done
 key="$(printf '%s' "$checkout_identity" | shasum -a 256 | cut -c1-12)"
 root_path="${resolved_prefix%/}$rest"
 printf '%s/%s-%s\n' "${root_path%/}" "${checkout##*/}" "$key"

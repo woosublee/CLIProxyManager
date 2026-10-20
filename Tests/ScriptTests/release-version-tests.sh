@@ -397,6 +397,10 @@ trimmed_dry_run="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT=" $scratch_ro
   fail "a SWIFT_SCRATCH_ROOT with surrounding spaces should be accepted"
 printf '%s\n' "$trimmed_dry_run" | grep -F -- "--scratch-path \"$scratch_path\"" >/dev/null ||
   fail "surrounding spaces must not become part of the scratch path"
+slashes_dry_run="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT="$physical_tmp//cliproxymanager-missing///scratch//")" ||
+  fail "a SWIFT_SCRATCH_ROOT with repeated slashes should be accepted"
+printf '%s\n' "$slashes_dry_run" | grep -F -- "--scratch-path \"$physical_tmp/cliproxymanager-missing/scratch/$(basename "$physical_root")-$scratch_key\"" >/dev/null ||
+  fail "repeated slashes in SWIFT_SCRATCH_ROOT must collapse to one"
 if file_output="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT="$physical_root/Makefile/cache" 2>&1)"; then
   fail "a SWIFT_SCRATCH_ROOT below a regular file must be rejected"
 fi
