@@ -142,6 +142,16 @@ cpm update stage all
 cpm update apply all --yes
 ```
 
+### Swift 빌드 엔진과 산출물 위치
+
+Makefile은 SwiftPM 기본 엔진인 `swiftbuild`로 빌드·테스트합니다(`make test`, `make development-bundle` 등). swiftbuild는 산출물 bundle에 서명하는데, iCloud Drive가 동기화 폴더의 디렉터리에 붙이는 Finder 정보 때문에 `~/Documents` 같은 동기화 폴더 안의 checkout에서는 서명이 실패합니다. 저장소를 옮기지 않고 SwiftPM 산출물만 로컬 폴더에 두려면 셸 설정에 다음을 추가합니다.
+
+```sh
+export SWIFT_SCRATCH_ROOT="$HOME/Library/Caches/CLIProxyManager"
+```
+
+checkout마다 그 아래 별도 하위 폴더를 사용하므로 여러 worktree가 충돌하지 않습니다. `make distclean`은 해당 폴더도 지웁니다.
+
 ### CLIProxyAPI artifact 관리
 
 CLIProxyAPI 실행 파일은 Git에 직접 저장하지 않습니다. `Sources/CLIProxyManagerApp/Resources/cliproxyapi/cliproxyapi.manifest.json`이 upstream URL·archive SHA-256·추출 binary SHA-256·크기·version metadata·`darwin/arm64` target을 고정하는 trust anchor입니다.

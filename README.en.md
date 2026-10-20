@@ -142,6 +142,16 @@ cpm update stage all
 cpm update apply all --yes
 ```
 
+### Swift build engine and output location
+
+The Makefile builds and tests with `swiftbuild`, the SwiftPM default engine (`make test`, `make development-bundle`, and so on). swiftbuild signs the bundles it produces, and signing fails in a checkout inside a synced folder such as `~/Documents` because iCloud Drive attaches Finder info to the directories it syncs. To keep the checkout where it is and move only SwiftPM output to a local folder, add this to your shell profile:
+
+```sh
+export SWIFT_SCRATCH_ROOT="$HOME/Library/Caches/CLIProxyManager"
+```
+
+Each checkout uses its own subdirectory there, so worktrees do not collide. `make distclean` removes that directory too.
+
 ### CLIProxyAPI artifact management
 
 The CLIProxyAPI executable is not stored directly in Git. `Sources/CLIProxyManagerApp/Resources/cliproxyapi/cliproxyapi.manifest.json` is the trust anchor that pins the upstream URL, archive SHA-256, extracted binary SHA-256 and size, version metadata, and `darwin/arm64` target.
