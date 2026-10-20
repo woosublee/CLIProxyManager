@@ -190,7 +190,7 @@ All pull requests and pushes to `main` run read-only CI on the fixed `macos-14` 
 | Check | Run locally before opening a PR |
 | --- | --- |
 | `Build` | `make ci-build` |
-| `Test` | `swift test` |
+| `Test` | `swift test --build-system native` |
 | `Script tests` | `bash scripts/run-script-tests.sh` |
 | `Package structure` | `make verify-bundle-structure` |
 

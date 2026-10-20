@@ -195,7 +195,7 @@ final class ReleaseWorkflowTests: XCTestCase {
         XCTAssertFalse(workflow.contains("bash Tests/ScriptTests/release-version-tests.sh"))
         XCTAssertFalse(workflow.contains("bash Tests/ScriptTests/release-local-tests.sh"))
         XCTAssertFalse(workflow.contains("bash Tests/ScriptTests/generate-sparkle-appcast-tests.sh"))
-        XCTAssertTrue(workflow.contains("swift test"))
+        XCTAssertTrue(workflow.contains("swift test --build-system native"))
         XCTAssertTrue(workflow.contains("uses: actions/cache@v4"))
         XCTAssertTrue(workflow.contains("path: .build/cliproxyapi"))
         XCTAssertTrue(workflow.contains("hashFiles('Sources/CLIProxyManagerApp/Resources/cliproxyapi/cliproxyapi.manifest.json')"))

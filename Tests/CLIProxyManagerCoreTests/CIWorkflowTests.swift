@@ -57,7 +57,7 @@ final class CIWorkflowTests: XCTestCase {
                   - uses: actions/checkout@v4
                     with:
                       persist-credentials: false
-                  - run: swift test
+                  - run: swift test --build-system native
             """,
             """
               script-tests:
