@@ -277,7 +277,7 @@ printf '%s\n' "$development_override_dry_run" | grep -F \
   "make verify-app-structure ARTIFACT_CHANNEL=development CONFIGURATION=debug DEVELOPMENT_VERSION=\"$canonical_version\" DEVELOPMENT_BUILD_NUMBER=\"$canonical_build\"" \
   >/dev/null || fail "development bundle must not accept caller metadata overrides"
 development_metadata_line="$(grep -n -m 1 -F 'scripts/resolve-release-version.sh validate' <<<"$development_bundle_dry_run" | cut -d: -f1)"
-development_compile_line="$(grep -n -m 1 -E 'swift build -c debug[[:space:]]+--product CLIProxyManager' <<<"$development_bundle_dry_run" | cut -d: -f1)"
+development_compile_line="$(grep -n -m 1 -E 'swift build -c debug --build-system native[[:space:]]+--product CLIProxyManager' <<<"$development_bundle_dry_run" | cut -d: -f1)"
 [[ -n "$development_metadata_line" && -n "$development_compile_line" && "$development_metadata_line" -lt "$development_compile_line" ]] ||
   fail "development bundle must validate metadata before compilation"
 ! printf '%s\n' "$development_bundle_dry_run" | grep -E '(^|[[:space:]])(sign|release-sign|dmg|verify-dmg|sign-dmg|codesign|hdiutil)([[:space:]]|$)' >/dev/null ||
@@ -317,11 +317,11 @@ printf '%s\n' "$ci_build_dry_run" | grep -F \
   >/dev/null || fail "ci-build must reuse swift-build with strict debug settings"
 for product in CLIProxyManager cpm cliproxy-manager; do
   printf '%s\n' "$ci_build_dry_run" | grep -F \
-    "swift build -c debug -Xswiftc -warnings-as-errors --product $product" \
+    "swift build -c debug --build-system native -Xswiftc -warnings-as-errors --product $product" \
     >/dev/null || fail "ci-build must compile $product with warnings as errors"
 done
 ci_metadata_line="$(grep -n -m 1 -F 'scripts/resolve-release-version.sh validate' <<<"$ci_build_dry_run" | cut -d: -f1)"
-ci_compile_line="$(grep -n -m 1 -F 'swift build -c debug -Xswiftc -warnings-as-errors --product CLIProxyManager' <<<"$ci_build_dry_run" | cut -d: -f1)"
+ci_compile_line="$(grep -n -m 1 -F 'swift build -c debug --build-system native -Xswiftc -warnings-as-errors --product CLIProxyManager' <<<"$ci_build_dry_run" | cut -d: -f1)"
 [[ -n "$ci_metadata_line" && -n "$ci_compile_line" && "$ci_metadata_line" -lt "$ci_compile_line" ]] ||
   fail "ci-build must validate metadata before compilation"
 ! printf '%s\n' "$ci_build_dry_run" | grep -E '[[:space:]](codesign|hdiutil)[[:space:]]' >/dev/null ||
