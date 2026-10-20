@@ -25,6 +25,10 @@ BUILD_NUMBER := $(shell $(RELEASE_RESOLVE) build 2>/dev/null)
 RELEASE_CHANNEL := $(shell $(RELEASE_RESOLVE) channel 2>/dev/null)
 BUILD_DIR ?= build
 CONFIGURATION ?= release
+# Swift 6.4 defaults to the swiftbuild engine, which nests resource bundle
+# contents under Contents/Resources and signs test bundles; keep the native
+# engine until the bundle layout is migrated.
+SWIFT_BUILD_SYSTEM ?= native
 SWIFT_BUILD_FLAGS ?=
 DEVELOPER_ID_IDENTITY := Developer ID Application: Woosub Lee (2L6ZW98RCP)
 RELEASE_CODESIGN_IDENTITY ?= $(CODESIGN_IDENTITY)
@@ -47,7 +51,7 @@ MACOS_DIR := $(CONTENTS_DIR)/MacOS
 RESOURCES_DIR := $(CONTENTS_DIR)/Resources
 HELPERS_DIR := $(CONTENTS_DIR)/Helpers
 FRAMEWORKS_DIR := $(CONTENTS_DIR)/Frameworks
-SWIFT_BUILD_DIR = $(shell swift build -c $(CONFIGURATION) --show-bin-path)
+SWIFT_BUILD_DIR = $(shell swift build -c $(CONFIGURATION) --build-system $(SWIFT_BUILD_SYSTEM) --show-bin-path)
 APP_EXECUTABLE = $(SWIFT_BUILD_DIR)/$(APP_NAME)
 CPM_EXECUTABLE = $(SWIFT_BUILD_DIR)/cpm
 HELPER_EXECUTABLE = $(SWIFT_BUILD_DIR)/cliproxy-manager
@@ -91,9 +95,9 @@ print-build-tag:
 	@$(RELEASE_RESOLVE) tag
 
 swift-build: release-metadata-check
-	swift build -c $(CONFIGURATION) $(SWIFT_BUILD_FLAGS) --product $(APP_NAME)
-	swift build -c $(CONFIGURATION) $(SWIFT_BUILD_FLAGS) --product cpm
-	swift build -c $(CONFIGURATION) $(SWIFT_BUILD_FLAGS) --product cliproxy-manager
+	swift build -c $(CONFIGURATION) --build-system $(SWIFT_BUILD_SYSTEM) $(SWIFT_BUILD_FLAGS) --product $(APP_NAME)
+	swift build -c $(CONFIGURATION) --build-system $(SWIFT_BUILD_SYSTEM) $(SWIFT_BUILD_FLAGS) --product cpm
+	swift build -c $(CONFIGURATION) --build-system $(SWIFT_BUILD_SYSTEM) $(SWIFT_BUILD_FLAGS) --product cliproxy-manager
 
 verify-app-structure: bundle
 	scripts/verify-app-structure.sh --app "$(APP_BUNDLE)" --version "$(VERSION)" --build "$(BUILD_NUMBER)" --channel "$(RELEASE_CHANNEL)"

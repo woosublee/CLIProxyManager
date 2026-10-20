@@ -78,7 +78,7 @@ jobs:
       - name: Test
         run: |
           bash scripts/run-script-tests.sh
-          swift test
+          swift test --build-system native
 
       - name: Restore pinned CLIProxyAPI artifact cache
         uses: actions/cache@v4
