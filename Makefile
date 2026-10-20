@@ -145,15 +145,7 @@ bundle: swift-build $(INFO_PLIST) $(ENTITLEMENTS) $(ICON_FILE)
 	@if [ "$(RELEASE_CHANNEL)" = "development" ]; then \
 		plutil -insert CLIProxyManagerReleaseChannel -string development "$(CONTENTS_DIR)/Info.plist"; \
 	fi
-	@copied=0; \
-	for bundle in $(SWIFT_BUILD_DIR)/*CLIProxyManagerApp*.bundle; do \
-		if [ -d "$$bundle/Contents/Resources" ]; then \
-			ditto --norsrc --noextattr "$$bundle/Contents/Resources" "$(RESOURCES_DIR)" && copied=1; \
-		elif [ -d "$$bundle" ]; then \
-			ditto --norsrc --noextattr "$$bundle" "$(RESOURCES_DIR)" && copied=1; \
-		fi; \
-	done; \
-	[ "$$copied" -eq 1 ] || { echo "Missing CLIProxyManagerApp resource bundle in $(SWIFT_BUILD_DIR)"; exit 1; }
+	scripts/install-swiftpm-resources.sh "$(SWIFT_BUILD_DIR)" "$(RESOURCES_DIR)"
 	mkdir -p "$(BUNDLED_PROXY_RESOURCE_DIR)"
 	cp "$(CLIPROXYAPI_MANIFEST)" "$(BUNDLED_PROXY_MANIFEST)"
 	$(CLIPROXYAPI_RESOLVER) --manifest "$(CLIPROXYAPI_MANIFEST)" --cache-root "$(CLIPROXYAPI_CACHE_ROOT)" --output "$(BUNDLED_PROXY_BINARY)" $(CLIPROXYAPI_RESOLVE_FLAGS)

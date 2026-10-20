@@ -125,7 +125,8 @@ esac
    ! -e "$resources/cliproxy-manager" && ! -L "$resources/cliproxy-manager" ]] ||
   structure_failure 'unexpected resource helper'
 [[ ! -e "$resources/Contents" && ! -L "$resources/Contents" &&
-   ! -e "$resources/_CodeSignature" && ! -e "$resources/Info.plist" ]] ||
+   ! -e "$resources/_CodeSignature" && ! -L "$resources/_CodeSignature" &&
+   ! -e "$resources/Info.plist" && ! -L "$resources/Info.plist" ]] ||
   structure_failure 'nested resource bundle'
 
 proxy_binary="$resources/cliproxyapi/cliproxyapi"
