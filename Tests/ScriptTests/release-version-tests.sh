@@ -345,7 +345,7 @@ printf '%s\n' "$test_override_dry_run" | grep -Ex 'swift test --build-system swi
 physical_tmp="$(cd -P /tmp && pwd)"
 scratch_root="$physical_tmp/cliproxymanager-scratch"
 physical_root="$(cd "$REPO_ROOT" && pwd -P)"
-scratch_key="$(printf '%s' "$physical_root" | shasum -a 256 | cut -c1-12)"
+scratch_key="$(printf '%s' "$(stat -f '%d:%i' "$physical_root")" | shasum -a 256 | cut -c1-12)"
 scratch_path="$scratch_root/$(basename "$physical_root")-$scratch_key"
 scratch_test_dry_run="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT="$scratch_root")" ||
   fail "test target should accept a scratch root"
@@ -374,10 +374,25 @@ fi
 [[ "$inside_output" == *'SWIFT_SCRATCH_ROOT must be outside the checkout'* ]] ||
   fail "a SWIFT_SCRATCH_ROOT inside the checkout must explain why it is rejected"
 if dotdot_output="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT="$(dirname "$physical_root")/missing/../$(basename "$physical_root")/.cache" 2>&1)"; then
-  fail "a SWIFT_SCRATCH_ROOT that reaches the checkout through .. must be rejected"
+  fail "a SWIFT_SCRATCH_ROOT that uses .. after a missing directory must be rejected"
 fi
-[[ "$dotdot_output" == *'SWIFT_SCRATCH_ROOT must be outside the checkout'* ]] ||
-  fail "a .. SWIFT_SCRATCH_ROOT inside the checkout must explain why it is rejected"
+[[ "$dotdot_output" == *'must not use . or .. after the part that exists'* ]] ||
+  fail "a SWIFT_SCRATCH_ROOT with .. after a missing directory must explain why it is rejected"
+upper_root="$(printf '%s' "$physical_root" | tr '[:lower:]' '[:upper:]')"
+if [[ -d "$upper_root" ]]; then
+  if case_output="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT="$upper_root/.cache" 2>&1)"; then
+    fail "a differently cased spelling of the checkout must be rejected on a case-insensitive volume"
+  fi
+  [[ "$case_output" == *'SWIFT_SCRATCH_ROOT must be outside the checkout'* ]] ||
+    fail "a differently cased checkout spelling must explain why it is rejected"
+fi
+glob_dir="$(mktemp -d "$physical_tmp/cliproxymanager-glob.XXXXXX")"
+mkdir "$glob_dir/Makefile-real"
+glob_dry_run="$(cd "$glob_dir" && make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT="$glob_dir/Make?ile-*/cache [old]")" ||
+  { rm -rf "$glob_dir"; fail "a SWIFT_SCRATCH_ROOT with glob characters should be accepted"; }
+rm -rf "$glob_dir"
+printf '%s\n' "$glob_dry_run" | grep -F -- "--scratch-path \"$glob_dir/Make?ile-*/cache [old]/" >/dev/null ||
+  fail "glob characters in SWIFT_SCRATCH_ROOT must stay literal"
 trimmed_dry_run="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT=" $scratch_root ")" ||
   fail "a SWIFT_SCRATCH_ROOT with surrounding spaces should be accepted"
 printf '%s\n' "$trimmed_dry_run" | grep -F -- "--scratch-path \"$scratch_path\"" >/dev/null ||

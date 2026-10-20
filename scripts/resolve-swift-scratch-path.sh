@@ -2,9 +2,11 @@
 # Prints the SwiftPM scratch path for a checkout under SWIFT_SCRATCH_ROOT.
 #
 # Make splits values on whitespace, so the root is validated here, where paths
-# keep their spaces. The root and checkout are resolved physically, so a symlink
-# cannot alias the checkout, and each checkout gets its own subdirectory named
-# after it plus a hash of its physical path.
+# keep their spaces. The existing part of the root is resolved by the kernel
+# (cd -P), so symlinks, .. and case-insensitive spellings mean what the file
+# system says they mean. The checkout is compared by device and inode, not by
+# spelling, and each checkout gets its own subdirectory named after it plus a
+# key derived from that identity.
 set -euo pipefail
 
 fail() {
@@ -28,47 +30,38 @@ esac
 [[ "$root" == /* ]] ||
   fail "SWIFT_SCRATCH_ROOT must be an absolute path or start with ~/, for example \$HOME/Library/Caches/CLIProxyManager"
 
-# Collapse ., .. and repeated slashes so a missing directory followed by ..
-# cannot hide where the path really points.
-normalize_path() {
-  local component
-  local -a parts=()
-  local IFS='/'
-  for component in $1; do
-    case "$component" in
-      '' | .) ;;
-      ..) [[ ${#parts[@]} -eq 0 ]] || unset 'parts[${#parts[@]}-1]' ;;
-      *) parts+=("$component") ;;
-    esac
-  done
-  # bash 3.2 treats an empty array as unset under set -u.
-  if [[ ${#parts[@]} -eq 0 ]]; then
-    printf '/'
-  else
-    printf '/%s' "${parts[*]}"
-  fi
+file_identity() {
+  stat -f '%d:%i' "$1"
 }
 
-# Resolve the longest existing prefix physically; the rest may not exist yet.
-physical_path() {
-  local path="$1"
-  local rest=''
-  local resolved
-  while [[ ! -e "$path" && ! -L "$path" ]]; do
-    rest="/$(basename "$path")$rest"
-    path="$(dirname "$path")"
-  done
-  [[ -d "$path" ]] || fail "SWIFT_SCRATCH_ROOT must be a directory path, but $path is not a directory"
-  resolved="$(cd -P "$path" && pwd)" || fail "Unable to resolve SWIFT_SCRATCH_ROOT component: $path"
-  printf '%s%s' "${resolved%/}" "$rest"
-}
-
-root="$(physical_path "$(normalize_path "$root")")"
-checkout="$(cd -P "$checkout" && pwd)" || fail "Unable to resolve checkout: $2"
-
-case "$root/" in
-  "$checkout/"*) fail 'SWIFT_SCRATCH_ROOT must be outside the checkout so SwiftPM output leaves the synced folder' ;;
+# Split the root into its longest existing prefix and the part still to create.
+prefix="$root"
+rest=''
+while [[ ! -e "$prefix" ]]; do
+  [[ ! -L "$prefix" ]] || fail "SWIFT_SCRATCH_ROOT goes through a broken symbolic link: $prefix"
+  rest="/${prefix##*/}$rest"
+  prefix="${prefix%/*}"
+  [[ -n "$prefix" ]] || prefix='/'
+done
+[[ -d "$prefix" ]] || fail "SWIFT_SCRATCH_ROOT must be a directory path, but $prefix is not a directory"
+case "$rest/" in
+  */../* | */./*) fail "SWIFT_SCRATCH_ROOT must not use . or .. after the part that exists: $rest" ;;
 esac
+resolved_prefix="$(cd -P "$prefix" && pwd)" || fail "Unable to resolve SWIFT_SCRATCH_ROOT component: $prefix"
 
-key="$(printf '%s' "$checkout" | shasum -a 256 | cut -c1-12)"
-printf '%s/%s-%s\n' "${root%/}" "$(basename "$checkout")" "$key"
+checkout="$(cd -P "$checkout" && pwd)" || fail "Unable to resolve checkout: $2"
+checkout_identity="$(file_identity "$checkout")"
+
+# The new directories in $rest do not exist yet, so the root is inside the
+# checkout exactly when its existing prefix is the checkout or below it.
+ancestor="$resolved_prefix"
+while :; do
+  [[ "$(file_identity "$ancestor")" != "$checkout_identity" ]] ||
+    fail 'SWIFT_SCRATCH_ROOT must be outside the checkout so SwiftPM output leaves the synced folder'
+  [[ "$ancestor" != / ]] || break
+  ancestor="$(cd -P "$ancestor/.." && pwd)"
+done
+
+key="$(printf '%s' "$checkout_identity" | shasum -a 256 | cut -c1-12)"
+root_path="${resolved_prefix%/}${rest//\/\///}"
+printf '%s/%s-%s\n' "${root_path%/}" "${checkout##*/}" "$key"
