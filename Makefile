@@ -1,3 +1,4 @@
+MAKEFILE_DIR := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 ifneq ($(filter command line environment,$(origin VERSION)),)
 $(error VERSION is derived from release/version.json; edit the canonical file and run scripts/sync-release-version.sh)
 endif
@@ -37,16 +38,12 @@ SWIFT_BUILD_SYSTEM ?= native
 # directory, for example $HOME/Library/Caches/CLIProxyManager; each checkout
 # then builds in its own subdirectory there instead of .build.
 SWIFT_SCRATCH_ROOT ?=
+shell_quote = '$(subst ','\'',$(1))'
 ifneq ($(strip $(SWIFT_SCRATCH_ROOT)),)
-SWIFT_SCRATCH_KEY := $(shell printf '%s' "$(CURDIR)" | shasum -a 256 | cut -c1-12)
-SWIFT_SCRATCH_ROOT_DIR := $(patsubst ~/%,$(HOME)/%,$(patsubst ~,$(HOME),$(strip $(SWIFT_SCRATCH_ROOT))))
-ifeq ($(filter /%,$(firstword $(SWIFT_SCRATCH_ROOT_DIR))),)
-$(error SWIFT_SCRATCH_ROOT must be an absolute path or start with ~/, for example $$HOME/Library/Caches/CLIProxyManager)
+SWIFT_SCRATCH_PATH := $(shell $(call shell_quote,$(MAKEFILE_DIR)/scripts/resolve-swift-scratch-path.sh) $(call shell_quote,$(SWIFT_SCRATCH_ROOT)) $(call shell_quote,$(CURDIR)))
+ifeq ($(SWIFT_SCRATCH_PATH),)
+$(error Invalid SWIFT_SCRATCH_ROOT; see the error above)
 endif
-ifneq ($(filter $(CURDIR) $(CURDIR)/%,$(SWIFT_SCRATCH_ROOT_DIR)),)
-$(error SWIFT_SCRATCH_ROOT must be outside the checkout so SwiftPM output leaves the synced folder)
-endif
-SWIFT_SCRATCH_PATH := $(SWIFT_SCRATCH_ROOT_DIR)/$(notdir $(CURDIR))-$(SWIFT_SCRATCH_KEY)
 else
 SWIFT_SCRATCH_PATH :=
 endif

@@ -341,7 +341,9 @@ printf '%s\n' "$test_override_dry_run" | grep -Ex 'swift test --build-system swi
 # SWIFT_SCRATCH_ROOT keeps SwiftPM output out of iCloud-synced checkouts, one
 # subdirectory per checkout, for every Swift invocation and the Sparkle lookup.
 # make -C resolves CURDIR physically, so derive the expected key the same way.
-scratch_root="/tmp/cliproxymanager-scratch"
+# Roots are resolved physically too (/tmp is a symlink on macOS).
+physical_tmp="$(cd -P /tmp && pwd)"
+scratch_root="$physical_tmp/cliproxymanager-scratch"
 physical_root="$(cd "$REPO_ROOT" && pwd -P)"
 scratch_key="$(printf '%s' "$physical_root" | shasum -a 256 | cut -c1-12)"
 scratch_path="$scratch_root/$(basename "$physical_root")-$scratch_key"
@@ -351,7 +353,7 @@ printf '%s\n' "$scratch_test_dry_run" | grep -F "swift test --build-system nativ
   fail "test must build in the per-checkout scratch path"
 home_scratch_dry_run="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT='~/cliproxymanager-scratch')" ||
   fail "test target should accept a home-relative scratch root"
-printf '%s\n' "$home_scratch_dry_run" | grep -F -- "--scratch-path \"$HOME/cliproxymanager-scratch/" >/dev/null ||
+printf '%s\n' "$home_scratch_dry_run" | grep -F -- "--scratch-path \"$(cd -P "$HOME" && pwd)/cliproxymanager-scratch/" >/dev/null ||
   fail "a ~/ scratch root must expand to HOME instead of a literal ~ inside the checkout"
 # A second checkout path must get its own scratch directory.
 other_checkout="$(mktemp -d /tmp/cliproxymanager-other-checkout.XXXXXX)"
@@ -371,11 +373,20 @@ if inside_output="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT="$physical_r
 fi
 [[ "$inside_output" == *'SWIFT_SCRATCH_ROOT must be outside the checkout'* ]] ||
   fail "a SWIFT_SCRATCH_ROOT inside the checkout must explain why it is rejected"
+alias_dir="$(mktemp -d "$physical_tmp/cliproxymanager-alias.XXXXXX")"
+ln -s "$physical_root" "$alias_dir/checkout"
+if alias_output="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT="$alias_dir/checkout/.cache" 2>&1)"; then
+  rm -rf "$alias_dir"
+  fail "a SWIFT_SCRATCH_ROOT that reaches the checkout through a symlink must be rejected"
+fi
+rm -rf "$alias_dir"
+[[ "$alias_output" == *'SWIFT_SCRATCH_ROOT must be outside the checkout'* ]] ||
+  fail "a symlinked SWIFT_SCRATCH_ROOT inside the checkout must explain why it is rejected"
 lone_tilde_dry_run="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT='~')" ||
   fail "SWIFT_SCRATCH_ROOT=~ should expand to HOME"
-printf '%s\n' "$lone_tilde_dry_run" | grep -F -- "--scratch-path \"$HOME/$(basename "$physical_root")-$scratch_key\"" >/dev/null ||
+printf '%s\n' "$lone_tilde_dry_run" | grep -F -- "--scratch-path \"$(cd -P "$HOME" && pwd)/$(basename "$physical_root")-$scratch_key\"" >/dev/null ||
   fail "SWIFT_SCRATCH_ROOT=~ must build under HOME"
-spaced_root="/tmp/cliproxymanager scratch"
+spaced_root="$physical_tmp/cliproxymanager  scratch ~"
 spaced_dry_run="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT="$spaced_root")" ||
   fail "an absolute SWIFT_SCRATCH_ROOT with spaces must be accepted"
 printf '%s\n' "$spaced_dry_run" | grep -F -- "--scratch-path \"$spaced_root/$(basename "$physical_root")-$scratch_key\"" >/dev/null ||
