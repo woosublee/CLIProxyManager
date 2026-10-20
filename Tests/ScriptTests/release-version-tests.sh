@@ -327,6 +327,14 @@ ci_compile_line="$(grep -n -m 1 -F 'swift build -c debug --build-system native -
 ! printf '%s\n' "$ci_build_dry_run" | grep -E '[[:space:]](codesign|hdiutil)[[:space:]]' >/dev/null ||
   fail "ci-build must not sign or create a DMG"
 
+test_dry_run="$(make -n -C "$REPO_ROOT" test)" || fail "test target should support a dry run"
+printf '%s\n' "$test_dry_run" | grep -Ex 'swift test --build-system native[[:space:]]*' >/dev/null ||
+  fail "test must run Swift tests with the default native build system"
+test_override_dry_run="$(make -n -C "$REPO_ROOT" test SWIFT_BUILD_SYSTEM=swiftbuild)" ||
+  fail "test target should accept a build system override"
+printf '%s\n' "$test_override_dry_run" | grep -Ex 'swift test --build-system swiftbuild[[:space:]]*' >/dev/null ||
+  fail "test must use the same SWIFT_BUILD_SYSTEM as the bundle build"
+
 write_appcast() {
   local path="$1" version="$2" build="$3" enclosure_version="$4" enclosure_build="$5" tag="$6" dmg="$7"
   cat > "$path" <<XML

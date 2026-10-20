@@ -198,6 +198,18 @@ for helper in cpm cliproxy-manager; do
     --app "$app" --version 1.2.3 --build 42 --channel official
 done
 
+for nested in Contents _CodeSignature Info.plist; do
+  app="$sandbox/nested-resource-bundle-$nested.app"
+  create_app "$app" 1.2.3 42 official
+  if [[ "$nested" == 'Info.plist' ]]; then
+    : > "$app/Contents/Resources/$nested"
+  else
+    mkdir -p "$app/Contents/Resources/$nested"
+  fi
+  expect_failure "nested-resource-bundle-$nested" 'App structure validation failed: nested resource bundle' \
+    --app "$app" --version 1.2.3 --build 42 --channel official
+done
+
 for resource in \
   'cliproxyapi/cliproxyapi.manifest.json' \
   'Licenses/CLIProxyAPI-LICENSE.txt' \

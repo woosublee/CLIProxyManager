@@ -13,7 +13,7 @@ Verify through the built `.app` or generated shell functions, not by calling int
 
 | Surface | Use for | Command pattern |
 |---|---|---|
-| Swift tests | Regression coverage only | `swift test --build-system native` |
+| Swift tests | Regression coverage only | `make test` |
 | App bundle | Packaging/helper presence | `make bundle CONFIGURATION=release BUILD_DIR="$CLAUDE_JOB_DIR/tmp/<name>"` |
 | Existing installed app | User-facing shell function behavior | `zsh -lc 'source ~/.cliproxy-manager/functions.zsh; <command> --version'` |
 

@@ -57,7 +57,7 @@ final class CIWorkflowTests: XCTestCase {
                   - uses: actions/checkout@v4
                     with:
                       persist-credentials: false
-                  - run: swift test --build-system native
+                  - run: make test
             """,
             """
               script-tests:
@@ -92,8 +92,8 @@ final class CIWorkflowTests: XCTestCase {
         XCTAssertEqual(occurrences(of: "runs-on: macos-14", in: workflow), 4)
         XCTAssertEqual(occurrences(of: "uses: actions/checkout@v4", in: workflow), 4)
         XCTAssertEqual(occurrences(of: "persist-credentials: false", in: workflow), 4)
-        XCTAssertEqual(occurrences(of: "run: swift test", in: workflow), 1)
-        XCTAssertEqual(occurrences(of: "swift test", in: workflow), 1)
+        XCTAssertEqual(occurrences(of: "run: make test", in: workflow), 1)
+        XCTAssertEqual(occurrences(of: "run: swift test", in: workflow), 0, "CI must run Swift tests through make test so the build system stays in one place.")
         XCTAssertFalse(workflow.contains("needs:"), "CI jobs must run independently.")
         XCTAssertFalse(workflow.contains("\n    if:"), "CI jobs must not be conditionally skipped.")
         XCTAssertFalse(workflow.contains("\n  if:"), "CI jobs must not be conditionally skipped.")

@@ -25,11 +25,12 @@ BUILD_NUMBER := $(shell $(RELEASE_RESOLVE) build 2>/dev/null)
 RELEASE_CHANNEL := $(shell $(RELEASE_RESOLVE) channel 2>/dev/null)
 BUILD_DIR ?= build
 CONFIGURATION ?= release
-# Swift 6.4 defaults to the swiftbuild engine, which nests resource bundle
-# contents under Contents/Resources and signs test bundles; keep the native
-# engine until the bundle layout is migrated.
+# Swift 6.4 defaults to the swiftbuild engine. The bundle step accepts either
+# resource bundle layout, but swift test still fails to sign test bundles under
+# swiftbuild (issue #185), so keep the native engine as the default for now.
 SWIFT_BUILD_SYSTEM ?= native
 SWIFT_BUILD_FLAGS ?=
+SWIFT_TEST_FLAGS ?=
 DEVELOPER_ID_IDENTITY := Developer ID Application: Woosub Lee (2L6ZW98RCP)
 RELEASE_CODESIGN_IDENTITY ?= $(CODESIGN_IDENTITY)
 CODESIGN_IDENTITY ?= $(DEVELOPER_ID_IDENTITY)
@@ -74,9 +75,12 @@ endif
 INFO_PLIST := Info.plist
 ENTITLEMENTS := CLIProxyManager.entitlements
 
-.PHONY: all ci-build development-bundle verify-bundle-structure verify-app-structure resolve-bundled-proxy prune-bundled-proxy-cache release-metadata-check print-app-version print-build-number print-build-tag swift-build bundle sign release-sign verify install-helper install run install-and-run notarize-app dmg verify-dmg sign-dmg notarize-dmg clean distclean
+.PHONY: all test ci-build development-bundle verify-bundle-structure verify-app-structure resolve-bundled-proxy prune-bundled-proxy-cache release-metadata-check print-app-version print-build-number print-build-tag swift-build bundle sign release-sign verify install-helper install run install-and-run notarize-app dmg verify-dmg sign-dmg notarize-dmg clean distclean
 
 all: sign
+
+test:
+	swift test --build-system $(SWIFT_BUILD_SYSTEM) $(SWIFT_TEST_FLAGS)
 
 ci-build:
 	$(MAKE) swift-build CONFIGURATION=debug SWIFT_BUILD_FLAGS="-Xswiftc -warnings-as-errors"
@@ -141,11 +145,15 @@ bundle: swift-build $(INFO_PLIST) $(ENTITLEMENTS) $(ICON_FILE)
 	@if [ "$(RELEASE_CHANNEL)" = "development" ]; then \
 		plutil -insert CLIProxyManagerReleaseChannel -string development "$(CONTENTS_DIR)/Info.plist"; \
 	fi
-	@for bundle in $(SWIFT_BUILD_DIR)/*CLIProxyManagerApp*.bundle; do \
-		if [ -d "$$bundle" ]; then \
-			ditto --norsrc --noextattr "$$bundle" "$(RESOURCES_DIR)"; \
+	@copied=0; \
+	for bundle in $(SWIFT_BUILD_DIR)/*CLIProxyManagerApp*.bundle; do \
+		if [ -d "$$bundle/Contents/Resources" ]; then \
+			ditto --norsrc --noextattr "$$bundle/Contents/Resources" "$(RESOURCES_DIR)" && copied=1; \
+		elif [ -d "$$bundle" ]; then \
+			ditto --norsrc --noextattr "$$bundle" "$(RESOURCES_DIR)" && copied=1; \
 		fi; \
-	done
+	done; \
+	[ "$$copied" -eq 1 ] || { echo "Missing CLIProxyManagerApp resource bundle in $(SWIFT_BUILD_DIR)"; exit 1; }
 	mkdir -p "$(BUNDLED_PROXY_RESOURCE_DIR)"
 	cp "$(CLIPROXYAPI_MANIFEST)" "$(BUNDLED_PROXY_MANIFEST)"
 	$(CLIPROXYAPI_RESOLVER) --manifest "$(CLIPROXYAPI_MANIFEST)" --cache-root "$(CLIPROXYAPI_CACHE_ROOT)" --output "$(BUNDLED_PROXY_BINARY)" $(CLIPROXYAPI_RESOLVE_FLAGS)

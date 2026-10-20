@@ -195,7 +195,9 @@ final class ReleaseWorkflowTests: XCTestCase {
         XCTAssertFalse(workflow.contains("bash Tests/ScriptTests/release-version-tests.sh"))
         XCTAssertFalse(workflow.contains("bash Tests/ScriptTests/release-local-tests.sh"))
         XCTAssertFalse(workflow.contains("bash Tests/ScriptTests/generate-sparkle-appcast-tests.sh"))
-        XCTAssertTrue(workflow.contains("swift test --build-system native"))
+        let commandLines = workflow.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        XCTAssertTrue(commandLines.contains("make test"))
+        XCTAssertFalse(commandLines.contains { $0.hasPrefix("swift test") }, "The release workflow must run Swift tests through make test.")
         XCTAssertTrue(workflow.contains("uses: actions/cache@v4"))
         XCTAssertTrue(workflow.contains("path: .build/cliproxyapi"))
         XCTAssertTrue(workflow.contains("hashFiles('Sources/CLIProxyManagerApp/Resources/cliproxyapi/cliproxyapi.manifest.json')"))
