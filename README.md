@@ -190,7 +190,7 @@ Fallback artifact의 `release-provenance.json`에는 `local-fallback` trust가 �
 | Check | PR 전 로컬 실행 명령 |
 | --- | --- |
 | `Build` | `make ci-build` |
-| `Test` | `swift test --build-system native` |
+| `Test` | `make test` |
 | `Script tests` | `bash scripts/run-script-tests.sh` |
 | `Package structure` | `make verify-bundle-structure` |
 

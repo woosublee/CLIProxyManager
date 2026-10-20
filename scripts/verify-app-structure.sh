@@ -124,6 +124,13 @@ esac
 [[ ! -e "$resources/cpm" && ! -L "$resources/cpm" &&
    ! -e "$resources/cliproxy-manager" && ! -L "$resources/cliproxy-manager" ]] ||
   structure_failure 'unexpected resource helper'
+[[ ! -e "$resources/Contents" && ! -L "$resources/Contents" &&
+   ! -e "$resources/_CodeSignature" && ! -L "$resources/_CodeSignature" &&
+   ! -e "$resources/Info.plist" && ! -L "$resources/Info.plist" ]] ||
+  structure_failure 'nested resource bundle'
+nested_bundles=("$resources"/*.bundle)
+[[ ! -e "${nested_bundles[0]}" && ! -L "${nested_bundles[0]}" ]] ||
+  structure_failure 'nested resource bundle'
 
 proxy_binary="$resources/cliproxyapi/cliproxyapi"
 proxy_manifest="$resources/cliproxyapi/cliproxyapi.manifest.json"

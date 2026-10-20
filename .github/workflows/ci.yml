@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - run: swift test --build-system native
+      - run: make test
 
   script-tests:
     name: Script tests
