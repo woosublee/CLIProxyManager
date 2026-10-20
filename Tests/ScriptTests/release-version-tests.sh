@@ -373,6 +373,20 @@ if inside_output="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT="$physical_r
 fi
 [[ "$inside_output" == *'SWIFT_SCRATCH_ROOT must be outside the checkout'* ]] ||
   fail "a SWIFT_SCRATCH_ROOT inside the checkout must explain why it is rejected"
+if dotdot_output="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT="$(dirname "$physical_root")/missing/../$(basename "$physical_root")/.cache" 2>&1)"; then
+  fail "a SWIFT_SCRATCH_ROOT that reaches the checkout through .. must be rejected"
+fi
+[[ "$dotdot_output" == *'SWIFT_SCRATCH_ROOT must be outside the checkout'* ]] ||
+  fail "a .. SWIFT_SCRATCH_ROOT inside the checkout must explain why it is rejected"
+trimmed_dry_run="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT=" $scratch_root ")" ||
+  fail "a SWIFT_SCRATCH_ROOT with surrounding spaces should be accepted"
+printf '%s\n' "$trimmed_dry_run" | grep -F -- "--scratch-path \"$scratch_path\"" >/dev/null ||
+  fail "surrounding spaces must not become part of the scratch path"
+if file_output="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT="$physical_root/Makefile/cache" 2>&1)"; then
+  fail "a SWIFT_SCRATCH_ROOT below a regular file must be rejected"
+fi
+[[ "$file_output" == *'must be a directory path'* ]] ||
+  fail "a SWIFT_SCRATCH_ROOT below a regular file must explain why it is rejected"
 alias_dir="$(mktemp -d "$physical_tmp/cliproxymanager-alias.XXXXXX")"
 ln -s "$physical_root" "$alias_dir/checkout"
 if alias_output="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT="$alias_dir/checkout/.cache" 2>&1)"; then

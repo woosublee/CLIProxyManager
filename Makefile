@@ -40,7 +40,7 @@ SWIFT_BUILD_SYSTEM ?= native
 SWIFT_SCRATCH_ROOT ?=
 shell_quote = '$(subst ','\'',$(1))'
 ifneq ($(strip $(SWIFT_SCRATCH_ROOT)),)
-SWIFT_SCRATCH_PATH := $(shell $(call shell_quote,$(MAKEFILE_DIR)/scripts/resolve-swift-scratch-path.sh) $(call shell_quote,$(SWIFT_SCRATCH_ROOT)) $(call shell_quote,$(CURDIR)))
+SWIFT_SCRATCH_PATH := $(shell bash $(call shell_quote,$(MAKEFILE_DIR)/scripts/resolve-swift-scratch-path.sh) $(call shell_quote,$(SWIFT_SCRATCH_ROOT)) $(call shell_quote,$(CURDIR)))
 ifeq ($(SWIFT_SCRATCH_PATH),)
 $(error Invalid SWIFT_SCRATCH_ROOT; see the error above)
 endif
