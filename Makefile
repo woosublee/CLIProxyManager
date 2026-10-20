@@ -39,9 +39,12 @@ SWIFT_BUILD_SYSTEM ?= native
 SWIFT_SCRATCH_ROOT ?=
 ifneq ($(strip $(SWIFT_SCRATCH_ROOT)),)
 SWIFT_SCRATCH_KEY := $(shell printf '%s' "$(CURDIR)" | shasum -a 256 | cut -c1-12)
-SWIFT_SCRATCH_ROOT_DIR := $(patsubst ~/%,$(HOME)/%,$(strip $(SWIFT_SCRATCH_ROOT)))
-ifneq ($(patsubst /%,/,$(SWIFT_SCRATCH_ROOT_DIR)),/)
-$(error SWIFT_SCRATCH_ROOT must be an absolute path outside the checkout, for example $$HOME/Library/Caches/CLIProxyManager)
+SWIFT_SCRATCH_ROOT_DIR := $(patsubst ~/%,$(HOME)/%,$(patsubst ~,$(HOME),$(strip $(SWIFT_SCRATCH_ROOT))))
+ifeq ($(filter /%,$(firstword $(SWIFT_SCRATCH_ROOT_DIR))),)
+$(error SWIFT_SCRATCH_ROOT must be an absolute path or start with ~/, for example $$HOME/Library/Caches/CLIProxyManager)
+endif
+ifneq ($(filter $(CURDIR) $(CURDIR)/%,$(SWIFT_SCRATCH_ROOT_DIR)),)
+$(error SWIFT_SCRATCH_ROOT must be outside the checkout so SwiftPM output leaves the synced folder)
 endif
 SWIFT_SCRATCH_PATH := $(SWIFT_SCRATCH_ROOT_DIR)/$(notdir $(CURDIR))-$(SWIFT_SCRATCH_KEY)
 else

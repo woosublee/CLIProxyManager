@@ -355,19 +355,31 @@ printf '%s\n' "$home_scratch_dry_run" | grep -F -- "--scratch-path \"$HOME/clipr
   fail "a ~/ scratch root must expand to HOME instead of a literal ~ inside the checkout"
 # A second checkout path must get its own scratch directory.
 other_checkout="$(mktemp -d /tmp/cliproxymanager-other-checkout.XXXXXX)"
-other_scratch_dry_run="$(make -n -C "$other_checkout" -f "$REPO_ROOT/Makefile" test SWIFT_SCRATCH_ROOT="$scratch_root" 2>/dev/null)" ||
-  { rm -rf "$other_checkout"; fail "test target should dry-run from another checkout path"; }
+other_scratch_dry_run="$(make -n -C "$other_checkout" -f "$REPO_ROOT/Makefile" test SWIFT_SCRATCH_ROOT="$scratch_root" 2>&1)" ||
+  { rm -rf "$other_checkout"; fail "test target should dry-run from another checkout path: $other_scratch_dry_run"; }
 rm -rf "$other_checkout"
 other_scratch_path="$(printf '%s\n' "$other_scratch_dry_run" | grep -oE -- '--scratch-path "[^"]+"' | head -1 || true)"
 [[ -n "$other_scratch_path" && "$other_scratch_path" != "--scratch-path \"$scratch_path\"" ]] ||
   fail "different checkouts must get different scratch paths"
-for invalid_root in '~' 'relative-cache'; do
-  if invalid_output="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT="$invalid_root" 2>&1)"; then
-    fail "SWIFT_SCRATCH_ROOT=$invalid_root must be rejected"
-  fi
-  [[ "$invalid_output" == *'SWIFT_SCRATCH_ROOT must be an absolute path'* ]] ||
-    fail "SWIFT_SCRATCH_ROOT=$invalid_root must explain the absolute path requirement"
-done
+if invalid_output="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT='relative-cache' 2>&1)"; then
+  fail "a relative SWIFT_SCRATCH_ROOT must be rejected"
+fi
+[[ "$invalid_output" == *'SWIFT_SCRATCH_ROOT must be an absolute path'* ]] ||
+  fail "a relative SWIFT_SCRATCH_ROOT must explain the absolute path requirement"
+if inside_output="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT="$physical_root/.cache" 2>&1)"; then
+  fail "a SWIFT_SCRATCH_ROOT inside the checkout must be rejected"
+fi
+[[ "$inside_output" == *'SWIFT_SCRATCH_ROOT must be outside the checkout'* ]] ||
+  fail "a SWIFT_SCRATCH_ROOT inside the checkout must explain why it is rejected"
+lone_tilde_dry_run="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT='~')" ||
+  fail "SWIFT_SCRATCH_ROOT=~ should expand to HOME"
+printf '%s\n' "$lone_tilde_dry_run" | grep -F -- "--scratch-path \"$HOME/$(basename "$physical_root")-$scratch_key\"" >/dev/null ||
+  fail "SWIFT_SCRATCH_ROOT=~ must build under HOME"
+spaced_root="/tmp/cliproxymanager scratch"
+spaced_dry_run="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT="$spaced_root")" ||
+  fail "an absolute SWIFT_SCRATCH_ROOT with spaces must be accepted"
+printf '%s\n' "$spaced_dry_run" | grep -F -- "--scratch-path \"$spaced_root/$(basename "$physical_root")-$scratch_key\"" >/dev/null ||
+  fail "an absolute SWIFT_SCRATCH_ROOT with spaces must be passed through quoted"
 scratch_bundle_dry_run="$(make -n -C "$REPO_ROOT" swift-build CONFIGURATION=debug SWIFT_SCRATCH_ROOT="$scratch_root")" ||
   fail "swift-build should accept a scratch root"
 for product in CLIProxyManager cpm cliproxy-manager; do
