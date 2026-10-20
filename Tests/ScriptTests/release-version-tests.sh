@@ -7,6 +7,7 @@ SOURCE_RESOLVER="$REPO_ROOT/scripts/resolve-release-version.sh"
 SOURCE_LIB="$REPO_ROOT/scripts/release-version-lib.sh"
 # Dry-run expectations describe the Makefile defaults, not the caller's overrides.
 unset SWIFT_BUILD_SYSTEM SWIFT_SCRATCH_ROOT SWIFT_SCRATCH_PATH SWIFT_BUILD_FLAGS SWIFT_TEST_FLAGS
+unset MAKEFLAGS MFLAGS MAKEOVERRIDES
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
@@ -348,8 +349,18 @@ scratch_test_dry_run="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT="$scratc
   fail "test target should accept a scratch root"
 printf '%s\n' "$scratch_test_dry_run" | grep -F "swift test --build-system native --scratch-path \"$scratch_path\"" >/dev/null ||
   fail "test must build in the per-checkout scratch path"
-other_checkout_key="$(printf '%s' "${physical_root}_other" | shasum -a 256 | cut -c1-12)"
-[[ "$other_checkout_key" != "$scratch_key" ]] || fail "different checkouts must get different scratch keys"
+home_scratch_dry_run="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT='~/cliproxymanager-scratch')" ||
+  fail "test target should accept a home-relative scratch root"
+printf '%s\n' "$home_scratch_dry_run" | grep -F -- "--scratch-path \"$HOME/cliproxymanager-scratch/" >/dev/null ||
+  fail "a ~/ scratch root must expand to HOME instead of a literal ~ inside the checkout"
+# A second checkout path must get its own scratch directory.
+other_checkout="$(mktemp -d /tmp/cliproxymanager-other-checkout.XXXXXX)"
+other_scratch_dry_run="$(make -n -C "$other_checkout" -f "$REPO_ROOT/Makefile" test SWIFT_SCRATCH_ROOT="$scratch_root" 2>/dev/null)" ||
+  { rm -rf "$other_checkout"; fail "test target should dry-run from another checkout path"; }
+rm -rf "$other_checkout"
+other_scratch_path="$(printf '%s\n' "$other_scratch_dry_run" | grep -oE -- '--scratch-path "[^"]+"' | head -1)"
+[[ -n "$other_scratch_path" && "$other_scratch_path" != "--scratch-path \"$scratch_path\"" ]] ||
+  fail "different checkouts must get different scratch paths"
 scratch_bundle_dry_run="$(make -n -C "$REPO_ROOT" swift-build CONFIGURATION=debug SWIFT_SCRATCH_ROOT="$scratch_root")" ||
   fail "swift-build should accept a scratch root"
 for product in CLIProxyManager cpm cliproxy-manager; do

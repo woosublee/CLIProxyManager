@@ -26,21 +26,24 @@ RELEASE_CHANNEL := $(shell $(RELEASE_RESOLVE) channel 2>/dev/null)
 BUILD_DIR ?= build
 CONFIGURATION ?= release
 # Swift 6.4 defaults to the swiftbuild engine and deprecates native, and the
-# bundle step accepts either engine's resource bundle layout. The CI and release
-# runners still ship Swift 6.3, whose swiftbuild test bundles fail to load
-# Sparkle.framework, so native stays the default until they move to Swift 6.4.
+# bundle step accepts either engine's resource bundle layout. On the Xcode 26.6
+# toolchain of the macos-26 CI and release runners, swiftbuild test bundles fail
+# to load Sparkle.framework, so native stays the default until the runners move
+# to a Swift 6.4 toolchain.
 SWIFT_BUILD_SYSTEM ?= native
 # swiftbuild signs bundles it produces, and codesign rejects the Finder info that
 # iCloud Drive's File Provider attaches to directories it syncs. When the checkout
 # lives in a synced folder such as ~/Documents, set SWIFT_SCRATCH_ROOT to a local
-# directory, for example ~/Library/Caches/CLIProxyManager; each checkout then
-# builds in its own subdirectory there instead of .build.
+# directory, for example $HOME/Library/Caches/CLIProxyManager; each checkout
+# then builds in its own subdirectory there instead of .build.
 SWIFT_SCRATCH_ROOT ?=
-SWIFT_SCRATCH_PATH = $(if $(SWIFT_SCRATCH_ROOT),$(SWIFT_SCRATCH_ROOT)/$(notdir $(CURDIR))-$(SWIFT_SCRATCH_KEY))
-SWIFT_SCRATCH_KEY = $(shell printf '%s' "$(CURDIR)" | shasum -a 256 | cut -c1-12)
-empty :=
-space := $(empty) $(empty)
-SWIFT_ENGINE_FLAGS = --build-system $(SWIFT_BUILD_SYSTEM)$(if $(SWIFT_SCRATCH_PATH),$(space)--scratch-path "$(SWIFT_SCRATCH_PATH)")
+ifneq ($(strip $(SWIFT_SCRATCH_ROOT)),)
+SWIFT_SCRATCH_KEY := $(shell printf '%s' "$(CURDIR)" | shasum -a 256 | cut -c1-12)
+SWIFT_SCRATCH_PATH := $(patsubst ~/%,$(HOME)/%,$(strip $(SWIFT_SCRATCH_ROOT)))/$(notdir $(CURDIR))-$(SWIFT_SCRATCH_KEY)
+else
+SWIFT_SCRATCH_PATH :=
+endif
+SWIFT_ENGINE_FLAGS = --build-system $(SWIFT_BUILD_SYSTEM)$(if $(SWIFT_SCRATCH_PATH), --scratch-path "$(SWIFT_SCRATCH_PATH)")
 SWIFT_ARTIFACTS_DIR = $(or $(SWIFT_SCRATCH_PATH),.build)/artifacts
 SWIFT_BUILD_FLAGS ?=
 SWIFT_TEST_FLAGS ?=
@@ -137,7 +140,7 @@ bundle: swift-build $(INFO_PLIST) $(ENTITLEMENTS) $(ICON_FILE)
 	test -f "$(ICON_FILE)" || { echo "Missing icon: $(ICON_FILE)"; exit 1; }
 	rm -rf "$(APP_BUNDLE)"
 	mkdir -p "$(MACOS_DIR)" "$(RESOURCES_DIR)" "$(HELPERS_DIR)" "$(FRAMEWORKS_DIR)"
-	test -d "$(SPARKLE_FRAMEWORK)" || { echo "Missing Sparkle.framework artifact. Run swift package resolve first."; exit 1; }
+	test -d "$(SPARKLE_FRAMEWORK)" || { echo "Missing Sparkle.framework artifact in $(SWIFT_ARTIFACTS_DIR). Run swift package resolve $(if $(SWIFT_SCRATCH_PATH),--scratch-path \"$(SWIFT_SCRATCH_PATH)\" )first."; exit 1; }
 	ditto --norsrc --noextattr "$(APP_EXECUTABLE)" "$(MACOS_DIR)/$(APP_NAME)"
 	if ! otool -l "$(MACOS_DIR)/$(APP_NAME)" | grep -F "@executable_path/../Frameworks" >/dev/null; then \
 		install_name_tool -add_rpath "@executable_path/../Frameworks" "$(MACOS_DIR)/$(APP_NAME)"; \

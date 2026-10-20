@@ -144,7 +144,7 @@ cpm update apply all --yes
 
 ### Swift 빌드 엔진과 산출물 위치
 
-Makefile은 기본으로 `native` 엔진을 사용합니다. Swift 6.4부터 SwiftPM 기본 엔진은 `swiftbuild`지만, CI·release runner의 Swift 6.3에서는 swiftbuild test bundle이 Sparkle.framework를 불러오지 못해 runner가 Swift 6.4로 올라갈 때까지 전환을 보류합니다. `SWIFT_BUILD_SYSTEM=swiftbuild`로 직접 쓸 수 있습니다.
+Makefile은 기본으로 `native` 엔진을 사용합니다. Swift 6.4부터 SwiftPM 기본 엔진은 `swiftbuild`지만, macos-26 CI·release runner의 Xcode 26.6 toolchain에서는 swiftbuild test bundle이 Sparkle.framework를 불러오지 못해 runner가 Swift 6.4 toolchain으로 올라갈 때까지 전환을 보류합니다. `SWIFT_BUILD_SYSTEM=swiftbuild`로 직접 쓸 수 있습니다.
 
 swiftbuild는 산출물 bundle에 서명하는데, iCloud Drive가 동기화 폴더의 디렉터리에 붙이는 Finder 정보 때문에 `~/Documents` 같은 동기화 폴더 안의 checkout에서는 서명이 실패합니다. 저장소를 옮기지 않고 SwiftPM 산출물만 로컬 폴더에 두려면 셸 설정에 다음을 추가합니다.
 

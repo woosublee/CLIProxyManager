@@ -144,7 +144,7 @@ cpm update apply all --yes
 
 ### Swift build engine and output location
 
-The Makefile uses the `native` engine by default. SwiftPM defaults to `swiftbuild` from Swift 6.4, but on the Swift 6.3 toolchain of the CI and release runners swiftbuild test bundles cannot load Sparkle.framework, so the switch waits until the runners move to Swift 6.4. Use `SWIFT_BUILD_SYSTEM=swiftbuild` to opt in.
+The Makefile uses the `native` engine by default. SwiftPM defaults to `swiftbuild` from Swift 6.4, but on the Xcode 26.6 toolchain of the macos-26 CI and release runners swiftbuild test bundles cannot load Sparkle.framework, so the switch waits until the runners move to a Swift 6.4 toolchain. Use `SWIFT_BUILD_SYSTEM=swiftbuild` to opt in.
 
 swiftbuild signs the bundles it produces, and signing fails in a checkout inside a synced folder such as `~/Documents` because iCloud Drive attaches Finder info to the directories it syncs. To keep the checkout where it is and move only SwiftPM output to a local folder, add this to your shell profile:
 
