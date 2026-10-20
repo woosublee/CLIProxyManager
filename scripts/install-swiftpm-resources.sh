@@ -29,6 +29,8 @@ bundle="${bundles[0]}"
 [[ -d "$bundle" ]] || fail "SwiftPM resource bundle is not a directory: $bundle"
 
 # swiftbuild writes a macOS bundle with Contents/Info.plist; a flat bundle has none.
+# App resources must not use a top-level Contents folder: verify-app-structure.sh
+# rejects Resources/Contents as a nested bundle.
 if [[ -f "$bundle/Contents/Info.plist" ]]; then
   [[ -d "$bundle/Contents/Resources" ]] ||
     fail "SwiftPM resource bundle has Contents/Info.plist without Contents/Resources: $bundle"

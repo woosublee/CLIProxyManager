@@ -74,15 +74,6 @@ bin="$sandbox/duplicate/bin"
 mkdir -p "$bin/$BUNDLE_NAME" "$bin/Other_CLIProxyManagerApp.bundle" "$sandbox/duplicate/Resources"
 expect_failure duplicate-bundle 'Expected one CLIProxyManagerApp resource bundle' "$bin" "$sandbox/duplicate/Resources"
 
-# A flat bundle may hold a resource folder named Contents; only Info.plist marks swiftbuild.
-bin="$sandbox/flat-contents/bin"
-resources="$sandbox/flat-contents/Resources"
-mkdir -p "$bin/$BUNDLE_NAME/Contents/Resources" "$resources"
-write_resources "$bin/$BUNDLE_NAME"
-"$SOURCE_SCRIPT" "$bin" "$resources" || fail "flat bundle with a Contents folder should install"
-[[ -f "$resources/Licenses/CLIProxyAPI-LICENSE.txt" && -d "$resources/Contents/Resources" ]] ||
-  fail "flat-contents: every flat resource must be copied"
-
 bin="$sandbox/contents-only/bin"
 mkdir -p "$bin/$BUNDLE_NAME/Contents" "$sandbox/contents-only/Resources"
 printf 'plist' > "$bin/$BUNDLE_NAME/Contents/Info.plist"
