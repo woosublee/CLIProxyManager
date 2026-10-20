@@ -59,9 +59,13 @@ while :; do
   [[ "$(file_identity "$ancestor")" != "$checkout_identity" ]] ||
     fail 'SWIFT_SCRATCH_ROOT must be outside the checkout so SwiftPM output leaves the synced folder'
   [[ "$ancestor" != / ]] || break
-  ancestor="$(cd -P "$ancestor/.." && pwd)"
+  ancestor="$(cd -P "$ancestor/.." && pwd)" ||
+    fail "Unable to check whether SWIFT_SCRATCH_ROOT is inside the checkout: cannot enter the parent of $ancestor"
 done
 
+while [[ "$rest" == *//* ]]; do
+  rest="${rest//\/\///}"
+done
 key="$(printf '%s' "$checkout_identity" | shasum -a 256 | cut -c1-12)"
-root_path="${resolved_prefix%/}${rest//\/\///}"
+root_path="${resolved_prefix%/}$rest"
 printf '%s/%s-%s\n' "${root_path%/}" "${checkout##*/}" "$key"
