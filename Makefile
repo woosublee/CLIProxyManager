@@ -39,7 +39,11 @@ SWIFT_BUILD_SYSTEM ?= native
 SWIFT_SCRATCH_ROOT ?=
 ifneq ($(strip $(SWIFT_SCRATCH_ROOT)),)
 SWIFT_SCRATCH_KEY := $(shell printf '%s' "$(CURDIR)" | shasum -a 256 | cut -c1-12)
-SWIFT_SCRATCH_PATH := $(patsubst ~/%,$(HOME)/%,$(strip $(SWIFT_SCRATCH_ROOT)))/$(notdir $(CURDIR))-$(SWIFT_SCRATCH_KEY)
+SWIFT_SCRATCH_ROOT_DIR := $(patsubst ~/%,$(HOME)/%,$(strip $(SWIFT_SCRATCH_ROOT)))
+ifneq ($(patsubst /%,/,$(SWIFT_SCRATCH_ROOT_DIR)),/)
+$(error SWIFT_SCRATCH_ROOT must be an absolute path outside the checkout, for example $$HOME/Library/Caches/CLIProxyManager)
+endif
+SWIFT_SCRATCH_PATH := $(SWIFT_SCRATCH_ROOT_DIR)/$(notdir $(CURDIR))-$(SWIFT_SCRATCH_KEY)
 else
 SWIFT_SCRATCH_PATH :=
 endif
@@ -76,7 +80,7 @@ BUNDLED_CPM := $(HELPERS_DIR)/cpm
 BUNDLED_HELPER := $(HELPERS_DIR)/cliproxy-manager
 BUNDLED_ICON := $(RESOURCES_DIR)/$(ICON_FILE)
 BUNDLED_SPARKLE_FRAMEWORK := $(FRAMEWORKS_DIR)/Sparkle.framework
-SPARKLE_FRAMEWORK = $(shell find "$(SWIFT_ARTIFACTS_DIR)" -path '*/Sparkle.framework' -type d -print -quit)
+SPARKLE_FRAMEWORK = $(shell find "$(SWIFT_ARTIFACTS_DIR)" -path '*/Sparkle.framework' -type d -print -quit 2>/dev/null)
 CLIPROXYAPI_MANIFEST := Sources/CLIProxyManagerApp/Resources/cliproxyapi/cliproxyapi.manifest.json
 CLIPROXYAPI_RESOLVER := scripts/resolve-bundled-cliproxyapi.sh
 CLIPROXYAPI_ARTIFACT_LIB := scripts/cliproxyapi-artifact-lib.sh

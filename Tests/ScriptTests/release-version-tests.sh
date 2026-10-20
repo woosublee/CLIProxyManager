@@ -358,9 +358,16 @@ other_checkout="$(mktemp -d /tmp/cliproxymanager-other-checkout.XXXXXX)"
 other_scratch_dry_run="$(make -n -C "$other_checkout" -f "$REPO_ROOT/Makefile" test SWIFT_SCRATCH_ROOT="$scratch_root" 2>/dev/null)" ||
   { rm -rf "$other_checkout"; fail "test target should dry-run from another checkout path"; }
 rm -rf "$other_checkout"
-other_scratch_path="$(printf '%s\n' "$other_scratch_dry_run" | grep -oE -- '--scratch-path "[^"]+"' | head -1)"
+other_scratch_path="$(printf '%s\n' "$other_scratch_dry_run" | grep -oE -- '--scratch-path "[^"]+"' | head -1 || true)"
 [[ -n "$other_scratch_path" && "$other_scratch_path" != "--scratch-path \"$scratch_path\"" ]] ||
   fail "different checkouts must get different scratch paths"
+for invalid_root in '~' 'relative-cache'; do
+  if invalid_output="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT="$invalid_root" 2>&1)"; then
+    fail "SWIFT_SCRATCH_ROOT=$invalid_root must be rejected"
+  fi
+  [[ "$invalid_output" == *'SWIFT_SCRATCH_ROOT must be an absolute path'* ]] ||
+    fail "SWIFT_SCRATCH_ROOT=$invalid_root must explain the absolute path requirement"
+done
 scratch_bundle_dry_run="$(make -n -C "$REPO_ROOT" swift-build CONFIGURATION=debug SWIFT_SCRATCH_ROOT="$scratch_root")" ||
   fail "swift-build should accept a scratch root"
 for product in CLIProxyManager cpm cliproxy-manager; do
