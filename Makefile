@@ -25,16 +25,19 @@ BUILD_NUMBER := $(shell $(RELEASE_RESOLVE) build 2>/dev/null)
 RELEASE_CHANNEL := $(shell $(RELEASE_RESOLVE) channel 2>/dev/null)
 BUILD_DIR ?= build
 CONFIGURATION ?= release
-# swiftbuild is the SwiftPM default from Swift 6.4; native is deprecated. The
-# bundle step accepts either engine's resource bundle layout.
-SWIFT_BUILD_SYSTEM ?= swiftbuild
+# Swift 6.4 defaults to the swiftbuild engine and deprecates native, and the
+# bundle step accepts either engine's resource bundle layout. The CI and release
+# runners still ship Swift 6.3, whose swiftbuild test bundles fail to load
+# Sparkle.framework, so native stays the default until they move to Swift 6.4.
+SWIFT_BUILD_SYSTEM ?= native
 # swiftbuild signs bundles it produces, and codesign rejects the Finder info that
 # iCloud Drive's File Provider attaches to directories it syncs. When the checkout
 # lives in a synced folder such as ~/Documents, set SWIFT_SCRATCH_ROOT to a local
 # directory, for example ~/Library/Caches/CLIProxyManager; each checkout then
 # builds in its own subdirectory there instead of .build.
 SWIFT_SCRATCH_ROOT ?=
-SWIFT_SCRATCH_PATH ?= $(if $(SWIFT_SCRATCH_ROOT),$(SWIFT_SCRATCH_ROOT)/$(subst /,_,$(CURDIR)))
+SWIFT_SCRATCH_PATH = $(if $(SWIFT_SCRATCH_ROOT),$(SWIFT_SCRATCH_ROOT)/$(notdir $(CURDIR))-$(SWIFT_SCRATCH_KEY))
+SWIFT_SCRATCH_KEY = $(shell printf '%s' "$(CURDIR)" | shasum -a 256 | cut -c1-12)
 empty :=
 space := $(empty) $(empty)
 SWIFT_ENGINE_FLAGS = --build-system $(SWIFT_BUILD_SYSTEM)$(if $(SWIFT_SCRATCH_PATH),$(space)--scratch-path "$(SWIFT_SCRATCH_PATH)")
