@@ -142,6 +142,18 @@ cpm update stage all
 cpm update apply all --yes
 ```
 
+### Swift 빌드 엔진과 산출물 위치
+
+Makefile은 기본으로 `native` 엔진을 사용합니다. Swift 6.4부터 SwiftPM 기본 엔진은 `swiftbuild`지만, macos-26 CI·release runner의 Xcode 26.6 toolchain에서는 swiftbuild test bundle이 Sparkle.framework를 불러오지 못해 runner가 Swift 6.4 toolchain으로 올라갈 때까지 전환을 보류합니다. `SWIFT_BUILD_SYSTEM=swiftbuild`로 직접 쓸 수 있습니다.
+
+swiftbuild는 산출물 bundle에 서명하는데, iCloud Drive가 동기화 폴더의 디렉터리에 붙이는 Finder 정보 때문에 `~/Documents` 같은 동기화 폴더 안의 checkout에서는 서명이 실패합니다. 저장소를 옮기지 않고 SwiftPM 산출물만 로컬 폴더에 두려면 셸 설정에 다음을 추가합니다.
+
+```sh
+export SWIFT_SCRATCH_ROOT="$HOME/Library/Caches/CLIProxyManager"
+```
+
+checkout마다 그 아래 별도 하위 폴더를 사용하므로 여러 worktree가 충돌하지 않습니다. `make distclean`은 해당 폴더도 지웁니다.
+
 ### CLIProxyAPI artifact 관리
 
 CLIProxyAPI 실행 파일은 Git에 직접 저장하지 않습니다. `Sources/CLIProxyManagerApp/Resources/cliproxyapi/cliproxyapi.manifest.json`이 upstream URL·archive SHA-256·추출 binary SHA-256·크기·version metadata·`darwin/arm64` target을 고정하는 trust anchor입니다.
@@ -185,7 +197,7 @@ Fallback artifact의 `release-provenance.json`에는 `local-fallback` trust가 �
 
 ## Pull request 및 main CI
 
-모든 pull request와 `main` push는 고정된 `macos-14` runner에서 읽기 전용 CI를 실행합니다. 이 workflow는 `contents: read` 권한만 사용하며 secret, signing identity·certificate, signing artifact를 사용하거나 생성·업로드하지 않습니다. Required check 이름은 다음 네 개로 정확히 고정됩니다.
+모든 pull request와 `main` push는 고정된 `macos-26` runner에서 읽기 전용 CI를 실행합니다. 이 workflow는 `contents: read` 권한만 사용하며 secret, signing identity·certificate, signing artifact를 사용하거나 생성·업로드하지 않습니다. Required check 이름은 다음 네 개로 정확히 고정됩니다.
 
 | Check | PR 전 로컬 실행 명령 |
 | --- | --- |

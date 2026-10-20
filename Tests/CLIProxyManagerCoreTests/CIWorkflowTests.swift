@@ -42,7 +42,7 @@ final class CIWorkflowTests: XCTestCase {
             """
               build:
                 name: Build
-                runs-on: macos-14
+                runs-on: macos-26
                 steps:
                   - uses: actions/checkout@v4
                     with:
@@ -52,7 +52,7 @@ final class CIWorkflowTests: XCTestCase {
             """
               test:
                 name: Test
-                runs-on: macos-14
+                runs-on: macos-26
                 steps:
                   - uses: actions/checkout@v4
                     with:
@@ -62,7 +62,7 @@ final class CIWorkflowTests: XCTestCase {
             """
               script-tests:
                 name: Script tests
-                runs-on: macos-14
+                runs-on: macos-26
                 steps:
                   - uses: actions/checkout@v4
                     with:
@@ -72,7 +72,7 @@ final class CIWorkflowTests: XCTestCase {
             """
               package-structure:
                 name: Package structure
-                runs-on: macos-14
+                runs-on: macos-26
                 steps:
                   - uses: actions/checkout@v4
                     with:
@@ -89,7 +89,7 @@ final class CIWorkflowTests: XCTestCase {
             XCTAssertTrue(workflow.contains(expectedJob))
         }
 
-        XCTAssertEqual(occurrences(of: "runs-on: macos-14", in: workflow), 4)
+        XCTAssertEqual(occurrences(of: "runs-on: macos-26", in: workflow), 4)
         XCTAssertEqual(occurrences(of: "uses: actions/checkout@v4", in: workflow), 4)
         XCTAssertEqual(occurrences(of: "persist-credentials: false", in: workflow), 4)
         XCTAssertEqual(occurrences(of: "run: make test", in: workflow), 1)

@@ -5,6 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 SOURCE_RESOLVER="$REPO_ROOT/scripts/resolve-release-version.sh"
 SOURCE_LIB="$REPO_ROOT/scripts/release-version-lib.sh"
+# Dry-run expectations describe the Makefile defaults, not the caller's overrides.
+unset SWIFT_BUILD_SYSTEM SWIFT_SCRATCH_ROOT SWIFT_SCRATCH_PATH SWIFT_BUILD_FLAGS SWIFT_TEST_FLAGS
+unset MAKEFLAGS MFLAGS MAKEOVERRIDES
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
@@ -327,13 +330,111 @@ ci_compile_line="$(grep -n -m 1 -F 'swift build -c debug --build-system native -
 ! printf '%s\n' "$ci_build_dry_run" | grep -E '[[:space:]](codesign|hdiutil)[[:space:]]' >/dev/null ||
   fail "ci-build must not sign or create a DMG"
 
-test_dry_run="$(env -u SWIFT_BUILD_SYSTEM -u SWIFT_TEST_FLAGS make -n -C "$REPO_ROOT" test)" || fail "test target should support a dry run"
+test_dry_run="$(make -n -C "$REPO_ROOT" test)" || fail "test target should support a dry run"
 printf '%s\n' "$test_dry_run" | grep -Ex 'swift test --build-system native[[:space:]]*' >/dev/null ||
   fail "test must run Swift tests with the default native build system"
-test_override_dry_run="$(env -u SWIFT_TEST_FLAGS make -n -C "$REPO_ROOT" test SWIFT_BUILD_SYSTEM=swiftbuild)" ||
+test_override_dry_run="$(make -n -C "$REPO_ROOT" test SWIFT_BUILD_SYSTEM=swiftbuild)" ||
   fail "test target should accept a build system override"
 printf '%s\n' "$test_override_dry_run" | grep -Ex 'swift test --build-system swiftbuild[[:space:]]*' >/dev/null ||
   fail "test must use the same SWIFT_BUILD_SYSTEM as the bundle build"
+
+# SWIFT_SCRATCH_ROOT keeps SwiftPM output out of iCloud-synced checkouts, one
+# subdirectory per checkout, for every Swift invocation and the Sparkle lookup.
+# make -C resolves CURDIR physically, so derive the expected key the same way.
+# Roots are resolved physically too (/tmp is a symlink on macOS).
+physical_tmp="$(cd -P /tmp && pwd)"
+scratch_root="$physical_tmp/cliproxymanager-scratch"
+physical_root="$(cd "$REPO_ROOT" && pwd -P)"
+scratch_key="$(printf '%s' "$(stat -f '%d:%i' "$physical_root")" | shasum -a 256 | cut -c1-12)"
+scratch_path="$scratch_root/$(basename "$physical_root")-$scratch_key"
+scratch_test_dry_run="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT="$scratch_root")" ||
+  fail "test target should accept a scratch root"
+printf '%s\n' "$scratch_test_dry_run" | grep -F "swift test --build-system native --scratch-path \"$scratch_path\"" >/dev/null ||
+  fail "test must build in the per-checkout scratch path"
+home_scratch_dry_run="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT='~/cliproxymanager-scratch')" ||
+  fail "test target should accept a home-relative scratch root"
+printf '%s\n' "$home_scratch_dry_run" | grep -F -- "--scratch-path \"$(cd -P "$HOME" && pwd)/cliproxymanager-scratch/" >/dev/null ||
+  fail "a ~/ scratch root must expand to HOME instead of a literal ~ inside the checkout"
+# A second checkout path must get its own scratch directory.
+other_checkout="$(mktemp -d /tmp/cliproxymanager-other-checkout.XXXXXX)"
+other_scratch_dry_run="$(make -n -C "$other_checkout" -f "$REPO_ROOT/Makefile" test SWIFT_SCRATCH_ROOT="$scratch_root" 2>&1)" ||
+  { rm -rf "$other_checkout"; fail "test target should dry-run from another checkout path: $other_scratch_dry_run"; }
+rm -rf "$other_checkout"
+other_scratch_path="$(printf '%s\n' "$other_scratch_dry_run" | grep -oE -- '--scratch-path "[^"]+"' | head -1 || true)"
+[[ -n "$other_scratch_path" && "$other_scratch_path" != "--scratch-path \"$scratch_path\"" ]] ||
+  fail "different checkouts must get different scratch paths"
+if invalid_output="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT='relative-cache' 2>&1)"; then
+  fail "a relative SWIFT_SCRATCH_ROOT must be rejected"
+fi
+[[ "$invalid_output" == *'SWIFT_SCRATCH_ROOT must be an absolute path'* ]] ||
+  fail "a relative SWIFT_SCRATCH_ROOT must explain the absolute path requirement"
+if inside_output="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT="$physical_root/.cache" 2>&1)"; then
+  fail "a SWIFT_SCRATCH_ROOT inside the checkout must be rejected"
+fi
+[[ "$inside_output" == *'SWIFT_SCRATCH_ROOT must be outside the checkout'* ]] ||
+  fail "a SWIFT_SCRATCH_ROOT inside the checkout must explain why it is rejected"
+if dotdot_output="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT="$(dirname "$physical_root")/missing/../$(basename "$physical_root")/.cache" 2>&1)"; then
+  fail "a SWIFT_SCRATCH_ROOT that uses .. after a missing directory must be rejected"
+fi
+[[ "$dotdot_output" == *'must not use . or .. after the part that exists'* ]] ||
+  fail "a SWIFT_SCRATCH_ROOT with .. after a missing directory must explain why it is rejected"
+upper_root="$(printf '%s' "$physical_root" | tr '[:lower:]' '[:upper:]')"
+if [[ -d "$upper_root" ]]; then
+  if case_output="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT="$upper_root/.cache" 2>&1)"; then
+    fail "a differently cased spelling of the checkout must be rejected on a case-insensitive volume"
+  fi
+  [[ "$case_output" == *'SWIFT_SCRATCH_ROOT must be outside the checkout'* ]] ||
+    fail "a differently cased checkout spelling must explain why it is rejected"
+fi
+glob_dir="$(mktemp -d "$physical_tmp/cliproxymanager-glob.XXXXXX")"
+mkdir "$glob_dir/Makefile-real"
+glob_dry_run="$(cd "$glob_dir" && make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT="$glob_dir/Make?ile-*/cache [old]")" ||
+  { rm -rf "$glob_dir"; fail "a SWIFT_SCRATCH_ROOT with glob characters should be accepted"; }
+rm -rf "$glob_dir"
+printf '%s\n' "$glob_dry_run" | grep -F -- "--scratch-path \"$glob_dir/Make?ile-*/cache [old]/" >/dev/null ||
+  fail "glob characters in SWIFT_SCRATCH_ROOT must stay literal"
+trimmed_dry_run="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT=" $scratch_root ")" ||
+  fail "a SWIFT_SCRATCH_ROOT with surrounding spaces should be accepted"
+printf '%s\n' "$trimmed_dry_run" | grep -F -- "--scratch-path \"$scratch_path\"" >/dev/null ||
+  fail "surrounding spaces must not become part of the scratch path"
+slashes_dry_run="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT="$physical_tmp//cliproxymanager-missing///scratch//")" ||
+  fail "a SWIFT_SCRATCH_ROOT with repeated slashes should be accepted"
+printf '%s\n' "$slashes_dry_run" | grep -F -- "--scratch-path \"$physical_tmp/cliproxymanager-missing/scratch/$(basename "$physical_root")-$scratch_key\"" >/dev/null ||
+  fail "repeated slashes in SWIFT_SCRATCH_ROOT must collapse to one"
+if file_output="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT="$physical_root/Makefile/cache" 2>&1)"; then
+  fail "a SWIFT_SCRATCH_ROOT below a regular file must be rejected"
+fi
+[[ "$file_output" == *'must be a directory path'* ]] ||
+  fail "a SWIFT_SCRATCH_ROOT below a regular file must explain why it is rejected"
+alias_dir="$(mktemp -d "$physical_tmp/cliproxymanager-alias.XXXXXX")"
+ln -s "$physical_root" "$alias_dir/checkout"
+if alias_output="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT="$alias_dir/checkout/.cache" 2>&1)"; then
+  rm -rf "$alias_dir"
+  fail "a SWIFT_SCRATCH_ROOT that reaches the checkout through a symlink must be rejected"
+fi
+rm -rf "$alias_dir"
+[[ "$alias_output" == *'SWIFT_SCRATCH_ROOT must be outside the checkout'* ]] ||
+  fail "a symlinked SWIFT_SCRATCH_ROOT inside the checkout must explain why it is rejected"
+lone_tilde_dry_run="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT='~')" ||
+  fail "SWIFT_SCRATCH_ROOT=~ should expand to HOME"
+printf '%s\n' "$lone_tilde_dry_run" | grep -F -- "--scratch-path \"$(cd -P "$HOME" && pwd)/$(basename "$physical_root")-$scratch_key\"" >/dev/null ||
+  fail "SWIFT_SCRATCH_ROOT=~ must build under HOME"
+spaced_root="$physical_tmp/cliproxymanager  scratch ~"
+spaced_dry_run="$(make -n -C "$REPO_ROOT" test SWIFT_SCRATCH_ROOT="$spaced_root")" ||
+  fail "an absolute SWIFT_SCRATCH_ROOT with spaces must be accepted"
+printf '%s\n' "$spaced_dry_run" | grep -F -- "--scratch-path \"$spaced_root/$(basename "$physical_root")-$scratch_key\"" >/dev/null ||
+  fail "an absolute SWIFT_SCRATCH_ROOT with spaces must be passed through quoted"
+scratch_bundle_dry_run="$(make -n -C "$REPO_ROOT" swift-build CONFIGURATION=debug SWIFT_SCRATCH_ROOT="$scratch_root")" ||
+  fail "swift-build should accept a scratch root"
+for product in CLIProxyManager cpm cliproxy-manager; do
+  printf '%s\n' "$scratch_bundle_dry_run" | grep -F \
+    "swift build -c debug --build-system native --scratch-path \"$scratch_path\"" \
+    | grep -E -- "--product $product\$" >/dev/null || fail "swift-build must compile $product in the scratch path"
+done
+scratch_distclean_dry_run="$(make -n -C "$REPO_ROOT" distclean SWIFT_SCRATCH_ROOT="$scratch_root")" ||
+  fail "distclean should accept a scratch root"
+printf '%s\n' "$scratch_distclean_dry_run" | grep -Fx "rm -rf \"$scratch_path\"" >/dev/null ||
+  fail "distclean must remove the per-checkout scratch path"
 
 write_appcast() {
   local path="$1" version="$2" build="$3" enclosure_version="$4" enclosure_build="$5" tag="$6" dmg="$7"

@@ -142,6 +142,18 @@ cpm update stage all
 cpm update apply all --yes
 ```
 
+### Swift build engine and output location
+
+The Makefile uses the `native` engine by default. SwiftPM defaults to `swiftbuild` from Swift 6.4, but on the Xcode 26.6 toolchain of the macos-26 CI and release runners swiftbuild test bundles cannot load Sparkle.framework, so the switch waits until the runners move to a Swift 6.4 toolchain. Use `SWIFT_BUILD_SYSTEM=swiftbuild` to opt in.
+
+swiftbuild signs the bundles it produces, and signing fails in a checkout inside a synced folder such as `~/Documents` because iCloud Drive attaches Finder info to the directories it syncs. To keep the checkout where it is and move only SwiftPM output to a local folder, add this to your shell profile:
+
+```sh
+export SWIFT_SCRATCH_ROOT="$HOME/Library/Caches/CLIProxyManager"
+```
+
+Each checkout uses its own subdirectory there, so worktrees do not collide. `make distclean` removes that directory too.
+
 ### CLIProxyAPI artifact management
 
 The CLIProxyAPI executable is not stored directly in Git. `Sources/CLIProxyManagerApp/Resources/cliproxyapi/cliproxyapi.manifest.json` is the trust anchor that pins the upstream URL, archive SHA-256, extracted binary SHA-256 and size, version metadata, and `darwin/arm64` target.
@@ -185,7 +197,7 @@ The fallback artifact records `local-fallback` trust in `release-provenance.json
 
 ## Pull request and main CI
 
-All pull requests and pushes to `main` run read-only CI on the fixed `macos-14` runner. The workflow uses only `contents: read`; it neither consumes secrets nor accesses, creates, or uploads signing identities, certificates, or signing artifacts. These are the exact required check names:
+All pull requests and pushes to `main` run read-only CI on the fixed `macos-26` runner. The workflow uses only `contents: read`; it neither consumes secrets nor accesses, creates, or uploads signing identities, certificates, or signing artifacts. These are the exact required check names:
 
 | Check | Run locally before opening a PR |
 | --- | --- |

@@ -1,3 +1,4 @@
+MAKEFILE_DIR := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 ifneq ($(filter command line environment,$(origin VERSION)),)
 $(error VERSION is derived from release/version.json; edit the canonical file and run scripts/sync-release-version.sh)
 endif
@@ -25,10 +26,29 @@ BUILD_NUMBER := $(shell $(RELEASE_RESOLVE) build 2>/dev/null)
 RELEASE_CHANNEL := $(shell $(RELEASE_RESOLVE) channel 2>/dev/null)
 BUILD_DIR ?= build
 CONFIGURATION ?= release
-# Swift 6.4 defaults to the swiftbuild engine. The bundle step accepts either
-# resource bundle layout, but swift test still fails to sign test bundles under
-# swiftbuild (issue #185), so keep the native engine as the default for now.
+# Swift 6.4 defaults to the swiftbuild engine and deprecates native, and the
+# bundle step accepts either engine's resource bundle layout. On the Xcode 26.6
+# toolchain of the macos-26 CI and release runners, swiftbuild test bundles fail
+# to load Sparkle.framework, so native stays the default until the runners move
+# to a Swift 6.4 toolchain.
 SWIFT_BUILD_SYSTEM ?= native
+# swiftbuild signs bundles it produces, and codesign rejects the Finder info that
+# iCloud Drive's File Provider attaches to directories it syncs. When the checkout
+# lives in a synced folder such as ~/Documents, set SWIFT_SCRATCH_ROOT to a local
+# directory, for example $HOME/Library/Caches/CLIProxyManager; each checkout
+# then builds in its own subdirectory there instead of .build.
+SWIFT_SCRATCH_ROOT ?=
+shell_quote = '$(subst ','\'',$(1))'
+ifneq ($(strip $(SWIFT_SCRATCH_ROOT)),)
+SWIFT_SCRATCH_PATH := $(shell bash $(call shell_quote,$(MAKEFILE_DIR)/scripts/resolve-swift-scratch-path.sh) $(call shell_quote,$(SWIFT_SCRATCH_ROOT)) $(call shell_quote,$(CURDIR)))
+ifeq ($(SWIFT_SCRATCH_PATH),)
+$(error Invalid SWIFT_SCRATCH_ROOT; see the error above)
+endif
+else
+SWIFT_SCRATCH_PATH :=
+endif
+SWIFT_ENGINE_FLAGS = --build-system $(SWIFT_BUILD_SYSTEM)$(if $(SWIFT_SCRATCH_PATH), --scratch-path "$(SWIFT_SCRATCH_PATH)")
+SWIFT_ARTIFACTS_DIR = $(or $(SWIFT_SCRATCH_PATH),.build)/artifacts
 SWIFT_BUILD_FLAGS ?=
 SWIFT_TEST_FLAGS ?=
 DEVELOPER_ID_IDENTITY := Developer ID Application: Woosub Lee (2L6ZW98RCP)
@@ -52,7 +72,7 @@ MACOS_DIR := $(CONTENTS_DIR)/MacOS
 RESOURCES_DIR := $(CONTENTS_DIR)/Resources
 HELPERS_DIR := $(CONTENTS_DIR)/Helpers
 FRAMEWORKS_DIR := $(CONTENTS_DIR)/Frameworks
-SWIFT_BUILD_DIR = $(shell swift build -c $(CONFIGURATION) --build-system $(SWIFT_BUILD_SYSTEM) --show-bin-path)
+SWIFT_BUILD_DIR = $(shell swift build -c $(CONFIGURATION) $(SWIFT_ENGINE_FLAGS) --show-bin-path)
 APP_EXECUTABLE = $(SWIFT_BUILD_DIR)/$(APP_NAME)
 CPM_EXECUTABLE = $(SWIFT_BUILD_DIR)/cpm
 HELPER_EXECUTABLE = $(SWIFT_BUILD_DIR)/cliproxy-manager
@@ -60,7 +80,7 @@ BUNDLED_CPM := $(HELPERS_DIR)/cpm
 BUNDLED_HELPER := $(HELPERS_DIR)/cliproxy-manager
 BUNDLED_ICON := $(RESOURCES_DIR)/$(ICON_FILE)
 BUNDLED_SPARKLE_FRAMEWORK := $(FRAMEWORKS_DIR)/Sparkle.framework
-SPARKLE_FRAMEWORK = $(shell find .build/artifacts -path '*/Sparkle.framework' -type d -print -quit)
+SPARKLE_FRAMEWORK = $(shell find "$(SWIFT_ARTIFACTS_DIR)" -path '*/Sparkle.framework' -type d -print -quit 2>/dev/null)
 CLIPROXYAPI_MANIFEST := Sources/CLIProxyManagerApp/Resources/cliproxyapi/cliproxyapi.manifest.json
 CLIPROXYAPI_RESOLVER := scripts/resolve-bundled-cliproxyapi.sh
 CLIPROXYAPI_ARTIFACT_LIB := scripts/cliproxyapi-artifact-lib.sh
@@ -80,7 +100,7 @@ ENTITLEMENTS := CLIProxyManager.entitlements
 all: sign
 
 test:
-	swift test --build-system $(SWIFT_BUILD_SYSTEM) $(SWIFT_TEST_FLAGS)
+	swift test $(SWIFT_ENGINE_FLAGS) $(SWIFT_TEST_FLAGS)
 
 ci-build:
 	$(MAKE) swift-build CONFIGURATION=debug SWIFT_BUILD_FLAGS="-Xswiftc -warnings-as-errors"
@@ -99,9 +119,9 @@ print-build-tag:
 	@$(RELEASE_RESOLVE) tag
 
 swift-build: release-metadata-check
-	swift build -c $(CONFIGURATION) --build-system $(SWIFT_BUILD_SYSTEM) $(SWIFT_BUILD_FLAGS) --product $(APP_NAME)
-	swift build -c $(CONFIGURATION) --build-system $(SWIFT_BUILD_SYSTEM) $(SWIFT_BUILD_FLAGS) --product cpm
-	swift build -c $(CONFIGURATION) --build-system $(SWIFT_BUILD_SYSTEM) $(SWIFT_BUILD_FLAGS) --product cliproxy-manager
+	swift build -c $(CONFIGURATION) $(SWIFT_ENGINE_FLAGS) $(SWIFT_BUILD_FLAGS) --product $(APP_NAME)
+	swift build -c $(CONFIGURATION) $(SWIFT_ENGINE_FLAGS) $(SWIFT_BUILD_FLAGS) --product cpm
+	swift build -c $(CONFIGURATION) $(SWIFT_ENGINE_FLAGS) $(SWIFT_BUILD_FLAGS) --product cliproxy-manager
 
 verify-app-structure: bundle
 	scripts/verify-app-structure.sh --app "$(APP_BUNDLE)" --version "$(VERSION)" --build "$(BUILD_NUMBER)" --channel "$(RELEASE_CHANNEL)"
@@ -124,7 +144,7 @@ bundle: swift-build $(INFO_PLIST) $(ENTITLEMENTS) $(ICON_FILE)
 	test -f "$(ICON_FILE)" || { echo "Missing icon: $(ICON_FILE)"; exit 1; }
 	rm -rf "$(APP_BUNDLE)"
 	mkdir -p "$(MACOS_DIR)" "$(RESOURCES_DIR)" "$(HELPERS_DIR)" "$(FRAMEWORKS_DIR)"
-	test -d "$(SPARKLE_FRAMEWORK)" || { echo "Missing Sparkle.framework artifact. Run swift package resolve first."; exit 1; }
+	test -d "$(SPARKLE_FRAMEWORK)" || { echo "Missing Sparkle.framework artifact in $(SWIFT_ARTIFACTS_DIR). Run swift package resolve $(if $(SWIFT_SCRATCH_PATH),--scratch-path \"$(SWIFT_SCRATCH_PATH)\" )first."; exit 1; }
 	ditto --norsrc --noextattr "$(APP_EXECUTABLE)" "$(MACOS_DIR)/$(APP_NAME)"
 	if ! otool -l "$(MACOS_DIR)/$(APP_NAME)" | grep -F "@executable_path/../Frameworks" >/dev/null; then \
 		install_name_tool -add_rpath "@executable_path/../Frameworks" "$(MACOS_DIR)/$(APP_NAME)"; \
@@ -352,3 +372,4 @@ clean:
 
 distclean: clean
 	rm -rf .build
+	$(if $(SWIFT_SCRATCH_PATH),rm -rf "$(SWIFT_SCRATCH_PATH)")
