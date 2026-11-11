@@ -9131,6 +9131,75 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.subscriptionUsageStates[claude.id], .available(recoveredClaudeSnapshot))
     }
 
+    func testReauthenticationResumesUsageStoppedByCredentialExpired() async throws {
+        try await assertReauthenticationResumesUsage(stoppedBy: .credentialExpired)
+    }
+
+    func testReauthenticationResumesUsageStoppedByCredentialDisabled() async throws {
+        try await assertReauthenticationResumesUsage(stoppedBy: .credentialDisabled)
+    }
+
+    private func assertReauthenticationResumesUsage(
+        stoppedBy issue: SubscriptionUsageIssue,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        config.oauthCommandProfiles = [
+            .init(
+                id: "claude-work",
+                provider: .claude,
+                authProfileID: "claude-work.json",
+                commandName: "ccwork",
+                nickname: "Work",
+                modelPrefix: "claude-work",
+                isEnabled: true
+            )
+        ]
+        let expiredProfile = AuthProfile(fileName: "claude-work.json", type: .claude, email: "work@example.com", accountID: nil, expired: nil, disabled: false, prefix: "claude-work")
+        let renewedProfile = AuthProfile(fileName: "claude-work.json", type: .claude, email: "work@example.com", accountID: nil, expired: "2026-11-11T16:45:21+09:00", disabled: false, prefix: "claude-work")
+        let initialState = availableUsageState(for: expiredProfile)
+        let initialSnapshot = try XCTUnwrap(initialState.snapshot)
+        let recoveredSnapshot = SubscriptionUsageSnapshot(
+            profileID: expiredProfile.id,
+            provider: .claude,
+            windows: [UsageWindow(id: "seven_day", label: "7d", usedPercent: 23, resetAt: nil)],
+            fetchedAt: Date(timeIntervalSince1970: 120)
+        )
+        let quotaClient = RecordingSubscriptionQuotaClient(reports: [
+            .init(statesByProfileID: [expiredProfile.id: initialState], fetchedAt: Date(timeIntervalSince1970: 0)),
+            .init(statesByProfileID: [expiredProfile.id: .unavailable(issue)], fetchedAt: Date(timeIntervalSince1970: 60)),
+            .init(statesByProfileID: [expiredProfile.id: .available(recoveredSnapshot)], fetchedAt: Date(timeIntervalSince1970: 120))
+        ])
+        let authStore = ReauthenticatingAuthProfileStore(initialTarget: expiredProfile, afterLoginTarget: renewedProfile)
+        let viewModel = DashboardViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            shellInstaller: StubShellInstaller(),
+            authProfileStore: authStore,
+            oauthLoginService: StubOAuthLoginService(),
+            proxyService: StubProxyServiceStarter(),
+            compatibilityAuthorizer: SupportedCompatibilityAuthorizer(),
+            claudeConnector: connectedClaudeConnector(),
+            subscriptionQuotaClient: quotaClient,
+            subscriptionUsageKeyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            secretStore: InMemorySecretStore()
+        )
+        viewModel.serverStatus = readyStatus()
+
+        await viewModel.refreshSubscriptionUsage()
+        await viewModel.refreshSubscriptionUsage()
+        XCTAssertEqual(viewModel.subscriptionUsageStates[expiredProfile.id], AccountSubscriptionUsageState.stale(initialSnapshot, issue), file: file, line: line)
+
+        viewModel.startOAuthReauthentication(.init(rawValue: "claude-work"))
+        await waitForOAuthCompletion(viewModel)
+
+        let requestedProfileIDs = await quotaClient.requestedProfileIDs()
+        XCTAssertEqual(requestedProfileIDs, [[expiredProfile.id], [expiredProfile.id], [expiredProfile.id]], file: file, line: line)
+        XCTAssertEqual(viewModel.subscriptionUsageStates[expiredProfile.id], AccountSubscriptionUsageState.available(recoveredSnapshot), file: file, line: line)
+    }
+
     func testDisablingSubscriptionUsageInvalidatesInFlightRefreshResult() async throws {
         var config = AppConfig.default
         config.subscriptionUsage.showInMenuBar = true
