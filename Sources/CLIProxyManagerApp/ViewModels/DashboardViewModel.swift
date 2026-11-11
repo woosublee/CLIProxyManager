@@ -342,7 +342,12 @@ final class DashboardViewModel: ObservableObject {
     private let serverStatusRetryDelayNanoseconds: UInt64
     private let settingsMessageAutoClearDelayNanoseconds: UInt64
     private static let serverStatusPollingInterval: TimeInterval = 5
-    private var authProfiles: [AuthProfile] = []
+    private var authProfiles: [AuthProfile] = [] {
+        didSet {
+            guard oldValue != authProfiles else { return }
+            resumeSubscriptionUsageForRenewedCredentials(previous: oldValue, refreshed: authProfiles)
+        }
+    }
     private var oauthLoginTask: Task<Void, Never>?
     private var settingsMessageAutoClearTask: Task<Void, Never>?
     private var configWriteProtectionMessage: String?
@@ -2652,6 +2657,34 @@ final class DashboardViewModel: ObservableObject {
         codexResetCreditsLastAttemptAt = codexResetCreditsLastAttemptAt.filter { enabledCodexIDs.contains($0.key) }
         persistCodexResetCreditSnapshots()
         rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
+    }
+
+    /// A `credentialExpired` usage state stops automatic polling. When the auth file is
+    /// rewritten with a new token expiry (app or CLI re-login, or a proxy-side refresh),
+    /// the credential is no longer the one that failed, so polling must resume.
+    private func resumeSubscriptionUsageForRenewedCredentials(
+        previous: [AuthProfile],
+        refreshed: [AuthProfile]
+    ) {
+        let previousExpiryByID = Dictionary(previous.map { ($0.id, $0.expired) }, uniquingKeysWith: { first, _ in first })
+        var resumed = false
+        for profile in refreshed {
+            guard let previousExpiry = previousExpiryByID[profile.id],
+                  previousExpiry != profile.expired,
+                  let state = subscriptionUsageStates[profile.id],
+                  state.issue == .credentialExpired else {
+                continue
+            }
+            if let snapshot = state.snapshot {
+                subscriptionUsageStates[profile.id] = .available(snapshot)
+            } else {
+                subscriptionUsageStates[profile.id] = nil
+            }
+            resumed = true
+        }
+        if resumed, subscriptionUsageRefreshTask == nil {
+            scheduleSubscriptionUsagePollingIfNeeded()
+        }
     }
 
     func clearSettingsMessage() {

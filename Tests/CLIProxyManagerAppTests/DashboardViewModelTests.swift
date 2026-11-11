@@ -9131,6 +9131,57 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.subscriptionUsageStates[claude.id], .available(recoveredClaudeSnapshot))
     }
 
+    func testRenewedCredentialResumesAutomaticRefreshAfterCredentialExpired() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let expiredClaude = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: "2026-11-11T00:45:00Z", disabled: false)
+        let renewedClaude = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: "2026-11-11T07:45:21Z", disabled: false)
+        let codex = AuthProfile(fileName: "codex.json", type: .codex, email: "codex@example.com", accountID: nil, expired: nil, disabled: false)
+        let initialClaudeState = availableUsageState(for: expiredClaude)
+        let initialClaudeSnapshot = try! XCTUnwrap(initialClaudeState.snapshot)
+        let recoveredClaudeSnapshot = SubscriptionUsageSnapshot(
+            profileID: expiredClaude.id,
+            provider: .claude,
+            windows: [UsageWindow(id: "seven_day", label: "7d", usedPercent: 23, resetAt: nil)],
+            fetchedAt: Date(timeIntervalSince1970: 120)
+        )
+        let quotaClient = RecordingSubscriptionQuotaClient(reports: [
+            .init(statesByProfileID: [expiredClaude.id: initialClaudeState, codex.id: availableUsageState(for: codex)], fetchedAt: Date(timeIntervalSince1970: 0)),
+            .init(statesByProfileID: [expiredClaude.id: .unavailable(.credentialExpired), codex.id: availableUsageState(for: codex)], fetchedAt: Date(timeIntervalSince1970: 60)),
+            .init(statesByProfileID: [codex.id: availableUsageState(for: codex)], fetchedAt: Date(timeIntervalSince1970: 90)),
+            .init(statesByProfileID: [expiredClaude.id: .available(recoveredClaudeSnapshot), codex.id: availableUsageState(for: codex)], fetchedAt: Date(timeIntervalSince1970: 120))
+        ])
+        let authStore = StubAuthProfileStore(profiles: [expiredClaude, codex])
+        let sleeper = SubscriptionUsageSleepRecorder()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            authProfileStore: authStore,
+            quotaClient: quotaClient,
+            subscriptionUsageSleep: { delay in try await sleeper.sleep(delay) }
+        )
+        viewModel.serverStatus = readyStatus()
+
+        await viewModel.refreshSubscriptionUsage()
+        await viewModel.refreshSubscriptionUsage()
+        XCTAssertEqual(viewModel.subscriptionUsageStates[expiredClaude.id], .stale(initialClaudeSnapshot, .credentialExpired))
+
+        // Unchanged credential stays excluded from automatic polling.
+        viewModel.refreshProfiles()
+        await viewModel.refreshSubscriptionUsage()
+
+        // Re-login rewrites the auth file with a new expiry.
+        authStore.nextProfiles = [renewedClaude, codex]
+        viewModel.refreshProfiles()
+        await viewModel.refreshSubscriptionUsage()
+
+        let requestedProfileIDs = await quotaClient.requestedProfileIDs()
+        XCTAssertEqual(requestedProfileIDs, [[expiredClaude.id, codex.id], [expiredClaude.id, codex.id], [codex.id], [expiredClaude.id, codex.id]])
+        XCTAssertEqual(viewModel.subscriptionUsageStates[expiredClaude.id], .available(recoveredClaudeSnapshot))
+    }
+
     func testDisablingSubscriptionUsageInvalidatesInFlightRefreshResult() async throws {
         var config = AppConfig.default
         config.subscriptionUsage.showInMenuBar = true
