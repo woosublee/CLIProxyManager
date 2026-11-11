@@ -343,9 +343,6 @@ final class DashboardViewModel: ObservableObject {
     private let settingsMessageAutoClearDelayNanoseconds: UInt64
     private static let serverStatusPollingInterval: TimeInterval = 5
     private var authProfiles: [AuthProfile] = []
-    /// Token expiry each profile had when its usage request was dispatched and came back
-    /// `credentialExpired`. A later auth file with a different expiry is a renewed credential.
-    private var credentialExpiredDispatchExpiryByProfileID: [String: String?] = [:]
     private var oauthLoginTask: Task<Void, Never>?
     private var settingsMessageAutoClearTask: Task<Void, Never>?
     private var configWriteProtectionMessage: String?
@@ -2355,11 +2352,6 @@ final class DashboardViewModel: ObservableObject {
                 reported: reported
             )
             subscriptionUsageStates[profile.id] = merged
-            if reported.issue == .credentialExpired {
-                credentialExpiredDispatchExpiryByProfileID[profile.id] = .some(profile.expired)
-            } else {
-                credentialExpiredDispatchExpiryByProfileID[profile.id] = nil
-            }
             if cooldownGeneration == quotaResetGeneration,
                let cooldownState = report.cooldownStatesByProfileID[profile.id] {
                 let previousDate = accountCooldownStates[profile.id]?.snapshot?.observedAt
@@ -2652,7 +2644,6 @@ final class DashboardViewModel: ObservableObject {
         reconcileConfigWithAuthProfiles()
         let enabledProfileIDs = Set(authProfiles.filter(isSubscriptionUsageEnabled(for:)).map(\.id))
         subscriptionUsageStates = subscriptionUsageStates.filter { enabledProfileIDs.contains($0.key) }
-        resumeSubscriptionUsageForRenewedCredentials()
         persistSuccessfulSubscriptionUsageSnapshots()
         let enabledCodexIDs = Set(authProfiles.filter {
             $0.type == .codex && isSubscriptionUsageEnabled(for: $0)
@@ -2661,34 +2652,6 @@ final class DashboardViewModel: ObservableObject {
         codexResetCreditsLastAttemptAt = codexResetCreditsLastAttemptAt.filter { enabledCodexIDs.contains($0.key) }
         persistCodexResetCreditSnapshots()
         rebuildProviderRows(claudeStatus: lastClaudeStatus, codexStatus: lastCodexStatus)
-    }
-
-    /// `credentialExpired` stops automatic polling. Once the auth file carries a different
-    /// token expiry than the one the failing request was dispatched with (app or CLI
-    /// re-login, proxy-side refresh), mark the account retriable so polling picks it up.
-    private func resumeSubscriptionUsageForRenewedCredentials() {
-        guard !credentialExpiredDispatchExpiryByProfileID.isEmpty else { return }
-        let profilesByID = Dictionary(authProfiles.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        var resumed = false
-        for (profileID, dispatchedExpiry) in credentialExpiredDispatchExpiryByProfileID {
-            guard let profile = profilesByID[profileID],
-                  let state = subscriptionUsageStates[profileID],
-                  state.issue == .credentialExpired else {
-                credentialExpiredDispatchExpiryByProfileID[profileID] = nil
-                continue
-            }
-            guard profile.expired != dispatchedExpiry else { continue }
-            credentialExpiredDispatchExpiryByProfileID[profileID] = nil
-            if let snapshot = state.snapshot {
-                subscriptionUsageStates[profileID] = .stale(snapshot, .transientFailure)
-            } else {
-                subscriptionUsageStates[profileID] = .unavailable(.transientFailure)
-            }
-            resumed = true
-        }
-        if resumed, subscriptionUsageRefreshTask == nil {
-            scheduleSubscriptionUsagePollingIfNeeded(didRefreshUsage: true)
-        }
     }
 
     func clearSettingsMessage() {
@@ -3040,6 +3003,7 @@ final class DashboardViewModel: ObservableObject {
             return
         }
 
+        resumeSubscriptionUsageAfterLogin(completedID)
         if serverStatus.severity == .ready {
             _ = await refreshSubscriptionUsage(force: false, pollingWakeReason: nil, source: .oauth(sessionID))
             try Task.checkCancellation()
@@ -3054,6 +3018,23 @@ final class DashboardViewModel: ObservableObject {
         completedOAuthLoginProvider = completedID
         completedOAuthLoginIsInitialSetup = isInitialSetup
         settingsMessage = successMessage
+    }
+
+    /// `credentialExpired` stops automatic polling for an account. A successful login for
+    /// that account replaces the credential, so clear the stop before the post-login refresh
+    /// (and later polling) skips it.
+    private func resumeSubscriptionUsageAfterLogin(_ completedID: ProviderRowState.ID) {
+        guard let authProfileID = config.oauthCommandProfiles
+            .first(where: { $0.id == completedID.rawValue })?.authProfileID,
+              let state = subscriptionUsageStates[authProfileID],
+              state.issue == .credentialExpired else {
+            return
+        }
+        if let snapshot = state.snapshot {
+            subscriptionUsageStates[authProfileID] = .stale(snapshot, .transientFailure)
+        } else {
+            subscriptionUsageStates[authProfileID] = .loading
+        }
     }
 
     private func reauthenticatedAccountTitle(_ provider: ProviderRowState.ID) -> String {
