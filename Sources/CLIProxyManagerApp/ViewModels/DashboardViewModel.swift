@@ -3003,7 +3003,7 @@ final class DashboardViewModel: ObservableObject {
             return
         }
 
-        resumeSubscriptionUsageAfterLogin(completedID)
+        let resumedUsage = resumeSubscriptionUsageAfterLogin(completedID)
         if serverStatus.severity == .ready {
             _ = await refreshSubscriptionUsage(force: false, pollingWakeReason: nil, source: .oauth(sessionID))
             try Task.checkCancellation()
@@ -3015,26 +3015,30 @@ final class DashboardViewModel: ObservableObject {
         }
         handOffCodexResetCreditsSourceAuthorizationIfNeeded(for: .oauth(sessionID))
         _ = releaseOAuthRefreshOwnership(for: sessionID)
+        if resumedUsage, serverStatus.severity != .ready {
+            scheduleSubscriptionUsagePollingIfNeeded()
+        }
         completedOAuthLoginProvider = completedID
         completedOAuthLoginIsInitialSetup = isInitialSetup
         settingsMessage = successMessage
     }
 
-    /// `credentialExpired` stops automatic polling for an account. A successful login for
-    /// that account replaces the credential, so clear the stop before the post-login refresh
-    /// (and later polling) skips it.
-    private func resumeSubscriptionUsageAfterLogin(_ completedID: ProviderRowState.ID) {
-        guard let authProfileID = config.oauthCommandProfiles
-            .first(where: { $0.id == completedID.rawValue })?.authProfileID,
+    /// `credentialExpired` and `credentialDisabled` stop automatic polling for an account.
+    /// A successful login for that account replaces and re-enables the credential, so clear
+    /// the stop before the post-login refresh (and later polling) skips it.
+    @discardableResult
+    private func resumeSubscriptionUsageAfterLogin(_ completedID: ProviderRowState.ID) -> Bool {
+        guard let authProfileID = authProfileID(for: completedID),
               let state = subscriptionUsageStates[authProfileID],
-              state.issue == .credentialExpired else {
-            return
+              state.issue == .credentialExpired || state.issue == .credentialDisabled else {
+            return false
         }
         if let snapshot = state.snapshot {
-            subscriptionUsageStates[authProfileID] = .stale(snapshot, .transientFailure)
+            setSubscriptionUsageStates(.stale(snapshot, .transientFailure), profileIDs: [authProfileID])
         } else {
-            subscriptionUsageStates[authProfileID] = .loading
+            setSubscriptionUsageStates(.loading, profileIDs: [authProfileID])
         }
+        return true
     }
 
     private func reauthenticatedAccountTitle(_ provider: ProviderRowState.ID) -> String {
