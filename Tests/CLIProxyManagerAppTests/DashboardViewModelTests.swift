@@ -9182,6 +9182,82 @@ final class DashboardViewModelRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.subscriptionUsageStates[expiredClaude.id], .available(recoveredClaudeSnapshot))
     }
 
+    func testRenewedCredentialWithoutSnapshotSchedulesPollingAndRecovers() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let expiredClaude = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: "2026-11-11T00:45:00Z", disabled: false)
+        let renewedClaude = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: "2026-11-11T07:45:21Z", disabled: false)
+        let recoveredState = availableUsageState(for: renewedClaude)
+        let quotaClient = RecordingSubscriptionQuotaClient(reports: [
+            .init(statesByProfileID: [expiredClaude.id: .unavailable(.credentialExpired)], fetchedAt: Date(timeIntervalSince1970: 0)),
+            .init(statesByProfileID: [expiredClaude.id: recoveredState], fetchedAt: Date(timeIntervalSince1970: 60))
+        ])
+        let authStore = StubAuthProfileStore(profiles: [expiredClaude])
+        let sleeper = SubscriptionUsageSleepRecorder()
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            authProfileStore: authStore,
+            quotaClient: quotaClient,
+            subscriptionUsageSleep: { delay in try await sleeper.sleep(delay) }
+        )
+        viewModel.serverStatus = readyStatus()
+
+        await viewModel.refreshSubscriptionUsage()
+        XCTAssertEqual(viewModel.subscriptionUsageStates[expiredClaude.id], .unavailable(.credentialExpired))
+        let delaysBeforeRenewal = await sleeper.delays().count
+
+        authStore.nextProfiles = [renewedClaude]
+        viewModel.refreshProfiles()
+
+        XCTAssertEqual(viewModel.subscriptionUsageStates[expiredClaude.id], .unavailable(.transientFailure))
+        let didSchedulePolling = await sleeper.waitForDelays(expectedCount: delaysBeforeRenewal + 1)
+        XCTAssertTrue(didSchedulePolling)
+
+        await viewModel.refreshSubscriptionUsage()
+        let requestedProfileIDs = await quotaClient.requestedProfileIDs()
+        XCTAssertEqual(requestedProfileIDs, [[expiredClaude.id], [expiredClaude.id]])
+        XCTAssertEqual(viewModel.subscriptionUsageStates[expiredClaude.id], recoveredState)
+    }
+
+    func testCredentialExpiredFromRequestDispatchedBeforeRenewalIsDiscarded() async {
+        var config = AppConfig.default
+        config.subscriptionUsage.showInMenuBar = true
+        let expiredClaude = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: "2026-11-11T00:45:00Z", disabled: false)
+        let renewedClaude = AuthProfile(fileName: "claude.json", type: .claude, email: "claude@example.com", accountID: nil, expired: "2026-11-11T07:45:21Z", disabled: false)
+        let quotaClient = SuspendedSubscriptionQuotaClient()
+        let authStore = StubAuthProfileStore(profiles: [expiredClaude])
+        let viewModel = subscriptionUsageViewModel(
+            config: config,
+            configStore: StubConfigStore(config: config),
+            keyStore: SubscriptionUsageManagementKeyDouble(isConfiguredValue: true),
+            proxyService: StubProxyServiceStarter(),
+            authProfileStore: authStore,
+            quotaClient: quotaClient,
+            subscriptionUsageSleep: { _ in try await Task.sleep(nanoseconds: 60_000_000_000) }
+        )
+        viewModel.serverStatus = readyStatus()
+
+        let inFlight = Task { await viewModel.refreshSubscriptionUsage() }
+        await waitForUsageFetches(quotaClient, expectedCount: 1)
+
+        // Re-login lands while the request with the old token is still in flight.
+        authStore.nextProfiles = [renewedClaude]
+        viewModel.refreshProfiles()
+        await quotaClient.resolveAll(with: SubscriptionUsageReport(
+            statesByProfileID: [expiredClaude.id: .unavailable(.credentialExpired)],
+            fetchedAt: Date(timeIntervalSince1970: 0)
+        ))
+        await inFlight.value
+
+        // The failure belongs to the old token; it must not stop polling for the renewed one.
+        let state = viewModel.subscriptionUsageStates[expiredClaude.id]
+        XCTAssertNotEqual(state?.issue, .credentialExpired)
+        XCTAssertFalse(state?.stopsAutomaticPolling ?? false)
+    }
+
     func testDisablingSubscriptionUsageInvalidatesInFlightRefreshResult() async throws {
         var config = AppConfig.default
         config.subscriptionUsage.showInMenuBar = true
